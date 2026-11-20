@@ -76,9 +76,80 @@ export function readInterestRateRaw(input: Fields | { fields?: Fields }): number
   return null;
 }
 
+/**
+ * The marker that says the stored rate IS a percent. Without it a stored rate
+ * has to be guessed (`normalizeAnnualRate`: 1 or less is a decimal), and the
+ * guess cannot represent a rate under 1%: a 0.9% promo APR typed into the
+ * loan-terms form was stored as 90 and the header read "APR 90.00%"
+ * (2026-11-20). Every writer that knows its unit stamps this key beside the
+ * rate (`storedRateFields`); the storage layer stamps it on any liability
+ * rate that arrives without it (`stampRateUnit`), so rows converge on one
+ * unit as they are written. `_`-prefixed, so no surface lists it as a field.
+ */
+export const RATE_UNIT_KEY = "_interestRateUnit";
+
+const parseRate = (r: unknown): number => {
+  const n = typeof r === "string" ? parseFloat(r.replace("%", "").trim()) : Number(r);
+  return Number.isFinite(n) && n >= 0 ? n : NaN;
+};
+
+/** True when the record states its rate is stored as a percent. */
+export function rateIsMarkedPercent(input: Fields | { fields?: Fields }): boolean {
+  return fieldsOf(input)[RATE_UNIT_KEY] === "percent";
+}
+
 /** The annual rate as a DECIMAL (0.065) — what the amortization engine takes. */
 export function readAnnualRate(input: Fields | { fields?: Fields }): number {
-  return normalizeAnnualRate(readInterestRateRaw(input));
+  const raw = readInterestRateRaw(input);
+  if (rateIsMarkedPercent(input)) {
+    const n = parseRate(raw);
+    return Number.isFinite(n) ? n / 100 : 0;
+  }
+  return normalizeAnnualRate(raw);
+}
+
+/**
+ * The fields a writer stores for a rate it knows is a PERCENT — what a "%"
+ * form field holds, exactly as typed: 0.9 is 0.9%, 7 is 7%. `{}` when the
+ * input is not a rate.
+ */
+export function storedRateFields(pct: string | number | null | undefined): Record<string, any> {
+  if (pct == null || String(pct).trim() === "") return {};
+  const n = parseRate(pct);
+  if (!Number.isFinite(n)) return {};
+  return { interestRate: Math.round(n * 1e6) / 1e6, [RATE_UNIT_KEY]: "percent" };
+}
+
+/**
+ * The PERCENT a chat tool's rate means. The model may pass a percent (5.5) or
+ * a fraction (0.055), so a value of 1 or less is read as a fraction — unless
+ * the user's own message states that very number as a percentage ("0.9%",
+ * "0.9 percent"), in which case it is the percent they typed. NaN when the
+ * input is not a rate.
+ */
+export function chatRatePct(value: unknown, userMessage?: unknown): number {
+  const n = parseRate(value);
+  if (!Number.isFinite(n)) return NaN;
+  if (n > 1) return Math.round(n * 1e6) / 1e6;
+  const stated = Array.from(String(userMessage ?? "").matchAll(/(\d+(?:\.\d+)?)\s*(?:%|percent\b)/gi)).map((m) => Number(m[1]));
+  if (n > 0 && stated.includes(n)) return n;
+  return Math.round(n * 100 * 1e6) / 1e6;
+}
+
+/**
+ * A liability's fields with the rate's unit made explicit. A rate that
+ * arrives WITHOUT the marker (a chat tool passing 0.065, an old row being
+ * rewritten, an import) gets the legacy guess once — 1 or less is a decimal —
+ * and is stored as a percent with the marker, so it is never guessed again.
+ * A rate that already carries the marker is left exactly as written.
+ */
+export function stampRateUnit<T extends Record<string, any>>(fields: T): T {
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) return fields;
+  if (fields[RATE_UNIT_KEY] === "percent") return fields;
+  if (isBlank(fields.interestRate)) return fields;
+  const n = parseRate(fields.interestRate);
+  if (!Number.isFinite(n)) return fields;
+  return { ...fields, interestRate: Math.round(normalizeAnnualRate(n) * 100 * 1e6) / 1e6, [RATE_UNIT_KEY]: "percent" };
 }
 
 /** The annual rate as a PERCENT (6.5) — the canonical stored form and the display form. */
@@ -88,15 +159,14 @@ export function readInterestRatePct(input: Fields | { fields?: Fields }): number
 
 /**
  * What a rate typed into a "%" field means, as the PERCENT that is stored:
- * "6.25" → 6.25. A value of 1 or less is read as a fraction ("0.0625" → 6.25),
- * the same rule `normalizeAnnualRate` applies to every stored rate, so the
- * form and the readers can never disagree. null when the input is not a rate.
+ * "6.25" → 6.25, "0.9" → 0.9. Store it with `storedRateFields` so the unit
+ * marker goes with it. null when the input is not a rate.
  */
 export function rateInputToStoredPct(input: string | number | null | undefined): number | null {
-  if (input == null || String(input).trim() === "") return null;
-  const n = typeof input === "number" ? input : parseFloat(String(input).replace("%", "").trim());
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Math.round(normalizeAnnualRate(n) * 100 * 1e6) / 1e6;
+  // A "%" field holds a percent, exactly as typed. This used to run the
+  // "1 or less is a fraction" guess, which turned a typed 0.9 into 90.
+  const stored = storedRateFields(input);
+  return typeof stored.interestRate === "number" ? stored.interestRate : null;
 }
 
 /** The stored rate as the text a "%" field shows: "6.25" for 6.25% however it was stored; "" when none. */
@@ -211,8 +281,8 @@ export function liabilityReceiptFields(
   set("originalBalance", num(src.originalBalance));
   for (const k of ["annualRate", "annualInterestRate", "interestRate", "apr"]) {
     if (src[k] == null) continue;
-    const pct = rateInputToStoredPct(src[k]);
-    if (pct != null) set("interestRate", pct);
+    const pct = chatRatePct(src[k], input?.__userMessage);
+    if (Number.isFinite(pct)) set("interestRate", pct);
     break;
   }
   for (const k of ["monthlyPayment", "minimumPayment", "creditLimit", "remainingTermMonths", "termMonths", "dueDay"]) set(k, num(src[k]));

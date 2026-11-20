@@ -12,6 +12,25 @@ import { canonicalFieldKey, canonicalizeProfileFields } from "./profile-field-ca
 
 export interface RegistryFieldDef { key: string; type?: string; label?: string; required?: boolean }
 
+// A type's own "what is it called" field: `card_name` on a credit card,
+// `service_name` on a subscription. The create dialog already asks for Name,
+// which is the profile's title, so this field asked for the same thing twice
+// — and, being required, forced it to be typed twice — while nothing reads
+// it (2026-11-20: "Name" and "Card Name" on Add Liability). An allow-list,
+// not "any *_name": `lender_name` or `provider_name` is a different fact.
+const PRIMARY_NAME_KEY_RE = /^(name|(card|service|item|device|gym|facility|loan|account|subscription|asset|product|membership|bill|plan|policy)_name)$/i;
+
+/** The schema's duplicate-of-Name field (if any) and the schema without it. */
+export function splitPrimaryNameField<T extends RegistryFieldDef>(
+  schema: ReadonlyArray<T> | null | undefined,
+): { nameField: T | null; rest: T[] } {
+  const list = Array.isArray(schema) ? [...schema] : [];
+  const i = list.findIndex((f) => f && typeof f.key === "string" && PRIMARY_NAME_KEY_RE.test(f.key) && (!f.type || f.type === "text"));
+  if (i < 0) return { nameField: null, rest: list };
+  const [nameField] = list.splice(i, 1);
+  return { nameField, rest: list };
+}
+
 /**
  * QA 2026-09-18 BUG-12: the registry form drew a red asterisk for every
  * `required` field (Savings Account → "Bank / Institution *", "Current

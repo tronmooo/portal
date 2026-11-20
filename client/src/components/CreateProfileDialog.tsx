@@ -6,7 +6,8 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import ProfileTypeSelector from "@/components/registry/ProfileTypeSelector";
-import { coerceRegistryFields, missingRequiredFields } from "@shared/registry-fields";
+import { coerceRegistryFields, missingRequiredFields, splitPrimaryNameField } from "@shared/registry-fields";
+import { RATE_UNIT_KEY } from "@shared/liability-fields";
 import type { TypeDefinition } from "@/components/registry/ProfileTypeSelector";
 import DynamicProfileForm from "@/components/registry/DynamicProfileForm";
 import { Button } from "@/components/ui/button";
@@ -95,6 +96,9 @@ export function CreateProfileDialog({
   const [step, setStep] = useState<1 | 2>(1);
   const [selectedTypeKey, setSelectedTypeKey] = useState<string | undefined>(undefined);
   const [selectedTypeDef, setSelectedTypeDef] = useState<TypeDefinition | null>(null);
+  // The type's own name field ("Card Name") duplicates the Name input above
+  // it: it is left out of the form, and its hint becomes Name's placeholder.
+  const { nameField: typeNameField, rest: formSchema } = splitPrimaryNameField(selectedTypeDef?.field_schema as any[] | undefined);
 
   // Step-2 state
   const [name, setName] = useState("");
@@ -185,7 +189,7 @@ export function CreateProfileDialog({
     // QA 2026-09-18 BUG-12: the fields the form marks with a red asterisk
     // are enforced by the same schema flag (shared/registry-fields). Block
     // the save, outline the empty ones and say which they are.
-    const missing = missingRequiredFields(selectedTypeDef.field_schema as any, fields);
+    const missing = missingRequiredFields(formSchema as any, fields);
     if (missing.length > 0) {
       setMissingKeys(missing.map((f) => f.key));
       toast({
@@ -205,10 +209,16 @@ export function CreateProfileDialog({
     // Numeric registry fields arrive as strings from <input type="number">;
     // store them as numbers like every other form does (D264).
     const cleanFields = coerceRegistryFields(
-      selectedTypeDef.field_schema as any,
+      formSchema as any,
       Object.fromEntries(Object.entries(fields).filter(([_, v]) => v !== "" && v !== null && v !== undefined)),
     );
     const legacyType = mapTypeKeyToLegacyType(selectedTypeDef.type_key, selectedTypeDef.category);
+    // A debt's rate field is a "%" input: what was typed IS the percent, so
+    // it is stored with its unit marker (0.9 is 0.9%, never read as 90%).
+    if ((legacyType === "liability" || legacyType === "loan")
+        && ["interest_rate", "interestRate", "apr", "annual_interest_rate"].some((k) => (cleanFields as any)[k] != null)) {
+      (cleanFields as any)[RATE_UNIT_KEY] = "percent";
+    }
     createMutation.mutate({
       type: legacyType,
       // @ts-ignore — type_key is stored as extra field on the profile
@@ -274,25 +284,25 @@ export function CreateProfileDialog({
                   data-testid="input-profile-name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Enter name"
+                  placeholder={(typeNameField as any)?.placeholder || "Enter name"}
                   autoFocus
                 />
               </FieldRow>
 
               {/* Dynamic fields from schema */}
-              {selectedTypeDef && selectedTypeDef.field_schema && selectedTypeDef.field_schema.length > 0 && (
+              {selectedTypeDef && formSchema.length > 0 && (
                 <div className="border-t pt-3">
                   <p className="micro-label text-muted-foreground mb-3">
                     {selectedTypeDef.label} Details
                   </p>
                   <DynamicProfileForm
-                    fieldSchema={selectedTypeDef.field_schema}
+                    fieldSchema={formSchema as any}
                     values={fields}
                     onChange={(next) => {
                       setFields(next);
                       // A field cleared of its error the moment it is filled.
                       if (missingKeys.length > 0) {
-                        setMissingKeys(missingRequiredFields(selectedTypeDef.field_schema as any, next).map((f) => f.key).filter((k) => missingKeys.includes(k)));
+                        setMissingKeys(missingRequiredFields(formSchema as any, next).map((f) => f.key).filter((k) => missingKeys.includes(k)));
                       }
                     }}
                     disabled={createMutation.isPending}

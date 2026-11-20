@@ -32,7 +32,8 @@ const cents = (n: number) => formatMoney(Math.round(n * 100) / 100);
 
 const monthYear = (iso: string) => {
   const d = parseLocalDate(iso);
-  return d ? d.toLocaleDateString("en-US", { month: "short", year: "2-digit" }) : "";
+  // A four-digit year: "Oct 31" for October 2031 read as the 31st of October.
+  return d ? d.toLocaleDateString("en-US", { month: "short", year: "numeric" }) : "";
 };
 
 function listPhrase(items: string[]): string {

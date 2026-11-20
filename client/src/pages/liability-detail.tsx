@@ -117,9 +117,11 @@ import {
 } from "@shared/liability-calc";
 import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
 import { liabilityBillStatus, BILL_STATUS_META, isWithinOverdueGrace } from "@shared/liability-status";
+import { isPausedBillFields } from "@shared/liability-recurrence";
+import { profileValueFingerprint } from "@shared/profile-summary-fingerprint";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { useAutosave, autosaveStatusLabel } from "@/hooks/useAutosave";
-import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw, rateInputToStoredPct, rateInputValue } from "@shared/liability-fields";
+import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw, storedRateFields, rateInputValue } from "@shared/liability-fields";
 import { payoffMissingFields } from "@shared/liability-payoff";
 import { PayoffOutlook } from "@/components/liability/PayoffOutlook";
 import { getRecordTemporalStatus } from "@shared/temporal-status";
@@ -479,8 +481,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     if (v.rate !== "") {
       // Stored as a PERCENT under the canonical key. Writing a decimal here
       // made the Overview print "0.1%" for a 6.25% loan.
-      const r = rateInputToStoredPct(v.rate);
-      if (r != null) fields.interestRate = r;
+      // What is typed IS the percent (0.9 is 0.9%), stored with its unit
+      // marker so no reader has to guess (shared/liability-fields).
+      Object.assign(fields, storedRateFields(v.rate));
     }
     if (v.term !== "") fields.remainingTermMonths = num(v.term);
     if (v.monthly !== "") fields.monthlyPayment = num(v.monthly);
@@ -498,6 +501,18 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     return fields;
   };
   type TermsForm = Parameters<typeof buildTermsFields>[0];
+  // The page header reads the profile-detail cache. A save used to show there
+  // only after a full refetch of that payload (~3 s of the old APR after the
+  // form said "Saved"); the saved fields are written into the cache at once
+  // and the refetch then confirms them.
+  const patchDetailFields = (saved: Record<string, any>) => {
+    qc.setQueryData(["/api/profiles", profile.id, "detail"], (old: any) => {
+      if (!old || typeof old !== "object") return old;
+      const next = { ...(old.fields || {}) };
+      for (const [k, v] of Object.entries(saved)) { if (v === null || v === undefined) delete next[k]; else next[k] = v; }
+      return { ...old, fields: next };
+    });
+  };
   // AUTO-SAVE: every change is saved as it is made (hooks/useAutosave) — only
   // what changed since the last save is written, so a balance moved by a
   // payment while the form sat open is still not put back (D246).
@@ -513,10 +528,36 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" });
         throw err;
       }
+      patchDetailFields(fields);
       invalidateDomains("liabilities", "events");
     },
   });
-  const closeTermsEditor = () => { void termsAutosave.flush(); setEditingTerms(false); };
+  // Done saves what is still waiting BEFORE the form closes: closing first
+  // reset the autosave baseline while a save was in flight and the last edit
+  // could be dropped.
+  const closeTermsEditor = async () => { await termsAutosave.flush(); setEditingTerms(false); };
+  /** Put the form back to the values it opened with; the autosave writes the reversal. */
+  const undoTermsEdits = () => {
+    const o = termsAutosave.opened;
+    if (!o) return;
+    // A field that opened blank is cleared on the record: the form's own
+    // builder skips blank inputs, so the typed value would otherwise stay.
+    const cleared: Record<string, null> = {};
+    const now = { balance: tBalance, original: tOriginal, rate: tRate, term: tTerm, monthly: tMonthly };
+    const stored: Record<keyof typeof now, string[]> = {
+      balance: ["balance"], original: ["originalBalance"], rate: ["interestRate"], term: ["remainingTermMonths"], monthly: ["monthlyPayment"],
+    };
+    for (const k of Object.keys(now) as Array<keyof typeof now>) {
+      if (o[k] === "" && now[k] !== "") for (const key of stored[k]) cleared[key] = null;
+    }
+    setTBalance(o.balance); setTOriginal(o.original); setTRate(o.rate); setTTerm(o.term);
+    setTMonthly(o.monthly); setTDueDay(o.dueDay); setTFirstPayment(o.firstPayment); setTLender(o.lender);
+    if (Object.keys(cleared).length > 0) {
+      void apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields: cleared })
+        .then(() => { patchDetailFields(cleared); invalidateDomains("liabilities", "events"); })
+        .catch((err: any) => toast({ title: "Failed to undo", description: formatApiError(err), variant: "destructive" }));
+    }
+  };
   const openTermsEditor = () => {
     setTBalance(terms.currentBalance ? String(terms.currentBalance) : "");
     setTOriginal(terms.originalBalance ? String(terms.originalBalance) : "");
@@ -621,11 +662,18 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       // The schedule key is ["/api/liabilities", id, "schedule"] — the domain
       // bus predicate matches "/api/liabilities/" (with the slash), so this one
       // has to be invalidated by hand or the card keeps the pre-edit series.
+      patchDetailFields(fields);
       qc.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "schedule"] });
       invalidateDomains("liabilities", "events");
     },
   });
-  const closeBillEditor = () => { void billAutosave.flush(); setEditingBill(false); };
+  const closeBillEditor = async () => { await billAutosave.flush(); setEditingBill(false); };
+  const undoBillEdits = () => {
+    const o = billAutosave.opened;
+    if (!o) return;
+    setBAmount(o.amount); setBFrequency(o.frequency); setBDueDate(o.dueDate); setBCount(o.count);
+    setBEnd(o.end); setBReminder(o.reminder); setBAutopay(o.autopay);
+  };
   const openBillEditor = () => {
     setBAmount(String(schedule?.amount ?? billMonthly ?? ""));
     setBFrequency(billFrequencyLabel || "monthly");
@@ -779,6 +827,11 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const amortize = isAmortizable(subtypeRaw);
   const recurringBill = isRecurringBill(subtypeRaw);
   const f2 = (profile.fields || {}) as any;
+  // A paused bill has no next due date, and "no due date" reads as
+  // "upcoming" — the STATUS tile said Upcoming while the bill was paused.
+  const billHeldLabel: string | null = recurringBill && isPausedBillFields(f2)
+    ? (String(f2.status || "").toLowerCase() === "cancelled" ? "Cancelled" : "Paused")
+    : null;
   const billMonthly = readMonthlyPayment(f2) || Number(f2.balance ?? 0) || 0;
   // The user's calendar day — the same helper the server uses (Rule 13).
   const todayISO = getUserToday(BROWSER_TIMEZONE);
@@ -1076,7 +1129,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         },
         {
           label: "Status",
-          value: seriesComplete ? "Complete" : BILL_STATUS_META[billStatusEff].label,
+          value: seriesComplete ? "Complete" : billHeldLabel ?? BILL_STATUS_META[billStatusEff].label,
           sub: `${payments.length} paid`,
           icon: ActivityIcon,
           testId: "kpi-bill-status",
@@ -1237,7 +1290,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             )}
 
             {/* AI insights card */}
-            <AISummaryCard profileId={profile.id} />
+            <AISummaryCard profileId={profile.id} valueFingerprint={profileValueFingerprint(profile)} />
 
             {/* Linked assets — surfaced near the top for parity with asset profiles */}
             <section data-testid="overview-linked-assets">
@@ -1466,6 +1519,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                     <Button size="sm" onClick={closeBillEditor} data-testid="button-save-bill">
                       Done
                     </Button>
+                    <Button size="sm" variant="ghost" onClick={undoBillEdits} disabled={!billAutosave.changedSinceOpen}
+                      title="Put every field back to what it was when you opened this form" data-testid="button-undo-bill-edits">
+                      Undo changes
+                    </Button>
                     <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="bill-autosave-status">
                       {autosaveStatusLabel(billAutosave.status)}
                     </span>
@@ -1485,7 +1542,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   <Row label="Recurring amount" value={fmtUSD(schedule?.amount ?? billMonthly)} />
                   <Row label="Frequency" value={cap(billFrequencyLabel)} />
                   <Row label="Next scheduled due" value={seriesComplete ? "Complete" : fmtDate(billNextDueEff)} />
-                  <Row label="Payment status" value={seriesComplete ? "Complete" : BILL_STATUS_META[billStatusEff].label} />
+                  <Row label="Payment status" value={seriesComplete ? "Complete" : billHeldLabel ?? BILL_STATUS_META[billStatusEff].label} />
                   <Row label="First payment" value={fmtDate(schedule?.firstPayment ?? terms.firstPaymentDate)} />
                   {/* ONE term row. This used to be three — "Total term: Ongoing
                       (no end date)", "Remaining: Ongoing" and "Ends: No end
@@ -1556,6 +1613,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   <div className="flex items-center gap-2">
                     <Button size="sm" onClick={closeTermsEditor} data-testid="button-save-terms">
                       Done
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={undoTermsEdits} disabled={!termsAutosave.changedSinceOpen}
+                      title="Put every field back to what it was when you opened this form" data-testid="button-undo-terms-edits">
+                      Undo changes
                     </Button>
                     <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="terms-autosave-status">
                       {autosaveStatusLabel(termsAutosave.status)}
@@ -3258,9 +3319,11 @@ interface AISummaryData {
     trend?: "up" | "down" | "stable";
   }>;
   generatedAt: string;
+  /** The figures the summary was written from (shared/profile-summary-fingerprint). */
+  fingerprint?: string;
 }
 
-function AISummaryCard({ profileId }: { profileId: string }) {
+function AISummaryCard({ profileId, valueFingerprint }: { profileId: string; valueFingerprint?: string }) {
   // When set, the next fetch appends ?force=true so the server regenerates
   // instead of serving its 2h cache. A ref (not state) keeps the single
   // useQuery queryFn as the only fetch path — the old handler set the cache to
@@ -3286,6 +3349,20 @@ function AISummaryCard({ profileId }: { profileId: string }) {
     forceRef.current = true;
     refetch();
   }, [refetch]);
+
+  // The summary carries the fingerprint of the figures it was written from
+  // (balance, last payment). When the page now shows different figures — a
+  // payment was just recorded — it is out of date: ask for a new one, once
+  // per change, and say so meanwhile instead of showing old numbers as
+  // "Generated 5m ago" (2026-11-20). A read, never a write.
+  const summaryStale = !!aiSummary?.fingerprint && !!valueFingerprint && aiSummary.fingerprint !== valueFingerprint;
+  const refetchedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!summaryStale || isFetching || !valueFingerprint) return;
+    if (refetchedFor.current === valueFingerprint) return;
+    refetchedFor.current = valueFingerprint;
+    refetch();
+  }, [summaryStale, isFetching, valueFingerprint, refetch]);
 
   // Only hide outright when there's nothing to show. Once a summary has loaded,
   // keep it on screen across refresh errors (react-query retains the last data)
@@ -3388,7 +3465,9 @@ function AISummaryCard({ profileId }: { profileId: string }) {
 
         {aiSummary.generatedAt && (
           <p className="text-xs text-muted-foreground pt-1">
-            Generated {fmtTimeAgo(new Date(aiSummary.generatedAt))}
+            {summaryStale
+              ? (isFetching ? "Updating for your latest change…" : isError ? "Out of date — couldn't refresh. Tap refresh to try again." : "Out of date — updating…")
+              : <>Generated {fmtTimeAgo(new Date(aiSummary.generatedAt))}</>}
           </p>
         )}
       </CardContent>

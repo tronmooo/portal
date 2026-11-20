@@ -14,7 +14,11 @@ export function profileValueFingerprint(profile: any): string {
   const asset = resolveAssetValue(fields);
   const debt = resolveLiabilityBalance(fields);
   const asOf = String(fields?.currentValueAsOf ?? fields?.valueAsOf ?? "").slice(0, 10);
-  return `v${asset}|d${debt}|${asOf}`;
+  // The last payment too: a payment can leave the balance where the summary
+  // already had it (an edit, a reversal re-recorded) yet change "last payment",
+  // and a summary kept quoting the Nov 18 payment after one on Nov 20.
+  const paid = String(fields?.lastPaidDate ?? fields?.last_paid_date ?? "").slice(0, 10);
+  return `v${asset}|d${debt}|${asOf}|p${paid}`;
 }
 
 /** True when a cached summary was written from different figures than the profile shows now. */

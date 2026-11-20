@@ -31,7 +31,7 @@ describe("L1 — one debt is one record", () => {
 
 describe("L3 — a rate is a percent, typed and stored", () => {
   it("the terms form stores what was typed under `interestRate`, with no unit guess", () => {
-    expect(page).toContain("if (r != null) fields.interestRate = r;");
+    expect(page).toContain("Object.assign(fields, storedRateFields(v.rate));");
     expect(page).not.toMatch(/r > 1 \? r \/ 100 : r/);
     // …and opens from the percent reader, not the decimal `terms.annualRate`.
     expect(page).not.toMatch(/setTRate\(terms\.annualRate/);
@@ -83,6 +83,6 @@ describe("the rules are written down", () => {
     const rules = src("CLAUDE.md");
     expect(rules).toContain("## Liability rules");
     expect(rules).toContain("tests/liability-rules-guards.test.ts");
-    for (const n of ["L1", "L2", "L3", "L4", "L5", "L6", "L7"]) expect(rules, n).toContain(`**${n}.`);
+    for (const n of ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"]) expect(rules, n).toContain(`**${n}.`);
   });
 });

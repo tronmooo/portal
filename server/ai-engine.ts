@@ -236,6 +236,8 @@ import { recordProfileEdit } from "./profile-history";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
+import { paymentReceiptLine, paymentNotRecordedLine, composePaymentReply } from "@shared/payment-receipt";
+import { chatRatePct, storedRateFields, RATE_UNIT_KEY } from "@shared/liability-fields";
 import { readMonthlyPayment as sharedReadMonthlyPayment, readBalance as sharedReadBalance, liabilityReceiptFields } from "@shared/liability-fields";
 import { isRecurringBill as sharedIsRecurringBill, isRecurringBillProfile, normalizeLiabilityName, liabilityFamily, liabilityTypeKeyOf } from "@shared/liability-types";
 import { liabilityBillStatus as sharedBillStatus } from "@shared/liability-status";
@@ -4248,7 +4250,8 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         monthlyPayment: { type: "number", description: "Required monthly payment amount." },
         minimumPayment: { type: "number", description: "Minimum payment due (credit_card / bnpl). Often the floor before late fees kick in." },
         creditLimit: { type: "number", description: "Credit limit (credit_card / heloc only). Used to compute utilization on the Overview tab." },
-        remainingTermMonths: { type: "number", description: "Months remaining on a fixed-term loan. Omit for revolving (credit_card)." },
+        termMonths: { type: "number", description: "The loan's ORIGINAL contract term in months: 'a 36-month loan' → 36, '30-year mortgage' → 360. Use THIS for the term the user states. Omit for revolving (credit_card)." },
+        remainingTermMonths: { type: "number", description: "Months still LEFT to pay — ONLY when the user says how many are left ('28 months left', '5 years remaining'). Never put the original term here." },
         firstPaymentDate: { type: "string", description: "YYYY-MM-DD of the first scheduled payment." },
         dueDay: { type: "number", description: "Day-of-month the payment is due (1-31). The loan appears on the calendar from this." },
         lender: { type: "string", description: "Lender / bank / servicer name. e.g. 'Chase', 'Sallie Mae', 'Wells Fargo', 'Affirm', 'IRS'." },
@@ -10051,8 +10054,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         }
       }
       // Normalize annualRate (accept either decimal 0.065 or percent 6.5)
-      let rate = Number(input.annualRate);
-      if (!isNaN(rate) && rate > 1) rate = rate / 100;
+      // …stored as a PERCENT with its unit marker (shared/liability-fields).
+      const ratePct = chatRatePct(input.annualRate, (input as any).__userMessage);
       // Auto-infer subtype if the model omitted it (safety net for NLP coverage).
       // Order matters: most-specific patterns first.
       if (!input.subtype) {
@@ -10138,11 +10141,24 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       else if (input.currentBalance != null) fields.originalBalance = Number(input.currentBalance);
       // Stored as a PERCENT under the canonical key (shared/profile-field-canon):
       // a decimal here printed as "0.1%" wherever the stored value is shown as-is.
-      if (!isNaN(rate)) fields.interestRate = Math.round(rate * 100 * 1e6) / 1e6;
+      if (Number.isFinite(ratePct)) Object.assign(fields, storedRateFields(ratePct));
       if (input.monthlyPayment != null) fields.monthlyPayment = Number(input.monthlyPayment);
       if (input.minimumPayment != null) fields.minimumPayment = Number(input.minimumPayment);
       if (input.creditLimit != null) fields.creditLimit = Number(input.creditLimit);
-      if (input.remainingTermMonths != null) fields.remainingTermMonths = Number(input.remainingTermMonths);
+      // The stated term is the ORIGINAL term; what is left is derived from it
+      // and the first payment (shared/loan-facts loanStoredTermMonths). A
+      // "remaining" the user never described as remaining, on a loan that has
+      // already started, is the original term under the wrong name.
+      {
+        const saidLeft = /\b(left|remaining|remain|to go)\b/i.test(String((input as any).__userMessage || ""));
+        const started = /^\d{4}-\d{2}-\d{2}/.test(String(input.firstPaymentDate || ""))
+          && String(input.firstPaymentDate).slice(0, 10) < new Date().toLocaleDateString("en-CA", { timeZone: aiUserTimezone() });
+        if (input.termMonths != null) fields.termMonths = Number(input.termMonths);
+        if (input.remainingTermMonths != null) {
+          if (input.termMonths == null && started && !saidLeft) fields.termMonths = Number(input.remainingTermMonths);
+          else fields.remainingTermMonths = Number(input.remainingTermMonths);
+        }
+      }
       if (input.firstPaymentDate) fields.firstPaymentDate = input.firstPaymentDate;
       if (input.dueDay != null) fields.dueDay = Number(input.dueDay);
       if (input.lender) fields.lender = input.lender;
@@ -10447,9 +10463,10 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // less is read as a fraction, as normalizeAnnualRate does everywhere.
       for (const rateKey of ["annualRate", "annualInterestRate", "interestRate", "apr"]) {
         if (ch[rateKey] == null) continue;
-        const r = Number(ch[rateKey]);
-        if (isNaN(r)) continue;
-        ch[rateKey] = Math.round((r > 1 ? r : r * 100) * 1e6) / 1e6;
+        const r = chatRatePct(ch[rateKey], (input as any).__userMessage);
+        if (!Number.isFinite(r)) continue;
+        ch[rateKey] = r;
+        ch[RATE_UNIT_KEY] = "percent";
       }
       const updates: any = {};
       if (ch.subtype) updates.type_key = ch.subtype;
@@ -10472,6 +10489,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if (k === "subtype") continue;
         setField(k, v);
       }
+      // A new ORIGINAL term (a refinance: "30 years") supersedes an old
+      // "months left" figure, which would otherwise keep winning.
+      if (ch.termMonths != null && ch.remainingTermMonths == null) delete newFields.remainingTermMonths;
       // Refinance flow: the new loan starts at the new balance.
       if (input.refinance) {
         if (ch.originalBalance == null) setField("originalBalance", sharedReadBalance(newFields));
@@ -10543,9 +10563,35 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         aiUserTimezone(),
       );
       if (!paid.ok) return { error: `Couldn't record the payment on ${liability.name}` };
+      // What the reply says about this payment comes from the RECORD, read
+      // back after the write (shared/payment-receipt) — never from the
+      // model's arithmetic, and never "paid" for a payment that was folded
+      // into an earlier one and not written.
+      const afterPay: any = await Promise.resolve(storage.getProfile(liability.id)).catch(() => null);
+      const tracksBalance = !isRecurringBillProfile(afterPay || liability);
+      const balanceAfter = tracksBalance ? sharedLiabilityBalance(afterPay || liability) : null;
+      if ((paid as any).deduped) {
+        const line = paymentNotRecordedLine(liability.name, Number(input.amount) || 0, balanceAfter);
+        return {
+          result: { alreadyRecorded: true, payment: paid.payment, balance: balanceAfter, paymentReceipt: line, note: "NOT recorded again — tell the user exactly this and nothing about a new balance." },
+          deduped: true,
+          message: line,
+          actions: [],
+        };
+      }
+      const paymentReceipt = paymentReceiptLine({
+        liabilityName: liability.name,
+        amount: Number((paid.payment as any)?.amount ?? input.amount) || 0,
+        principal: paid.principal, interest: paid.interest,
+        balanceAfter,
+      });
       return {
+        message: paymentReceipt,
         result: {
-          payment: paid.payment, newBalance: paid.newBalance, principal: paid.principal, interest: paid.interest,
+          paymentReceipt,
+          // The stored balance, not the plan's: this is the number to quote.
+          balanceAfter,
+          payment: paid.payment, newBalance: balanceAfter ?? paid.newBalance, principal: paid.principal, interest: paid.interest,
           // A payoff's excess or a settlement's write-off is the one thing the
           // user must hear back; without it the reply said "paid" and nothing
           // about the $5,980 the lender owes back or the $2,900 written off.
@@ -19239,6 +19285,17 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       if (receipts.length > 0) finalReply = composeReceiptReply(receipts, finalReply || "");
     } catch (e: any) {
       logger.warn("ai", `[field-receipt] reply compose skipped: ${e?.message || e}`);
+    }
+
+    // The same for a debt PAYMENT: the line that says what was recorded and
+    // what the balance is now is the server's, built from the stored record.
+    try {
+      const paymentLines = allResults
+        .map((r: any) => (r && !r.error ? (r.paymentReceipt ?? r.result?.paymentReceipt) : null))
+        .filter((l: any): l is string => typeof l === "string" && l.length > 0);
+      if (paymentLines.length > 0) finalReply = composePaymentReply(paymentLines, finalReply || "");
+    } catch (e: any) {
+      logger.warn("ai", `[payment-receipt] reply compose skipped: ${e?.message || e}`);
     }
 
     // No raw database ids and no "let me look that up" preamble reach the

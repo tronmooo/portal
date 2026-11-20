@@ -27,7 +27,7 @@ export function useAutosave<T>(opts: {
   /** Persist `snapshot`, given the last-saved `baseline`. Reject to report an error. */
   save: (snapshot: T, baseline: T) => Promise<void>;
   delayMs?: number;
-}): { status: AutosaveStatus; flush: () => Promise<void> } {
+}): { status: AutosaveStatus; flush: () => Promise<void>; opened: T | null; changedSinceOpen: boolean } {
   const { enabled, snapshot, delayMs = AUTOSAVE_DELAY_MS } = opts;
   const key = JSON.stringify(snapshot);
   const [status, setStatus] = useState<AutosaveStatus>("idle");
@@ -37,6 +37,10 @@ export function useAutosave<T>(opts: {
   const latest = useRef<{ key: string; value: T }>({ key, value: snapshot });
   latest.current = { key, value: snapshot };
   const baseline = useRef<{ key: string; value: T } | null>(null);
+  // What the form OPENED with. `baseline` moves forward with every save; this
+  // does not, so "Undo changes" can put the form back where it started — an
+  // auto-saving form has no Cancel to do that.
+  const opened = useRef<{ key: string; value: T } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef<Promise<void> | null>(null);
   const mounted = useRef(true);
@@ -68,12 +72,13 @@ export function useAutosave<T>(opts: {
   useEffect(() => {
     if (!enabled) {
       baseline.current = null;
+      opened.current = null;
       if (timer.current) { clearTimeout(timer.current); timer.current = null; }
       setStatus("idle");
       return;
     }
     // Opening the form: what it opened with is the baseline, not a change.
-    if (!baseline.current) { baseline.current = { key, value: snapshot }; return; }
+    if (!baseline.current) { baseline.current = { key, value: snapshot }; opened.current = baseline.current; return; }
     if (key === baseline.current.key) return;
     setStatus("pending");
     if (timer.current) clearTimeout(timer.current);
@@ -87,7 +92,7 @@ export function useAutosave<T>(opts: {
   }, [run]);
 
   const flush = useCallback(async () => { if (baseline.current) await run(); }, [run]);
-  return { status, flush };
+  return { status, flush, opened: opened.current?.value ?? null, changedSinceOpen: !!opened.current && opened.current.key !== key };
 }
 
 /** The short line an auto-saving form shows beside its Done button. */

@@ -851,7 +851,25 @@ export async function payBillOccurrence(
   // Only an explicit form submission means "pay this again": automation
   // (autopay, a confirmed extraction, a chat tool the model may call twice)
   // keeps the old idempotent answer on a settled occurrence.
-  const automated = input.source === "autopay" || input.source === "extraction" || input.source === "ai" || input.source === "shim";
+  //
+  // The CHAT paying down a debt is not one of them. "Paid $500 on my Chase card" after a $95
+  // payment the same day is a second payment the user stated, with its own
+  // amount — answering it with the first payment's row left the balance
+  // untouched while the reply said "New balance: $2,671.64" (2026-11-20). For
+  // the chat only the model's own double call is folded: the same money, on
+  // the same day, within a minute of the row it repeats.
+  // A recurring service bill keeps the idempotent answer from the chat: one
+  // occurrence of a phone bill is paid once, and a second "pay it" is the
+  // model repeating itself. A DEBT is paid down as often as the user says.
+  const automated = input.source === "autopay" || input.source === "extraction" || input.source === "shim"
+    || (input.source === "ai" && recurring);
+  const sameMoneyWithin = (stamp: any, windowMs: number) => {
+    const ageMs = stamp && typeof stamp.postedAt === "string" ? Date.now() - Date.parse(stamp.postedAt) : NaN;
+    const stampDate = stamp && typeof stamp.paymentDate === "string" ? stamp.paymentDate.slice(0, 10) : "";
+    const sameDay = !stampDate || stampDate === String(paymentDate || "").slice(0, 10);
+    return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < windowMs && Math.abs(Number(stamp.amount) - amount) < 0.005 && sameDay;
+  };
+  const chatRepeat = (stamp: any) => input.source === "ai" && sameMoneyWithin(stamp, 60_000);
   // A one-tap "Mark paid" (no amount of its own) repeated on a settled
   // occurrence is the same tap a minute later, not a second payment; only a
   // payment that names its amount can be one.
@@ -871,7 +889,7 @@ export async function payBillOccurrence(
     const latest = stamps
       .filter((o) => o && o.status === "paid" && typeof o.postedAt === "string" && o.paymentId)
       .sort((a, b) => String(b.postedAt).localeCompare(String(a.postedAt)))[0];
-    if (latest && sameTap(latest)) {
+    if (latest && (sameTap(latest) || chatRepeat(latest))) {
       const winner = await findPaymentWithRetry(storage, liabilityId, latest.paymentId);
       return {
         ok: true, deduped: true, payment: winner, liability, occurrenceDate: curDue || occurrenceDate,
@@ -925,7 +943,7 @@ export async function payBillOccurrence(
       const claim = await claimFn.call(storage, liabilityId, occurrenceDate, stamp, extra);
       if (claim.status === "already-paid") {
         const prior = claim.occurrences?.[occurrenceDate];
-        if (sameTap(prior) || automated || !explicitAmount) {
+        if (sameTap(prior) || chatRepeat(prior) || automated || !explicitAmount) {
           const winner = await findPaymentWithRetry(storage, liabilityId, prior?.paymentId);
           return {
             ok: true, deduped: true, payment: winner, liability, occurrenceDate,

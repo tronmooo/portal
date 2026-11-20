@@ -6253,6 +6253,20 @@ Respond ONLY in JSON format:
           timestamp: t.timestamp,
         })),
       };
+      // A debt's summary is written from its PAYMENTS, not only its fields: the
+      // model was never shown the ledger, so "last payment" came from a field
+      // an extra-principal payment does not touch and the summary kept quoting
+      // an older instalment.
+      if (detail.type === "liability" || detail.type === "loan") {
+        try {
+          const recent = await storage.getLiabilityPayments(id);
+          profileData.recentPayments = (recent || []).slice(0, 6).map((p: any) => ({
+            date: p.paymentDate, amount: p.amount, principal: p.principalPortion, interest: p.interestPortion,
+            type: p.paymentType || undefined, balanceAfter: p.remainingBalanceAfter ?? undefined,
+          }));
+          profileData.currentBalance = resolveLiabilityValue(detail.fields || {});
+        } catch (err) { console.error("[routes:profile-ai-summary] payments read failed:", err); }
+      }
 
       // Type-specific prompt angles
       const typePrompts: Record<string, string> = {

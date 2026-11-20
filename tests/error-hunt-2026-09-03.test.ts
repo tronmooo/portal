@@ -3192,7 +3192,9 @@ describe("D264 registry-form numeric fields are coerced at submit", async () => 
   it("the create-profile dialog coerces by the selected type's schema", () => {
     const src = readFileSync(new URL("../client/src/components/CreateProfileDialog.tsx", import.meta.url), "utf8");
     expect(src).toContain("coerceRegistryFields(");
-    expect(src).toContain("selectedTypeDef.field_schema");
+    // The selected type's schema, minus the field that duplicates Name.
+    expect(src).toContain("splitPrimaryNameField(selectedTypeDef?.field_schema");
+    expect(src).toMatch(/coerceRegistryFields\(\s*formSchema as any,/);
   });
 });
 

@@ -83,7 +83,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 }
 import { getUserToday, getUserCurrentMonth, parseLocalDate, toLocalDateStr, localDayOf, addDays as tzAddDays, DEFAULT_TIMEZONE } from "../shared/timezone";
 import { prepareProfileFields } from "../shared/registry-fields";
-import { readMonthlyPayment } from "../shared/liability-fields";
+import { readMonthlyPayment, stampRateUnit } from "../shared/liability-fields";
 import { sumExpenses } from "../shared/expense-ledger";
 import { validateEntityIntegrity, resolveCanonicalFields } from "../shared/entity-integrity";
 import { logIntegrity } from "./integrity-log";
@@ -6371,8 +6371,11 @@ export class SupabaseStorage implements IStorage {
     ctx: { typeKey?: string | null; todayISO?: string },
     meta: { entityType?: string; entityId?: string } = {},
   ): T {
-    const prepared = prepareProfileFields(fields, ctx);
+    let prepared = prepareProfileFields(fields, ctx);
     if (!prepared || typeof prepared !== "object") return prepared;
+    // A debt's rate is stored as a percent WITH its unit marker, so a rate
+    // under 1% is not read back as a decimal (shared/liability-fields).
+    if (meta.entityType === "liability" || meta.entityType === "loan") prepared = stampRateUnit(prepared);
     try {
       const resolved = resolveCanonicalFields(prepared, { at: new Date().toISOString() });
       for (const w of resolved.warnings) {

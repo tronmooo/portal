@@ -175,12 +175,19 @@ disagrees with it, so an alias write is silently discarded — the chat said
 built from a read-back of the saved record, never from the model's sentence.
 *Guards:* `tests/chat-liability-one-record.test.ts`, `tests/profile-field-canon.test.ts`.
 
-**L3. A rate is a percent.** `interestRate` is stored as a percent (6.25).
-Read it only through `shared/liability-fields.ts` (`readInterestRatePct` to
-show or prefill, `readAnnualRate` for math). Never print the raw field and
-never guess the unit at a write (`r > 1 ? r / 100 : r`): a decimal under a
-"%" label was shown as "0.1%" and a form labelled "%" opened with 0.0625.
-*Guards:* `tests/no-inline-liability-field-chains.test.ts`, `tests/liability-rules-guards.test.ts`.
+**L3. A rate is a percent, and the record says so.** `interestRate` is stored
+as a percent (6.25) beside the marker `_interestRateUnit: "percent"`
+(`RATE_UNIT_KEY`, `shared/liability-fields.ts`). Read it only through that
+module (`readInterestRatePct` to show or prefill, `readAnnualRate` for math —
+feed the amortization engine the DECIMAL). Write it with `storedRateFields`
+(a "%" input: what is typed is the percent) or, in a chat tool, `chatRatePct`
+then `storedRateFields`. Never print the raw field and never guess the unit
+at a write (`r > 1 ? r / 100 : r`): the guess cannot hold a rate under 1% —
+0.9 typed in the loan-terms form was stored as 90 ("APR 90.00%"). Only an
+UNMARKED legacy row is still guessed, and the storage layer marks it the
+next time it is written (`stampRateUnit`).
+*Guards:* `tests/liability-rate-unit.test.ts`, `tests/no-inline-liability-field-chains.test.ts`,
+`tests/liability-rules-guards.test.ts`.
 
 **L4. The list and the page agree.** A debt's type comes from the `type_key`
 column (`liabilityTypeKeyOf`, `shared/liability-types.ts`), not `fields.*`
@@ -202,8 +209,15 @@ same rule. A month's interest is charged once (`interestChargedInMonth`,
 `shared/liability-calc.ts`) — a second payment in the month is all principal.
 "Extra principal" sends the extra alone as `paymentType: "extra_principal"`
 and carries no interest. Reversing a payment takes two taps (Rule 8).
+A payment the chat reports IS recorded: on a debt, a second chat payment the
+same day is its own payment (only the model's double call — same money, same
+day, within a minute — is folded, and then the reply says nothing new was
+recorded). The confirmation line is the server's, from the ledger row and a
+read-back of the balance (`shared/payment-receipt.ts`), never the model's
+subtraction ("$1,150" quoted against a stored $1,173.85; "New balance:
+$2,671.64" for a payment that was never written).
 *Guards:* `tests/liability-interest-once-per-month.test.ts`, `tests/liability-payment-parity.test.ts`,
-`tests/liability-rules-guards.test.ts`.
+`tests/chat-payment-recorded.test.ts`, `tests/liability-rules-guards.test.ts`.
 
 **L6. A write made elsewhere shows when the profile is reopened.** A payment
 recorded in chat can only mark the closed profile's query stale; the detail
@@ -219,10 +233,24 @@ Edit dialog saves through `client/src/lib/profile-autosave.ts`, the
 loan-terms and bill-details forms through `client/src/hooks/useAutosave.ts`
 (after a pause in typing, on Done, and on leaving the page; only what changed
 since the last save; nothing on open — Rule 3). A new edit form uses one of
-these. After deleting a liability the app returns to the Liabilities list
+these. Because there is no Cancel, the form offers "Undo changes" (back to
+the values it opened with — `useAutosave().opened`), and Done awaits the
+pending save before closing. A saved edit is written into the profile-detail
+cache at once so the header does not show the old value until a refetch.
+After deleting a liability the app returns to the Liabilities list
 (`/linked?tab=liabilities`), not the Info tab.
 *Guards:* `tests/autosave-edit-forms.dom.test.tsx`, `tests/profile-autosave.test.ts`,
-`tests/liability-qa-2026-11-18-followup.test.ts`.
+`tests/liability-qa-2026-11-18-followup.test.ts`, `tests/liability-term-and-status.test.ts`.
+
+**L8. A loan's original term is not its months left.** `termMonths` is the
+contract term ("a 36-month loan"); `remainingTermMonths` is only what the
+user says is LEFT. "Payments left" has one reader, `loanStoredTermMonths(fields,
+today)` (`shared/loan-facts.ts`): an explicit remaining figure, else the term
+minus the payments scheduled since the first payment. Never count a stored
+term from today (a 36-month loan eight months in showed "36 payments left").
+The AI summary of a debt is written from its payments and is stale when the
+balance or last payment date changes (`shared/profile-summary-fingerprint.ts`).
+*Guard:* `tests/liability-term-and-status.test.ts`.
 
 ## Journal and Notes rules (what was written stays written, and chat can read it back)
 

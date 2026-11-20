@@ -149,11 +149,40 @@ export function loanMonthlyPayment(fields: Record<string, any> | null | undefine
   return readMonthlyPayment(fields);
 }
 
-/** The contract term still stored on the loan (months), or 0. */
-export function loanStoredTermMonths(fields: Record<string, any> | null | undefined): number {
-  const f = fields || {};
-  const n = Math.floor(Number(f.remainingTermMonths ?? f.remaining_term_months ?? f.loanTermMonths ?? f.termMonths ?? f.term_months ?? 0) || 0);
+const wholeMonths = (v: unknown): number => {
+  const n = Math.floor(Number(v) || 0);
   return n > 0 ? n : 0;
+};
+
+/**
+ * The payments still to make on a fixed-term loan, in months, or 0 when the
+ * loan names no term.
+ *
+ * A loan's ORIGINAL term (`termMonths`: "a 36-month loan") and the months
+ * still LEFT (`remainingTermMonths`) are different facts. With only one field
+ * for both, "36 months, first payment March 10" was stored as 36 months
+ * remaining and the loan showed "36 payments left" eight months in
+ * (2026-11-20). When the original term and the loan's first payment are both
+ * known, what is left is derived: the term minus the payments already
+ * scheduled before the next due date. With `todayISO` omitted nothing can be
+ * derived and the stored number is returned as before.
+ */
+export function loanStoredTermMonths(fields: Record<string, any> | null | undefined, todayISO?: string | null): number {
+  const f = fields || {};
+  const original = wholeMonths(f.termMonths ?? f.term_months ?? f.loanTermMonths ?? f.loan_term_months);
+  // An explicit "months left" is the user's own answer and wins.
+  const stated = wholeMonths(f.remainingTermMonths ?? f.remaining_term_months);
+  if (stated > 0) return stated;
+  const today = clip(todayISO);
+  if (original > 0 && ISO_DAY.test(today)) {
+    const origin = normalizeDateString(f.firstPaymentDate ?? f.first_payment_date ?? f.loanStartDate ?? f.loan_start_date ?? f.startDate ?? f.start_date);
+    if (origin) {
+      const next = nextLoanDueDate(f, today) ?? today;
+      const elapsed = (Number(next.slice(0, 4)) - Number(origin.slice(0, 4))) * 12 + (Number(next.slice(5, 7)) - Number(origin.slice(5, 7)));
+      return Math.max(0, original - Math.max(0, elapsed));
+    }
+  }
+  return original;
 }
 
 /**
@@ -167,7 +196,7 @@ export function loanPayoff(
 ): LiabilitySummary {
   const f = fields || {};
   const payment = loanMonthlyPayment(f);
-  const term = loanStoredTermMonths(f);
+  const term = loanStoredTermMonths(f, todayISO);
   return summarizeLiability({
     currentBalance: readBalance(f),
     originalBalance: readOriginalBalance(f) || undefined,
