@@ -330,7 +330,8 @@ the buttons and the manual forms); else the first clause of the text
 not mid-sentence.
 *Guards:* `tests/journal-entries-routes.test.ts`, `tests/chat-capture-buttons.test.ts`.
 
-*Live check for J1–J8 (deployed app, smoke account):* `npx tsx tests/live-journal-check.ts`.
+*Live checks for J1–J8 (deployed app, smoke account):* `npx tsx tests/live-journal-check.ts` (server),
+`npx tsx tests/live-journal-ui-check.ts` (real browser: the buttons, the For menu, the Journal page).
 
 ## Auto Pay rules (routine payments record themselves; the books stay honest)
 
