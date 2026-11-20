@@ -119,6 +119,8 @@ import { normalizeTrackerEntry, stripUnstatedSleepQuality } from "./tracker-norm
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF, mergeDismissedNotifications } from "./notification-service";
 import { upcomingEventOccurrences } from "@shared/event-upcoming";
 import { rankByName } from "@shared/entity-resolution";
+import { journalFilingContent, parseJournalReadIntent, parseNoteFindIntent, rankNotesByTopic } from "@shared/journal-intent";
+import { answerJournalRead, answerNoteFind, journalContextBlock, journalEntriesFor, resolveJournalDay, moodLabel, longDay } from "./journal-read";
 import { markOccurrence as markRecurringOccurrence, pruneOccurrenceTags as pruneRecurringOccurrenceTags } from "@shared/recurring-dates";
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, entityTypeForTool, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
@@ -4787,6 +4789,21 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     },
   },
   {
+    name: "read_journal",
+    description: "READ the user's journal: the text and mood of stored entries. Use it for ANY question about what the journal holds — 'show me my journal entry from today', 'what did I write yesterday', 'what was my mood on Monday', 'summarize my journal this week', 'did I write about work'. The data snapshot lists entry DATES only, so call this before answering; never say you cannot see the journal, and never answer a journal question with a document (open_document / search_documents).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        date: { type: "string", description: "One day, YYYY-MM-DD (or 'today' / 'yesterday'). Omit for the most recent entries." },
+        from: { type: "string", description: "Start of a date range, YYYY-MM-DD." },
+        to: { type: "string", description: "End of a date range, YYYY-MM-DD." },
+        query: { type: "string", description: "Only entries whose text contains this." },
+        limit: { type: "number", description: "Max entries. Default 7." },
+      },
+      required: [],
+    },
+  },
+  {
     name: "search_notes",
     description: "Search the user's NOTES by text and/or profile. Use before answering 'what was Robert's gate code', 'what notes do I have about the car'.",
     input_schema: {
@@ -6356,7 +6373,7 @@ force a multi-part message into one object.
 - create: create_note(content, title?, forProfile?, tags?)
 - update: update_note(title, content?|append?, newTitle?, forProfile?)
 - delete: delete_note(title, forProfile?)
-- search: search_notes(query?, forProfile?)
+- search: search_notes(query?, forProfile?) — 'find my note about X' is ALWAYS this, never open_document/search_documents
 Notes never own a calendar date. If a note's text carries an actionable future
 date, create the task/event separately — do NOT drop the note.
 
@@ -6365,6 +6382,7 @@ date, create the task/event separately — do NOT drop the note.
 - append: append_journal_entry(content, entryDate?, forProfile?)
 - update today's: update_journal(date:"today's date", changes)
 - delete: delete_journal(date)
+- read: read_journal(date?, from?, to?, query?) — the ONLY way to see an entry's text or mood. A question about the journal is never answered with a document.
 entryDate is WHEN THE EXPERIENCE HAPPENED, YYYY-MM-DD. "Journal entry for
 yesterday" / "journal this from last Friday" → resolve the relative day against
 today's date and pass it. The entry date does NOT go on the calendar and creates
@@ -12507,13 +12525,39 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       return { success: ok, id: hit.match.id, title: hit.match.title, dateRuleImpact: "none — notes do not own Date Rules" };
     }
 
+    case "read_journal": {
+      const tz = aiUserTimezone();
+      const rawDay = String(input.date || "").trim().toLowerCase();
+      const day = rawDay ? resolveJournalDay(rawDay, tz) : null;
+      if (rawDay && !day) return { error: `"${input.date}" is not a day I can read — pass YYYY-MM-DD, "today" or "yesterday".` };
+      const iso = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null);
+      const rows = await journalEntriesFor(storage, {
+        day, from: iso(input.from), to: iso(input.to), query: input.query,
+        limit: Math.max(1, Math.min(60, Number(input.limit) || 7)),
+      });
+      return {
+        count: rows.length,
+        // Not `entries`: the result summariser keeps only ids and values of
+        // an `entries` array (tracker logs) and would drop the text.
+        journal: rows.map((e) => ({ date: e.date, mood: e.mood, content: e.content })),
+        ...(rows.length === 0 ? { note: day ? `There is no journal entry for ${day}.` : "No journal entries match." } : {}),
+      };
+    }
+
     case "search_notes": {
       const noteProfile = await resolveNoteProfile(input.forProfile, input.query || "");
-      const found = await listNotes(storage, {
+      const noteLimit = Math.max(1, Math.min(100, Number(input.limit) || 20));
+      let found = await listNotes(storage, {
         profileId: noteProfile?.id ?? null,
         query: input.query,
-        limit: Math.max(1, Math.min(100, Number(input.limit) || 20)),
+        limit: noteLimit,
       });
+      // "buying new tires" is not a substring of "Buy new tires for the
+      // Honda". When the exact phrase finds nothing, match on the words.
+      if (found.length === 0 && String(input.query || "").trim()) {
+        const pool = await listNotes(storage, { profileId: noteProfile?.id ?? null });
+        found = rankNotesByTopic(pool as any[], String(input.query)).slice(0, noteLimit);
+      }
       return found.map((n: any) => ({
         id: n.id, title: n.title, content: n.content,
         linkedProfiles: n.linkedProfiles || [], createdAt: n.createdAt, updatedAt: n.updatedAt,
@@ -12571,8 +12615,19 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       }
 
       const actionable = findActionableTime(input.content || "");
+      // Said from the saved row: a NEW entry is "saved", text joined onto the
+      // day's existing entry is "added to" — never "Updated journal entry"
+      // for one that was just created (append_journal_entry creates too).
+      const savedMood = moodLabel((finalEntry as any)?.mood);
+      const dayText = entryDate === todayDate ? "today" : longDay(entryDate);
+      const journalMessage = appended
+        ? `Added to your journal entry for ${dayText} — what was already there is unchanged. Mood: ${savedMood}.`
+        : (entry as any)?.unchanged
+          ? `That is already in your journal entry for ${dayText}. Nothing was changed.`
+          : `Saved a new journal entry for ${dayText}. Mood: ${savedMood}.`;
       return {
         ...finalEntry,
+        message: journalMessage,
         appended,
         entryDate,
         dateRules: [],
@@ -15576,7 +15631,26 @@ export function buildContentRoutingDirective(userMessage: string, profiles?: Arr
   const inferred = plan.actions.filter((a) => !a.explicit && a.confidence >= 0.8 && a.kind !== "unknown");
 
   const lines: string[] = [];
-  if (named.length > 0) {
+  // "…Save this as today's journal entry": the message IS the entry.
+  const filing = journalFilingContent(userMessage);
+  if (filing) {
+    lines.push(
+      `[ROUTER] The user asked for ONE thing: save this message as a journal entry. Call journal_entry ONCE with content set to their own words, ` +
+      `verbatim: "${filing.slice(0, 600)}". Do NOT also log trackers, workouts, steps, expenses or tasks for things the text mentions ` +
+      `(a run, a walk, a meal) — they wrote a diary entry, they did not ask to log those.`,
+    );
+  }
+  // A QUESTION that names the journal ("did I write about work in my diary?")
+  // is a read. Telling the model to "write the object the user named" there
+  // is wrong, and nothing may be written during a read turn anyway.
+  const readTurn = classifyTurnScope(userMessage).allowedMutations === "none";
+  if (readTurn && named.some((a) => a.kind === "journal")) {
+    lines.push(`[ROUTER] This is a QUESTION about the journal. Call read_journal to see the entries' text and mood, then answer. Write nothing, and do not open a document.`);
+  }
+  if (readTurn && named.some((a) => a.kind === "note")) {
+    lines.push(`[ROUTER] This is a QUESTION about the user's notes. Call search_notes, then answer. Write nothing, and do not open a document.`);
+  }
+  if (named.length > 0 && !readTurn) {
     const kinds = Array.from(new Set(named.map((a) => a.kind)));
     lines.push(
       `[ROUTER] The user explicitly named ${kinds.length === 1 ? "this object" : "these objects"}: ${kinds.join(", ").toUpperCase()}. ` +
@@ -16394,6 +16468,25 @@ async function processMessageInner(userMessage: string, conversationHistory: Arr
       reply: "I'm not sure what you're asking — could you rephrase that? For example: \"how much did I spend on groceries this month\" or \"add a task to call the dentist\".",
       actions: [], results: [],
     };
+  }
+
+  // FAST-PATH: reading the journal or a note back. Answered from the stored
+  // rows, before the document lookup below: "Find my note about buying new
+  // tires" opened a tire-warranty PDF and "Show me my journal entry from
+  // today" a piano warranty (Journal tutorial QA, 2026-11-20). A summary is
+  // left to the model, which is handed the entry's text (journalContextBlock).
+  try {
+    const journalRead = parseJournalReadIntent(userMessage);
+    if (journalRead && journalRead.kind !== "summarize") {
+      const reply = await answerJournalRead(storage, journalRead, aiUserTimezone());
+      if (reply) return { reply, actions: [], results: [] };
+    }
+    const noteFind = !journalRead ? parseNoteFindIntent(userMessage) : null;
+    if (noteFind) {
+      return { reply: await answerNoteFind(storage, noteFind), actions: [], results: [] };
+    }
+  } catch (err: any) {
+    logger.warn("ai", `journal/note read fast path failed, falling through: ${err?.message || err}`);
   }
 
   // FAST-PATH: "open [document name]" — direct DB lookup, no AI needed
@@ -17362,7 +17455,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     (() => {
       const dates = Array.from(new Set((journalEntries as any[]).map((j: any) => String(j?.date || "").slice(0, 10)).filter(Boolean))).sort().reverse().slice(0, 14);
       return dates.length
-        ? `Journal: entries exist on ${dates.join(", ")} (text not shown — use the journal tools to read, change or delete one; a new entry on a day that has one is still allowed).`
+        ? `Journal: entries exist on ${dates.join(", ")} (text not shown — call read_journal to read one, the journal tools to change or delete one; a new entry on a day that has one is still allowed).`
         : "";
     })(),
     // Two small tables the model otherwise never sees.
@@ -17578,6 +17671,12 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // an inferred read informs the model without overriding its judgement on a
     // message the router only half understood.
     const contentDirective = buildContentRoutingDirective(userMessage, profiles as any);
+    // A question about the journal ("summarize what I wrote today") is answered
+    // from the entry's text, which the snapshot deliberately leaves out.
+    const journalReadIntent = parseJournalReadIntent(userMessage);
+    const journalReadDirective = journalReadIntent
+      ? await journalContextBlock(storage, journalReadIntent, aiUserTimezone()).catch(() => "")
+      : "";
 
     // ── WHO IS "SHE"? ────────────────────────────────────────────────────
     // Resolved deterministically from the conversation, for the same reason
@@ -17604,7 +17703,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       resolveReferent(userMessage, conversationHistory || [], referentCandidates),
     );
 
-    const directives = [contentDirective, referentDirective].filter(Boolean).join("\n\n");
+    const directives = [contentDirective, journalReadDirective, referentDirective].filter(Boolean).join("\n\n");
     const userTurnText = directives ? `${userMessage}\n\n${directives}` : userMessage;
 
     const lastCarried = messages[messages.length - 1];
@@ -17988,6 +18087,17 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             return;
           }
 
+          // "…Save this as today's journal entry": the entry's text is the
+          // user's own message. The model sent an EMPTY entry for it ("Journal
+          // entry needs content or mood"), or a one-line paraphrase.
+          if (toolUse.name === "journal_entry" || toolUse.name === "append_journal_entry") {
+            const filed = journalFilingContent(userMessage);
+            const jin = (toolUse.input || {}) as Record<string, any>;
+            const given = String(jin.content || "").trim();
+            if (filed && given.length < filed.length * 0.6) jin.content = filed;
+            toolUse.input = jin;
+          }
+
           // Validate input before executing
           const validation = validateToolInput(toolUse.name, toolUse.input as Record<string, any>);
           if (!validation.valid) {
@@ -18054,7 +18164,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const execMs = Date.now() - tExecStart;
 
           // Invalidate context cache after any write operation
-          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
+          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "search_notes", "read_journal", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
             invalidateContextCache(userId);
           }
@@ -18253,7 +18363,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
           // Log the action to in-memory history
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
-          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
+          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "search_notes", "read_journal", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);
           }
@@ -19049,7 +19159,7 @@ export const READ_ONLY_TOOLS = new Set<string>([
   // Notes lookup, and the temporal re-derivation. `sync_date_rules_for_entity`
   // writes nothing — Date Rules are derived from the canonical record, so
   // "syncing" is a read that reports what the record now projects.
-  "search_notes", "sync_date_rules_for_entity",
+  "search_notes", "read_journal", "sync_date_rules_for_entity",
   // Connected bank data (Stripe Financial Connections). These four are pure
   // reads over the authenticated user's own financial_* rows.
   // `refresh_financial_data` is deliberately NOT here — it is an action that

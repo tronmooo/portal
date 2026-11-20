@@ -54,7 +54,11 @@ function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: Journ
   const { toast } = useToast();
   const mood = MOOD_CONFIG[entry.mood] || MOOD_CONFIG.neutral;
   const MoodIcon = mood.icon;
-  const dateObj = new Date(entry.createdAt);
+  // The entry's DAY is `date` (it can be backdated); createdAt only supplies
+  // the time of day, and only when the entry was written on that same day.
+  const dateObj = parseLocalDate(entry.date) ?? new Date(entry.createdAt);
+  const writtenAt = new Date((entry as any).updatedAt || entry.createdAt);
+  const writtenSameDay = !isNaN(writtenAt.getTime()) && writtenAt.toLocaleDateString("en-CA") === entry.date;
 
   const deleteMutation = useMutation<any,Error,void>({
     mutationFn: () => apiRequest("DELETE", `/api/journal/${entry.id}`),
@@ -94,7 +98,7 @@ function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: Journ
               <span className="text-base font-semibold" style={{ color: mood.color }}>{mood.label}</span>
               <p className="text-xs text-muted-foreground">
                 {dateObj.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
-                {" · "}{dateObj.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                {writtenSameDay && <>{" · "}{writtenAt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</>}
               </p>
             </div>
           </div>
@@ -180,6 +184,53 @@ function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: Journ
           </div>
         )}
       </CardContent>
+    </Card>
+  );
+}
+
+// The mood buttons, shared by the guided and the free-write composer (the
+// free-write one had none: its mood was detected silently and an entry came
+// out "Great" that nobody had picked — Journal tutorial QA, 2026-11-20).
+function MoodPicker({ mood, onPick, detected }: { mood: MoodLevel | null; onPick: (m: MoodLevel | null) => void; detected: MoodLevel | null }) {
+  const shown = mood || detected;
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-4 pt-4 pb-4">
+        <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-1">How Are You Feeling?</p>
+        <p className="text-[11px] text-muted-foreground mb-3" data-testid="journal-mood-source">
+          {mood
+            ? <>You picked <span className="font-medium text-foreground">{MOOD_CONFIG[mood].label}</span>. <button type="button" className="underline" onClick={() => onPick(null)} data-testid="button-mood-auto">Detect it from my writing instead</button></>
+            : detected
+              ? <>Detected from your writing: <span className="font-medium text-foreground">{MOOD_CONFIG[detected].label}</span>. Tap a mood to choose your own.</>
+              : <>Optional. If you don't pick one, it is detected from what you write.</>}
+        </p>
+        <div className="flex gap-1.5 flex-wrap justify-center">
+          {(Object.entries(MOOD_CONFIG) as [MoodLevel, typeof MOOD_CONFIG.amazing][]).map(([key, cfg]) => {
+            const MIcon = cfg.icon;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => onPick(key)}
+                aria-pressed={mood === key}
+                className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${
+                  mood === key
+                    ? "ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-950/30 scale-105"
+                    : shown === key
+                      ? "ring-1 ring-dashed ring-border opacity-90"
+                      : "opacity-50 hover:opacity-90 hover:bg-muted/50"
+                }`}
+                data-testid={`button-mood-${key}`}
+              >
+                <div className={`p-2 rounded-full ${cfg.bg}`}>
+                  <MIcon className="h-4 w-4" style={{ color: cfg.color }} />
+                </div>
+                <span className="text-[11px] font-medium">{cfg.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </Card>
   );
 }
@@ -276,6 +327,15 @@ export default function JournalPage() {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const freeSavingRef = useRef(false);
+  // The day the entry is ABOUT (it can be backdated); today by default.
+  const [entryDate, setEntryDate] = useState<string>(() => getUserToday(BROWSER_TIMEZONE));
+  // One entry per day: when the day already has one, what is written here is
+  // JOINED onto it. `joinedRef` remembers that the draft row is that existing
+  // entry, and `savedTextRef` the passage this session last saved into it, so
+  // a later autosave edits only that passage (PATCH find/replace) instead of
+  // overwriting everything the entry already held.
+  const joinedRef = useRef(false);
+  const savedTextRef = useRef("");
 
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -319,6 +379,8 @@ export default function JournalPage() {
     setSelectedProfileId(activeCreateProfileId || "");
     setEditingEntry(null);
     setFreeText(""); setFreeTags(""); setDraftId(null); setLastSavedAt(null);
+    setEntryDate(getUserToday(BROWSER_TIMEZONE));
+    joinedRef.current = false; savedTextRef.current = "";
   };
 
   // Free-write save: POST once, then PATCH the same entry. `finalize` closes
@@ -334,27 +396,40 @@ export default function JournalPage() {
     freeSavingRef.current = true;
     try {
       const tags = freeTags.split(",").map((s) => s.trim()).filter(Boolean);
-      if (draftId) {
+      if (draftId && joinedRef.current) {
+        // The draft row is the day's EXISTING entry: change only the passage
+        // written here. Sending `content` would replace the whole entry.
+        await apiRequest("PATCH", `/api/journal/${draftId}`, {
+          find: savedTextRef.current, replace: freeText,
+          ...(tags.length ? { addTags: tags } : {}),
+          ...(mood ? { mood } : detectMoodFromText(freeText) !== "neutral" ? { mood: detectMoodFromText(freeText) } : {}),
+        });
+      } else if (draftId) {
         await apiRequest("PATCH", `/api/journal/${draftId}`, { content: freeText, tags, mood: mood || detectMoodFromText(freeText) });
       } else {
         const r = await apiRequest("POST", "/api/journal", {
           content: freeText,
-          // Mood auto-detection (user request): no manual pick needed — the
-          // shared detector stamps the mood from what was written.
-          mood: mood || detectMoodFromText(freeText),
+          // A mood is sent only when it was PICKED; otherwise the server
+          // detects it from the text (shared/mood-detect), same as chat.
+          ...(mood ? { mood } : {}),
           tags,
+          entryDate,
           ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
         });
         const j = await r.json();
         if (j?.id) setDraftId(j.id);
+        joinedRef.current = j?.appended === true;
       }
+      savedTextRef.current = freeText;
       setLastSavedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
       invalidateDomain("journal");
       if (finalize) {
         // QA 2026-09-18: the autosave creates the draft row before Save is
         // pressed, so `draftId` is set for a brand-new entry too — "updated"
         // is only right when an EXISTING entry was reopened for editing.
-        toast({ title: editingEntry ? "Entry updated" : "Entry saved" });
+        toast(joinedRef.current
+          ? { title: "Added to that day's entry", description: "What was already there is unchanged." }
+          : { title: editingEntry ? "Entry updated" : "Entry saved" });
         resetForm();
         setShowCreate(false);
       }
@@ -429,7 +504,8 @@ export default function JournalPage() {
       editMutation.mutate({ mood: effectiveMood, content, energy });
     } else {
       createMutation.mutate({
-        mood: effectiveMood, content, energy,
+        // Only a PICKED mood is sent; the server detects it otherwise.
+        ...(mood ? { mood } : {}), content, energy, entryDate,
         ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
       });
     }
@@ -466,16 +542,19 @@ export default function JournalPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => apiRequest("POST", "/api/journal", data),
+    mutationFn: (data: any) => apiRequest("POST", "/api/journal", data).then((r) => r.json()),
     onMutate: async (data: any) => {
       await queryClient.cancelQueries({ queryKey: ["/api/journal"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/journal"] });
+      // A day that already has an entry gets this text JOINED onto it by the
+      // server; a second optimistic card would show two entries for one day.
+      if (allEntries.some((e) => e.date === data.entryDate)) return { prev };
       const tempEntry = {
         id: 'temp-' + Date.now(),
         content: data.content,
-        mood: data.mood,
+        mood: data.mood || detectMoodFromText(data.content),
         energy: data.energy,
-        date: new Date().toLocaleDateString('en-CA'),
+        date: data.entryDate,
         createdAt: new Date().toISOString(),
         tags: [],
         highlights: [],
@@ -486,10 +565,14 @@ export default function JournalPage() {
       );
       return { prev };
     },
-    onSuccess: () => {
+    onSuccess: (saved: any) => {
       resetForm();
       setShowCreate(false);
-      toast({ title: "Journal entry saved", description: `Mood: ${mood}` });
+      // Said from the saved row ("Mood: null" was the unpicked state variable).
+      const savedMood = MOOD_CONFIG[saved?.mood as MoodLevel]?.label;
+      toast(saved?.appended
+        ? { title: "Added to that day's entry", description: "What was already there is unchanged." }
+        : { title: "Journal entry saved", description: savedMood ? `Mood: ${savedMood}` : undefined });
     },
     onError: (err: Error, _v: any, ctx: any) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
@@ -509,6 +592,10 @@ export default function JournalPage() {
   // Entry dates are written in the browser's zone (en-CA), so walk back from
   // the same "today" — the UTC slice left today's dot dark after ~5 PM Pacific.
   const todayLocal = getUserToday(BROWSER_TIMEZONE);
+  // The entry the chosen day already has (any profile: the day is the key),
+  // unless it is the row this session's own draft was saved into.
+  const existingForDate = allEntries.find((e) => e.date === entryDate && e.id !== draftId && !String(e.id).startsWith("temp-"))
+    ?? (joinedRef.current ? allEntries.find((e) => e.id === draftId) : undefined);
   for (let i = 6; i >= 0; i--) {
     const dateStr = tzAddDays(todayLocal, -i);
     const entry = entries.find(e => e.date === dateStr);
@@ -559,11 +646,34 @@ export default function JournalPage() {
             <p className="text-[11px] font-bold tracking-[0.2em] text-muted-foreground uppercase">
               {editingEntry ? "Edit Journal Entry" : entryMode === "free" ? "Journal — Free Write" : "5 Minute Morning Journal"}
             </p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-              {" · "}{new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-            </p>
+            {editingEntry ? (
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {(parseLocalDate(editingEntry.date) ?? new Date()).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+              </p>
+            ) : (
+              <label className="mt-1.5 inline-flex items-center gap-2 text-xs text-muted-foreground">
+                Entry date
+                <input
+                  type="date"
+                  value={entryDate}
+                  max={todayLocal}
+                  // The day cannot move once this session's text is saved under it.
+                  disabled={!!draftId}
+                  onChange={(e) => { if (e.target.value && e.target.value <= todayLocal) setEntryDate(e.target.value); }}
+                  className="bg-transparent border border-border rounded-md px-2 py-1 text-xs text-foreground"
+                  data-testid="input-journal-date"
+                />
+              </label>
+            )}
           </div>
+
+          {/* One entry per day: say so BEFORE anything is saved. */}
+          {!editingEntry && existingForDate && (
+            <p className="text-xs rounded-lg border border-border bg-muted/40 px-3 py-2 text-foreground/90" data-testid="journal-existing-entry-notice">
+              You already have an entry for {entryDate === todayLocal ? "today" : "this day"}. What you write here is <span className="font-medium">added to it</span> — nothing already in it is replaced.{" "}
+              <button type="button" className="underline" onClick={() => handleEditEntry(existingForDate)} data-testid="button-open-existing-entry">Open that entry to edit it</button>
+            </p>
+          )}
 
           {/* Mode toggle (hidden while editing — the entry keeps its own format) */}
           {!editingEntry && (
@@ -598,27 +708,10 @@ export default function JournalPage() {
                     className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/35 resize-y text-foreground leading-relaxed min-h-[220px]"
                     data-testid="input-journal-free-text"
                   />
-                  {/* Live mood detection: shows what will be stamped, tap to override. */}
-                  {freeText.trim() && (() => {
-                    const detected = mood || detectMoodFromText(freeText);
-                    const cfg = MOOD_CONFIG[detected] || MOOD_CONFIG.neutral;
-                    const DIcon = cfg.icon;
-                    return (
-                      <div className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground" data-testid="journal-detected-mood">
-                        <DIcon className="h-3.5 w-3.5" style={{ color: cfg.color }} />
-                        <span>{mood ? "Mood" : "Detected mood"}: <span className="font-medium" style={{ color: cfg.color }}>{cfg.label}</span></span>
-                        <div className="flex gap-1 ml-1">
-                          {(Object.keys(MOOD_CONFIG) as MoodLevel[]).map((m) => (
-                            <button key={m} onClick={() => setMood(m)} title={MOOD_CONFIG[m].label}
-                              className={`w-3.5 h-3.5 rounded-full border ${m === detected ? "ring-1 ring-offset-1 ring-offset-background" : "opacity-40 hover:opacity-100"}`}
-                              style={{ background: MOOD_CONFIG[m].color, borderColor: MOOD_CONFIG[m].color }} />
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })()}
                 </div>
               </Card>
+              <MoodPicker mood={mood} onPick={setMood}
+                detected={freeText.trim() ? detectMoodFromText(freeText) : null} />
               <Card className="overflow-hidden">
                 <div className="px-4 pt-4 pb-4">
                   <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-2">Tags <span className="text-muted-foreground font-normal normal-case tracking-normal">(comma separated, optional)</span></p>
@@ -659,34 +752,9 @@ export default function JournalPage() {
             </>
           ) : (
             <>
-          {/* Mood selector */}
-          <Card className="overflow-hidden">
-            <div className="px-4 pt-4 pb-4">
-              <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">How Are You Feeling?</p>
-              <div className="flex gap-1.5 flex-wrap justify-center">
-                {(Object.entries(MOOD_CONFIG) as [MoodLevel, typeof MOOD_CONFIG.amazing][]).map(([key, cfg]) => {
-                  const MIcon = cfg.icon;
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => setMood(key)}
-                      className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${
-                        mood === key
-                          ? "ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-950/30 scale-105"
-                          : "opacity-50 hover:opacity-90 hover:bg-muted/50"
-                      }`}
-                      data-testid={`button-mood-${key}`}
-                    >
-                      <div className={`p-2 rounded-full ${cfg.bg}`}>
-                        <MIcon className="h-4 w-4" style={{ color: cfg.color }} />
-                      </div>
-                      <span className="text-[11px] font-medium">{cfg.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </Card>
+          <MoodPicker mood={mood} onPick={setMood}
+            detected={[grateful1, grateful2, grateful3, makeAmazing, affirmation].join(" ").trim()
+              ? detectMoodFromText([grateful1, grateful2, grateful3, makeAmazing, affirmation].join(" ")) : null} />
 
           {/* Gratitude */}
           <Card className="overflow-hidden">
@@ -843,10 +911,12 @@ export default function JournalPage() {
             if (visible.length === 0) return <p className="text-sm text-muted-foreground text-center py-6">No entries match{q ? ` "${searchQuery}"` : ""}{moodFilter !== "all" ? ` · ${MOOD_CONFIG[moodFilter].label} mood` : ""}.</p>;
             // Group by calendar day so the list reads like a real journal.
             const groups: Array<{ day: string; items: any[] }> = [];
+            // By the entry's DAY (`date`), newest first: a backdated entry
+            // belongs under the day it is about, not the day it was typed.
+            visible = [...visible].sort((a: any, b: any) =>
+              String(b.date || "").localeCompare(String(a.date || "")) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
             for (const e of visible) {
-              // createdAt is a timestamp; the `date` fallback is a bare YYYY-MM-DD,
-              // which `new Date()` would file under the previous local day.
-              const day = formatLocalDate(e.createdAt || e.date, { weekday: "long", month: "long", day: "numeric", year: "numeric" }, "en-US");
+              const day = formatLocalDate(e.date || e.createdAt, { weekday: "long", month: "long", day: "numeric", year: "numeric" }, "en-US");
               const g = groups[groups.length - 1];
               if (g && g.day === day) g.items.push(e);
               else groups.push({ day, items: [e] });

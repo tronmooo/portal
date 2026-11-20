@@ -14,6 +14,7 @@
 // Data comes from /api/profile-bootstrap/:id under the SAME cache key the
 // detail page uses (["/api/profiles", id, "detail"]), so it's instant when
 // you've already visited the profile and edits here reflect there too.
+import { NewNoteForm } from "@/components/notes/NewNoteForm";
 import { formatStoredDate } from "@/lib/dates";
 import { isBirthDateField, formatYearMonth } from "@shared/date-precision";
 import { useState, useRef, useEffect } from "react";
@@ -539,7 +540,9 @@ function SingleProfileInfo({ id }: { id: string }) {
 
   const timeline: any[] = Array.isArray(profile.timeline) ? profile.timeline.slice(0, 6) : [];
   const journal: any[] = Array.isArray(profile.relatedJournal) ? profile.relatedJournal : [];
-  const latestJournal = journal[0];
+  // The entry written to most recently, whatever order the list arrived in.
+  const latestJournal = [...journal].sort((a, b) =>
+    String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))[0];
   const initial = (profile.name || "?").charAt(0).toUpperCase();
   const isSelf = profile.type === "self";
   // One rule, read by the screen and by DELETE /api/profiles/:id.
@@ -765,7 +768,10 @@ function SingleProfileInfo({ id }: { id: string }) {
         >
           <SectionHeading
             title="Journal" icon={BookOpen} accent={INFO_TONE.journal}
-            meta={latestJournal ? `Last ${timeAgo(latestJournal.date || latestJournal.createdAt)} ago` : undefined}
+            // When it was last WRITTEN (updatedAt / createdAt). The bare
+            // `date` is midnight UTC of the entry's day: an entry saved minutes
+            // ago read "Last 18h ago".
+            meta={latestJournal ? `Last ${timeAgo(latestJournal.updatedAt || latestJournal.createdAt || latestJournal.date)} ago` : undefined}
           />
           {latestJournal ? (
             <p className="text-sm italic text-foreground/90 flex-1">"{String(latestJournal.content || "").slice(0, 140)}…"</p>
@@ -976,6 +982,7 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
 }) {
   const { toast } = useToast();
   const [editingNotes, setEditingNotes] = useState(false);
+  const [addingNote, setAddingNote] = useState(false);
   const [draft, setDraft] = useState(notes);
   const [tagInput, setTagInput] = useState("");
   useEffect(() => { setDraft(notes); }, [notes]);
@@ -1031,12 +1038,24 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
       <Card className="p-4" data-testid="info-notes">
         <SectionHeading
           title="Notes" icon={StickyNote} accent={INFO_TONE.notes}
-          meta={!editingNotes ? (
-            <button onClick={() => setEditingNotes(true)} className="text-muted-foreground hover:text-foreground" aria-label="Edit notes"><Pencil className="h-3.5 w-3.5" /></button>
+          meta={!editingNotes && !addingNote ? (
+            <span className="flex items-center gap-2">
+              <button onClick={() => setAddingNote(true)} className="text-xs font-medium text-primary hover:underline" data-testid="info-notes-new">+ New note</button>
+              <button onClick={() => setEditingNotes(true)} className="text-muted-foreground hover:text-foreground" aria-label="Edit notes" title="Edit this profile's memo"><Pencil className="h-3.5 w-3.5" /></button>
+            </span>
           ) : undefined}
         />
+        {/* A NOTE (title + text) is a record of its own: it shows in Notes &
+            Artifacts and chat can find it. The memo below is free text on
+            this profile only. */}
+        {addingNote && (
+          <div className="mb-3">
+            <NewNoteForm profileId={profileId} onDone={() => setAddingNote(false)} />
+          </div>
+        )}
         {editingNotes ? (
           <div className="space-y-2">
+            <p className="text-[11px] text-muted-foreground">Profile memo — stays on this profile. For a note you want under Notes & Artifacts, use New note.</p>
             <Textarea value={draft} onChange={e => setDraft(e.target.value)} rows={3} className="text-xs" placeholder="Add notes…" data-testid="info-notes-input" />
             <div className="flex gap-2">
               <Button size="sm" className="h-7 text-xs" onClick={() => { onSaveNotes(draft); setEditingNotes(false); }}>Save</Button>

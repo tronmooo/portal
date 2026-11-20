@@ -283,6 +283,50 @@ describe("notes and tags", () => {
     expect(wrote("PATCH", "/api/profiles/bob-1")!.body).toEqual({ notes: "Updated scratchpad." });
   });
 
+  // Journal tutorial QA (2026-11-20): "Car Maintenance Ideas" typed into the
+  // Notes box and saved never showed in Notes or Artifacts — the box only
+  // wrote the profile's memo — and it had no title field.
+  it("New note saves a NOTE record with a title, not the profile memo", async () => {
+    renderPage();
+    await ready();
+
+    fireEvent.click(screen.getByTestId("info-notes-new"));
+    fireEvent.change(screen.getByTestId("new-note-title"), { target: { value: "Car Maintenance Ideas" } });
+    fireEvent.change(screen.getByTestId("new-note-content"), { target: { value: "Rotate tires, change oil." } });
+    fireEvent.click(screen.getByTestId("new-note-save"));
+
+    await waitFor(() => expect(wrote("POST", "/api/notes")).toBeTruthy());
+    expect(wrote("POST", "/api/notes")!.body).toEqual({
+      title: "Car Maintenance Ideas", content: "Rotate tires, change oil.", profileId: "bob-1",
+    });
+    expect(wrote("PATCH", "/api/profiles/bob-1")).toBeUndefined();
+  });
+
+  // "Last 18h ago" for an entry saved minutes earlier: the label read the
+  // entry's bare `date` (midnight UTC of that day), not when it was written.
+  it("the Journal card's 'Last … ago' is when the entry was last written", async () => {
+    const minutesAgo = new Date(Date.now() - 4 * 60_000).toISOString();
+    (PROFILE as any).relatedJournal = [{
+      id: "j1", date: new Date(Date.now() - 20 * 3600_000).toISOString().slice(0, 10),
+      mood: "good", content: "Saved a few minutes ago.", createdAt: new Date(Date.now() - 20 * 3600_000).toISOString(), updatedAt: minutesAgo,
+    }];
+    try {
+      renderPage();
+      await ready();
+      await waitFor(() => expect(screen.getByTestId("info-journal").textContent).toMatch(/Last 4m ago/));
+    } finally { (PROFILE as any).relatedJournal = []; }
+  });
+
+  it("a note with only a title is still saved", async () => {
+    renderPage();
+    await ready();
+    fireEvent.click(screen.getByTestId("info-notes-new"));
+    fireEvent.change(screen.getByTestId("new-note-title"), { target: { value: "Car Maintenance Ideas" } });
+    fireEvent.click(screen.getByTestId("new-note-save"));
+    await waitFor(() => expect(wrote("POST", "/api/notes")).toBeTruthy());
+    expect(wrote("POST", "/api/notes")!.body.content).toBe("Car Maintenance Ideas");
+  });
+
   it("edits a SAVED note in place — title and body", async () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId("saved-note-n1")).toBeTruthy());

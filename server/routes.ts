@@ -9523,6 +9523,8 @@ Rules:
     // Mood auto-detection (user request 2026-07-16): when the writer didn't
     // pick a mood, stamp one from the text — same shared detector the chat
     // fast-path and the journal composer use.
+    // A mood in the body is one the writer PICKED; it is kept as given.
+    const moodPicked = !!req.body.mood;
     if (!req.body.mood) req.body.mood = detectMoodFromText(req.body.content);
     const parsed = insertJournalEntrySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
@@ -9546,6 +9548,8 @@ Rules:
     let { entry: newEntry, appended } = await upsertJournalEntry(storage, {
       content: parsed.data.content || "",
       mood: parsed.data.mood,
+      moodPicked,
+      tags: parsed.data.tags,
       entryDate,
       profileId: linkedProfileId,
       energy: parsed.data.energy,
@@ -9562,6 +9566,9 @@ Rules:
     bustCache(`stats:${uid_j1}`);
     // A journal entry's date is not a calendar commitment — it never creates a
     // Date Rule. Stated in the response so no caller has to infer it.
+    // `appended` tells the composer the day already had an entry and this text
+    // was joined onto it — its later saves must then edit ONLY this text
+    // (PATCH find/replace), never overwrite the entry.
     res.status(appended ? 200 : 201).json({ ...newEntry, appended, dateRules: [] });
   }));
   app.patch("/api/journal/:id", asyncHandler(async (req, res) => {
@@ -9577,6 +9584,38 @@ Rules:
     if (req.body.mood !== undefined) {
       const validMoods = ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"];
       if (!validMoods.includes(req.body.mood)) return res.status(400).json({ error: `Invalid mood. Must be one of: ${validMoods.join(", ")}` });
+    }
+    // EDIT ONE PASSAGE, KEEP THE REST (Rule 6: no client read-modify-write of
+    // the whole text). The composer's autosave used to PATCH `content` with
+    // only what was typed in THIS session; when the day already had an entry
+    // (written in chat that morning), that replaced the whole entry and the
+    // earlier text was gone without a warning (Journal tutorial QA,
+    // 2026-11-20). `find`/`replace` swaps the passage in the STORED text;
+    // a passage that is no longer there is added at the end instead.
+    if (typeof req.body.find === "string" && typeof req.body.replace === "string") {
+      const current = (await storage.getJournalEntries()).find((e) => e.id === req.params.id);
+      if (!current) return res.status(404).json({ error: "Not found" });
+      const stored = String(current.content || "");
+      const find = sanitize(req.body.find);
+      const replace = sanitize(req.body.replace);
+      const at = find ? stored.lastIndexOf(find) : -1;
+      req.body.content = at >= 0
+        ? stored.slice(0, at) + replace + stored.slice(at + find.length)
+        : (stored && replace ? `${stored}\n\n${replace}` : stored || replace);
+    }
+    delete req.body.find; delete req.body.replace;
+    // Tags joined onto the stored list, for the same reason.
+    if (Array.isArray(req.body.addTags)) {
+      const current = (await storage.getJournalEntries()).find((e) => e.id === req.params.id);
+      if (!current) return res.status(404).json({ error: "Not found" });
+      req.body.tags = Array.from(new Set([...(current.tags || []), ...req.body.addTags.map((t: unknown) => String(t).trim()).filter(Boolean)]));
+    }
+    delete req.body.addTags;
+    // One entry per day: moving an entry onto a day that has one is refused
+    // by name, not surfaced as a database error.
+    if (typeof req.body.date === "string" && req.body.date) {
+      const clash = (await storage.getJournalEntries()).find((e) => e.date === req.body.date && e.id !== req.params.id);
+      if (clash) return res.status(409).json({ error: `You already have a journal entry for ${req.body.date}. Open that entry to add to it.` });
     }
     const updated = await storage.updateJournalEntry(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });

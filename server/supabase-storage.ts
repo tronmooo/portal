@@ -1562,6 +1562,9 @@ export class SupabaseStorage implements IStorage {
       gratitude: r.gratitude || undefined, highlights: r.highlights || undefined,
       linkedProfiles: r.linked_profiles || [],
       createdAt: r.created_at,
+      // When the entry was last written to. "Add this to today's journal"
+      // changes the entry without changing the day it was started.
+      updatedAt: r.updated_at || r.created_at,
     } as JournalEntry & { linkedProfiles: string[] };
   }
 
@@ -6992,7 +6995,7 @@ export class SupabaseStorage implements IStorage {
       content: data.content || "", tags: data.tags || [], energy: data.energy ?? null,
       gratitude: data.gratitude || null, highlights: data.highlights || null,
       linked_profiles: linkedProfiles,
-      created_at: now,
+      created_at: now, updated_at: now,
     });
     if (error) throw error;
     this.logActivity("journal", `Journal entry — mood: ${data.mood}`);
@@ -7007,6 +7010,7 @@ export class SupabaseStorage implements IStorage {
       date: merged.date, mood: merged.mood, content: merged.content,
       tags: merged.tags, energy: merged.energy ?? null,
       gratitude: merged.gratitude || null, highlights: merged.highlights || null,
+      updated_at: new Date().toISOString(),
     }, data as Record<string, any>, { date: "date", mood: "mood", content: "content", tags: "tags", energy: "energy", gratitude: "gratitude", highlights: "highlights" })).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners).

@@ -224,6 +224,53 @@ these. After deleting a liability the app returns to the Liabilities list
 *Guards:* `tests/autosave-edit-forms.dom.test.tsx`, `tests/profile-autosave.test.ts`,
 `tests/liability-qa-2026-11-18-followup.test.ts`.
 
+## Journal and Notes rules (what was written stays written, and chat can read it back)
+
+Every rule below is a bug from one session (Journal tutorial, 2026-11-20).
+Read them before touching `client/src/pages/journal.tsx`, `upsertJournalEntry`
+(`server/content-service.ts`), the journal/note tools in `server/ai-engine.ts`
+or the profile Notes boxes.
+
+**J1. One entry per day, and a second write ADDS to it.** `journal_entries`
+is unique on (user, date); `upsertJournalEntry` joins a second write onto the
+day's entry. A composer whose draft row is that existing entry must never
+PATCH `content` (it holds only this session's text and replaced the whole
+entry): it sends `find`/`replace` (and `addTags`), which the server applies to
+the stored text. The composer says the day already has an entry before
+anything is saved.
+*Guards:* `tests/journal-entry-not-replaced.test.ts`, `tests/journal-composer.dom.test.tsx`.
+
+**J2. Mood is picked or detected, never a silent default.** A mood the writer
+picked is kept (`moodPicked`); any other mood is a guess, and a neutral guess
+gives way to `detectMoodFromText` (`shared/mood-detect.ts`) — the chat saved
+"frustrated and overwhelmed" as Neutral. Text with no feeling in it leaves the
+day's mood alone. Both composers show the mood buttons and say whether the
+mood shown was picked or detected.
+*Guards:* `tests/journal-entry-not-replaced.test.ts`, `tests/chat-journal-read.test.ts`.
+
+**J3. "Save this as today's journal entry" saves the message.** The entry's
+text is the user's own words (`journalFilingContent`, `shared/journal-intent.ts`),
+filled in when the model sends an empty or paraphrased entry. The confirmation
+comes from the saved row: a new entry is "Saved", text joined onto the day's
+entry is "Added to" — never "Updated" for one just created.
+*Guards:* `tests/journal-intent.test.ts`, `tests/chat-journal-read.test.ts`.
+
+**J4. A question about the journal or a note is answered from that record.**
+"Show me my journal entry from today", "what was my mood earlier today" and
+"find my note about …" are answered from the stored rows
+(`server/journal-read.ts`) before the document lookup; anything else about
+the journal goes through `read_journal`, and a summary is handed the entry's
+text. Never answer one with a document. A tool result must not put journal
+text under an `entries` key (the result summariser strips it).
+*Guard:* `tests/chat-journal-read.test.ts`.
+
+**J5. A note is a Note.** A profile's "New note" box saves a Note record with
+a title (`NewNoteForm` → `POST /api/notes`), so it shows under Notes &
+Artifacts and chat can find it. `profile.notes` is the profile's memo and is
+labelled as one. An entry's "last written" time is `updatedAt`, never its
+bare `date` ("Last 18h ago" for an entry saved minutes earlier).
+*Guard:* `tests/info-tab-editable.dom.test.tsx`.
+
 ## Auto Pay rules (routine payments record themselves; the books stay honest)
 
 Every liability (bill, subscription, loan, card) has an Auto Pay setting. The

@@ -182,7 +182,7 @@ const EXPLICIT_TASK: RegExp[] = [
  * empty journal entry.
  */
 const BARE_DIRECTIVE =
-  /^(?:please\s+)?(?:can\s+you\s+)?(?:add|save|put|file|record|write|keep|make|log)?\s*(?:this|that|it|the\s+above)?\s*(?:down)?\s*(?:in|to|into|as|on|under)?\s*(?:my|his|her|their|the)?\s*(?:journal|diary|notes?)\b[\s.!]*$/;
+  /^(?:please\s+)?(?:can\s+you\s+)?(?:add|save|put|file|record|write|keep|make|log)?\s*(?:this|that|it|the\s+above)?\s*(?:down)?\s*(?:in|to|into|as|on|under)?\s*(?:my|his|her|their|the|a|an|today'?s)?\s*(?:new\s+)?(?:journal|diary|notes?)(?:\s+entry)?(?:\s+(?:for|from)\s+today)?\b[\s.!]*$/;
 
 /** "journal this", "note this" — verb-first bare directives. */
 const BARE_DIRECTIVE_VERBED =

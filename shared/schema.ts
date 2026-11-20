@@ -1024,6 +1024,8 @@ export interface JournalEntry {
   highlights?: string[];
   linkedProfiles?: string[];
   createdAt: string;
+  /** Last write (an append or an edit); equals createdAt for an untouched entry. */
+  updatedAt?: string;
 }
 
 export const insertJournalEntrySchema = z.object({

@@ -25,6 +25,7 @@
 // means re-derive and report, never write a second copy of the truth.
 
 import type { IStorage } from "./storage";
+import { detectMoodFromText } from "@shared/mood-detect";
 import { deriveDateRulesForRecord, ownsDateRules, type DateRule, type RuleSourceSystem } from "@shared/temporal-rules";
 import { findActionableTime } from "@shared/temporal-rules";
 
@@ -164,6 +165,15 @@ export interface JournalInput {
   energy?: number;
   gratitude?: string[];
   highlights?: string[];
+  /** Tags for a new entry; joined onto the tags an existing entry has. */
+  tags?: string[];
+  /**
+   * The writer PICKED this mood (the journal page's mood buttons). A picked
+   * mood is kept as given. Any other mood is a guess — chat's model sent
+   * "neutral" for "frustrated and overwhelmed" — and a neutral guess gives way
+   * to what the text itself says (shared/mood-detect).
+   */
+  moodPicked?: boolean;
 }
 
 const MOODS = ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"];
@@ -184,7 +194,16 @@ export async function upsertJournalEntry(
 ): Promise<{ entry: any; appended: boolean }> {
   const content = String(input.content ?? "").trim();
   const date = String(input.entryDate).slice(0, 10);
-  const mood = MOODS.includes(String(input.mood)) ? String(input.mood) : "neutral";
+  const given = MOODS.includes(String(input.mood)) ? String(input.mood) : null;
+  const detected = detectMoodFromText(content);
+  // What this piece of writing says about the day: the picked mood, else a
+  // non-neutral guess, else the text's own, else nothing.
+  const said: string | null = input.moodPicked && given
+    ? given
+    : given && given !== "neutral" ? given
+    : detected !== "neutral" ? detected
+    : null;
+  const mood = said ?? given ?? "neutral";
 
   const readExisting = async () => {
     const all = await storage.getJournalEntries();
@@ -195,7 +214,7 @@ export async function upsertJournalEntry(
   const appendTo = async (row: any): Promise<{ entry: any; appended: boolean }> => {
     // IDEMPOTENCY: a retried turn must not append the same paragraph twice.
     if (normalizeText(row.content).includes(normalizeText(content)) && content) {
-      return { entry: row, appended: false };
+      return { entry: { ...row, unchanged: true }, appended: false };
     }
     const label = input.profileLabel ? `[${input.profileLabel}] ` : "";
     const merged = row.content ? `${row.content}\n\n${label}${content}` : `${label}${content}`;
@@ -205,10 +224,13 @@ export async function upsertJournalEntry(
     ]));
     const updated = await storage.updateJournalEntry(row.id, {
       content: merged,
-      mood: (input.mood && MOODS.includes(input.mood) ? input.mood : row.mood) as any,
+      // The day's mood follows the latest writing that says something about
+      // it; a paragraph with no feeling in it leaves the mood alone.
+      mood: (said ?? row.mood) as any,
       energy: input.energy ?? row.energy,
       gratitude: input.gratitude || row.gratitude,
       highlights: input.highlights || row.highlights,
+      ...(input.tags?.length ? { tags: Array.from(new Set([...(row.tags || []), ...input.tags])) } : {}),
       linkedProfiles: linked,
     } as any);
     if (input.profileId) {
@@ -225,7 +247,7 @@ export async function upsertJournalEntry(
       date,
       mood: mood as any,
       content,
-      tags: [],
+      tags: input.tags || [],
       energy: input.energy,
       gratitude: input.gratitude,
       highlights: input.highlights,

@@ -1,3 +1,4 @@
+import { NewNoteForm } from "@/components/notes/NewNoteForm";
 import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
@@ -12846,7 +12847,7 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
       await apiRequest("PATCH", `/api/profiles/${profileId}`, { notes });
     },
     onSuccess: () => {
-      toast({ title: "Notes saved for this profile" });
+      toast({ title: "Memo saved on this profile" });
       setIsEditing(false);
       invalidateDomains("profiles");
       onChanged();
@@ -12854,12 +12855,38 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
     onError: (err: Error) => toast({ title: "Failed to save notes", description: formatApiError(err), variant: "destructive" }),
   });
 
+  // The profile's NOTE records (title + text). They are what shows under
+  // Notes & Artifacts and what chat's "find my note about…" reads; the memo
+  // box below is free text on the profile row and never did either.
+  const { data: savedNotes = [] } = useQuery<any[]>({
+    queryKey: ["/api/notes", profileId],
+    queryFn: async () => (await apiRequest("GET", `/api/notes?profileId=${encodeURIComponent(profileId)}`)).json(),
+    enabled: !!profileId,
+  });
+
   return (
+    <div className="space-y-3">
+    <Card>
+      <CardContent className="p-4 space-y-3" data-testid="profile-notes-records">
+        <h3 className="text-sm font-semibold">Notes</h3>
+        <NewNoteForm profileId={profileId} autoFocus={false} />
+        {savedNotes.length > 0 && (
+          <div className="space-y-2 border-t pt-3">
+            {savedNotes.map((n: any) => (
+              <div key={n.id} className="rounded-lg border bg-muted/30 p-3" data-testid={`profile-note-${n.id}`}>
+                <p className="text-sm font-medium">{n.title}</p>
+                <p className="text-xs text-muted-foreground whitespace-pre-wrap mt-0.5">{n.content}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
     <Card>
       <CardContent className="p-4">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <h3 className="text-sm font-semibold">Notes</h3>
+            <h3 className="text-sm font-semibold" title="Free text kept on this profile only. It is not a Note and does not show under Notes & Artifacts.">Profile memo</h3>
             {updatedAt && (
               <span className="text-xs text-muted-foreground">
                 Last edited {new Date(updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
@@ -12895,10 +12922,11 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
             {currentNotes}
           </div>
         ) : (
-          <EmptyState scope="none" icon={FileText} label="No notes yet" hint="Anything worth remembering about this profile." ctaLabel="Add Notes" onCta={() => setIsEditing(true)} className="rounded-lg border border-dashed" />
+          <EmptyState scope="none" icon={FileText} label="No memo yet" hint="Free text kept on this profile only. For a note that shows under Notes & Artifacts, use the box above." ctaLabel="Write memo" onCta={() => setIsEditing(true)} className="rounded-lg border border-dashed" />
         )}
       </CardContent>
     </Card>
+    </div>
   );
 }
 
