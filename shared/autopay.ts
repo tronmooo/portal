@@ -25,7 +25,7 @@ import { readMonthlyPayment, readStoredDueDate } from "./liability-fields";
 import { currentBillDueDate, effectiveDueDate, isEndedBillFields, isPausedBillFields } from "./liability-recurrence";
 import { isWithinOverdueGrace } from "./liability-status";
 import { isRecurringBill, liabilityFamily } from "./liability-types";
-import { lastPaymentSettledEarlierCycle, loanDueDay } from "./loan-facts";
+import { lastPaymentCoversCycle, loanDueDay } from "./loan-facts";
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const clip = (v: unknown) => String(v ?? "").slice(0, 10);
@@ -263,6 +263,9 @@ export function autopayDueOccurrence(
   // A loan, card or one-time debt (one record: its payment day is a field on it).
   if (!(readMonthlyPayment(f) > 0)) return null;
   if (liabilityFamily(typeKey) === "one_time") {
+    // A one-time debt has ONE payment. Once any occurrence is paid there is
+    // nothing left to record, whatever date the record carries afterwards.
+    if (Object.values(occ).some((st) => st && st.status === "paid")) return null;
     const stored = readStoredDueDate(f);
     return stored ? eligible(stored) : null;
   }
@@ -274,7 +277,7 @@ export function autopayDueOccurrence(
   // same rule nextLoanDueDate applies), so there is nothing to assume.
   const previous = dayInMonth(addMonthsISO(key.slice(0, 7) + "-01", -1).slice(0, 7), day);
   const lastPaid = normalizeDateString(f.lastPaidDate ?? f.last_paid_date);
-  if (lastPaid && lastPaid > previous && !lastPaymentSettledEarlierCycle(f, lastPaid, previous)) return null;
+  if (lastPaymentCoversCycle(f, lastPaid, previous)) return null;
   return eligible(key);
 }
 

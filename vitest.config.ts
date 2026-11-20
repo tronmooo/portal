@@ -339,6 +339,7 @@ export default defineConfig({
       'tests/autopay-liabilities.test.ts',
       'tests/autopay-controls.dom.test.tsx',
       'tests/chat-autopay.test.ts',
+      'tests/autopay-scenarios.test.ts',
       'tests/bill-unpay-op.test.ts',
       'tests/bill-entry-point-parity.test.ts',
       'tests/habit-uncomplete-op.test.ts',

@@ -234,8 +234,11 @@ them before touching the due-scan cron (`runLiabilityDueScan`,
 *Guards:* `tests/autopay-liabilities.test.ts` (car loan, mortgage, phone bill,
 subscription over the real pay pipeline), `tests/autopay-controls.dom.test.tsx`,
 `tests/chat-autopay.test.ts` (chat: `update_obligation` with `autopay` /
-`paymentStatus`, loans included).
-*Live check (deployed app, smoke account):* `npx tsx tests/live-autopay-check.ts`.
+`paymentStatus`, loans included), `tests/autopay-scenarios.test.ts` (credit
+card, weekly/quarterly/yearly, paused, month-end, reversals, extra principal,
+paired payment bill, statement import).
+*Live checks (deployed app, smoke account):* `npx tsx tests/live-autopay-check.ts`,
+`npx tsx tests/live-autopay-scenarios-check.ts`.
 
 **A1. Recorded on the due day, once.** `autopayDueOccurrence` is the only
 answer to "what does Auto Pay record now": never before the due day, never for
@@ -244,7 +247,11 @@ storage layer whichever door flips the switch), never for an occurrence that
 is paid, skipped or missed. The occurrence is claimed before the ledger row is
 written, so a retry, a second run or a page load cannot add a payment. Only
 the cron and the explicit `POST /api/autopay/run` (this user, same rule)
-record; no screen does on its own (Rule 3).
+record; no screen does on its own (Rule 3). For a loan or card, "this cycle
+is already paid" is `lastPaymentCoversCycle` (`shared/loan-facts.ts`): a late
+or delayed payment belongs to the cycle it settled, and an extra-principal
+payment is not the instalment. A loan whose "<loan> payment" bill is on Auto
+Pay is recorded through the bill only; a one-time debt is recorded once.
 
 **A2. Assumed is not confirmed.** A payment Auto Pay recorded carries
 `verification: "assumed"` on its occurrence stamp, the one place that state
@@ -260,6 +267,11 @@ It never writes the liability's amount, due day or Auto Pay flag. Marking a
 recorded payment missed reverses it (expense, balance, account) and takes two
 taps (Rule 8); the series moves on, and the missed payment is raised as an
 alert derived from the stamp (Rule 5) until it is paid, moved or reopened.
+Reversing a payment Auto Pay recorded (the Reverse button, deleting its
+expense in Finance, chat's undo) marks it missed for the same reason: an open
+occurrence would simply be recorded again by the next run
+(`unpayBillOccurrence`; pass `reopen: true` only when the caller re-records
+or sets its own state).
 
 **A4. Principal is not spending.** A loan or card payment lowers the balance
 by its principal (L5); only its interest and fees are logged as an expense

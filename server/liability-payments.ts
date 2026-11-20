@@ -21,7 +21,7 @@ import { deriveScheduleFields, liabilityAmount } from "@shared/liability-schedul
 import { isAccountProfile, isDebtAccount } from "@shared/finance-accounts";
 import { billPaymentExpenseCategory } from "@shared/category-canon";
 import { getUserToday, DEFAULT_TIMEZONE } from "@shared/timezone";
-import { ASSUMED_EXPENSE_TAG, DEBT_COST_TAG_PREFIX, debtPaymentExpenseAmount, type PaymentVerification } from "@shared/autopay";
+import { ASSUMED_EXPENSE_TAG, DEBT_COST_TAG_PREFIX, debtPaymentExpenseAmount, isAutoPayOn, type PaymentVerification } from "@shared/autopay";
 import type { IStorage } from "./storage";
 import { randomUUID } from "crypto";
 
@@ -432,6 +432,9 @@ export async function applyLiabilityPayment(
   let plan = planDebtPayment(liability, input);
   const balancePatch = (pl: DebtPaymentPlan) => ({
     currentBalance: pl.newBalance, remainingBalance: pl.newBalance, loanBalance: pl.newBalance, lastPaidDate: paymentDate,
+    // An extra-principal payment is not the cycle's instalment; the due-date
+    // rule needs to tell the two apart (shared/loan-facts lastPaymentCoversCycle).
+    ...(pl.paymentType === "extra_principal" ? { lastExtraPrincipalDate: paymentDate } : {}),
   });
   const mutate = (storage as any).mutateProfileFields as
     | ((id: string, fn: (fresh: any) => any) => Promise<any>) | undefined;
@@ -1143,6 +1146,15 @@ export interface UnpayBillInput {
   /** Retract the payment that settled this occurrence. Default: the latest payment. */
   occurrenceDate?: string | null;
   source: "route" | "ai";
+  /**
+   * Leave the occurrence OPEN after the reversal. Default false: reversing a
+   * payment AUTO PAY recorded means "that payment did not happen", so while
+   * Auto Pay is still on the occurrence is marked missed — otherwise the next
+   * run would simply record it again and undo the user's reversal. Callers
+   * that re-record or set their own state (an amount edit, setOccurrenceStatus)
+   * pass true.
+   */
+  reopen?: boolean;
 }
 
 export interface UnpayBillStep {
@@ -1378,6 +1390,27 @@ export async function unpayBillOccurrence(
   } catch (e: any) {
     steps.push({ step: "expense_delete", ok: false, error: e?.message || String(e) });
     logger.warn(`[unpayBillOccurrence] expense retract failed:`, e?.message || e);
+  }
+
+  // ── 7. a reversed Auto Pay payment stays reversed ───────────────────────
+  if (!input.reopen && stampedOverride?.autopay === true) {
+    try {
+      const fresh: any = await storage.getProfile(liabilityId);
+      if (fresh && isAutoPayOn(fresh.fields)) {
+        const expected = Number(stampedOverride.expectedAmount) > 0 ? Number(stampedOverride.expectedAmount) : amount;
+        await storage.updateOccurrenceOverride(liabilityId, occurrenceDate, {
+          status: "missed", missedAt: new Date().toISOString(),
+          ...(expected > 0 ? { expectedAmount: expected, amount: expected } : {}),
+        });
+        // The series carries on, as it does for any missed payment.
+        const after: any = await storage.getProfile(liabilityId);
+        if (after && recurring && readDueDate(after.fields) === occurrenceDate) {
+          await storage.updateProfile(liabilityId, { fields: advanceLiabilityDueDatePatch(after.fields, occurrenceDate) } as any);
+        }
+      }
+    } catch (e: any) {
+      logger.warn(`[unpayBillOccurrence] could not mark the reversed Auto Pay payment missed:`, e?.message || e);
+    }
   }
 
   return {

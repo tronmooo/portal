@@ -76,6 +76,32 @@ export function lastPaymentSettledEarlierCycle(fields: Record<string, any> | nul
     ISO_DAY.test(key) && key <= previousDue && stamp && stamp.status === "paid" && clip(stamp.paymentDate) === lastPaidISO);
 }
 
+/**
+ * Does the latest payment cover the cycle that follows `previousDue`?
+ *
+ * It does when it was made after the previous due day — unless the records
+ * say otherwise:
+ *   • it settled an EARLIER occurrence (a late or delayed payment), or
+ *   • it was an extra-principal payment. An extra $1,000 on the 5th is not
+ *     the month's instalment: the instalment is still due on the 15th (it
+ *     used to read "next due: next month", and Auto Pay skipped the cycle).
+ * A regular payment made the same day as an extra one still counts: its
+ * occurrence stamp carries that date.
+ */
+export function lastPaymentCoversCycle(fields: Record<string, any> | null | undefined, lastPaidISO: string | null | undefined, previousDue: string): boolean {
+  const f = fields || {};
+  const lastPaid = clip(lastPaidISO);
+  if (!ISO_DAY.test(lastPaid) || !(lastPaid > previousDue)) return false;
+  if (lastPaymentSettledEarlierCycle(f, lastPaid, previousDue)) return false;
+  if (clip(f.lastExtraPrincipalDate) === lastPaid) {
+    const occ = f.occurrences && typeof f.occurrences === "object" ? f.occurrences as Record<string, any> : {};
+    const regularSameDay = Object.entries(occ).some(([key, stamp]) =>
+      ISO_DAY.test(key) && key > previousDue && stamp && stamp.status === "paid" && clip(stamp.paymentDate) === lastPaid);
+    if (!regularSameDay) return false;
+  }
+  return true;
+}
+
 /** The earliest occurrence the user moved to another day that is still open and not past. */
 function movedOpenOccurrence(fields: Record<string, any>, today: string): string | null {
   const occ = fields.occurrences;
@@ -111,7 +137,7 @@ function regularLoanDueDate(fields: Record<string, any> | null | undefined, toda
   const lastPaid = normalizeDateString(f.lastPaidDate ?? f.last_paid_date);
   if (lastPaid) {
     const previous = dayInMonth(addMonthsISO(due.slice(0, 7) + "-01", -1).slice(0, 7), day);
-    if (lastPaid > previous && !lastPaymentSettledEarlierCycle(f, lastPaid, previous)) {
+    if (lastPaymentCoversCycle(f, lastPaid, previous)) {
       due = dayInMonth(addMonthsISO(due.slice(0, 7) + "-01", 1).slice(0, 7), day);
     }
   }

@@ -12309,7 +12309,7 @@ No emojis. No prose outside the JSON.`,
     // Loans and cards do not have occurrence stamps. Resolve their paying
     // account from balance history BEFORE deleting the row that identifies it.
     const accountId = (stamped?.[1] as any)?.accountId || await accountThatPaid(storage, row.id);
-    const undone = await unpayBillOccurrence(storage, row.liabilityProfileId, { paymentId: row.id, source: "route" }, tz, log);
+    const undone = await unpayBillOccurrence(storage, row.liabilityProfileId, { paymentId: row.id, source: "route", reopen: true }, tz, log);
     if (!undone.ok) return res.status(404).json({ error: "Payment not found" });
 
     // If undo itself reported a failed side effect, replay could debit or reduce

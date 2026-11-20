@@ -21,7 +21,7 @@ import { resolveLiabilityBalance } from "@shared/asset-value";
 import { resolveAnnualRate } from "@shared/liability-calc";
 import { readMonthlyPayment, readOriginalBalance } from "@shared/liability-fields";
 import { advanceLiabilityDueDatePatch, readDueDate, resolveOccurrenceKey } from "@shared/liability-recurrence";
-import { isRecurringBillProfile } from "@shared/liability-types";
+import { billsServicingDebt, isRecurringBillProfile } from "@shared/liability-types";
 import { DEFAULT_TIMEZONE, getUserToday } from "@shared/timezone";
 import {
   PAYMENT_TAG_PREFIX, closeBillReminderTasksWhere, payBillOccurrence, repriceBillPayment, rescheduleBillOccurrence, unpayBillOccurrence,
@@ -93,7 +93,14 @@ export async function runAutopayForLiability(
     const balance = resolveLiabilityBalance(liability);
     // A paid-off loan has nothing left to pay (a loan whose balance was never
     // tracked keeps recording its payment).
-    if (balance <= 0 && readOriginalBalance(f) > 0) return null;
+    const balanceTracked = readOriginalBalance(f) > 0
+      || [f.balance, f.currentBalance, f.remainingBalance, f.loanBalance].some((v) => v !== undefined && v !== null && v !== "");
+    if (balance <= 0 && balanceTracked) return null;
+    // Older accounts keep a "<loan> payment" bill beside the loan. When that
+    // bill is on Auto Pay it IS the loan's payment: recording the loan too
+    // would pay the same instalment twice.
+    const everyone: any[] = await Promise.resolve(storage.getProfiles()).catch(() => [] as any[]);
+    if (billsServicingDebt(everyone, liability).some((b: any) => isAutoPayOn(b.fields))) return null;
     // The last payment of a loan is what is left plus this month's interest,
     // not a full instalment (which would record an overpayment).
     const scheduled = Number((f.occurrences || {})[due.occurrenceKey]?.amount) || readMonthlyPayment(f);
@@ -177,7 +184,7 @@ export async function setOccurrenceStatus(
   /** Take the recorded payment back; false when the reversal did not complete. */
   const reverse = async (): Promise<boolean> => {
     if (!paidId) return true;
-    const undone = await unpayBillOccurrence(storage, liabilityId, { paymentId: paidId, source: "route" }, timezone, logger);
+    const undone = await unpayBillOccurrence(storage, liabilityId, { paymentId: paidId, source: "route", reopen: true }, timezone, logger);
     // A half-finished reversal followed by a new record could move a balance
     // twice. Stop and say so.
     return undone.ok && !undone.steps.some((s) => !s.ok);
