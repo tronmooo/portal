@@ -61,10 +61,45 @@ function dayInMonth(ym: string, day: number): string {
  * returns null. (The old "last paid + 1 month" fallback in
  * shared/liability-schedule was exactly that inference, and is gone.)
  */
+/**
+ * Does the latest payment belong to an occurrence at or before `previousDue`?
+ * A payment made late (the Nov 15 instalment paid on Nov 27, or moved to the
+ * 24th) is dated inside the NEXT cycle, but it settled the earlier one: the
+ * occurrence stamp that names its date says which. Without this the late
+ * payment read as "December is already paid", the next due date jumped two
+ * months and Auto Pay skipped a cycle.
+ */
+export function lastPaymentSettledEarlierCycle(fields: Record<string, any> | null | undefined, lastPaidISO: string, previousDue: string): boolean {
+  const occ = (fields || {}).occurrences;
+  if (!occ || typeof occ !== "object") return false;
+  return Object.entries(occ as Record<string, any>).some(([key, stamp]) =>
+    ISO_DAY.test(key) && key <= previousDue && stamp && stamp.status === "paid" && clip(stamp.paymentDate) === lastPaidISO);
+}
+
+/** The earliest occurrence the user moved to another day that is still open and not past. */
+function movedOpenOccurrence(fields: Record<string, any>, today: string): string | null {
+  const occ = fields.occurrences;
+  if (!occ || typeof occ !== "object") return null;
+  const days = Object.values(occ as Record<string, any>)
+    .filter((st) => st && ISO_DAY.test(clip(st.movedTo)) && !["paid", "skipped", "missed"].includes(String(st.status || "")))
+    .map((st) => clip(st.movedTo))
+    .filter((d) => d >= today)
+    .sort();
+  return days[0] ?? null;
+}
+
 export function nextLoanDueDate(fields: Record<string, any> | null | undefined, todayISO: string): string | null {
-  const f = fields || {};
   const today = clip(todayISO);
   if (!ISO_DAY.test(today)) return null;
+  const regular = regularLoanDueDate(fields, today);
+  // One payment moved to another day is due on THAT day (the series keeps its
+  // own day for every other month).
+  const moved = movedOpenOccurrence(fields || {}, today);
+  return moved && (!regular || moved < regular) ? moved : regular;
+}
+
+function regularLoanDueDate(fields: Record<string, any> | null | undefined, today: string): string | null {
+  const f = fields || {};
   for (const v of [f.nextPaymentDate, f.nextPayment, f.next_payment, f.nextDueDate, f.next_due_date, f.dueDate, f.due_date]) {
     const iso = normalizeDateString(v);
     if (iso && iso >= today) return iso;
@@ -76,7 +111,9 @@ export function nextLoanDueDate(fields: Record<string, any> | null | undefined, 
   const lastPaid = normalizeDateString(f.lastPaidDate ?? f.last_paid_date);
   if (lastPaid) {
     const previous = dayInMonth(addMonthsISO(due.slice(0, 7) + "-01", -1).slice(0, 7), day);
-    if (lastPaid > previous) due = dayInMonth(addMonthsISO(due.slice(0, 7) + "-01", 1).slice(0, 7), day);
+    if (lastPaid > previous && !lastPaymentSettledEarlierCycle(f, lastPaid, previous)) {
+      due = dayInMonth(addMonthsISO(due.slice(0, 7) + "-01", 1).slice(0, 7), day);
+    }
   }
   return due;
 }

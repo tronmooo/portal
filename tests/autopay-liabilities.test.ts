@@ -570,3 +570,39 @@ describe("Every door that returns payments carries their status", () => {
     expect(reads.length).toBe(2);
   });
 });
+
+describe("A late or delayed loan payment does not swallow the next cycle", () => {
+  it("a payment delayed to the 22nd is the next due date, and December is still recorded", async () => {
+    const storage = fakeStorage([CAR_LOAN]);
+    await setOccurrenceStatus(storage, "loan-car", { occurrenceDate: "2026-11-15" }, { status: "delayed", movedTo: "2026-11-22" }, "UTC");
+    // The list and the page ask this: the moved payment is what is due next.
+    expect(nextLoanDueDate((await storage.getProfile("loan-car")).fields, "2026-11-16")).toBe("2026-11-22");
+    expect((await runDay(storage, "loan-car", "2026-11-22"))?.ok).toBe(true);
+    const f = (await storage.getProfile("loan-car")).fields;
+    expect(f.lastPaidDate).toBe("2026-11-22");
+    // Paid a week into the December cycle, for NOVEMBER: December is still due.
+    expect(nextLoanDueDate(f, "2026-11-23")).toBe("2026-12-15");
+    expect(await runDay(storage, "loan-car", "2026-12-14")).toBeNull();
+    expect((await runDay(storage, "loan-car", "2026-12-15"))?.ok).toBe(true);
+    expect(storage.payments).toHaveLength(2);
+  });
+
+  it("a missed payment paid late by hand leaves next month for Auto Pay", async () => {
+    const storage = fakeStorage([CAR_LOAN]);
+    await runDay(storage, "loan-car", "2026-11-15");
+    await setOccurrenceStatus(storage, "loan-car", { occurrenceDate: "2026-11-15" }, { status: "missed" }, "UTC");
+    await payBillOccurrence(storage, "loan-car", { occurrenceDate: "2026-11-15", amount: 400, paymentDate: "2026-11-27", source: "occurrence_route" }, "UTC");
+    expect(nextLoanDueDate((await storage.getProfile("loan-car")).fields, "2026-11-28")).toBe("2026-12-15");
+    expect((await runDay(storage, "loan-car", "2026-12-15"))?.ok).toBe(true);
+    expect(storage.payments).toHaveLength(2);
+  });
+
+  it("a payment made ahead for the coming cycle still counts as that cycle's", async () => {
+    const storage = fakeStorage([CAR_LOAN]);
+    await runDay(storage, "loan-car", "2026-11-15");
+    // December's instalment sent by hand on Dec 3, no occurrence named.
+    await payBillOccurrence(storage, "loan-car", { amount: 400, paymentDate: "2026-12-03", source: "route" }, "UTC");
+    expect(await runDay(storage, "loan-car", "2026-12-15")).toBeNull();
+    expect(storage.payments).toHaveLength(2);
+  });
+});

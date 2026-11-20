@@ -25,7 +25,7 @@ import { readMonthlyPayment, readStoredDueDate } from "./liability-fields";
 import { currentBillDueDate, effectiveDueDate, isEndedBillFields, isPausedBillFields } from "./liability-recurrence";
 import { isWithinOverdueGrace } from "./liability-status";
 import { isRecurringBill, liabilityFamily } from "./liability-types";
-import { loanDueDay } from "./loan-facts";
+import { lastPaymentSettledEarlierCycle, loanDueDay } from "./loan-facts";
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const clip = (v: unknown) => String(v ?? "").slice(0, 10);
@@ -274,7 +274,7 @@ export function autopayDueOccurrence(
   // same rule nextLoanDueDate applies), so there is nothing to assume.
   const previous = dayInMonth(addMonthsISO(key.slice(0, 7) + "-01", -1).slice(0, 7), day);
   const lastPaid = normalizeDateString(f.lastPaidDate ?? f.last_paid_date);
-  if (lastPaid && lastPaid > previous) return null;
+  if (lastPaid && lastPaid > previous && !lastPaymentSettledEarlierCycle(f, lastPaid, previous)) return null;
   return eligible(key);
 }
 

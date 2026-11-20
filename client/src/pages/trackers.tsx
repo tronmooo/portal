@@ -7167,7 +7167,7 @@ export default function TrackersPage() {
                           // information, not a warning.
                           ? <StatusPill tone={autoPay && dueIn >= 0 ? "neutral" : toneForDays(dueIn)}>{dayLabel(dueIn)}</StatusPill>
                           : <StatusPill tone="neutral">No due date</StatusPill>}
-                        {autoPay && <StatusPill tone="neutral" data-testid={`liab-autopay-${liab.id}`}>Auto Pay</StatusPill>}
+                        {autoPay && <span data-testid={`liab-autopay-${liab.id}`}><StatusPill tone="neutral">Auto Pay</StatusPill></span>}
                       </>}
                       actions={<Pencil className="h-3.5 w-3.5 text-muted-foreground/60" aria-hidden="true" />}
                       data-testid={`liab-card-${liab.id}`}
