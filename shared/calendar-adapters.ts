@@ -345,9 +345,10 @@ function obligationCompletionState(
   o: any,
   baseDate: string,
   recurrence: string,
-): Pick<CalendarSeries, "completedDates" | "skippedDates"> {
+): Pick<CalendarSeries, "completedDates" | "skippedDates" | "missedDates"> {
   const completed = new Set<string>();
   const skipped = new Set<string>();
+  const missed = new Set<string>();
 
   const raw = o?.fields?.occurrences;
   if (raw && typeof raw === "object") {
@@ -355,6 +356,7 @@ function obligationCompletionState(
       if (!isISO(date) || !ov || typeof ov !== "object") continue;
       if (ov.status === "paid") completed.add(clip(date));
       else if (ov.status === "skipped") skipped.add(clip(date));
+      else if (ov.status === "missed") missed.add(clip(date));
     }
   }
 
@@ -369,6 +371,7 @@ function obligationCompletionState(
   return {
     ...(completed.size ? { completedDates: [...completed].sort() } : {}),
     ...(skipped.size ? { skippedDates: [...skipped].sort() } : {}),
+    ...(missed.size ? { missedDates: [...missed].sort() } : {}),
   };
 }
 
@@ -551,12 +554,14 @@ function liabilityOccurrenceState(p: any, definitionAmount: number): Partial<Cal
   const estimatedDates: string[] = [];
   const completedDates: string[] = [];
   const skippedDates: string[] = [];
+  const missedDates: string[] = [];
   const movedDates: Record<string, string> = {};
 
   for (const [date, ov] of Object.entries(raw as Record<string, any>)) {
     if (!isISO(date) || !ov || typeof ov !== "object") continue;
     if (ov.status === "paid") completedDates.push(date);
     if (ov.status === "skipped") skippedDates.push(date);
+    if (ov.status === "missed") missedDates.push(date);
     if (isISO(ov.movedTo)) movedDates[date] = clip(ov.movedTo);
 
     const money = resolveOccurrenceAmount(definitionAmount, ov, billingModel);
@@ -577,6 +582,7 @@ function liabilityOccurrenceState(p: any, definitionAmount: number): Partial<Cal
     ...(estimatedDates.length ? { estimatedDates } : {}),
     ...(completedDates.length ? { completedDates } : {}),
     ...(skippedDates.length ? { skippedDates } : {}),
+    ...(missedDates.length ? { missedDates } : {}),
     ...(Object.keys(movedDates).length ? { movedDates } : {}),
   };
 }

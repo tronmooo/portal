@@ -1486,6 +1486,7 @@ export default function FinancePage() {
             <BudgetPopup open={financePopup === "budget"} onOpenChange={closer} filterMode={fc} filterIds={filterIds} monthlyIncome={monthlyIncome} />
             <CashFlowWaterfallPopup open={financePopup === "cashflow"} onOpenChange={closer}
               monthLabel={monthLabel} cashIn={monthlyIncome} spendMtd={spendMtd} recurringOut={recurringOut}
+              debtPrincipalPaid={Number((snap as any).debtPrincipalPaidThisMonth) || 0}
               incomes={incomes || []} spendByCategory={spendByCat} />
             <SpendPopup open={financePopup === "spend"} onOpenChange={closer}
               monthLabel={monthLabel} spendMtd={spendMtd}

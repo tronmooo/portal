@@ -8271,6 +8271,30 @@ export class SupabaseStorage implements IStorage {
     // out of the window, so the amount moves from this term into
     // totalMonthlySpend and the sum of the two does not move.
     const unpaidBillsThisMonth = sumBillsDueThroughMonth(allObligations as any[], userYearMonth);
+    // Principal paid on loans and cards this month. It is money that left the
+    // account but it is NOT spending (it lowered a debt), so it is reported
+    // beside the cash-flow figures instead of inside them — only a loan
+    // payment's interest and fees are an expense (Auto Pay rule A4).
+    const debtPrincipalPaidThisMonth = await (async () => {
+      try {
+        const debtIds = allProfiles
+          .filter((p: any) => (p.type === "liability" || p.type === "loan") && !isRecurringBillProfile(p))
+          .filter((p: any) => !fpIds || fpIds.length === 0 || fpIds.includes(p.id) || (p.parentProfileId && fpIds.includes(p.parentProfileId)))
+          .map((p: any) => p.id);
+        if (debtIds.length === 0) return 0;
+        const { data } = await this.supabase.from("liability_payments")
+          .select("principal_portion, payment_type, payment_date")
+          .eq("user_id", this.userId).in("liability_profile_id", debtIds)
+          .gte("payment_date", `${userYearMonth}-01`).lte("payment_date", `${userYearMonth}-31`);
+        let sum = 0;
+        for (const r of data || []) {
+          if (r.payment_type === "skipped" || r.payment_type === "deferred") continue;
+          const principal = Math.abs(Number(r.principal_portion) || 0);
+          sum += r.payment_type === "reversal" ? -principal : principal;
+        }
+        return Math.round(Math.max(0, sum) * 100) / 100;
+      } catch { return 0; }
+    })();
     // Income: recurring streams that had started by this month PLUS the
     // paychecks that actually landed in it. Marking a paycheck received used
     // to move nothing at all (INCOME · MTD stayed $0, savings rate stayed "—").
@@ -8400,6 +8424,7 @@ export class SupabaseStorage implements IStorage {
         //   IN  = monthlyIncome
         //   OUT = totalMonthlySpend + unpaidBillsThisMonth
         unpaidBillsThisMonth,
+        debtPrincipalPaidThisMonth,
         monthlyIncome,
         recurringIncome,
         receivedPaycheckIncome,

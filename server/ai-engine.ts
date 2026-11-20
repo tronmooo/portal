@@ -220,6 +220,9 @@ import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope
 import { toMonthlyAmount, sumMonthlyIncomeNow, findDuplicatePaycheck } from "@shared/obligation-windows";
 import { guessExpenseCategory } from "@shared/expense-category-guess";
 import { DEFAULT_TIMEZONE, getUserCurrentMonth, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
+import { setAutoPay, setOccurrenceStatus } from "./autopay";
+import { isAutoPayOn } from "@shared/autopay";
+import { resolveLiabilityBalance as autopayResolveBalance } from "@shared/asset-value";
 import { signedPrincipal, retractPaymentOfExpense, payBillOccurrence, unpayBillOccurrence, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
@@ -5050,6 +5053,11 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         rescheduleTo: { type: "string", description: "Move the targeted occurrence to this date (YYYY-MM-DD) WITHOUT changing the series. One-time move only." },
         occurrenceAmount: { type: "number", description: "One-time amount override for the targeted occurrence (does not change the recurring amount)." },
         occurrenceNotes: { type: "string", description: "Note to attach to the targeted occurrence." },
+        autopay: { type: "boolean", description: "Turn Auto Pay on or off for this bill, loan or card ('put my car loan on autopay', 'turn off autopay for Netflix'). On = each scheduled payment is recorded on its due date as ASSUMED paid and no reminders are raised. Off = nothing more is recorded automatically; history is kept." },
+        autopayFromAccount: { type: "string", description: "Name of the account Auto Pay draws from ('autopay my mortgage from Chase Checking')." },
+        autopayReminders: { type: "boolean", description: "Keep due-date reminders even though Auto Pay is on." },
+        paymentStatus: { type: "string", enum: ["missed", "confirmed", "partial", "scheduled"], description: "Change ONE payment's status without touching the recurring schedule. 'missed' = that payment did not happen (a recorded payment is reversed: expense, balance and account restored). 'confirmed' = an assumed Auto Pay payment really went through. 'partial' = only part was paid (pass partialAmount). 'scheduled' = undo a missed mark. Target with occurrenceDate ('last' = the most recent recorded payment, the default; 'next'; YYYY-MM; YYYY-MM-DD)." },
+        partialAmount: { type: "number", description: "With paymentStatus:'partial' — the amount actually paid. With paymentStatus:'confirmed' — the amount the bank actually posted, when it differs." },
       },
       required: ["name"],
     },
@@ -6065,6 +6073,8 @@ BEHAVIOR:
   "move my phone bill to the 18th" → changes:{ dueDay: 18 } (or nextDueDate). "increase it to $95" → changes:{ amount: 95 }. "make it quarterly" → changes:{ frequency: "quarterly" }.
   "skip next month" → skip:"next" (or skip:"2026-09" for a specific month). "pause until January" → pause:true, pauseUntil:"2027-01-01". "resume it" → resume:true.
   To PAY a specific month's occurrence use pay_obligation with forMonth:"YYYY-MM" or dueDate:"YYYY-MM-DD".
+  AUTO PAY (bills, subscriptions, loans and cards alike): "put my car loan on autopay" → update_obligation(name:<it>, autopay:true). "turn off autopay for Netflix" → autopay:false. "autopay the mortgage from Chase Checking" → autopay:true, autopayFromAccount:"Chase Checking". Never create a second record or a reminder for it.
+  ONE PAYMENT, NOT THE SCHEDULE: "my November car payment didn't go through" / "I missed the car payment" → update_obligation(name:<it>, paymentStatus:"missed", occurrenceDate:"2026-11" or "last"). "the Verizon autopay went through" → paymentStatus:"confirmed". "I only paid $200 of the car payment" → paymentStatus:"partial", partialAmount:200. "it wasn't missed after all" → paymentStatus:"scheduled". These change that one payment only; never edit changes.amount for them.
   Answer informational questions directly from the bill's stored fields: "when is my next phone bill?" → its next due date; "how much am I paying annually?" → amount times periods per year (monthly x12, weekly x52, quarterly x4, yearly x1). Never invent numbers.
 - MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. Every independent sentence or clause describing something the user did is its own operation. If a user sends 10, 20, or even 50 actions, you MUST execute ALL of them as separate tool calls — count the clauses and match that count in tool calls. Emit ALL the tool calls in a SINGLE response whenever possible (parallel tool use) instead of one per round. NEVER handle some items and verbally decline the rest — off-catalog activities (cannabis, shower, bathroom, chores) are logged via log_tracker_entry like everything else. If you run out of room in one response, continue emitting the remaining tool calls in the next round until every item is handled.
 - COMPLETE COVERAGE — STATED FACTS COUNT TOO (CRITICAL): Multi-fact messages often mix commands with plain statements of what happened ("I went to bed at 11, woke at 7, took one shower, and I'm about to eat three cheeseburgers"). EVERY discrete loggable fact gets its own tool call — sleep, meals/drinks, showers/hygiene, naps, workouts, moods, symptoms, medications. Everyday activities with no obvious existing tracker (a shower, a meditation session, a dog walk) are still logged via log_tracker_entry with a sensible trackerName (e.g. trackerName:"Showers", values:{count:1}) — the tool auto-creates the tracker when it doesn't exist yet. Before you reply, re-scan the user's message clause by clause and confirm each clause either (a) produced a tool call, or (b) is explicitly acknowledged in your reply as not logged and why ("I didn't log the shower — say 'track my showers' if you want that recorded"). NEVER silently ignore a stated fact.
@@ -12977,6 +12987,96 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
     }
 
     case "update_obligation": {
+      // ── Auto Pay and one payment's status ───────────────────────────────
+      // These apply to EVERY liability — a loan or card is its own bill (L1)
+      // and is not in the obligations list — so the target is matched across
+      // liability profiles. Everything goes through the same operations the
+      // buttons use (server/autopay): one occurrence, never the schedule.
+      const wantsAutoPay = typeof input.autopay === "boolean" || input.autopayFromAccount || typeof input.autopayReminders === "boolean";
+      const wantsStatus = !!input.paymentStatus;
+      const changesAutoPay = input.changes && typeof input.changes === "object" && typeof input.changes.autopay === "boolean";
+      if (wantsAutoPay || wantsStatus || changesAutoPay) {
+        const allProfiles: any[] = await storage.getProfiles();
+        const liabilities = allProfiles.filter((p: any) => p.type === "liability" || p.type === "loan" || p.type === "subscription");
+        const lm = safeMatchEntity(liabilities, input.name || "", (p: any) => p.name, { isDestructive: input.paymentStatus === "missed" });
+        if (!lm.match) return { error: lm.error || `No bill, loan or card found matching "${input.name}"`, candidates: lm.candidates };
+        const liab: any = lm.match;
+        const tz = aiUserTimezone();
+        const out: Record<string, any> = { updated: true, name: liab.name };
+
+        if (wantsAutoPay || changesAutoPay) {
+          let accountId: string | null | undefined;
+          if (input.autopayFromAccount) {
+            const account = findAccount(allProfiles, String(input.autopayFromAccount));
+            if (!account) {
+              const names = allProfiles.filter(isAccountProfile).map((a: any) => a.name);
+              return { error: `I couldn't find an account matching "${input.autopayFromAccount}".${names.length ? ` You have: ${names.join(", ")}.` : " You haven't added any accounts yet."}` };
+            }
+            accountId = account.id;
+            out.autopayFrom = account.name;
+          }
+          const enabled = typeof input.autopay === "boolean" ? input.autopay : changesAutoPay ? input.changes.autopay : undefined;
+          const saved: any = await setAutoPay(storage, liab.id, {
+            ...(enabled !== undefined ? { enabled } : {}),
+            ...(accountId !== undefined ? { accountId } : {}),
+            ...(typeof input.autopayReminders === "boolean" ? { reminders: input.autopayReminders } : {}),
+          }, tz);
+          if (!saved) return { error: `Couldn't change Auto Pay on ${liab.name}` };
+          // The reply is built from the saved record, not from the request (L2).
+          const fresh: any = await storage.getProfile(liab.id);
+          out.action = "autopay";
+          out.autopay = isAutoPayOn(fresh?.fields);
+          out.autopayReminders = fresh?.fields?.autopayReminders === true;
+          if (out.autopay && !(sharedReadMonthlyPayment(fresh?.fields) > 0)) {
+            out.note = "Auto Pay is on, but this has no payment amount yet, so there is nothing to record until one is set.";
+          }
+        }
+
+        if (wantsStatus) {
+          const status = String(input.paymentStatus);
+          if (!["missed", "confirmed", "partial", "scheduled"].includes(status)) return { error: `paymentStatus must be missed, confirmed, partial or scheduled (got "${status}")` };
+          const sched = await storage.getLiabilitySchedule(liab.id, 24);
+          const occs: any[] = sched?.occurrences || [];
+          const sel = String(input.occurrenceDate || (status === "scheduled" ? "missed" : "last")).trim().toLowerCase();
+          const todayISO = getUserToday(tz);
+          let target: any;
+          if (/^\d{4}-\d{2}-\d{2}$/.test(sel)) target = occs.find(o => o.date === sel || o.effectiveDate === sel);
+          else if (/^\d{4}-\d{2}$/.test(sel)) target = occs.find(o => o.date.slice(0, 7) === sel || String(o.effectiveDate).slice(0, 7) === sel);
+          else if (sel === "next") target = occs.find(o => o.status !== "paid" && o.status !== "skipped" && o.status !== "missed");
+          else if (sel === "missed") target = [...occs].reverse().find(o => o.status === "missed");
+          else {
+            // "last": the most recent recorded payment, else the most recent
+            // occurrence that has come due.
+            const past = occs.filter(o => String(o.effectiveDate) <= todayISO);
+            target = [...past].reverse().find(o => o.status === "paid") || past[past.length - 1];
+          }
+          if (!target) return { error: `I couldn't find a ${liab.name} payment matching "${input.occurrenceDate || sel}".${occs.length ? ` Payments on its schedule: ${occs.slice(0, 6).map(o => `${o.date} (${o.paymentStatus || o.status})`).join(", ")}.` : " It has no payment schedule yet (it needs an amount and a due date)."}` };
+          let change: any;
+          if (status === "partial") {
+            const amt = Number(input.partialAmount);
+            if (!(amt > 0)) return { error: "Tell me how much was actually paid (partialAmount)." };
+            change = { status, amount: amt };
+          } else if (status === "confirmed") {
+            change = { status, amount: input.partialAmount != null && Number(input.partialAmount) > 0 ? Number(input.partialAmount) : null, via: "manual" };
+          } else change = { status };
+          const done = await setOccurrenceStatus(storage, liab.id, { occurrenceDate: target.date, paymentId: target.status === "paid" ? target.paymentId : null }, change, tz);
+          if (!done.ok) {
+            return { error: done.reason === "not_paid" ? `There is no recorded ${liab.name} payment for ${target.date} to confirm.`
+              : done.reason === "reversal_failed" ? `The recorded ${liab.name} payment could not be fully reversed, so nothing else was changed.`
+              : `Couldn't change the ${liab.name} payment for ${target.date}.` };
+          }
+          // Read back what is stored now (L2).
+          const after = await storage.getLiabilitySchedule(liab.id, 24);
+          const row = (after?.occurrences || []).find((o: any) => o.date === done.occurrenceDate);
+          const freshLiab: any = await storage.getProfile(liab.id);
+          out.action = "payment_status";
+          out.payment = { date: done.occurrenceDate, status: row?.paymentStatus ?? status, amount: row?.amount ?? null, reversed: done.reversed };
+          if (!isRecurringBillProfile(freshLiab)) out.balance = autopayResolveBalance(freshLiab);
+          out.nextDue = after?.nextDue?.effectiveDate ?? null;
+        }
+        return out;
+      }
+
       const obligations = await storage.getObligations();
       const uoResult = safeMatchEntity(obligations, input.name || "", o => o.name);
       if (!uoResult.match) return { error: uoResult.error || `No obligation found matching "${input.name}"`, candidates: uoResult.candidates };

@@ -243,6 +243,12 @@ export interface CalendarSeries {
   completedDates?: string[];
   /** Occurrences skipped, by canonical date. */
   skippedDates?: string[];
+  /**
+   * Payments the user marked missed (shared/autopay), by canonical date. The
+   * occurrence stays on the calendar on its day — it is not done and not
+   * skipped — and is labelled so.
+   */
+  missedDates?: string[];
   /** Canonical date → the date it was moved to. */
   movedDates?: Record<string, string>;
   paused?: boolean;
@@ -739,7 +745,7 @@ function restateOnSurvivorSlot(date: string, survivor: CalendarSeries): string |
 function unionDates(
   winner: CalendarSeries,
   loser: CalendarSeries,
-  key: "completedDates" | "skippedDates",
+  key: "completedDates" | "skippedDates" | "missedDates",
 ): string[] {
   const out = new Set<string>(winner[key] || []);
   for (const date of loser[key] || []) {
@@ -764,14 +770,17 @@ function unionDates(
 function absorbSeriesState(winner: CalendarSeries, loser: CalendarSeries): CalendarSeries {
   const completedDates = unionDates(winner, loser, "completedDates");
   const skippedDates = unionDates(winner, loser, "skippedDates");
+  const missedDates = unionDates(winner, loser, "missedDates");
   const fillAmount = winner.amount == null && loser.amount != null;
   const grew = completedDates.length !== (winner.completedDates?.length || 0)
-    || skippedDates.length !== (winner.skippedDates?.length || 0);
+    || skippedDates.length !== (winner.skippedDates?.length || 0)
+    || missedDates.length !== (winner.missedDates?.length || 0);
   if (!grew && !fillAmount) return winner;
   return {
     ...winner,
     ...(completedDates.length ? { completedDates } : {}),
     ...(skippedDates.length ? { skippedDates } : {}),
+    ...(missedDates.length ? { missedDates } : {}),
     ...(fillAmount ? { amount: loser.amount } : {}),
   };
 }
@@ -932,6 +941,8 @@ export interface CalendarOccurrence {
   effectiveDate: string;
   moved: boolean;
   status: OccurrenceStatus;
+  /** The user marked this payment missed (it did not happen). */
+  missed?: boolean;
   /** This occurrence's own amount when the series carries one, else the series amount. */
   amount?: number;
   /** True when `amount` is a forecast (a variable bill that hasn't posted yet). */
@@ -1073,6 +1084,19 @@ export function generateSeriesOccurrences(
   const perDate = series.amountByDate || {};
   const estimated = new Set(series.estimatedDates || []);
 
+  // The walk starts at the series' base (its NEXT due date), so an occurrence
+  // the series already moved past is not generated. A payment the user marked
+  // missed is the one past occurrence that still needs a decision, so it keeps
+  // its place on the calendar while it is inside the window and unpaid.
+  const completed = new Set(series.completedDates || []);
+  for (const missed of series.missedDates || []) {
+    const shown = moved[missed] || missed;
+    if (dates.includes(missed) || completed.has(missed)) continue;
+    if (shown < windowStart || shown > windowEnd) continue;
+    dates.push(missed);
+  }
+  dates.sort();
+
   return dates.map((date) => {
     const effectiveDate = moved[date] || date;
     // A per-occurrence amount always wins over the series amount. That is the
@@ -1090,6 +1114,8 @@ export function generateSeriesOccurrences(
       effectiveDate,
       moved: effectiveDate !== date,
       status: statusFor(series, date, today, !!opts.requireComplete),
+      // Paid late afterwards? Then it is done, not missed.
+      ...(series.missedDates?.includes(date) && !series.completedDates?.includes(date) ? { missed: true } : {}),
       amount: typeof own === "number" ? own : series.amount,
       amountIsEstimate: estimated.has(date) || undefined,
       series,

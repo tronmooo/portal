@@ -232,7 +232,10 @@ still moves only through `payBillOccurrence` / `unpayBillOccurrence`. Read
 them before touching the due-scan cron (`runLiabilityDueScan`,
 `server/routes.ts`), `AutoPaySection` or `PaymentStatusControls`.
 *Guards:* `tests/autopay-liabilities.test.ts` (car loan, mortgage, phone bill,
-subscription over the real pay pipeline), `tests/autopay-controls.dom.test.tsx`.
+subscription over the real pay pipeline), `tests/autopay-controls.dom.test.tsx`,
+`tests/chat-autopay.test.ts` (chat: `update_obligation` with `autopay` /
+`paymentStatus`, loans included).
+*Live check (deployed app, smoke account):* `npx tsx tests/live-autopay-check.ts`.
 
 **A1. Recorded on the due day, once.** `autopayDueOccurrence` is the only
 answer to "what does Auto Pay record now": never before the due day, never for
@@ -240,7 +243,8 @@ a day before Auto Pay was switched on (`autoRecordSince`, stamped by the
 storage layer whichever door flips the switch), never for an occurrence that
 is paid, skipped or missed. The occurrence is claimed before the ledger row is
 written, so a retry, a second run or a page load cannot add a payment. Only
-the cron records; no screen does (Rule 3).
+the cron and the explicit `POST /api/autopay/run` (this user, same rule)
+record; no screen does on its own (Rule 3).
 
 **A2. Assumed is not confirmed.** A payment Auto Pay recorded carries
 `verification: "assumed"` on its occurrence stamp, the one place that state

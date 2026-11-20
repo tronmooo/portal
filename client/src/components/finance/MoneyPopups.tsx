@@ -62,10 +62,12 @@ const ROSE = "350 80% 58%", VIOLET = "262 80% 66%", INDIGO = "234 85% 68%";
 // ═════════════════════════════════════════════════════════════════════════════
 
 export function CashFlowWaterfallPopup({
-  open, onOpenChange, monthLabel, cashIn, spendMtd, recurringOut, incomes, spendByCategory,
+  open, onOpenChange, monthLabel, cashIn, spendMtd, recurringOut, incomes, spendByCategory, debtPrincipalPaid = 0,
 }: {
   open: boolean; onOpenChange: (o: boolean) => void; monthLabel: string;
   cashIn: number; spendMtd: number; recurringOut: number;
+  /** Loan / card principal paid this month: cash that left, but not spending. */
+  debtPrincipalPaid?: number;
   incomes: any[]; spendByCategory: Record<string, number>;
 }) {
   const cashOut = spendMtd + recurringOut;
@@ -173,6 +175,11 @@ export function CashFlowWaterfallPopup({
               icon={ArrowUpFromLine} hs="0 72%" i={1} />
             <div className="px-1">
               <p className="micro-label text-muted-foreground mb-1.5">Where it went · {monthLabel}</p>
+              {debtPrincipalPaid > 0 && (
+                <p className="text-[11px] text-muted-foreground mb-1.5" data-testid="cashflow-debt-principal">
+                  Plus {formatMoneyRound(debtPrincipalPaid)} of loan principal paid. It lowered what you owe, so it is not counted as spending.
+                </p>
+              )}
               <ul className="space-y-1.5">
                 <li className="flex items-baseline justify-between gap-2 text-xs">
                   <span className="truncate flex items-center gap-1"><RefreshCw className="h-3 w-3 text-muted-foreground" /> Recurring</span>

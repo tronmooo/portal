@@ -435,7 +435,7 @@ export function CalendarItemDetail({
                         </p>
                         <p className="text-[11px] text-muted-foreground">
                           {relativeDayLabel(o.effectiveDate, todayISO)}
-                          {o.status === "done" ? " · done" : o.status === "skipped" ? " · skipped" : ""}
+                          {o.status === "done" ? " · done" : o.status === "skipped" ? " · skipped" : o.missed ? " · missed" : ""}
                         </p>
                       </div>
                       {canCheck && (

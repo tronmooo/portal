@@ -12159,6 +12159,24 @@ No emojis. No prose outside the JSON.`,
     return { liabilityId: row ? String(row.liabilityProfileId) : null, paymentId: req.params.id };
   }));
 
+  // Record what Auto Pay owes RIGHT NOW for the signed-in user: the same rule
+  // the daily job applies (autopayDueOccurrence), for this account only. It
+  // is an explicit action, never called on navigation, and it is idempotent:
+  // a second call records nothing.
+  app.post("/api/autopay/run", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const tz = getTimezone(req);
+    const todayISO = getUserToday(tz);
+    const recorded: Array<{ liabilityId: string; name: string; occurrenceDate: string; amount: number; paymentId: string | null }> = [];
+    for (const p of (await storage.getProfiles()) as any[]) {
+      if ((p.type !== "liability" && p.type !== "loan") || !isAutoPayOn(p.fields)) continue;
+      const paid = await runAutopayForLiability(storage, p, todayISO, tz, log);
+      if (paid?.ok && !paid.deduped) recorded.push({ liabilityId: p.id, name: p.name, occurrenceDate: paid.occurrenceDate, amount: paid.amount, paymentId: paid.payment?.id ?? null });
+    }
+    if (recorded.length > 0) bustBillCaches(uid);
+    res.json({ today: todayISO, recorded });
+  }));
+
   // A bank transaction that IS an Auto Pay payment already on the books
   // confirms that payment. It never becomes a second expense: `matched: false`
   // means the caller may record it as a new transaction; `matched: true` means

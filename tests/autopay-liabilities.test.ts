@@ -516,3 +516,30 @@ describe("A6 — quiet by default, loud on an exception", () => {
     expect(stampOfPayment(loan.fields, "nope")).toBeNull();
   });
 });
+
+describe("Calendar — the payment dates stay; a missed one says so", () => {
+  it("a phone bill keeps every due date on the calendar, and the missed month is flagged, not hidden", async () => {
+    const { seriesFromLiabilityProfiles } = await import("../shared/calendar-adapters");
+    const { generateSeriesOccurrences } = await import("../shared/calendar-occurrences");
+    const storage = fakeStorage([PHONE]);
+    await runDay(storage, "bill-phone", "2026-11-20");
+    await setOccurrenceStatus(storage, "bill-phone", { occurrenceDate: "2026-11-20" }, { status: "missed" }, "UTC");
+    const [series] = seriesFromLiabilityProfiles([await storage.getProfile("bill-phone")]);
+    expect(series.missedDates).toEqual(["2026-11-20"]);
+    expect(series.skippedDates ?? []).toEqual([]);
+    const occ = generateSeriesOccurrences(series, { todayISO: "2026-11-25", lookbackDays: 30, horizonDays: 90 });
+    const byDate = Object.fromEntries(occ.map((o: any) => [o.date, o]));
+    expect(Object.keys(byDate)).toEqual(expect.arrayContaining(["2026-11-20", "2026-12-20", "2027-01-20"]));
+    expect(byDate["2026-11-20"].missed).toBe(true);
+    expect(byDate["2026-12-20"].missed).toBeUndefined();
+    expect(byDate["2026-12-20"].status).toBe("upcoming");
+
+    // Paid late: it is no longer a missed payment anywhere on the calendar.
+    await payBillOccurrence(storage, "bill-phone", { occurrenceDate: "2026-11-20", paymentDate: "2026-11-25", source: "occurrence_route" }, "UTC");
+    const [after] = seriesFromLiabilityProfiles([await storage.getProfile("bill-phone")]);
+    expect(after.missedDates ?? []).toEqual([]);
+    expect(after.completedDates).toContain("2026-11-20");
+    const again = generateSeriesOccurrences(after, { todayISO: "2026-11-25", lookbackDays: 30, horizonDays: 30 });
+    expect(again.some((o: any) => o.missed)).toBe(false);
+  });
+});
