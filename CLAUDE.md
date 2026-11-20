@@ -271,6 +271,8 @@ labelled as one. An entry's "last written" time is `updatedAt`, never its
 bare `date` ("Last 18h ago" for an entry saved minutes earlier).
 *Guard:* `tests/info-tab-editable.dom.test.tsx`.
 
+*Live check for J1–J5 (deployed app, smoke account):* `npx tsx tests/live-journal-check.ts`.
+
 ## Auto Pay rules (routine payments record themselves; the books stay honest)
 
 Every liability (bill, subscription, loan, card) has an Auto Pay setting. The
