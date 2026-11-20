@@ -12,7 +12,7 @@
 // Pinned by tests/overview-compose.test.ts.
 
 import { parseMoney } from "./asset-value";
-import { readInterestRatePct } from "./liability-fields";
+import { readInterestRatePct, RATE_UNIT_KEY } from "./liability-fields";
 import { computeEquity, deriveLiabilityMetrics } from "./liability-derived";
 import { getUserToday } from "./timezone";
 import { toMonthlyAmount } from "./obligation-windows";
@@ -178,6 +178,7 @@ function valueFor(
   raw: any,
   entityId: string,
   hints: OverviewSchemaHints | null | undefined,
+  rateMarked = false,
 ): OverviewValue {
   const sem = fieldSemantics(key, raw);
   const hint = hints?.fieldHints?.[key];
@@ -187,7 +188,7 @@ function valueFor(
   // A loan's rate is shown as the percent it IS, however a writer stored it:
   // older rows hold the decimal (0.0625), which printed as "0.1%".
   if (sem.key === "interestRate" && hasValue(raw)) {
-    const pct = readInterestRatePct({ interestRate: raw });
+    const pct = readInterestRatePct({ interestRate: raw, ...(rateMarked ? { [RATE_UNIT_KEY]: "percent" } : {}) });
     if (pct > 0) value = pct;
   }
   return {
@@ -674,7 +675,7 @@ export function composeOverview(input: ComposeInput): OverviewSpec {
   if (hints?.subtype) classification.subtype = hints.subtype;
 
   // 1 — every stored fact, classified and resolved.
-  const allValues = Object.entries(fields).map(([k, v]) => valueFor(k, v, entity.id, hints));
+  const allValues = Object.entries(fields).map(([k, v]) => valueFor(k, v, entity.id, hints, (entity.fields as any)?.[RATE_UNIT_KEY] === "percent"));
 
   // 2 — derived intelligence.
   const d = computeDerivedMetrics(input, classification, fields);

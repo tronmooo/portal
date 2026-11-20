@@ -305,7 +305,7 @@ import { expenseShownOnProfile } from "@shared/expense-on-profile";
 import { pendingProfilePatch, applySavedPatch, type EditFormState } from "@/lib/profile-autosave";
 import { guessExpenseCategory } from "@shared/expense-category-guess";
 import { deriveLiabilityMetrics, deriveLiabilityAmortization, simulateExtraPayment, payoffProgressPct } from "@shared/liability-derived";
-import { readBalance, readInterestRatePct, readMonthlyPayment, readInterestRateRaw } from "@shared/liability-fields";
+import { readBalance, readInterestRatePct, readMonthlyPayment, readInterestRateRaw, storedRateFields } from "@shared/liability-fields";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr, addDays as tzAddDays } from "@shared/timezone";
 import { toMonthlyAmount } from "@shared/obligation-windows";
@@ -3337,7 +3337,8 @@ function StaticInfoTab({
       if (f.email) parts.push(String(f.email));
     } else if (t === "loan" || t === "liability") {
       if (f.lender) parts.push(String(f.lender));
-      if (f.interestRate) parts.push(`${f.interestRate}% APR`);
+      // The percent, however the row stores it (L3) — never the raw field.
+      { const apr = readInterestRatePct(f); if (apr > 0) parts.push(`${apr}% APR`); }
     } else if (t === "subscription") {
       if (f.provider) parts.push(String(f.provider));
       if (f.frequency) parts.push(String(f.frequency));
@@ -8722,7 +8723,8 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
   const buildLoanFields = (v: { balance: string; rate: string; term: string; payment: string; lender: string; startDate: string }): Record<string, any> => {
     const fields: Record<string, any> = {};
     if (v.balance) fields.loanBalance = v.balance;
-    if (v.rate) fields.interestRate = v.rate;
+    // A "%" field: stored as typed, with its unit marker (0.9 is 0.9%).
+    if (v.rate) Object.assign(fields, storedRateFields(v.rate));
     if (v.term) fields.termMonths = v.term;
     if (v.payment) fields.monthlyPayment = v.payment;
     if (v.lender) fields.lender = v.lender;
@@ -8761,7 +8763,8 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
   const loanTabToday = getUserToday(BROWSER_TIMEZONE);
   const loanTabTypeKey = (profile as any).type_key ?? (profile as any).typeKey ?? null;
   const loanTabTerms: Record<string, any> = {
-    balance: loanBalance, interestRate, monthlyPayment: monthlyPayment || undefined, termMonths: termMonths || undefined,
+    // `interestRate` here is the percent read above, so it carries the marker.
+    balance: loanBalance, ...storedRateFields(interestRate), monthlyPayment: monthlyPayment || undefined, termMonths: termMonths || undefined,
     dueDay: f.dueDay ?? fin.dueDay, dueDate: f.dueDate ?? fin.dueDate, nextPaymentDate: f.nextPaymentDate, lastPaidDate: f.lastPaidDate,
   };
   const loanTabAmort = loanBalance > 0 && interestRate > 0 && (monthlyPayment > 0 || termMonths > 0)

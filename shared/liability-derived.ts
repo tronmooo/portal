@@ -16,7 +16,7 @@
 
 import { buildAmortization, payoffProgressPct, type AmortizationResult, type LiabilitySummary } from "./liability-calc";
 import { loanPayoff, loanStoredTermMonths } from "./loan-facts";
-import { readBalance, readInterestRatePct, readMonthlyPayment, readOriginalBalance } from "./liability-fields";
+import { readBalance, readInterestRatePct, readAnnualRate, readMonthlyPayment, readOriginalBalance } from "./liability-fields";
 import { getRecordTemporalStatus, type RecordTemporalStatus } from "./temporal-status";
 
 export { payoffProgressPct };
@@ -117,7 +117,9 @@ export function deriveLiabilityAmortization(
   const term = loanStoredTermMonths(f);
   return buildAmortization({
     currentBalance: readBalance(f),
-    annualInterestRate: readInterestRatePct(f),
+    // The DECIMAL: the engine re-guesses a bare number's unit, and a percent
+    // under 1 (a 0.9% promo APR) would be read as 90%.
+    annualInterestRate: readAnnualRate(f),
     monthlyPayment: payment || undefined,
     remainingTermMonths: term || undefined,
     extraPerPeriod: opts.extraPerPeriod || undefined,

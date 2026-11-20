@@ -119,7 +119,7 @@ import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liabili
 import { liabilityBillStatus, BILL_STATUS_META, isWithinOverdueGrace } from "@shared/liability-status";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { useAutosave, autosaveStatusLabel } from "@/hooks/useAutosave";
-import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw, rateInputToStoredPct, rateInputValue } from "@shared/liability-fields";
+import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw, storedRateFields, rateInputValue } from "@shared/liability-fields";
 import { payoffMissingFields } from "@shared/liability-payoff";
 import { PayoffOutlook } from "@/components/liability/PayoffOutlook";
 import { getRecordTemporalStatus } from "@shared/temporal-status";
@@ -479,8 +479,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     if (v.rate !== "") {
       // Stored as a PERCENT under the canonical key. Writing a decimal here
       // made the Overview print "0.1%" for a 6.25% loan.
-      const r = rateInputToStoredPct(v.rate);
-      if (r != null) fields.interestRate = r;
+      // What is typed IS the percent (0.9 is 0.9%), stored with its unit
+      // marker so no reader has to guess (shared/liability-fields).
+      Object.assign(fields, storedRateFields(v.rate));
     }
     if (v.term !== "") fields.remainingTermMonths = num(v.term);
     if (v.monthly !== "") fields.monthlyPayment = num(v.monthly);

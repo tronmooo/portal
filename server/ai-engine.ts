@@ -235,6 +235,7 @@ import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitiz
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
 import { paymentReceiptLine, paymentNotRecordedLine, composePaymentReply } from "@shared/payment-receipt";
+import { chatRatePct, storedRateFields, RATE_UNIT_KEY } from "@shared/liability-fields";
 import { readMonthlyPayment as sharedReadMonthlyPayment, readBalance as sharedReadBalance, liabilityReceiptFields } from "@shared/liability-fields";
 import { isRecurringBill as sharedIsRecurringBill, isRecurringBillProfile, normalizeLiabilityName, liabilityFamily, liabilityTypeKeyOf } from "@shared/liability-types";
 import { liabilityBillStatus as sharedBillStatus } from "@shared/liability-status";
@@ -10048,8 +10049,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         }
       }
       // Normalize annualRate (accept either decimal 0.065 or percent 6.5)
-      let rate = Number(input.annualRate);
-      if (!isNaN(rate) && rate > 1) rate = rate / 100;
+      // …stored as a PERCENT with its unit marker (shared/liability-fields).
+      const ratePct = chatRatePct(input.annualRate, (input as any).__userMessage);
       // Auto-infer subtype if the model omitted it (safety net for NLP coverage).
       // Order matters: most-specific patterns first.
       if (!input.subtype) {
@@ -10135,7 +10136,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       else if (input.currentBalance != null) fields.originalBalance = Number(input.currentBalance);
       // Stored as a PERCENT under the canonical key (shared/profile-field-canon):
       // a decimal here printed as "0.1%" wherever the stored value is shown as-is.
-      if (!isNaN(rate)) fields.interestRate = Math.round(rate * 100 * 1e6) / 1e6;
+      if (Number.isFinite(ratePct)) Object.assign(fields, storedRateFields(ratePct));
       if (input.monthlyPayment != null) fields.monthlyPayment = Number(input.monthlyPayment);
       if (input.minimumPayment != null) fields.minimumPayment = Number(input.minimumPayment);
       if (input.creditLimit != null) fields.creditLimit = Number(input.creditLimit);
@@ -10444,9 +10445,10 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // less is read as a fraction, as normalizeAnnualRate does everywhere.
       for (const rateKey of ["annualRate", "annualInterestRate", "interestRate", "apr"]) {
         if (ch[rateKey] == null) continue;
-        const r = Number(ch[rateKey]);
-        if (isNaN(r)) continue;
-        ch[rateKey] = Math.round((r > 1 ? r : r * 100) * 1e6) / 1e6;
+        const r = chatRatePct(ch[rateKey], (input as any).__userMessage);
+        if (!Number.isFinite(r)) continue;
+        ch[rateKey] = r;
+        ch[RATE_UNIT_KEY] = "percent";
       }
       const updates: any = {};
       if (ch.subtype) updates.type_key = ch.subtype;

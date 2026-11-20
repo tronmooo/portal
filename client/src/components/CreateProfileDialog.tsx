@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import ProfileTypeSelector from "@/components/registry/ProfileTypeSelector";
 import { coerceRegistryFields, missingRequiredFields } from "@shared/registry-fields";
+import { RATE_UNIT_KEY } from "@shared/liability-fields";
 import type { TypeDefinition } from "@/components/registry/ProfileTypeSelector";
 import DynamicProfileForm from "@/components/registry/DynamicProfileForm";
 import { Button } from "@/components/ui/button";
@@ -209,6 +210,12 @@ export function CreateProfileDialog({
       Object.fromEntries(Object.entries(fields).filter(([_, v]) => v !== "" && v !== null && v !== undefined)),
     );
     const legacyType = mapTypeKeyToLegacyType(selectedTypeDef.type_key, selectedTypeDef.category);
+    // A debt's rate field is a "%" input: what was typed IS the percent, so
+    // it is stored with its unit marker (0.9 is 0.9%, never read as 90%).
+    if ((legacyType === "liability" || legacyType === "loan")
+        && ["interest_rate", "interestRate", "apr", "annual_interest_rate"].some((k) => (cleanFields as any)[k] != null)) {
+      (cleanFields as any)[RATE_UNIT_KEY] = "percent";
+    }
     createMutation.mutate({
       type: legacyType,
       // @ts-ignore — type_key is stored as extra field on the profile
