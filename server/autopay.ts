@@ -14,7 +14,7 @@
 // stays one ledger row however many times it is corrected.
 import {
   ASSUMED_EXPENSE_TAG, DEBT_COST_TAG_PREFIX,
-  assumedPaymentsOf, autoPayAccountId, autoPaySettingPatch, autopayDueOccurrence, isAutoPayOn, matchAssumedPayment, stampOfPayment,
+  assumedPaymentsOf, autoPayAccountId, autoPaySettingPatch, autopayDueOccurrence, isAutoPayOn, matchAssumedPayment, occurrencePaymentStatus, stampOfPayment,
   type AssumedPaymentCandidate, type BankTransactionish,
 } from "@shared/autopay";
 import { resolveLiabilityBalance } from "@shared/asset-value";
@@ -278,6 +278,33 @@ async function clearAssumedExpenseTag(storage: IStorage, paymentId: string, logg
   } catch (e: any) {
     logger.warn(`[autopay] could not clear the assumed tag for payment ${paymentId}:`, e?.message || e);
   }
+}
+
+// ─── Payment rows, as every door returns them ────────────────────────────────
+
+/**
+ * Payment rows with their Auto Pay status (assumed / confirmed / partial),
+ * read from the occurrence stamp that names each one — the one place that
+ * state lives. Every route that returns a liability's payments answers
+ * through this: the standalone payments endpoint and the profile bundle the
+ * detail page is seeded from must not disagree about whether a payment is
+ * confirmed. A row with no stamp is a payment a person recorded: confirmed.
+ */
+export async function withPaymentStatuses(storage: IStorage, rows: any[], todayISO: string): Promise<any[]> {
+  const owners = new Map<string, any>();
+  for (const id of new Set((rows || []).map((r: any) => String(r.liabilityProfileId)))) {
+    owners.set(id, await storage.getProfile(id).catch(() => undefined));
+  }
+  return (rows || []).map((r: any) => {
+    const hit = stampOfPayment(owners.get(String(r.liabilityProfileId))?.fields, r.id);
+    return {
+      ...r,
+      occurrenceDate: hit?.date ?? null,
+      status: occurrencePaymentStatus(hit?.stamp ?? null, hit?.date ?? String(r.paymentDate || ""), todayISO, { paid: true }),
+      autopay: hit?.stamp?.autopay === true,
+      expectedAmount: hit?.stamp?.partial === true ? Number(hit.stamp.expectedAmount) || null : null,
+    };
+  });
 }
 
 // ─── Bank reconciliation ─────────────────────────────────────────────────────

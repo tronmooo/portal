@@ -35,8 +35,8 @@ import { collectMetrics, activityHistory, labPanels, weeklyBrief, resolveWellnes
 import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD, dependenciesForPrefix } from "@shared/cache-domains";
 import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
-import { isAutoPayOn, wantsDueReminders, stampOfPayment, occurrencePaymentStatus } from "@shared/autopay";
-import { runAutopayForLiability, setAutoPay, setOccurrenceStatus, reconcileBankTransaction } from "./autopay";
+import { isAutoPayOn, wantsDueReminders } from "@shared/autopay";
+import { runAutopayForLiability, setAutoPay, setOccurrenceStatus, reconcileBankTransaction, withPaymentStatuses } from "./autopay";
 import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { enrichNutritionEntry, rescaleNutritionEntry, forgetEnrichmentMode } from "./nutrition-enrichment";
@@ -5404,7 +5404,12 @@ ${JSON.stringify(ctx, null, 2)}`;
           } catch { /* best-effort — page still renders without owner rows */ }
         }
         const [payments, schedule, assetLinks] = await Promise.all([
-          storage.getLiabilityPayments(profileId).catch(() => [] as any[]),
+          // With each row's Auto Pay status: this bundle SEEDS the detail
+          // page's payments query, so it must carry what the standalone
+          // endpoint carries (the page showed no "Assumed paid" badge).
+          storage.getLiabilityPayments(profileId)
+            .then((rows) => withPaymentStatuses(storage, rows as any[], getUserToday(getTimezone(req))))
+            .catch(() => [] as any[]),
           storage.getLiabilitySchedule(profileId, 12).catch(() => null),
           (storage as any).getLiabilityAssetLinks
             ? (storage as any).getLiabilityAssetLinks(profileId).catch(() => [] as any[])
@@ -12071,25 +12076,9 @@ No emojis. No prose outside the JSON.`,
   // ---- Payments ----
   app.get("/api/liabilities/:id/payments", asyncHandler(async (req, res) => {
     const rows = await storage.getLiabilityPayments(req.params.id);
-    // Each row carries its Auto Pay status (assumed / confirmed / partial),
-    // read from the occurrence stamp that names it — the one place that state
-    // lives (shared/autopay). A row with no stamp is a payment a person
-    // recorded: confirmed.
-    const todayISO = getUserToday(getTimezone(req));
-    const owners = new Map<string, any>();
-    for (const id of new Set(rows.map((r: any) => String(r.liabilityProfileId)))) {
-      owners.set(id, await storage.getProfile(id).catch(() => undefined));
-    }
-    res.json(rows.map((r: any) => {
-      const hit = stampOfPayment(owners.get(String(r.liabilityProfileId))?.fields, r.id);
-      return {
-        ...r,
-        occurrenceDate: hit?.date ?? null,
-        status: occurrencePaymentStatus(hit?.stamp ?? null, hit?.date ?? String(r.paymentDate || ""), todayISO, { paid: true }),
-        autopay: hit?.stamp?.autopay === true,
-        expectedAmount: hit?.stamp?.partial === true ? Number(hit.stamp.expectedAmount) || null : null,
-      };
-    }));
+    // Each row carries its Auto Pay status (assumed / confirmed / partial) —
+    // the same enrichment the profile bundle applies (server/autopay).
+    res.json(await withPaymentStatuses(storage, rows, getUserToday(getTimezone(req))));
   }));
 
   // ---- Auto Pay ----

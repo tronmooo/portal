@@ -543,3 +543,30 @@ describe("Calendar — the payment dates stay; a missed one says so", () => {
     expect(again.some((o: any) => o.missed)).toBe(false);
   });
 });
+
+describe("Every door that returns payments carries their status", () => {
+  it("withPaymentStatuses labels assumed, confirmed and partial rows from the stamps", async () => {
+    const { withPaymentStatuses } = await import("../server/autopay");
+    const storage = fakeStorage([CAR_LOAN, PHONE, NETFLIX]);
+    await runDay(storage, "loan-car", "2026-11-15");
+    await payBillOccurrence(storage, "bill-phone", { occurrenceDate: "2026-11-20", source: "occurrence_route" }, "UTC");
+    const sub = await runDay(storage, "bill-sub", "2026-11-18");
+    await setOccurrenceStatus(storage, "bill-sub", { paymentId: sub!.payment.id }, { status: "partial", amount: 10 }, "UTC");
+    const rows = await withPaymentStatuses(storage, storage.payments, "2026-11-21");
+    const of = (id: string) => rows.find((r: any) => r.liabilityProfileId === id);
+    expect(of("loan-car")).toMatchObject({ status: "assumed_paid", autopay: true, occurrenceDate: "2026-11-15" });
+    expect(of("bill-phone")).toMatchObject({ status: "confirmed_paid", autopay: false });
+    expect(of("bill-sub")).toMatchObject({ status: "partial", expectedAmount: 15.99 });
+  });
+
+  // Found on the deployed app (2026-11-20): the liability page is SEEDED from
+  // the profile bundle, which returned bare rows, so the history showed no
+  // "Assumed paid" badge and no per-payment controls while the standalone
+  // endpoint had them.
+  it("the payments endpoint AND the profile bundle both answer through it", async () => {
+    const fs = await import("fs");
+    const src = fs.readFileSync("server/routes.ts", "utf8");
+    const reads = src.match(/storage\.getLiabilityPayments\((?:req\.params\.id|profileId)\)[\s\S]{0,400}?withPaymentStatuses\(/g) || [];
+    expect(reads.length).toBe(2);
+  });
+});
