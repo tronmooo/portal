@@ -67,6 +67,8 @@ describe("who it is for (pure)", () => {
     ["Journal for Bob: he had a rough day", "Bob", "he had a rough day"],
     ["Note for Bob Robertson - prefers morning appointments", "Bob Robertson", "prefers morning appointments"],
     ["For Rex: ate all his dinner", "Rex", "ate all his dinner"],
+    ["Bobcheck 8RVNK's journal: he scored two goals", "Bobcheck 8RVNK", "he scored two goals"],
+    ["Zzyzx8RVNK's journal: passed the test", "Zzyzx8RVNK", "passed the test"],
     ["My journal: slept well", null, "slept well"],
     ["I had a good day with Bob's family", null, "I had a good day with Bob's family"],
     ["Bob's car broke down today", null, "Bob's car broke down today"],

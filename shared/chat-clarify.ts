@@ -1,3 +1,4 @@
+import { classifyTurnScope } from "./turn-scope";
 /**
  * Whether the capture classifier's clarifying question may be appended to a
  * chat reply.
@@ -16,9 +17,17 @@ export function shouldAppendClarifyingQuestion(input: {
   confidence: number;
   projectionsCount: number;
   actionsCount: number;
+  /** The user's message, when known. */
+  message?: string | null;
 }): boolean {
   const q = String(input.question || "").trim();
   if (!q) return false;
+  // The user ASKED something and was answered. "Nothing was saved" is the
+  // normal outcome of a question, not a sign the message was misunderstood:
+  // "Summarize what I wrote in my journal today" got a correct summary and
+  // then "I don't have access to your journal entries. Did you want to
+  // paste…?" from the capture classifier (live check, 2026-11-20).
+  if (input.message && String(input.reply || "").trim() && classifyTurnScope(input.message).allowedMutations === "none") return false;
   if (input.confidence >= 0.7) return false;
   if (input.projectionsCount > 0) return false;
   // The assistant did something this turn: its own summary is the answer.

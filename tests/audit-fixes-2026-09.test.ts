@@ -487,6 +487,16 @@ describe("shouldAppendClarifyingQuestion", () => {
     // the same question already in the reply
     expect(shouldAppendClarifyingQuestion({ ...base, reply: "What item should be moved to today? I found nothing." })).toBe(false);
   });
+  // Live check 2026-11-20: a correct journal summary was followed by "I don't
+  // have access to your journal entries. Did you want to paste…?".
+  it("never follows the ANSWER to a question: saving nothing is what a question does", async () => {
+    const { shouldAppendClarifyingQuestion } = await import("../shared/chat-clarify");
+    const q = { ...base, question: "I don't have access to your journal entries. Did you want to paste today's journal text?" };
+    expect(shouldAppendClarifyingQuestion({ ...q, message: "Summarize what I wrote in my journal today", reply: "You wrote two entries today. Nice arc from a rough day to a calm evening." })).toBe(false);
+    expect(shouldAppendClarifyingQuestion({ ...q, message: "How much did I spend on groceries this month?", reply: "You spent $412 on groceries." })).toBe(false);
+    // A statement that went nowhere can still be asked about.
+    expect(shouldAppendClarifyingQuestion({ ...base, message: "the blue one on tuesday", reply: "I couldn't tell what you meant." })).toBe(true);
+  });
 });
 
 // ── D37: global search never returned events or documents ──

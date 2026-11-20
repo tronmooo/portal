@@ -17,7 +17,9 @@ export interface CaptureTarget {
   text: string;
 }
 
-const NAME = String.raw`([\p{L}][\p{L}\p{M}'.-]*(?:\s+[\p{L}][\p{L}\p{M}'.-]*){0,3}?)`;
+// Letters first; later characters and later words may carry digits ("R2",
+// "Unit 7").
+const NAME = String.raw`([\p{L}][\p{L}\p{M}\p{N}'.-]*(?:\s+[\p{L}\p{N}][\p{L}\p{M}\p{N}'.-]*){0,3}?)`;
 const KIND = String.raw`(?:journal|diary|notes?)(?:\s+entry)?`;
 const SEP = String.raw`\s*[:\-—,]\s*`;
 

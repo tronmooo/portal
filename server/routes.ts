@@ -2248,6 +2248,7 @@ export async function registerRoutes(
             typeof (result as any).reply === "string" &&
             shouldAppendClarifyingQuestion({
               question: classification?.clarifyingQuestion,
+              message,
               reply: (result as any).reply,
               confidence: captureConf,
               projectionsCount: projections.length,

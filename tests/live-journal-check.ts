@@ -138,7 +138,9 @@ async function main() {
     const r4 = await chat("Summarize what I wrote in my journal today");
     // The refusal it used to give: "I can only see dates and moods, not the text".
     const refused = /(?:can only|can't|cannot|unable to) see (?:the |your )?(?:dates|text|journal|content)|don't have access to (?:the |your )?journal/i.test(r4.reply);
-    check(/frustrat|overwhelm/i.test(r4.reply) && /grocer/i.test(r4.reply) && !refused, `#7 "Summarize what I wrote in my journal today" summarises the text (reply: ${r4.reply.replace(/\s+/g, " ").slice(0, 400)})`);
+    // …and the stray follow-up the capture classifier used to tack on.
+    const stray = /do you want me to summarize a journal entry|did you want to paste/i.test(r4.reply);
+    check(/frustrat|overwhelm/i.test(r4.reply) && /grocer/i.test(r4.reply) && !refused && !stray, `#7 "Summarize what I wrote in my journal today" summarises the text and stops there (reply: …${r4.reply.replace(/\s+/g, " ").slice(-260)})`);
     check((await created()).length === countBeforeQuestions, `the four questions wrote nothing to the journal`);
 
     // ── #8  "last written" time ───────────────────────────────────────────
