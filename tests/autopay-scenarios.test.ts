@@ -342,3 +342,49 @@ describe("the rest of the books", () => {
     expect((await s.getProfile("bill")).fields.occurrences["2026-11-10"].verification).toBe("confirmed");
   });
 });
+
+describe("found on the deployed app (2026-11-20)", () => {
+  it("a weekly bill with no series origin is recorded on its due day (phantom earlier cycles do not block it)", async () => {
+    const weekly = { id: "wk", name: "Lawn", type: "liability", type_key: "utility", parentProfileId: "me", fields: { amount: 30, frequency: "weekly", dueDate: "2026-11-20", autopay: true, autoPay: true, autoRecordSince: "2026-11-20" } };
+    const s = fakeStorage([weekly]);
+    const paid = await run(s, "wk", "2026-11-20");
+    expect(paid?.ok).toBe(true);
+    expect(s.payments.map((p: any) => p.paymentDate)).toEqual(["2026-11-20"]);
+    expect((await s.getProfile("wk")).fields.dueDate).toBe("2026-11-27");
+    expect(await run(s, "wk", "2026-11-21")).toBeNull();
+  });
+
+  it("a cycle that was overdue before the switch stays the user's, and does not stall the cycles after it", async () => {
+    const late = clone(BILL); late.fields.dueDate = "2026-11-05"; late.fields.firstPaymentDate = "2026-10-05"; late.fields.autoRecordSince = "2026-11-08";
+    late.fields.occurrences = { "2026-10-05": { status: "paid", paymentId: "old" } };
+    const s = fakeStorage([late]);
+    expect(await run(s, "bill", "2026-11-20")).toBeNull();
+    const dec = await run(s, "bill", "2026-12-05");
+    expect(dec?.ok).toBe(true);
+    expect(dec?.occurrenceDate).toBe("2026-12-05");
+    const f = (await s.getProfile("bill")).fields;
+    // November is still open and still the bill's due date (overdue): nothing
+    // was assumed for it.
+    expect(f.dueDate).toBe("2026-11-05");
+    expect(f.occurrences["2026-11-05"]?.status).toBeUndefined();
+    expect(await run(s, "bill", "2026-12-06")).toBeNull();
+    // Settling November by hand moves the bill past the December Auto Pay recorded.
+    await payBillOccurrence(s, "bill", { occurrenceDate: "2026-11-05", paymentDate: "2026-12-07", source: "occurrence_route" }, "UTC");
+    expect((await s.getProfile("bill")).fields.dueDate).toBe("2027-01-05");
+    expect(s.payments).toHaveLength(2);
+  });
+
+  it("the month range for principal paid ends at the first of next month (November has no 31st)", async () => {
+    const { firstOfNextMonth } = await import("../server/supabase-storage");
+    expect(firstOfNextMonth("2026-11")).toBe("2026-12-01");
+    expect(firstOfNextMonth("2026-12")).toBe("2027-01-01");
+    expect(firstOfNextMonth("2027-02")).toBe("2027-03-01");
+  });
+
+  it("a recurring bill created with a due date and no origin is given one at the storage door", async () => {
+    const fs = await import("fs");
+    const src = fs.readFileSync("server/supabase-storage.ts", "utf8");
+    const create = src.slice(src.indexOf("async createProfile(data: InsertProfile)"), src.indexOf("async createProfile(data: InsertProfile)") + 3500);
+    expect(create).toMatch(/isRecurringBill\(createdTypeKey\)[\s\S]{0,200}firstPaymentDate: firstDue/);
+  });
+});

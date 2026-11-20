@@ -139,6 +139,12 @@ import { isTestEntity } from "../shared/test-data";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth, sumMonthIncomeToDate } from "../shared/obligation-windows";
 import { isAutoPayOn, autoPayRemindersOn, withAutoPaySince } from "../shared/autopay";
 
+/** `YYYY-MM` → the first day of the following month (`YYYY-MM-01`). */
+export function firstOfNextMonth(yearMonth: string): string {
+  const y = Number(yearMonth.slice(0, 4)), m = Number(yearMonth.slice(5, 7));
+  return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+}
+
 // PostgREST `.or()` filters are built by string concatenation, so a value
 // containing `,` `(` `)` or `.` breaks out of its operand and appends
 // caller-chosen conditions (or throws a 500). Every id interpolated into one
@@ -1969,6 +1975,20 @@ export class SupabaseStorage implements IStorage {
       data = { ...data, fields: this._prepareFieldsForWrite(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (data as any).typeKey, todayISO: getUserToday(this._timezone) }, { entityType: String(data.type ?? "profile") }) };
       // Created with Auto Pay on: it is on from today (shared/autopay).
       data = { ...data, fields: withAutoPaySince(null, data.fields as Record<string, any>, getUserToday(this._timezone)) };
+      // A recurring bill born with a due date and no series origin starts ON
+      // that date. Without an origin the "which cycle is still owed" rule
+      // (currentBillDueDate) walks back past the bill's own beginning: a bill
+      // added today and due tomorrow read "overdue" for the cycle before it
+      // existed, and a weekly one for four of them.
+      {
+        const cf: any = data.fields;
+        const createdTypeKey = (data as any).type_key ?? (data as any).typeKey;
+        const origin = String(cf.firstPaymentDate ?? cf.first_payment_date ?? "").slice(0, 10);
+        const firstDue = readDueDate(cf);
+        if (isRecurringBill(createdTypeKey) && !/^\d{4}-\d{2}-\d{2}$/.test(origin) && /^\d{4}-\d{2}-\d{2}$/.test(firstDue)) {
+          data = { ...data, fields: { ...cf, firstPaymentDate: firstDue } };
+        }
+      }
     }
     // An unrecognised type used to be stored as "person" — the last door by
     // which "tires for my Dodge Ram" became a human being. The canonical rule
@@ -8285,7 +8305,9 @@ export class SupabaseStorage implements IStorage {
         const { data } = await this.supabase.from("liability_payments")
           .select("principal_portion, payment_type, payment_date")
           .eq("user_id", this.userId).in("liability_profile_id", debtIds)
-          .gte("payment_date", `${userYearMonth}-01`).lte("payment_date", `${userYearMonth}-31`);
+          // Up to the first of NEXT month: "-31" is not a date in a 30-day
+          // month and the query failed (the figure read 0 all November).
+          .gte("payment_date", `${userYearMonth}-01`).lt("payment_date", firstOfNextMonth(userYearMonth));
         let sum = 0;
         for (const r of data || []) {
           if (r.payment_type === "skipped" || r.payment_type === "deferred") continue;

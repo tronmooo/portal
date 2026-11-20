@@ -22,7 +22,8 @@
 import { addMonthsISO } from "./date-math";
 import { normalizeDateString } from "./extraction-normalize";
 import { readMonthlyPayment, readStoredDueDate } from "./liability-fields";
-import { currentBillDueDate, effectiveDueDate, isEndedBillFields, isPausedBillFields } from "./liability-recurrence";
+import { billRecurrenceRule, currentBillDueDate, effectiveDueDate, isEndedBillFields, isOneTimeFrequency, isPausedBillFields, liabilityAnchorDay } from "./liability-recurrence";
+import { advance } from "./recurrence";
 import { isWithinOverdueGrace } from "./liability-status";
 import { isRecurringBill, liabilityFamily } from "./liability-types";
 import { lastPaymentCoversCycle, loanDueDay } from "./loan-facts";
@@ -257,7 +258,23 @@ export function autopayDueOccurrence(
   const typeKey = liability.type_key ?? liability.typeKey ?? null;
   if (isRecurringBill(typeKey)) {
     if (isEndedBillFields(f)) return null;
-    return eligible(currentBillDueDate(f, today));
+    // Start at the occurrence still owed and walk forward to the first one
+    // Auto Pay is responsible for. A cycle that came due before the switch
+    // stays the user's to settle (it still shows overdue), but it must not
+    // stall every cycle after it.
+    let key = currentBillDueDate(f, today);
+    const frequency = f.frequency ?? f.billingFrequency;
+    if (isOneTimeFrequency(frequency)) return eligible(key);
+    const rule = billRecurrenceRule(frequency);
+    rule.anchorDay = liabilityAnchorDay(f, key);
+    for (let guard = 0; guard < 120 && ISO_DAY.test(key) && key <= today; guard++) {
+      const hit = eligible(key);
+      if (hit) return hit;
+      const next = advance(key, rule);
+      if (!(next > key)) break;
+      key = next;
+    }
+    return eligible(key);
   }
 
   // A loan, card or one-time debt (one record: its payment day is a field on it).
