@@ -181,6 +181,8 @@ import { toUserFacingError, stripInternalText } from "@shared/ai-message-kinds";
 import { checkClaims, shouldRetryUnbackedWriteClaim, UNBACKED_WRITE_RETRY_INSTRUCTION, honestFailureReply, groundedSummary, describeMismatch, stripStaleCapabilityClaims, type ExecutedOperation } from "@shared/ai-claim-check";
 import { recordChatFailure } from "./ai-failure-log";
 import { detectMoodFromText } from "@shared/mood-detect";
+import { parseCaptureTarget, type CaptureKind } from "@shared/capture-target";
+import { generateTitle } from "./content-title";
 import { detectRecurrenceFreq, parseRecurrence, withAnchorDay } from "@shared/recurrence";
 import { resolveTaskActor } from "@shared/task-actor";
 import { annualLabelEvent, profileIsNamedBy, personNamedByTitle } from "@shared/birthday-event";
@@ -4730,7 +4732,8 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       type: "object" as const,
       properties: {
         mood: { type: "string", enum: ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"], description: "Mood level (optional — infer from context). 'amazing/incredible' → amazing, 'great/wonderful' → great, 'good/fine' → good, 'okay/alright' → okay, 'meh/indifferent' → neutral, 'bad/rough/sore/tired' → bad, 'awful/horrible' → awful, 'terrible/miserable' → terrible. Default: 'neutral'" },
-        content: { type: "string", description: "Journal content. Write a full sentence summarizing what the user said." },
+        content: { type: "string", description: "Journal content — the user's own words when they wrote the entry themselves; otherwise a full sentence summarizing what they said." },
+        title: { type: "string", description: "A short, specific title for this entry: 3 to 7 words, Title Case, no quotes ('Rough Day At Work', 'First Run In Months'). Always provide one." },
         energy: { type: "number", description: "Energy level 1-5" },
         gratitude: { type: "array", items: { type: "string" }, description: "Things grateful for" },
         highlights: { type: "array", items: { type: "string" }, description: "Day highlights" },
@@ -4753,7 +4756,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       type: "object" as const,
       properties: {
         content: { type: "string", description: "The note body — the information to remember, as a full sentence." },
-        title: { type: "string", description: "Short title (max ~60 chars). Omit and one is derived from the content." },
+        title: { type: "string", description: "A short, specific title for the note: 3 to 7 words, Title Case, no quotes ('Buy New Tires', 'Robert Gate Code'). Always provide one." },
         forProfile: { type: "string", description: "EXACT profile name the note belongs to ('Robert', 'Jane Doe', 'Max'). Omit for the user's own note." },
         tags: { type: "array", items: { type: "string" }, description: "Optional tags." },
       },
@@ -4798,6 +4801,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         from: { type: "string", description: "Start of a date range, YYYY-MM-DD." },
         to: { type: "string", description: "End of a date range, YYYY-MM-DD." },
         query: { type: "string", description: "Only entries whose text contains this." },
+        forProfile: { type: "string", description: "EXACT profile name to read ANOTHER person's journal ('Bob'). Omit for the user's own." },
         limit: { type: "number", description: "Max entries. Default 7." },
       },
       required: [],
@@ -12531,7 +12535,10 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const day = rawDay ? resolveJournalDay(rawDay, tz) : null;
       if (rawDay && !day) return { error: `"${input.date}" is not a day I can read — pass YYYY-MM-DD, "today" or "yesterday".` };
       const iso = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null);
+      const journalOf = input.forProfile ? matchProfileByName(await storage.getProfiles(), input.forProfile) : null;
+      if (input.forProfile && !journalOf) return { error: `No profile named "${input.forProfile}".` };
       const rows = await journalEntriesFor(storage, {
+        profileId: journalOf && (journalOf as any).type !== "self" ? (journalOf as any).id : null,
         day, from: iso(input.from), to: iso(input.to), query: input.query,
         limit: Math.max(1, Math.min(60, Number(input.limit) || 7)),
       });
@@ -12539,7 +12546,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         count: rows.length,
         // Not `entries`: the result summariser keeps only ids and values of
         // an `entries` array (tracker logs) and would drop the text.
-        journal: rows.map((e) => ({ date: e.date, mood: e.mood, content: e.content })),
+        journal: rows.map((e) => ({ date: e.date, title: e.title, mood: e.mood, content: e.content })),
         ...(rows.length === 0 ? { note: day ? `There is no journal entry for ${day}.` : "No journal entries match." } : {}),
       };
     }
@@ -12583,62 +12590,16 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         ? String(input.entryDate).slice(0, 10)
         : todayDate;
 
-      let targetProfile: any = null;
-      if (input.forProfile) {
-        const profiles = await storage.getProfiles();
-        targetProfile = matchProfileByName(profiles, input.forProfile);
-      }
-
-      const { entry, appended } = await upsertJournalEntry(storage, {
-        content: input.content || "",
-        mood: input.mood,
-        entryDate,
-        profileId: targetProfile?.id ?? null,
-        profileLabel: targetProfile?.name ?? null,
-        energy: input.energy,
-        gratitude: input.gratitude,
-        highlights: input.highlights,
+      const profiles = await storage.getProfiles();
+      const targetProfile: any = input.forProfile ? matchProfileByName(profiles, input.forProfile) : null;
+      return saveJournalEntryForChat({
+        content: input.content || "", mood: input.mood, title: input.title,
+        entryDate, todayDate, targetProfile, profiles,
+        // "add this to today's journal" joins the day's entry; every other
+        // journal write is its own entry (a day can hold several).
+        mode: name === "append_journal_entry" ? "append" : "new",
+        energy: input.energy, gratitude: input.gratitude, highlights: input.highlights,
       });
-
-      // A self entry created without forProfile starts with no owner. Stamp the
-      // self profile so it still surfaces under the user's own journal view.
-      let finalEntry: any = entry;
-      if (!targetProfile) {
-        const profiles = await storage.getProfiles();
-        const selfProfile = profiles.find((p: any) => p.type === "self");
-        if (selfProfile && !((entry as any)?.linkedProfiles || []).includes(selfProfile.id)) {
-          const merged = Array.from(new Set([...((entry as any)?.linkedProfiles || []), selfProfile.id]));
-          const patched = await storage.updateJournalEntry(entry.id, { linkedProfiles: merged } as any);
-          if (patched) finalEntry = patched;
-          await storage.linkProfileTo(selfProfile.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Self profile linking failed:", e?.message); });
-        }
-      }
-
-      const actionable = findActionableTime(input.content || "");
-      // Said from the saved row: a NEW entry is "saved", text joined onto the
-      // day's existing entry is "added to" — never "Updated journal entry"
-      // for one that was just created (append_journal_entry creates too).
-      const savedMood = moodLabel((finalEntry as any)?.mood);
-      const dayText = entryDate === todayDate ? "today" : longDay(entryDate);
-      const journalMessage = appended
-        ? `Added to your journal entry for ${dayText} — what was already there is unchanged. Mood: ${savedMood}.`
-        : (entry as any)?.unchanged
-          ? `That is already in your journal entry for ${dayText}. Nothing was changed.`
-          : `Saved a new journal entry for ${dayText}. Mood: ${savedMood}.`;
-      return {
-        ...finalEntry,
-        message: journalMessage,
-        appended,
-        entryDate,
-        dateRules: [],
-        dateRuleNote: "A journal entry's date records when the experience happened — it is not a calendar commitment and creates no Date Rule.",
-        ...(actionable.actionable
-          ? {
-              actionableTime: { dateText: actionable.dateText, cue: actionable.cue },
-              suggestion: `The entry mentions ${actionable.cue} on/around "${actionable.dateText}". If that is a real commitment, create a task or event for it as well — the journal entry itself stays as written.`,
-            }
-          : {}),
-      };
     }
 
     case "create_artifact": {
@@ -16345,6 +16306,157 @@ export interface ProcessMessageOptions {
    *  Idempotency-Key). Every write operation id is derived from it, so a retry
    *  of the same request finds its own completed operations. */
   requestId?: string;
+  /**
+   * The composer's Journal or Note button was on: save this message as that,
+   * word for word. No model decides what it is, and nothing else is logged
+   * from what the text mentions. `profileId` is the person picked in the
+   * "For" chip; a person named in the text ("Bob's journal: …") wins over it.
+   */
+  capture?: { kind: CaptureKind; profileId?: string };
+}
+
+/**
+ * The composer's Journal / Note button: save the message as that object.
+ *
+ * WHO IT IS FOR: a person named in the text ("Bob's journal: …", "Note for
+ * Bob: …") if that name is one of the user's profiles; else the person picked
+ * in the "For" chip; else the writer. A name that matches no profile never
+ * creates one (CLAUDE.md rule 13): the text is saved whole, under the writer,
+ * and the reply says so. Two profiles answering to the name → nothing is
+ * saved and the reply asks which.
+ */
+async function captureFromButton(
+  message: string, capture: { kind: CaptureKind; profileId?: string },
+): Promise<{ reply: string; actions: ParsedAction[]; results: any[] }> {
+  const profiles = ((await storage.getProfiles()) || []) as any[];
+  const people = profiles.filter((p) => ["self", "person", "pet"].includes(String(p.type)));
+  const self = people.find((p) => p.type === "self") || null;
+  const read = parseCaptureTarget(message);
+  let target: any | null = capture.profileId ? people.find((p) => p.id === capture.profileId) || null : null;
+  let text = read.text;
+  let unknownName: string | null = null;
+
+  if (read.name) {
+    const wanted = read.name.toLowerCase();
+    const answering = people.filter((p) => {
+      const n = String(p.name || "").toLowerCase();
+      return n === wanted || n.split(/\s+/)[0] === wanted;
+    });
+    if (answering.length > 1) {
+      return {
+        reply: `You have ${answering.length} profiles that answer to "${read.name}": ${answering.map((p) => p.name).join(", ")}. Nothing was saved — pick the person in the "For" menu, or use their full name.`,
+        actions: [], results: [],
+      };
+    }
+    if (answering[0]) target = answering[0];
+    else { unknownName = read.name; text = message.trim(); }
+  }
+  if (capture.kind === "journal") text = journalFilingContent(text) ?? text;
+  if (!text.trim()) return { reply: "There's nothing to save yet — type the text first.", actions: [], results: [] };
+
+  const forOther = !!target && target.id !== self?.id;
+  const title = await generateTitle(text, capture.kind);
+  const noProfileNote = unknownName
+    ? ` I don't have a profile for ${unknownName}, so it is saved under you. Say "create a profile for ${unknownName}" if you want them to have their own.`
+    : "";
+
+  if (capture.kind === "journal") {
+    const tz = aiUserTimezone();
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+    const saved = await saveJournalEntryForChat({
+      content: text, title, entryDate: today, todayDate: today,
+      targetProfile: forOther ? target : null, profiles, mode: "new",
+    });
+    return {
+      reply: `${saved.message}${noProfileNote}`,
+      actions: [{ type: "journal_entry", category: "journal", data: { mood: saved.mood, content: text, title: saved.title, ...(forOther ? { forProfile: target.name } : {}) } } as ParsedAction],
+      results: [saved],
+    };
+  }
+
+  const created = await createNote(storage, {
+    content: text, title, profileId: forOther ? target.id : null, tags: [], source: "chat",
+  });
+  const noteTitle = String(created.note?.title || title);
+  return {
+    reply: created.deduped
+      ? `You already have this note ("${noteTitle}"). It was not saved twice.`
+      : `Saved the note "${noteTitle}"${forOther ? ` for ${target.name}` : ""}.${noProfileNote}`,
+    actions: [{ type: "create_artifact", category: "artifact", data: { title: noteTitle, content: text, ...(forOther ? { forProfile: target.name } : {}) } } as ParsedAction],
+    results: [created.note],
+  };
+}
+
+/**
+ * Save one journal entry and say what was saved, from the saved row.
+ * The single path for chat's journal tools AND the composer's Journal button,
+ * so both file under the same person, title and mood rules.
+ */
+async function saveJournalEntryForChat(args: {
+  content: string; mood?: string; moodPicked?: boolean; title?: string;
+  entryDate: string; todayDate: string;
+  /** Whose journal: a matched profile, or null for the writer's own. */
+  targetProfile: any | null;
+  profiles: any[];
+  mode: "new" | "append";
+  energy?: number; gratitude?: string[]; highlights?: string[];
+}): Promise<Record<string, any>> {
+  const selfProfile = args.profiles.find((p: any) => p.type === "self") || null;
+  const forOther = !!args.targetProfile && args.targetProfile.id !== selfProfile?.id;
+  const { entry, appended } = await upsertJournalEntry(storage, {
+    content: args.content,
+    mood: args.mood,
+    moodPicked: args.moodPicked,
+    title: args.title,
+    entryDate: args.entryDate,
+    profileId: forOther ? args.targetProfile.id : null,
+    selfProfileId: selfProfile?.id ?? null,
+    mode: args.mode,
+    energy: args.energy,
+    gratitude: args.gratitude,
+    highlights: args.highlights,
+  });
+
+  // An own entry starts with no owner. Stamp the self profile so it still
+  // surfaces under the user's own journal view.
+  let finalEntry: any = entry;
+  if (!forOther && selfProfile && !((entry as any)?.linkedProfiles || []).includes(selfProfile.id)) {
+    const merged = Array.from(new Set([...((entry as any)?.linkedProfiles || []), selfProfile.id]));
+    const patched = await storage.updateJournalEntry(entry.id, { linkedProfiles: merged } as any);
+    if (patched) finalEntry = patched;
+    await storage.linkProfileTo(selfProfile.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Self profile linking failed:", e?.message); });
+  }
+
+  const actionable = findActionableTime(args.content || "");
+  // Said from the saved row: a NEW entry is "saved", text joined onto an
+  // existing entry is "added to" — never "Updated journal entry" for one
+  // that was just created (append_journal_entry creates too).
+  const savedMood = moodLabel((finalEntry as any)?.mood);
+  const dayText = args.entryDate === args.todayDate ? "today" : longDay(args.entryDate);
+  const whose = forOther ? `${args.targetProfile.name}'s` : "your";
+  const savedTitle = String((finalEntry as any)?.title || "").trim();
+  const journalMessage = appended
+    ? `Added to ${whose} journal entry for ${dayText} — what was already there is unchanged. Mood: ${savedMood}.`
+    : (entry as any)?.unchanged
+      ? `That is already in ${whose} journal for ${dayText}. Nothing was changed.`
+      : `Saved ${savedTitle ? `"${savedTitle}" to` : "a new entry in"} ${whose} journal for ${dayText}. Mood: ${savedMood}.`;
+  const { unchanged: _unchanged, ...row } = finalEntry as any;
+  return {
+    ...row,
+    message: journalMessage,
+    appended,
+    ...((entry as any)?.unchanged ? { deduped: true } : {}),
+    entryDate: args.entryDate,
+    forProfileName: forOther ? args.targetProfile.name : null,
+    dateRules: [],
+    dateRuleNote: "A journal entry's date records when the experience happened — it is not a calendar commitment and creates no Date Rule.",
+    ...(actionable.actionable
+      ? {
+          actionableTime: { dateText: actionable.dateText, cue: actionable.cue },
+          suggestion: `The entry mentions ${actionable.cue} on/around "${actionable.dateText}". If that is a real commitment, create a task or event for it as well — the journal entry itself stays as written.`,
+        }
+      : {}),
+  };
 }
 
 /**
@@ -16355,7 +16467,12 @@ export interface ProcessMessageOptions {
  * not authorization — nothing about the scope is read from history.
  */
 export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: ProcessMessageOptions): ReturnType<typeof processMessageInner> {
-  const turnScope = classifyTurnScope(userMessage);
+  // The Journal / Note button IS the instruction to save: a diary line that
+  // happens to be a question ("Why was today so hard?") is still an entry,
+  // not a read turn.
+  const turnScope: TurnScope = options?.capture
+    ? { intent: "CREATE", allowedMutations: "all", reason: `${options.capture.kind} button`, clauses: [] }
+    : classifyTurnScope(userMessage);
   const turnId = options?.turnId || randomUUID();
   const requestId = options?.requestId || options?.sourceMessageId;
   if (turnScope.allowedMutations === "none") {
@@ -16471,6 +16588,24 @@ async function processMessageInner(userMessage: string, conversationHistory: Arr
     return {
       reply: "I'm not sure what you're asking — could you rephrase that? For example: \"how much did I spend on groceries this month\" or \"add a task to call the dentist\".",
       actions: [], results: [],
+    };
+  }
+
+  // ── JOURNAL / NOTE BUTTON ───────────────────────────────────────────────
+  // Deterministic: the button named the object, the message is its text.
+  if (options?.capture) {
+    const captured = await captureFromButton(userMessage, options.capture);
+    const domains = domainsForActionTypes(captured.actions.map((a) => a?.type));
+    return {
+      reply: captured.reply,
+      actions: captured.actions.map((a) => ({
+        ...a,
+        data: { ...(a.data || {}), _turnId: turnId, ...(sourceMessageId ? { _sourceMessageId: sourceMessageId } : {}) },
+      })),
+      results: captured.results,
+      turnId, sourceMessageId,
+      ...(domains.length > 0 ? { mutations: [{ op: "create" as const, entityType: null, domains, tool: `capture:${options.capture.kind}` }] } : {}),
+      meta: { timings: { aiMs: Date.now() - turnStartedAt, tools: [] } },
     };
   }
 

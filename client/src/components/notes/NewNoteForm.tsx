@@ -51,7 +51,7 @@ export function NewNoteForm({ profileId, onDone, autoFocus = true }: {
       <Input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        placeholder="Title"
+        placeholder="Title (optional — written for you if left blank)"
         aria-label="Note title"
         className="h-8 text-sm"
         autoFocus={autoFocus}

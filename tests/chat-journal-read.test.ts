@@ -109,7 +109,7 @@ describe("writing", () => {
     expect(db.journal).toHaveLength(1);
     expect(db.journal[0].mood).toBe("bad");
     const said = JSON.stringify(res);
-    expect(said).toMatch(/Saved a new journal entry for today\. Mood: Bad\./);
+    expect(said).toMatch(/Saved \\".+\\" to your journal for today\. Mood: Bad\./);
     expect(said).not.toMatch(/Updated journal/i);
   });
 

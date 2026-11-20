@@ -1557,7 +1557,7 @@ export class SupabaseStorage implements IStorage {
 
   private rowToJournalEntry(r: any): JournalEntry {
     return {
-      id: r.id, date: r.date, mood: r.mood as MoodLevel, content: r.content || "",
+      id: r.id, date: r.date, mood: r.mood as MoodLevel, title: r.title || null, content: r.content || "",
       tags: r.tags || [], energy: r.energy ?? undefined,
       gratitude: r.gratitude || undefined, highlights: r.highlights || undefined,
       linkedProfiles: r.linked_profiles || [],
@@ -6992,6 +6992,7 @@ export class SupabaseStorage implements IStorage {
     const linkedProfiles = await this.resolveOwnersAndValidate("journal", data as any);
     const { error } = await this.supabase.from("journal_entries").insert({
       id, user_id: this.userId, date: data.date || getUserToday(this._timezone), mood: data.mood,
+      title: (data as any).title || null,
       content: data.content || "", tags: data.tags || [], energy: data.energy ?? null,
       gratitude: data.gratitude || null, highlights: data.highlights || null,
       linked_profiles: linkedProfiles,
@@ -7008,10 +7009,11 @@ export class SupabaseStorage implements IStorage {
     const merged = { ...existing, ...data };
     const { error } = await this.supabase.from("journal_entries").update(onlyPatched({
       date: merged.date, mood: merged.mood, content: merged.content,
+      title: (merged as any).title ?? null,
       tags: merged.tags, energy: merged.energy ?? null,
       gratitude: merged.gratitude || null, highlights: merged.highlights || null,
       updated_at: new Date().toISOString(),
-    }, data as Record<string, any>, { date: "date", mood: "mood", content: "content", tags: "tags", energy: "energy", gratitude: "gratitude", highlights: "highlights" })).eq("id", id).eq("user_id", this.userId);
+    }, data as Record<string, any>, { date: "date", mood: "mood", content: "content", title: "title", tags: "tags", energy: "energy", gratitude: "gratitude", highlights: "highlights" })).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners).
     if ((data as any).linkedProfiles !== undefined) {

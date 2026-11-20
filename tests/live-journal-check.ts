@@ -28,6 +28,7 @@ const trackerEntryCount = async (): Promise<number> =>
 async function main() {
   const release = await acquireGateLock(preferenceLockIo((m, p, b) => api(m, p, b)), { gate: "live-journal-check" });
   const tag = Math.random().toString(36).slice(2, 7).toUpperCase();
+  let personId: string | undefined;
   const startIds = new Set((await journal()).map((j) => j.id));
   const created = async () => (await journal()).filter((j) => !startIds.has(j.id));
   const dropCreated = async () => { for (const j of await created()) await api("DELETE", `/journal/${j.id}`).catch(() => undefined); };
@@ -67,15 +68,49 @@ async function main() {
     mine = await created();
     check(mine.length === 1 && /frustrated/i.test(mine[0].content) && /grocery/i.test(mine[0].content), `adding to today's entry keeps what was there (got "${String(mine[0]?.content).slice(0, 120)}")`);
 
-    // ── #4  a manual entry does not replace the day's entry ───────────────
-    const post = await api("POST", "/journal", { content: `Walked the dog ${tag}`, entryDate, tags: [] });
-    check(post.ok && post.data?.appended === true && post.data?.id === entryId, `#4 a manual entry for the same day is joined onto it (appended=${post.data?.appended})`);
-    const patch = await api("PATCH", `/journal/${entryId}`, { find: `Walked the dog ${tag}`, replace: `Walked the dog and cooked dinner ${tag}` });
+    // ── #4  a manual entry is its own entry; the day's other entry is untouched
+    const post = await api("POST", "/journal", { content: `Walked the dog ${tag}`, entryDate, tags: [], draft: true });
+    check(post.ok && post.data?.id && post.data.id !== entryId, `#4 a manual entry on the same day is a new entry (status ${post.status})`);
+    const patch = await api("PATCH", `/journal/${post.data?.id}`, { content: `Walked the dog and cooked dinner ${tag}`, mood: "neutral", autoTitle: true });
     mine = await created();
-    const text = String(mine[0]?.content || "");
-    check(patch.ok && mine.length === 1 && /frustrated/i.test(text) && /grocery/i.test(text) && text.includes(`cooked dinner ${tag}`),
-      `#4 after the composer's autosave the earlier text is still there (got "${text.slice(0, 160)}")`);
-    check(["bad", "awful", "terrible"].includes(mine[0]?.mood), `#4 the day's mood was not changed by text with no feeling in it (got ${mine[0]?.mood})`);
+    const chatEntry = mine.find((j) => j.id === entryId);
+    const manual = mine.find((j) => j.id === post.data?.id);
+    check(patch.ok && mine.length === 2 && /frustrated/i.test(chatEntry?.content || "") && /grocery/i.test(chatEntry?.content || ""),
+      `#4 the entry written in chat is untouched (got "${String(chatEntry?.content).slice(0, 120)}")`);
+    check(["bad", "awful", "terrible"].includes(chatEntry?.mood), `#4 its mood is unchanged (got ${chatEntry?.mood})`);
+    check(String(manual?.title || "").trim().length >= 3, `the manual entry was given a title on save (got "${manual?.title}")`);
+
+    // ── Journal / Note buttons, and "Bob's journal" ───────────────────────
+    const capture = async (kind: "journal" | "note", message: string) => {
+      const r = await api("POST", "/chat", { message, history: [], capture: { kind } });
+      if (!r.ok) throw new Error(`POST /chat (button): ${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+      return String(r.data?.reply || "");
+    };
+    const trackersBefore = await trackerEntryCount();
+    const b1 = await capture("journal", `Why was today so hard ${tag}? I ran 2 miles and still felt awful afterwards.`);
+    mine = await created();
+    const btn = mine.find((j) => String(j.content).includes(`so hard ${tag}`));
+    check(!!btn && btn.content === `Why was today so hard ${tag}? I ran 2 miles and still felt awful afterwards.`, `Journal button: a question-shaped line is saved word for word (reply: ${b1.slice(0, 90)})`);
+    check(String(btn?.title || "").trim().length >= 3, `Journal button: the entry has a title (got "${btn?.title}")`);
+    check((await trackerEntryCount()) === trackersBefore, `Journal button: the run it mentions was not logged`);
+    check(mine.filter((j) => j.date === entryDate).length >= 3, `several entries on one day are kept (${mine.filter((j) => j.date === entryDate).length})`);
+
+    // A person profile for "Bob's journal" (created and removed by this run).
+    const person = await api("POST", "/profiles", { name: `Bobcheck ${tag}`, type: "person" });
+    if (!person.ok) note(`"Bob's journal" skipped: could not create a test profile (${person.status})`);
+    else {
+      personId = person.data?.id;
+      const b2 = await capture("journal", `Bobcheck ${tag}'s journal: he scored two goals and was thrilled.`);
+      mine = await created();
+      const bobs = mine.find((j) => String(j.content).startsWith("he scored two goals"));
+      check(!!bobs && (bobs.linkedProfiles || []).includes(personId), `"<Name>'s journal: …" is filed under that person, without the lead (reply: ${b2.slice(0, 90)})`);
+      const b3 = await capture("note", `Note for Bobcheck ${tag}: prefers morning appointments ${tag}.`);
+      const noteRow = ((await get("/artifacts")) as any[]).find((a) => a.type === "note" && String(a.content).startsWith("prefers morning appointments"));
+      check(!!noteRow && (noteRow.linkedProfiles || []).includes(personId) && String(noteRow.title || "").length >= 3, `Note button: "Note for <Name>: …" belongs to that person and has a title (reply: ${b3.slice(0, 90)})`);
+    }
+    const before2 = (await created()).length;
+    const b4 = await capture("journal", `Zzyzx${tag}'s journal: passed the driving test.`);
+    check((await created()).length === before2 + 1 && /don't have a profile/i.test(b4), `a name with no profile creates none and says so (reply: ${b4.slice(0, 110)})`);
 
     // ── #5  backdated entry ───────────────────────────────────────────────
     const back = new Date(Date.now() - 40 * 86400_000).toISOString().slice(0, 10);
@@ -93,6 +128,7 @@ async function main() {
     check(arts.some((a) => a.id === n.data?.id && a.type === "note"), `#6 it shows in Notes & Artifacts`);
 
     // ── #7  chat reads them back ──────────────────────────────────────────
+    const countBeforeQuestions = (await created()).length;
     const r1 = await chat("Show me my journal entry from today");
     check(/frustrated/i.test(r1.reply) && !/warranty/i.test(r1.reply) && !r1.raw?.documentPreview, `#7 "Show me my journal entry from today" shows the entry (reply: ${r1.reply.slice(0, 100)})`);
     const r2 = await chat("What was my mood earlier today?");
@@ -103,7 +139,7 @@ async function main() {
     // The refusal it used to give: "I can only see dates and moods, not the text".
     const refused = /(?:can only|can't|cannot|unable to) see (?:the |your )?(?:dates|text|journal|content)|don't have access to (?:the |your )?journal/i.test(r4.reply);
     check(/frustrat|overwhelm/i.test(r4.reply) && /grocer/i.test(r4.reply) && !refused, `#7 "Summarize what I wrote in my journal today" summarises the text (reply: ${r4.reply.replace(/\s+/g, " ").slice(0, 400)})`);
-    check((await created()).filter((j) => j.date === entryDate).length === 1, `the four questions wrote nothing to the journal`);
+    check((await created()).length === countBeforeQuestions, `the four questions wrote nothing to the journal`);
 
     // ── #8  "last written" time ───────────────────────────────────────────
     const fresh = (await journal()).find((j) => j.id === entryId);
@@ -111,6 +147,7 @@ async function main() {
     check(age >= 0 && age < 15 * 60_000, `#8 the entry reports when it was last written (updatedAt ${Math.round(age / 1000)}s ago)`);
   } finally {
     await dropCreated().catch(() => undefined);
+    if (personId) await api("DELETE", `/profiles/${personId}`).catch(() => undefined);
     for (const a of ((await get("/artifacts").catch(() => [])) as any[]).filter((a) => String(a.title || "").includes(tag) || String(a.content || "").includes(tag))) {
       await api("DELETE", `/notes/${a.id}`).catch(() => undefined);
     }

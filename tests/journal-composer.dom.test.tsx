@@ -41,6 +41,7 @@ const CHAT_ENTRY = {
   tags: [], linkedProfiles: [], createdAt: new Date().toISOString(),
 };
 let existing: any[] = [];
+let profiles: any[] = [];
 
 const json = (body: any, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -54,14 +55,13 @@ const wrote = (method: string, urlPart: string) => calls.filter((c) => c.method 
 beforeEach(() => {
   calls.length = 0;
   existing = [];
+  profiles = [];
   apiRequest.mockImplementation(async (method: string, url: string, body?: any) => {
     calls.push({ method, url, body });
     if (method === "GET" && url.startsWith("/api/journal")) return json(existing);
-    if (method === "GET" && url.startsWith("/api/profiles")) return json([]);
-    // The server joins a second write for a day onto that day's entry.
+    if (method === "GET" && url.startsWith("/api/profiles")) return json(profiles);
     if (method === "POST" && url === "/api/journal") {
-      const hit = existing.find((e) => e.date === (body.entryDate || TODAY));
-      return hit ? json({ ...hit, appended: true }) : json({ id: "j-new", date: body.entryDate || TODAY, mood: body.mood || "neutral", content: body.content, appended: false }, 201);
+      return json({ id: "j-new", date: body.entryDate || TODAY, mood: body.mood || "neutral", content: body.content, title: body.title || body.content, appended: false }, 201);
     }
     return json({ ok: true });
   });
@@ -104,26 +104,19 @@ describe("free write", () => {
     expect(wrote("POST", "/api/journal")[0].body.mood).toBe("okay");
   });
 
-  it("says the day already has an entry, and never overwrites it", async () => {
+  it("a day that already has an entry gets a NEW entry; the existing one is never written to", async () => {
     existing = [CHAT_ENTRY];
     await openFreeWrite();
-    await waitFor(() => expect(screen.getByTestId("journal-existing-entry-notice").textContent).toMatch(/added to it/));
-
-    const box = screen.getByTestId("input-journal-free-text");
-    fireEvent.change(box, { target: { value: "Walked the dog" } });
+    fireEvent.change(screen.getByTestId("input-journal-free-text"), { target: { value: "Walked the dog" } });
     fireEvent.click(screen.getByTestId("button-save-journal-free"));
     await waitFor(() => expect(wrote("POST", "/api/journal")).toHaveLength(1));
-
-    // No request may carry `content` to the existing entry: that is the
-    // overwrite. (The composer closes after Save; the autosave path is the
-    // same function and is covered by the route test's find/replace.)
-    const patches = wrote("PATCH", "/api/journal/j-chat");
-    expect(patches.every((c) => !("content" in c.body))).toBe(true);
-    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Added to that day's entry" })));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Entry saved" })));
+    // Every write after the POST goes to the composer's OWN row.
+    expect(wrote("PATCH", "/api/journal/j-chat")).toHaveLength(0);
+    expect(wrote("PATCH", "/api/journal/j-new").length).toBeGreaterThan(0);
   });
 
-  it("autosave after joining an existing entry edits only its own passage", async () => {
-    existing = [CHAT_ENTRY];
+  it("autosave is a draft; Save asks for a title when none was typed", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       await openFreeWrite();
@@ -131,13 +124,38 @@ describe("free write", () => {
       fireEvent.change(box, { target: { value: "Walked the dog" } });
       await vi.advanceTimersByTimeAsync(2100);
       await waitFor(() => expect(wrote("POST", "/api/journal")).toHaveLength(1));
+      expect(wrote("POST", "/api/journal")[0].body.draft).toBe(true);
       fireEvent.change(box, { target: { value: "Walked the dog and cooked dinner" } });
-      await vi.advanceTimersByTimeAsync(2100);
-      await waitFor(() => expect(wrote("PATCH", "/api/journal/j-chat")).toHaveLength(1));
-      const body = wrote("PATCH", "/api/journal/j-chat")[0].body;
-      expect(body.find).toBe("Walked the dog");
-      expect(body.replace).toBe("Walked the dog and cooked dinner");
-      expect("content" in body).toBe(false);
+      fireEvent.click(screen.getByTestId("button-save-journal-free"));
+      await waitFor(() => expect(wrote("PATCH", "/api/journal/j-new")).toHaveLength(1));
+      const body = wrote("PATCH", "/api/journal/j-new")[0].body;
+      expect(body.content).toBe("Walked the dog and cooked dinner");
+      expect(body.autoTitle).toBe(true);
     } finally { vi.useRealTimers(); }
+  });
+
+  it("a typed title is sent as the title, and no automatic one is asked for", async () => {
+    await openFreeWrite();
+    fireEvent.change(screen.getByTestId("input-journal-title"), { target: { value: "Dog Day" } });
+    fireEvent.change(screen.getByTestId("input-journal-free-text"), { target: { value: "Walked the dog" } });
+    fireEvent.click(screen.getByTestId("button-save-journal-free"));
+    await waitFor(() => expect(wrote("POST", "/api/journal")).toHaveLength(1));
+    expect(wrote("POST", "/api/journal")[0].body.title).toBe("Dog Day");
+    expect(calls.some((c) => c.body?.autoTitle)).toBe(false);
+  });
+});
+
+describe("the list", () => {
+  it("shows each entry's title, and whose journal it is when it is not mine", async () => {
+    profiles = [{ id: "self-1", type: "self", name: "Tron" }, { id: "bob-1", type: "person", name: "Bob" }];
+    existing = [
+      { ...CHAT_ENTRY, title: "Rough Day At Work", linkedProfiles: ["self-1"] },
+      { id: "j-bob", date: TODAY, mood: "good", title: "Two Goals", content: "He scored twice.", tags: [], linkedProfiles: ["bob-1"], createdAt: new Date().toISOString() },
+    ];
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("journal-title-j-chat").textContent).toBe("Rough Day At Work"));
+    expect(screen.getByTestId("journal-title-j-bob").textContent).toBe("Two Goals");
+    expect(screen.getByTestId("journal-owner-j-bob").textContent).toBe("Bob's journal");
+    expect(screen.queryByTestId("journal-owner-j-chat")).toBeNull();
   });
 });

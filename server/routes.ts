@@ -38,6 +38,7 @@ import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX 
 import { isAutoPayOn, wantsDueReminders } from "@shared/autopay";
 import { runAutopayForLiability, setAutoPay, setOccurrenceStatus, reconcileBankTransaction, withPaymentStatuses } from "./autopay";
 import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
+import { generateTitle } from "./content-title";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { enrichNutritionEntry, rescaleNutritionEntry, forgetEnrichmentMode } from "./nutrition-enrichment";
 import { enrichItem, type EnrichmentTarget } from "./item-enrichment";
@@ -2044,6 +2045,10 @@ export async function registerRoutes(
         requestId: runRequestId || undefined,
         // Rule 6: the UI's selected profile is the default owner for creates.
         activeProfileIds: activeProfileIds(req),
+        // The composer's Journal / Note button: save the message as that.
+        ...(req.body?.capture && (req.body.capture.kind === "journal" || req.body.capture.kind === "note")
+          ? { capture: { kind: req.body.capture.kind, ...(typeof req.body.capture.profileId === "string" && req.body.capture.profileId ? { profileId: req.body.capture.profileId } : {}) } }
+          : {}),
         // Forward engine progress frames (round / assistant_delta /
         // tool_start / tool_result) straight onto the SSE stream.
         ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),
@@ -7059,7 +7064,8 @@ Rules:
       return res.status(400).json({ error: "Note content is required" });
     }
     const content = sanitize(req.body.content);
-    const title = req.body.title ? sanitize(String(req.body.title)) : undefined;
+    // A note with no title gets one written from its text.
+    const title = (req.body.title ? sanitize(String(req.body.title)).trim() : "") || await generateTitle(content, "note");
     // Honour the active-profile scope header the same way every other create
     // does, so a note made while a profile is selected belongs to that profile.
     const scoped: Record<string, any> = {};
@@ -9529,9 +9535,8 @@ Rules:
     const parsed = insertJournalEntrySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     // SAME SERVICE AS CHAT. `entryDate` (or the legacy `date`) is the day the
-    // experience happened; a second write for a day that already has an entry
-    // appends, because journal_entries is UNIQUE on (user_id, date) and
-    // "add this to today's journal" should append anyway.
+    // experience happened. Every save from the page is its own entry: a day
+    // can hold several, and several people's.
     const entryDate = String(req.body.entryDate || parsed.data.date || getUserToday(getTimezone(req))).slice(0, 10);
     applyActiveProfileScope(req, req.body);
     // The linked profiles must be this user's and exist BEFORE the entry is
@@ -9545,8 +9550,18 @@ Rules:
     }
     const linkedProfileId = Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0
       ? String(req.body.linkedProfiles[0]) : null;
+    // The title: what the writer typed, else written from the text. A DRAFT
+    // (the composer's autosave, mid-sentence) is not titled yet — the title
+    // is written when the entry is saved (PATCH autoTitle).
+    const givenTitle = typeof req.body.title === "string" ? sanitize(req.body.title).trim().slice(0, 120) : "";
+    const entryTitle = givenTitle || (req.body.draft === true ? undefined : await generateTitle(parsed.data.content || "", "journal"));
+    const selfProfileId = (await storage.getProfiles()).find((p: any) => p.type === "self")?.id ?? null;
     let { entry: newEntry, appended } = await upsertJournalEntry(storage, {
       content: parsed.data.content || "",
+      title: entryTitle,
+      selfProfileId,
+      mode: "new",
+      dedupe: req.body.draft !== true,
       mood: parsed.data.mood,
       moodPicked,
       tags: parsed.data.tags,
@@ -9566,10 +9581,8 @@ Rules:
     bustCache(`stats:${uid_j1}`);
     // A journal entry's date is not a calendar commitment — it never creates a
     // Date Rule. Stated in the response so no caller has to infer it.
-    // `appended` tells the composer the day already had an entry and this text
-    // was joined onto it — its later saves must then edit ONLY this text
-    // (PATCH find/replace), never overwrite the entry.
-    res.status(appended ? 200 : 201).json({ ...newEntry, appended, dateRules: [] });
+    const { unchanged, ...savedRow } = newEntry as any;
+    res.status(unchanged ? 200 : 201).json({ ...savedRow, appended, ...(unchanged ? { deduped: true } : {}), dateRules: [] });
   }));
   app.patch("/api/journal/:id", asyncHandler(async (req, res) => {
     {
@@ -9611,12 +9624,15 @@ Rules:
       req.body.tags = Array.from(new Set([...(current.tags || []), ...req.body.addTags.map((t: unknown) => String(t).trim()).filter(Boolean)]));
     }
     delete req.body.addTags;
-    // One entry per day: moving an entry onto a day that has one is refused
-    // by name, not surfaced as a database error.
-    if (typeof req.body.date === "string" && req.body.date) {
-      const clash = (await storage.getJournalEntries()).find((e) => e.date === req.body.date && e.id !== req.params.id);
-      if (clash) return res.status(409).json({ error: `You already have a journal entry for ${req.body.date}. Open that entry to add to it.` });
+    if (typeof req.body.title === "string") req.body.title = sanitize(req.body.title).trim().slice(0, 120);
+    // The entry is being SAVED with no title typed: write one from its text.
+    if (req.body.autoTitle === true && !req.body.title) {
+      const text = typeof req.body.content === "string"
+        ? req.body.content
+        : String((await storage.getJournalEntries()).find((e) => e.id === req.params.id)?.content || "");
+      if (text.trim()) req.body.title = await generateTitle(text, "journal");
     }
+    delete req.body.autoTitle;
     const updated = await storage.updateJournalEntry(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_j2 = cacheUserKey(req as AuthenticatedRequest);

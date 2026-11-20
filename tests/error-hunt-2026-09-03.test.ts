@@ -3878,61 +3878,75 @@ describe("D288 a backup restored before is refused the second time", async () =>
 });
 
 // ── D290: a raced journal write appends instead of losing the paragraph.
-describe("D290 two writes for one day never lose the loser's text", async () => {
+// D290 was "two writes for one day never lose the loser's text" under a
+// UNIQUE (user_id, date) index. The index is gone (owner decision 2026-11-20:
+// several entries per day): two writes for one day are two entries, so there
+// is no loser. What must still hold is that nothing is lost or doubled.
+describe("D290 two writes for one day never lose text", async () => {
   const { upsertJournalEntry } = await import("../server/content-service");
-  function store(existingRows: any[] = []) {
-    let rows = [...existingRows];
-    let failNextCreateWith: any = null;
+  function store() {
+    const rows: any[] = [];
     const storage: any = {
       getJournalEntries: async () => rows.map((r) => ({ ...r })),
       createJournalEntry: async (d: any) => {
-        if (failNextCreateWith) {
-          const e = failNextCreateWith; failNextCreateWith = null;
-          // the winner's row lands the moment our create is rejected
-          rows.push({ id: "winner", date: d.date, content: "first paragraph", mood: "good", linkedProfiles: [] });
-          throw e;
-        }
-        const row = { id: `j${rows.length + 1}`, ...d, linkedProfiles: [] };
-        rows.push(row); return row;
+        const row = { id: `j${rows.length + 1}`, createdAt: new Date(Date.now() + rows.length).toISOString(), ...d, linkedProfiles: [] };
+        rows.push(row); return { ...row };
       },
       updateJournalEntry: async (id: string, patch: any) => {
         const i = rows.findIndex((r) => r.id === id);
         if (i < 0) return undefined;
-        rows[i] = { ...rows[i], ...patch }; return rows[i];
+        rows[i] = { ...rows[i], ...patch }; return { ...rows[i] };
       },
       linkProfileTo: async () => {},
     };
-    return { storage, rows: () => rows, failCreate: (e: any) => { failNextCreateWith = e; } };
+    return { storage, rows };
   }
-  it("a unique-violation on create is retried as an append, keeping both paragraphs", async () => {
+  it("two writes for one day are two entries, both kept", async () => {
     const s = store();
-    s.failCreate(Object.assign(new Error('duplicate key value violates unique constraint "journal_entries_user_id_date_key"'), { code: "23505" }));
-    const r = await upsertJournalEntry(s.storage, { content: "second paragraph", entryDate: "2026-09-04", mood: "good" } as any);
-    expect(r.appended).toBe(true);
-    expect(r.entry.content).toContain("first paragraph");
-    expect(r.entry.content).toContain("second paragraph");
-    expect(s.rows()).toHaveLength(1);
-  });
-  it("the retry stays idempotent: the winner's own text is not appended to itself", async () => {
-    const s = store();
-    s.failCreate(Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505" }));
-    const r = await upsertJournalEntry(s.storage, { content: "first paragraph", entryDate: "2026-09-04", mood: "good" } as any);
-    expect(r.entry.content).toBe("first paragraph");
-    expect((r.entry.content.match(/first paragraph/g) || []).length).toBe(1);
-  });
-  it("an error that is not a duplicate still propagates", async () => {
-    const s = store();
-    s.failCreate(Object.assign(new Error("database is on fire"), { code: "58030" }));
-    await expect(upsertJournalEntry(s.storage, { content: "x", entryDate: "2026-09-04", mood: "good" } as any)).rejects.toThrow(/on fire/);
-  });
-  it("the ordinary paths still work: a first write creates, a second appends", async () => {
-    const s = store();
-    const a = await upsertJournalEntry(s.storage, { content: "one", entryDate: "2026-09-04", mood: "good" } as any);
+    const a = await upsertJournalEntry(s.storage, { content: "first paragraph", entryDate: "2026-09-04", mood: "good" } as any);
+    const b = await upsertJournalEntry(s.storage, { content: "second paragraph", entryDate: "2026-09-04", mood: "great" } as any);
     expect(a.appended).toBe(false);
-    const b = await upsertJournalEntry(s.storage, { content: "two", entryDate: "2026-09-04", mood: "great" } as any);
+    expect(b.appended).toBe(false);
+    expect(s.rows.map((r) => r.content)).toEqual(["first paragraph", "second paragraph"]);
+  });
+  it("the same text again is the same entry, not a second one", async () => {
+    const s = store();
+    await upsertJournalEntry(s.storage, { content: "first paragraph", entryDate: "2026-09-04", mood: "good" } as any);
+    const again = await upsertJournalEntry(s.storage, { content: "First paragraph.", entryDate: "2026-09-04", mood: "good" } as any);
+    expect(again.entry.unchanged).toBe(true);
+    expect(s.rows).toHaveLength(1);
+  });
+  it("a fragment of an existing entry is NOT a duplicate of it", async () => {
+    const s = store();
+    await upsertJournalEntry(s.storage, { content: "I walked the dog", entryDate: "2026-09-04", mood: "good" } as any);
+    const r = await upsertJournalEntry(s.storage, { content: "I", entryDate: "2026-09-04", mood: "good" } as any);
+    expect(r.entry.unchanged).toBeUndefined();
+    expect(s.rows).toHaveLength(2);
+  });
+  it("append joins the day's latest entry and stays idempotent", async () => {
+    const s = store();
+    await upsertJournalEntry(s.storage, { content: "one", entryDate: "2026-09-04", mood: "good" } as any);
+    const b = await upsertJournalEntry(s.storage, { content: "two", entryDate: "2026-09-04", mode: "append" } as any);
     expect(b.appended).toBe(true);
     expect(b.entry.content).toBe("one\n\ntwo");
-    expect(s.rows()).toHaveLength(1);
+    const c = await upsertJournalEntry(s.storage, { content: "two", entryDate: "2026-09-04", mode: "append" } as any);
+    expect(c.appended).toBe(false);
+    expect(s.rows).toHaveLength(1);
+    expect(s.rows[0].content).toBe("one\n\ntwo");
+  });
+  it("Bob's entry and mine on one day are separate; append reaches only the right one", async () => {
+    const s = store();
+    await upsertJournalEntry(s.storage, { content: "my morning", entryDate: "2026-09-04", selfProfileId: "self" } as any);
+    await upsertJournalEntry(s.storage, { content: "bob had a rough day", entryDate: "2026-09-04", profileId: "bob", selfProfileId: "self" } as any);
+    expect(s.rows).toHaveLength(2);
+    await upsertJournalEntry(s.storage, { content: "my evening", entryDate: "2026-09-04", selfProfileId: "self", mode: "append" } as any);
+    expect(s.rows.find((r) => r.content.startsWith("my")).content).toBe("my morning\n\nmy evening");
+    expect(s.rows.find((r) => r.content.startsWith("bob")).content).toBe("bob had a rough day");
+  });
+  it("a storage error propagates", async () => {
+    const s = store();
+    s.storage.createJournalEntry = async () => { throw Object.assign(new Error("database is on fire"), { code: "58030" }); };
+    await expect(upsertJournalEntry(s.storage, { content: "x", entryDate: "2026-09-04", mood: "good" } as any)).rejects.toThrow(/on fire/);
   });
 });
 

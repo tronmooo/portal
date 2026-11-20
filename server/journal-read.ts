@@ -38,18 +38,31 @@ export function longDay(day: string): string {
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" });
 }
 
-export interface JournalReadRow { id: string; date: string; mood: string; content: string }
+export interface JournalReadRow { id: string; date: string; mood: string; title: string; content: string; createdAt: string }
 
 /** The entries a read is about: that day's, or the most recent when no day was named. */
 export async function journalEntriesFor(
   storage: IStorage,
-  opts: { day?: string | null; from?: string | null; to?: string | null; query?: string | null; limit?: number },
+  opts: { day?: string | null; from?: string | null; to?: string | null; query?: string | null; limit?: number; /** Another person's journal. */ profileId?: string | null },
 ): Promise<JournalReadRow[]> {
-  const all = ((await storage.getJournalEntries()) || []) as any[];
+  let all = ((await storage.getJournalEntries()) || []) as any[];
+  // "My journal" is the writer's own: entries written on behalf of another
+  // profile (Bob's journal) are read only when that person is asked for.
+  const profiles = ((await storage.getProfiles().catch(() => [])) || []) as any[];
+  const selfId = profiles.find((p) => p?.type === "self")?.id;
+  all = all.filter((e) => {
+    const linked: string[] = e.linkedProfiles || [];
+    if (opts.profileId) return linked.includes(opts.profileId);
+    return linked.length === 0 || !selfId || linked.includes(selfId);
+  });
   let rows = all
-    .map((e) => ({ id: String(e.id), date: String(e.date || "").slice(0, 10), mood: String(e.mood || "neutral"), content: String(e.content || "") }))
+    .map((e) => ({
+      id: String(e.id), date: String(e.date || "").slice(0, 10), mood: String(e.mood || "neutral"),
+      title: String(e.title || ""), content: String(e.content || ""), createdAt: String(e.createdAt || ""),
+    }))
     .filter((e) => e.date)
-    .sort((a, b) => b.date.localeCompare(a.date));
+    // Newest day first; within a day, in the order they were written.
+    .sort((a, b) => b.date.localeCompare(a.date) || a.createdAt.localeCompare(b.createdAt));
   if (opts.day) rows = rows.filter((e) => e.date === opts.day);
   if (opts.from) rows = rows.filter((e) => e.date >= opts.from!);
   if (opts.to) rows = rows.filter((e) => e.date <= opts.to!);
@@ -92,20 +105,28 @@ export async function answerJournalRead(
   if (intent.kind === "summarize") return null;
   const day = resolveJournalDay(intent.day, tz, now);
   const today = dayInZone(now, tz);
-  const rows = await journalEntriesFor(storage, { day, limit: 1 });
-  const entry = rows[0];
+  // A day can hold several entries: with a day named, all of that day's;
+  // with none, the most recent day's.
+  let rows = await journalEntriesFor(storage, { day, limit: 50 });
+  if (!day && rows[0]) rows = rows.filter((e) => e.date === rows[0].date);
+  // How the day ENDED is the mood of the last thing written (shared/journal-mood).
+  const entry = rows[rows.length - 1];
   const dayPhrase = (d: string) => (d === today ? "today" : `on ${longDay(d)}`);
+  const titled = (e: JournalReadRow) => (e.title ? `**${e.title}** · ` : "");
 
   if (intent.kind === "mood") {
     const moodDay = day || entry?.date || today;
     const readings = await moodTrackerReadings(storage, moodDay, tz);
     const parts: string[] = [];
-    if (entry) parts.push(`Your journal entry ${dayPhrase(entry.date)} is marked **${moodLabel(entry.mood)}**.`);
+    if (rows.length === 1) parts.push(`Your journal entry ${dayPhrase(entry.date)} is marked **${moodLabel(entry.mood)}**.`);
+    else if (rows.length > 1) {
+      parts.push(`You wrote ${rows.length} journal entries ${dayPhrase(entry.date)}: ${rows.map((e) => `${e.title ? `"${e.title}" ` : ""}**${moodLabel(e.mood)}**`).join(", ")}. The latest is **${moodLabel(entry.mood)}**.`);
+    }
     if (readings.length > 0) parts.push(`Mood tracker ${dayPhrase(moodDay)}: ${readings.join("; ")}.`);
     if (parts.length === 0) {
       return `You haven't recorded a mood ${dayPhrase(moodDay)} — there's no journal entry or Mood tracker reading for that day.`;
     }
-    if (entry?.content) parts.push(`You wrote: "${excerpt(entry.content, 280)}"`);
+    if (rows.length === 1 && entry?.content) parts.push(`You wrote: "${excerpt(entry.content, 280)}"`);
     return parts.join("\n\n");
   }
 
@@ -114,8 +135,12 @@ export async function answerJournalRead(
       ? `You don't have a journal entry ${dayPhrase(day)}. Say "journal this: …" to write one.`
       : `You don't have any journal entries yet. Say "journal this: …" to write one.`;
   }
-  const head = `Your journal entry ${entry.date === today ? "from today" : `from ${longDay(entry.date)}`} · Mood: **${moodLabel(entry.mood)}**`;
-  return `${head}\n\n${entry.content || "(no text — mood only)"}\n\n[Open Journal](/journal)`;
+  const when = entry.date === today ? "from today" : `from ${longDay(entry.date)}`;
+  if (rows.length === 1) {
+    return `Your journal entry ${when} · ${titled(entry)}Mood: **${moodLabel(entry.mood)}**\n\n${entry.content || "(no text — mood only)"}\n\n[Open Journal](/journal)`;
+  }
+  const body = rows.map((e) => `${titled(e)}Mood: **${moodLabel(e.mood)}**\n${e.content || "(no text — mood only)"}`).join("\n\n");
+  return `Your ${rows.length} journal entries ${when}:\n\n${body}\n\n[Open Journal](/journal)`;
 }
 
 function excerpt(text: string, max: number): string {
@@ -132,11 +157,11 @@ export async function journalContextBlock(
   storage: IStorage, intent: JournalReadIntent, tz: string, now: Date = new Date(),
 ): Promise<string> {
   const day = resolveJournalDay(intent.day, tz, now);
-  const rows = await journalEntriesFor(storage, { day, limit: day ? 1 : 3 });
+  const rows = await journalEntriesFor(storage, { day, limit: day ? 20 : 5 });
   if (rows.length === 0) {
     return `[JOURNAL] The user is asking about their journal${day ? ` for ${day}` : ""}. There is NO journal entry${day ? " for that day" : ""}. Say so plainly; do not open a document and do not write anything.`;
   }
-  const body = rows.map((e) => `— ${e.date} · mood ${moodLabel(e.mood)}:\n${e.content}`).join("\n\n");
+  const body = rows.map((e) => `— ${e.date}${e.title ? ` · "${e.title}"` : ""} · mood ${moodLabel(e.mood)}:\n${e.content}`).join("\n\n");
   return `[JOURNAL] The user is asking about their journal. You HAVE the journal: the stored text is below, in full. Answer from it directly — ` +
     `no tool call is needed, do not open a document, do not write anything, do not ask the user to paste it, and never say you cannot see or access the journal.\n${body}`;
 }

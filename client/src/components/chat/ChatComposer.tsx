@@ -21,7 +21,7 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Camera, Loader2, Mic, Paperclip, RotateCcw, Search, Send } from "lucide-react";
+import { BookOpen, Camera, Loader2, Mic, Paperclip, RotateCcw, Search, Send, StickyNote } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 // Moved verbatim from pages/chat.tsx — the composer is the only consumer.
@@ -117,7 +117,35 @@ interface ChatComposerProps {
   onEmptyChange?: (empty: boolean) => void;
   /** The "+ New doc/sheet" button — rendered by the parent, slotted in here. */
   newDocButton?: ReactNode;
+  /**
+   * Journal / Note mode. With one on, the message is SAVED as that, word for
+   * word — the chat does not decide what it is. Off = ordinary chat.
+   */
+  capture?: CaptureMode;
+  onCaptureChange?: (mode: CaptureMode) => void;
+  /** Who the entry or note is for; "" = me. */
+  captureProfileId?: string;
+  onCaptureProfileChange?: (profileId: string) => void;
+  /** The people the "For" menu offers (id + name; the writer is listed as "Me"). */
+  captureProfiles?: Array<{ id: string; name: string; isSelf?: boolean }>;
 }
+
+export type CaptureMode = "journal" | "note" | null;
+
+const CAPTURE_COPY: Record<"journal" | "note", { label: string; placeholder: string; send: string; hint: string }> = {
+  journal: {
+    label: "Journal entry",
+    placeholder: "Write your journal entry…",
+    send: "Save entry",
+    hint: "Saved to the journal exactly as written. Nothing else is logged.",
+  },
+  note: {
+    label: "Note",
+    placeholder: "Write your note…",
+    send: "Save note",
+    hint: "Saved as a note exactly as written.",
+  },
+};
 
 export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer(
   {
@@ -131,6 +159,11 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     onReset,
     onEmptyChange,
     newDocButton,
+    capture = null,
+    onCaptureChange,
+    captureProfileId = "",
+    onCaptureProfileChange,
+    captureProfiles = [],
   },
   ref,
 ) {
@@ -217,12 +250,57 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             the user types, leaving the field unlabelled for both sighted users
             and assistive tech (production audit 2026-07-29). The label stays
             on screen; the placeholder is now only an example. */}
-        <label
-          htmlFor="chat-message-input"
-          className="block px-1 pb-1.5 micro-label text-muted-foreground"
-        >
-          Message
-        </label>
+        <div className="flex flex-wrap items-center gap-1.5 px-1 pb-1.5">
+          <label
+            htmlFor="chat-message-input"
+            className="micro-label text-muted-foreground mr-1"
+          >
+            {capture ? CAPTURE_COPY[capture].label : "Message"}
+          </label>
+          {/* Journal / Note buttons: a hard switch, so the chat never has to
+              guess whether a message is a diary entry, a note or a question. */}
+          {onCaptureChange && ([
+            ["journal", "Journal", BookOpen],
+            ["note", "Note", StickyNote],
+          ] as const).map(([kind, label, Icon]) => (
+            <button
+              key={kind}
+              type="button"
+              aria-pressed={capture === kind}
+              onClick={() => { onCaptureChange(capture === kind ? null : kind); textareaRef.current?.focus(); }}
+              title={capture === kind ? `${label} mode is on — tap to go back to chat` : `Save my next message as a ${kind === "journal" ? "journal entry" : "note"}`}
+              className={`h-7 px-2.5 rounded-full border text-xs font-medium flex items-center gap-1 transition-colors ${
+                capture === kind
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "border-border text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              }`}
+              data-testid={`button-capture-${kind}`}
+            >
+              <Icon className="h-3.5 w-3.5" /> {label}
+            </button>
+          ))}
+          {capture && captureProfiles.length > 1 && (
+            <label className="flex items-center gap-1 text-xs text-muted-foreground">
+              For
+              <select
+                value={captureProfileId}
+                onChange={(e) => onCaptureProfileChange?.(e.target.value)}
+                className="h-7 rounded-full border border-border bg-background px-2 text-xs text-foreground"
+                aria-label={`Who this ${capture === "journal" ? "journal entry" : "note"} is for`}
+                data-testid="select-capture-profile"
+              >
+                {captureProfiles.map((p) => (
+                  <option key={p.id} value={p.isSelf ? "" : p.id}>{p.isSelf ? "Me" : p.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+        {capture && (
+          <p className="px-1 pb-1.5 text-[11px] text-muted-foreground" data-testid="capture-hint">
+            {CAPTURE_COPY[capture].hint} You can also start with a name: “Bob’s {capture === "journal" ? "journal" : "note"}: …”.
+          </p>
+        )}
         {/* Large prominent input box */}
         <div className="bubble relative focus-within:border-primary/50 focus-within:shadow-md transition-all duration-200">
           <Textarea
@@ -231,7 +309,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask me anything..."
+            placeholder={capture ? CAPTURE_COPY[capture].placeholder : "Ask me anything..."}
             maxLength={10000}
             className="min-h-[76px] max-h-[280px] resize-none border-0 bg-transparent px-4 pt-3.5 pb-14 text-sm leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0 rounded-2xl"
             rows={3}
@@ -345,7 +423,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                 className="h-8 px-4 rounded-xl text-xs font-semibold gap-1.5 hover:scale-105 active:scale-95 transition-transform"
                 data-testid="button-send"
               >
-                {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Send className="h-3.5 w-3.5" /> Send</>}
+                {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Send className="h-3.5 w-3.5" /> {capture ? CAPTURE_COPY[capture].send : "Send"}</>}
               </Button>
             </div>
           </div>

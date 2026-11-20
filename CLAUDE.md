@@ -231,14 +231,18 @@ Read them before touching `client/src/pages/journal.tsx`, `upsertJournalEntry`
 (`server/content-service.ts`), the journal/note tools in `server/ai-engine.ts`
 or the profile Notes boxes.
 
-**J1. One entry per day, and a second write ADDS to it.** `journal_entries`
-is unique on (user, date); `upsertJournalEntry` joins a second write onto the
-day's entry. A composer whose draft row is that existing entry must never
-PATCH `content` (it holds only this session's text and replaced the whole
-entry): it sends `find`/`replace` (and `addTags`), which the server applies to
-the stored text. The composer says the day already has an entry before
-anything is saved.
-*Guards:* `tests/journal-entry-not-replaced.test.ts`, `tests/journal-composer.dom.test.tsx`.
+**J1. A day holds several entries, and a save never writes over another
+entry.** There is no one-entry-per-day rule (owner decision 2026-11-20;
+`migrations/20261120_journal_many_per_day_and_title.sql` dropped the unique
+index). Every journal write is a new entry (`upsertJournalEntry`, mode
+`"new"`); only "add this to today's journal" (`append_journal_entry`, mode
+`"append"`) joins the writer's latest entry of that day. A new entry is a
+duplicate only when its whole text EQUALS an entry's — never "is contained
+in": the composer's first autosave is a fragment (`draft: true`, never
+de-duplicated), and matching it to another row handed the composer that row
+to overwrite, which is how a manual save once replaced the entry chat wrote.
+*Guards:* `tests/journal-entries-routes.test.ts`, `tests/journal-composer.dom.test.tsx`,
+`tests/error-hunt-2026-09-03.test.ts` (D290).
 
 **J2. Mood is picked or detected, never a silent default.** A mood the writer
 picked is kept (`moodPicked`); any other mood is a guess, and a neutral guess
@@ -246,7 +250,7 @@ gives way to `detectMoodFromText` (`shared/mood-detect.ts`) — the chat saved
 "frustrated and overwhelmed" as Neutral. Text with no feeling in it leaves the
 day's mood alone. Both composers show the mood buttons and say whether the
 mood shown was picked or detected.
-*Guards:* `tests/journal-entry-not-replaced.test.ts`, `tests/chat-journal-read.test.ts`.
+*Guards:* `tests/journal-entries-routes.test.ts`, `tests/chat-journal-read.test.ts`.
 
 **J3. "Save this as today's journal entry" saves the message.** The entry's
 text is the user's own words (`journalFilingContent`, `shared/journal-intent.ts`),
@@ -271,7 +275,34 @@ labelled as one. An entry's "last written" time is `updatedAt`, never its
 bare `date` ("Last 18h ago" for an entry saved minutes earlier).
 *Guard:* `tests/info-tab-editable.dom.test.tsx`.
 
-*Live check for J1–J5 (deployed app, smoke account):* `npx tsx tests/live-journal-check.ts`.
+**J6. The Journal and Note buttons save; they do not interpret.** With a
+button on, the chat box sends `capture: { kind, profileId? }` and the server
+saves the message as that object, word for word (`captureFromButton`,
+`server/ai-engine.ts`): the chat model does not run, a line shaped like a
+question is still an entry, and nothing the text mentions is logged. The mode
+is never persisted across a reload. Without a button, the word "journal" /
+"note" still routes as before.
+*Guards:* `tests/chat-capture-buttons.test.ts`, `tests/chat-capture-buttons.dom.test.tsx`.
+
+**J7. An entry belongs to one person.** "Bob's journal: …", "Note for Bob: …"
+(`parseCaptureTarget`, `shared/capture-target.ts`) or the "For" menu files the
+record under that profile; Bob's entry and the writer's on the same day are
+separate rows, and "my journal" reads only the writer's own
+(`journalEntriesFor`). Only people and pets can own one. A name with no
+profile creates none (Rule 13): the text is saved whole under the writer and
+the reply says so. Two profiles answering to the name: nothing is saved and
+the reply asks which.
+*Guard:* `tests/chat-capture-buttons.test.ts`.
+
+**J8. Every entry and note has a title, and a title never costs a save.**
+What the writer typed; else the chat model's `title` in its tool call; else
+`generateTitle` (`server/content-title.ts`: one small bounded call, used by
+the buttons and the manual forms); else the first clause of the text
+(`fallbackTitle`). A composer draft is titled when it is saved (`autoTitle`),
+not mid-sentence.
+*Guards:* `tests/journal-entries-routes.test.ts`, `tests/chat-capture-buttons.test.ts`.
+
+*Live check for J1–J8 (deployed app, smoke account):* `npx tsx tests/live-journal-check.ts`.
 
 ## Auto Pay rules (routine payments record themselves; the books stay honest)
 

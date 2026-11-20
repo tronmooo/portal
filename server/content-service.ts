@@ -26,6 +26,7 @@
 
 import type { IStorage } from "./storage";
 import { detectMoodFromText } from "@shared/mood-detect";
+import { fallbackTitle } from "@shared/capture-target";
 import { deriveDateRulesForRecord, ownsDateRules, type DateRule, type RuleSourceSystem } from "@shared/temporal-rules";
 import { findActionableTime } from "@shared/temporal-rules";
 
@@ -159,14 +160,28 @@ export interface JournalInput {
   mood?: string;
   /** The day the EXPERIENCE happened, YYYY-MM-DD. Not a calendar commitment. */
   entryDate: string;
+  /** Whose journal this is. Null = the writer's own. */
   profileId?: string | null;
-  /** Display name used to attribute an appended snippet. */
-  profileLabel?: string | null;
+  /** The writer's own profile, so an own entry can be told from Bob's. */
+  selfProfileId?: string | null;
   energy?: number;
   gratitude?: string[];
   highlights?: string[];
   /** Tags for a new entry; joined onto the tags an existing entry has. */
   tags?: string[];
+  /** Headline for a new entry. Left to the caller (AI-written); the first
+   *  clause of the text when absent. */
+  title?: string;
+  /**
+   * "new" (default): every write is its own entry — a day can hold several,
+   * and several people's. "append": join the text onto that person's latest
+   * entry for the day ("add this to today's journal"); creates one if there
+   * is none.
+   */
+  mode?: "new" | "append";
+  /** False for a composer DRAFT: its first autosave is a fragment, and must
+   *  always get a row of its own. Default true. */
+  dedupe?: boolean;
   /**
    * The writer PICKED this mood (the journal page's mood buttons). A picked
    * mood is kept as given. Any other mood is a guess — chat's model sent
@@ -179,11 +194,15 @@ export interface JournalInput {
 const MOODS = ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"];
 
 /**
- * Write a journal entry for a specific DATE.
+ * Write a journal entry for a specific DATE and PERSON.
  *
- * `journal_entries` carries a UNIQUE (user_id, date) constraint — one entry per
- * day — so a second write for the same day APPENDS rather than failing. That is
- * also exactly what "add this to today's journal" should do.
+ * A day can hold several entries, and entries written on behalf of other
+ * profiles ("Bob's journal"): each write is a new entry unless the caller asks
+ * to append (owner decision 2026-11-20; the one-entry-per-day rule and its
+ * unique index are gone — migrations/20261120_journal_many_per_day_and_title).
+ *
+ * IDEMPOTENT: the same text for the same person on the same day is returned,
+ * not written twice, so a retried chat turn or a double tap makes one entry.
  *
  * The entry date never produces a Date Rule. See NON_TEMPORAL_ENTITIES in
  * shared/temporal-rules for why.
@@ -205,26 +224,42 @@ export async function upsertJournalEntry(
     : null;
   const mood = said ?? given ?? "neutral";
 
-  const readExisting = async () => {
-    const all = await storage.getJournalEntries();
-    return (all || []).find((j: any) => String(j.date).slice(0, 10) === date) || null;
+  // "This person's entries": Bob's are the rows linked to Bob. The writer's
+  // own are the rows linked to their self profile, plus rows linked to no one
+  // (an entry with no owner is the account holder's).
+  const ownerId = input.profileId || null;
+  const isTheirs = (row: any): boolean => {
+    const linked: string[] = row.linkedProfiles || [];
+    if (ownerId && ownerId !== input.selfProfileId) return linked.includes(ownerId);
+    return linked.length === 0 || (!!input.selfProfileId && linked.includes(input.selfProfileId)) || (!input.selfProfileId && !ownerId);
   };
-  const existing = await readExisting();
+  const all = ((await storage.getJournalEntries()) || []) as any[];
+  const sameDay = all
+    .filter((j) => String(j.date).slice(0, 10) === date && isTheirs(j))
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
 
-  const appendTo = async (row: any): Promise<{ entry: any; appended: boolean }> => {
-    // IDEMPOTENCY: a retried turn must not append the same paragraph twice.
-    if (normalizeText(row.content).includes(normalizeText(content)) && content) {
+  // IDEMPOTENCY: a retried turn must not write the same entry twice. A NEW
+  // entry is a duplicate only when its whole text equals an entry's — never
+  // "contained in": a draft that begins "I" is not every entry with an "i"
+  // in it, and treating it as one would hand the composer someone else's row
+  // to overwrite.
+  const wanted = normalizeText(content);
+  if (content && input.mode !== "append" && input.dedupe !== false) {
+    const dup = sameDay.find((j) => normalizeText(j.content) === wanted);
+    if (dup) return { entry: { ...dup, unchanged: true }, appended: false };
+  }
+
+  if (input.mode === "append" && sameDay[0]) {
+    const row = sameDay[0];
+    // The paragraph is already in the entry (a retried "add this to today's").
+    if (content && normalizeText(row.content).includes(wanted)) {
       return { entry: { ...row, unchanged: true }, appended: false };
     }
-    const label = input.profileLabel ? `[${input.profileLabel}] ` : "";
-    const merged = row.content ? `${row.content}\n\n${label}${content}` : `${label}${content}`;
-    const linked = Array.from(new Set([
-      ...(row.linkedProfiles || []),
-      ...(input.profileId ? [input.profileId] : []),
-    ]));
+    const merged = row.content ? `${row.content}\n\n${content}` : content;
+    const linked = Array.from(new Set([...(row.linkedProfiles || []), ...(ownerId ? [ownerId] : [])]));
     const updated = await storage.updateJournalEntry(row.id, {
       content: merged,
-      // The day's mood follows the latest writing that says something about
+      // The entry's mood follows the latest writing that says something about
       // it; a paragraph with no feeling in it leaves the mood alone.
       mood: (said ?? row.mood) as any,
       energy: input.energy ?? row.energy,
@@ -233,47 +268,28 @@ export async function upsertJournalEntry(
       ...(input.tags?.length ? { tags: Array.from(new Set([...(row.tags || []), ...input.tags])) } : {}),
       linkedProfiles: linked,
     } as any);
-    if (input.profileId) {
-      await storage.linkProfileTo(input.profileId, "journal", row.id).catch(() => { /* non-fatal */ });
-    }
+    if (ownerId) await storage.linkProfileTo(ownerId, "journal", row.id).catch(() => { /* non-fatal */ });
     return { entry: updated || row, appended: true };
-  };
-
-  if (existing) return appendTo(existing);
-
-  let created: any;
-  try {
-    created = await storage.createJournalEntry({
-      date,
-      mood: mood as any,
-      content,
-      tags: input.tags || [],
-      energy: input.energy,
-      gratitude: input.gratitude,
-      highlights: input.highlights,
-    } as any);
-  } catch (e: any) {
-    // Two writes for one day raced: journal_entries is UNIQUE on
-    // (user_id, date), so the loser used to surface the constraint as a 409
-    // and the paragraph the user had typed was simply gone (D290). A day that
-    // already has an entry is an APPEND — that is this function's whole
-    // contract — so re-read the winner's row and append onto it.
-    const code = String(e?.code || e?.details?.code || "");
-    const msg = String(e?.message || "");
-    const isDuplicate = code === "23505" || /duplicate key value violates unique constraint/i.test(msg);
-    if (!isDuplicate) throw e;
-    const winner = await readExisting();
-    if (!winner) throw e;
-    return appendTo(winner);
   }
-  if (input.profileId) {
+
+  const created: any = await storage.createJournalEntry({
+    date,
+    mood: mood as any,
+    title: (input.title || "").trim().slice(0, 120) || fallbackTitle(content, "Journal entry"),
+    content,
+    tags: input.tags || [],
+    energy: input.energy,
+    gratitude: input.gratitude,
+    highlights: input.highlights,
+  } as any);
+  if (ownerId) {
     // Return the row AS LINKED, not the pre-link row: the create answered
     // with Self as owner while the store held Linda, so the journal page's
     // optimistic cache (and the write manifest) filed the entry under the
     // wrong person until a refetch — under Linda's scope it vanished.
-    const linkedRow = await storage.updateJournalEntry(created.id, { linkedProfiles: [input.profileId] } as any);
-    await storage.linkProfileTo(input.profileId, "journal", created.id).catch(() => { /* non-fatal */ });
-    return { entry: linkedRow || { ...created, linkedProfiles: [input.profileId] }, appended: false };
+    const linkedRow = await storage.updateJournalEntry(created.id, { linkedProfiles: [ownerId] } as any);
+    await storage.linkProfileTo(ownerId, "journal", created.id).catch(() => { /* non-fatal */ });
+    return { entry: linkedRow || { ...created, linkedProfiles: [ownerId] }, appended: false };
   }
   return { entry: created, appended: false };
 }

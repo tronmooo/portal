@@ -151,6 +151,9 @@ export interface ChatMessage {
   pending?: boolean;
   /** The send failed; the row shows "Not sent · Retry". */
   failed?: boolean;
+  /** Sent with the composer's Journal / Note button on: saved as that, not
+   *  interpreted. Kept on the message so a retry saves it the same way. */
+  capture?: { kind: "journal" | "note"; profileId?: string };
   attachment?: {
     name: string;
     mimeType: string;
@@ -1017,6 +1020,8 @@ export interface JournalEntry {
   id: string;
   date: string; // YYYY-MM-DD
   mood: MoodLevel;
+  /** Short headline, AI-written from the text; absent on older entries. */
+  title?: string | null;
   content: string;
   tags: string[];
   energy?: number; // 1-5
@@ -1029,8 +1034,10 @@ export interface JournalEntry {
 }
 
 export const insertJournalEntrySchema = z.object({
-  // The entry's day (one entry per day); a real calendar day or blank = today.
+  // The entry's day; a real calendar day or blank = today. A day can hold
+  // several entries (and entries for several people).
   date: calendarDayOrBlank.optional(),
+  title: z.string().max(120).optional(),
   mood: z.enum(["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"]),
   content: z.string().default(""),
   tags: z.array(z.string()).optional().default([]),

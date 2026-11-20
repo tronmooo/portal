@@ -50,7 +50,7 @@ const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; 
 
 const ENERGY_LABELS = ["", "Exhausted", "Low", "Normal", "High", "Energized"];
 
-function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: JournalEntry) => void }) {
+function JournalCard({ entry, onEdit, ownerName }: { entry: JournalEntry; onEdit: (e: JournalEntry) => void; /** Shown when the entry is someone else's ("Bob's journal"). */ ownerName?: string | null }) {
   const { toast } = useToast();
   const mood = MOOD_CONFIG[entry.mood] || MOOD_CONFIG.neutral;
   const MoodIcon = mood.icon;
@@ -150,6 +150,12 @@ function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: Journ
           </div>
         </div>
 
+        {(entry.title || ownerName) && (
+          <div className="mb-2 flex flex-wrap items-baseline gap-2">
+            {entry.title && <h3 className="text-base font-semibold text-foreground" data-testid={`journal-title-${entry.id}`}>{entry.title}</h3>}
+            {ownerName && <Badge variant="secondary" className="text-xs" data-testid={`journal-owner-${entry.id}`}>{ownerName}'s journal</Badge>}
+          </div>
+        )}
         {entry.content && (
           <p className="text-base leading-relaxed text-foreground/90 mb-3 whitespace-pre-wrap">{entry.content}</p>
         )}
@@ -329,13 +335,9 @@ export default function JournalPage() {
   const freeSavingRef = useRef(false);
   // The day the entry is ABOUT (it can be backdated); today by default.
   const [entryDate, setEntryDate] = useState<string>(() => getUserToday(BROWSER_TIMEZONE));
-  // One entry per day: when the day already has one, what is written here is
-  // JOINED onto it. `joinedRef` remembers that the draft row is that existing
-  // entry, and `savedTextRef` the passage this session last saved into it, so
-  // a later autosave edits only that passage (PATCH find/replace) instead of
-  // overwriting everything the entry already held.
-  const joinedRef = useRef(false);
-  const savedTextRef = useRef("");
+  // Optional. Left blank, the title is written from the text when the entry
+  // is saved (server/content-title).
+  const [title, setTitle] = useState("");
 
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -380,7 +382,7 @@ export default function JournalPage() {
     setEditingEntry(null);
     setFreeText(""); setFreeTags(""); setDraftId(null); setLastSavedAt(null);
     setEntryDate(getUserToday(BROWSER_TIMEZONE));
-    joinedRef.current = false; savedTextRef.current = "";
+    setTitle("");
   };
 
   // Free-write save: POST once, then PATCH the same entry. `finalize` closes
@@ -396,17 +398,12 @@ export default function JournalPage() {
     freeSavingRef.current = true;
     try {
       const tags = freeTags.split(",").map((s) => s.trim()).filter(Boolean);
-      if (draftId && joinedRef.current) {
-        // The draft row is the day's EXISTING entry: change only the passage
-        // written here. Sending `content` would replace the whole entry.
-        await apiRequest("PATCH", `/api/journal/${draftId}`, {
-          find: savedTextRef.current, replace: freeText,
-          ...(tags.length ? { addTags: tags } : {}),
-          ...(mood ? { mood } : detectMoodFromText(freeText) !== "neutral" ? { mood: detectMoodFromText(freeText) } : {}),
-        });
-      } else if (draftId) {
-        await apiRequest("PATCH", `/api/journal/${draftId}`, { content: freeText, tags, mood: mood || detectMoodFromText(freeText) });
-      } else {
+      // The title is settled when the entry is SAVED: what was typed, or
+      // (autoTitle) one written from the finished text. Autosaves in between
+      // are drafts and carry no title of their own.
+      const titled = finalize ? (title.trim() ? { title: title.trim() } : (editingEntry?.title ? {} : { autoTitle: true })) : {};
+      let activeId = draftId;
+      if (!activeId) {
         const r = await apiRequest("POST", "/api/journal", {
           content: freeText,
           // A mood is sent only when it was PICKED; otherwise the server
@@ -414,22 +411,24 @@ export default function JournalPage() {
           ...(mood ? { mood } : {}),
           tags,
           entryDate,
+          draft: true,
+          ...(title.trim() ? { title: title.trim() } : {}),
           ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
         });
         const j = await r.json();
-        if (j?.id) setDraftId(j.id);
-        joinedRef.current = j?.appended === true;
+        if (j?.id) { setDraftId(j.id); activeId = j.id; }
+        // Saved in one go: only the title is still owed.
+        if (finalize && activeId && "autoTitle" in titled) await apiRequest("PATCH", `/api/journal/${activeId}`, titled);
+      } else {
+        await apiRequest("PATCH", `/api/journal/${activeId}`, { content: freeText, tags, mood: mood || detectMoodFromText(freeText), ...titled });
       }
-      savedTextRef.current = freeText;
       setLastSavedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
       invalidateDomain("journal");
       if (finalize) {
         // QA 2026-09-18: the autosave creates the draft row before Save is
         // pressed, so `draftId` is set for a brand-new entry too — "updated"
         // is only right when an EXISTING entry was reopened for editing.
-        toast(joinedRef.current
-          ? { title: "Added to that day's entry", description: "What was already there is unchanged." }
-          : { title: editingEntry ? "Entry updated" : "Entry saved" });
+        toast({ title: editingEntry ? "Entry updated" : "Entry saved" });
         resetForm();
         setShowCreate(false);
       }
@@ -461,12 +460,14 @@ export default function JournalPage() {
       setFreeTags(((entry as any).tags || []).join(", "));
       setDraftId(entry.id);
       setMood(entry.mood);
+      setTitle(entry.title || "");
       setShowCreate(true);
       return;
     }
     // Parse content back into form fields
     setEditingEntry(entry);
     setEntryMode("guided");
+    setTitle(entry.title || "");
     setMood(entry.mood);
     setEnergy(entry.energy || 3);
     const content = entry.content || "";
@@ -501,11 +502,12 @@ export default function JournalPage() {
     if (affirmation.trim()) parts.push(`DAILY AFFIRMATION:\n${affirmation}`);
     const content = parts.join('\n\n');
     if (editingEntry) {
-      editMutation.mutate({ mood: effectiveMood, content, energy });
+      editMutation.mutate({ mood: effectiveMood, content, energy, ...(title.trim() ? { title: title.trim() } : editingEntry.title ? {} : { autoTitle: true }) });
     } else {
       createMutation.mutate({
         // Only a PICKED mood is sent; the server detects it otherwise.
         ...(mood ? { mood } : {}), content, energy, entryDate,
+        ...(title.trim() ? { title: title.trim() } : {}),
         ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
       });
     }
@@ -546,9 +548,6 @@ export default function JournalPage() {
     onMutate: async (data: any) => {
       await queryClient.cancelQueries({ queryKey: ["/api/journal"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/journal"] });
-      // A day that already has an entry gets this text JOINED onto it by the
-      // server; a second optimistic card would show two entries for one day.
-      if (allEntries.some((e) => e.date === data.entryDate)) return { prev };
       const tempEntry = {
         id: 'temp-' + Date.now(),
         content: data.content,
@@ -570,9 +569,9 @@ export default function JournalPage() {
       setShowCreate(false);
       // Said from the saved row ("Mood: null" was the unpicked state variable).
       const savedMood = MOOD_CONFIG[saved?.mood as MoodLevel]?.label;
-      toast(saved?.appended
-        ? { title: "Added to that day's entry", description: "What was already there is unchanged." }
-        : { title: "Journal entry saved", description: savedMood ? `Mood: ${savedMood}` : undefined });
+      toast(saved?.deduped
+        ? { title: "Already in your journal", description: "The same text was saved for this day; it was not saved twice." }
+        : { title: "Journal entry saved", description: [saved?.title, savedMood ? `Mood: ${savedMood}` : ""].filter(Boolean).join(" · ") || undefined });
     },
     onError: (err: Error, _v: any, ctx: any) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
@@ -592,15 +591,13 @@ export default function JournalPage() {
   // Entry dates are written in the browser's zone (en-CA), so walk back from
   // the same "today" — the UTC slice left today's dot dark after ~5 PM Pacific.
   const todayLocal = getUserToday(BROWSER_TIMEZONE);
-  // The entry the chosen day already has (any profile: the day is the key),
-  // unless it is the row this session's own draft was saved into.
-  const existingForDate = allEntries.find((e) => e.date === entryDate && e.id !== draftId && !String(e.id).startsWith("temp-"))
-    ?? (joinedRef.current ? allEntries.find((e) => e.id === draftId) : undefined);
-  for (let i = 6; i >= 0; i--) {
-    const dateStr = tzAddDays(todayLocal, -i);
-    const entry = entries.find(e => e.date === dateStr);
-    last7.push({ date: dateStr, mood: entry?.mood });
-  }
+  // Whose entry a card is, when it is not the writer's own.
+  const selfId = profiles.find((p) => p.type === "self")?.id;
+  const ownerNameOf = (e: any): string | null => {
+    const linked: string[] = e.linkedProfiles || [];
+    if (linked.length === 0 || (selfId && linked.includes(selfId))) return null;
+    return profiles.find((p) => linked.includes(p.id))?.name ?? null;
+  };
 
   return (
     <PageContainer width="2xl">
@@ -667,13 +664,17 @@ export default function JournalPage() {
             )}
           </div>
 
-          {/* One entry per day: say so BEFORE anything is saved. */}
-          {!editingEntry && existingForDate && (
-            <p className="text-xs rounded-lg border border-border bg-muted/40 px-3 py-2 text-foreground/90" data-testid="journal-existing-entry-notice">
-              You already have an entry for {entryDate === todayLocal ? "today" : "this day"}. What you write here is <span className="font-medium">added to it</span> — nothing already in it is replaced.{" "}
-              <button type="button" className="underline" onClick={() => handleEditEntry(existingForDate)} data-testid="button-open-existing-entry">Open that entry to edit it</button>
-            </p>
-          )}
+          {/* Title: optional. Blank = written from the text on save. */}
+          <input
+            type="text"
+            value={title}
+            maxLength={120}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Title (optional — written for you if left blank)"
+            aria-label="Entry title"
+            className="w-full bg-transparent border-b border-border/60 text-base font-semibold py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/40 placeholder:font-normal placeholder:text-sm text-foreground"
+            data-testid="input-journal-title"
+          />
 
           {/* Mode toggle (hidden while editing — the entry keeps its own format) */}
           {!editingEntry && (
@@ -905,6 +906,7 @@ export default function JournalPage() {
             let visible = q
               ? entries.filter((e: any) =>
                   (e.content || "").toLowerCase().includes(q) ||
+                  (e.title || "").toLowerCase().includes(q) ||
                   (e.tags || []).some((t: string) => t.toLowerCase().includes(q)))
               : entries;
             if (moodFilter !== "all") visible = visible.filter((e: any) => e.mood === moodFilter);
@@ -925,7 +927,7 @@ export default function JournalPage() {
               <div key={g.day} className="space-y-3">
                 <p className="micro-label text-muted-foreground pt-1">{g.day}</p>
                 {g.items.map((entry) => (
-                  <JournalCard key={entry.id} entry={entry} onEdit={handleEditEntry} />
+                  <JournalCard key={entry.id} entry={entry} onEdit={handleEditEntry} ownerName={ownerNameOf(entry)} />
                 ))}
               </div>
             ));
