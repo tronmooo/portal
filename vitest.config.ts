@@ -20,6 +20,7 @@ export default defineConfig({
       'tests/ai-destructive-safety.test.ts',
       'tests/chat-liability-one-record.test.ts',
       'tests/chat-debt-and-payment-one-card.test.ts',
+      'tests/chat-payment-recorded.test.ts',
       'tests/profile-activity-tab.dom.test.tsx',
       'tests/profile-autosave.test.ts',
       'tests/autosave-edit-forms.dom.test.tsx',

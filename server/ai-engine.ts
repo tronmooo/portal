@@ -234,6 +234,7 @@ import { recordProfileEdit } from "./profile-history";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
+import { paymentReceiptLine, paymentNotRecordedLine, composePaymentReply } from "@shared/payment-receipt";
 import { readMonthlyPayment as sharedReadMonthlyPayment, readBalance as sharedReadBalance, liabilityReceiptFields } from "@shared/liability-fields";
 import { isRecurringBill as sharedIsRecurringBill, isRecurringBillProfile, normalizeLiabilityName, liabilityFamily, liabilityTypeKeyOf } from "@shared/liability-types";
 import { liabilityBillStatus as sharedBillStatus } from "@shared/liability-status";
@@ -10539,9 +10540,35 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         aiUserTimezone(),
       );
       if (!paid.ok) return { error: `Couldn't record the payment on ${liability.name}` };
+      // What the reply says about this payment comes from the RECORD, read
+      // back after the write (shared/payment-receipt) — never from the
+      // model's arithmetic, and never "paid" for a payment that was folded
+      // into an earlier one and not written.
+      const afterPay: any = await Promise.resolve(storage.getProfile(liability.id)).catch(() => null);
+      const tracksBalance = !isRecurringBillProfile(afterPay || liability);
+      const balanceAfter = tracksBalance ? sharedLiabilityBalance(afterPay || liability) : null;
+      if ((paid as any).deduped) {
+        const line = paymentNotRecordedLine(liability.name, Number(input.amount) || 0, balanceAfter);
+        return {
+          result: { alreadyRecorded: true, payment: paid.payment, balance: balanceAfter, paymentReceipt: line, note: "NOT recorded again — tell the user exactly this and nothing about a new balance." },
+          deduped: true,
+          message: line,
+          actions: [],
+        };
+      }
+      const paymentReceipt = paymentReceiptLine({
+        liabilityName: liability.name,
+        amount: Number((paid.payment as any)?.amount ?? input.amount) || 0,
+        principal: paid.principal, interest: paid.interest,
+        balanceAfter,
+      });
       return {
+        message: paymentReceipt,
         result: {
-          payment: paid.payment, newBalance: paid.newBalance, principal: paid.principal, interest: paid.interest,
+          paymentReceipt,
+          // The stored balance, not the plan's: this is the number to quote.
+          balanceAfter,
+          payment: paid.payment, newBalance: balanceAfter ?? paid.newBalance, principal: paid.principal, interest: paid.interest,
           // A payoff's excess or a settlement's write-off is the one thing the
           // user must hear back; without it the reply said "paid" and nothing
           // about the $5,980 the lender owes back or the $2,900 written off.
@@ -19104,6 +19131,17 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       if (receipts.length > 0) finalReply = composeReceiptReply(receipts, finalReply || "");
     } catch (e: any) {
       logger.warn("ai", `[field-receipt] reply compose skipped: ${e?.message || e}`);
+    }
+
+    // The same for a debt PAYMENT: the line that says what was recorded and
+    // what the balance is now is the server's, built from the stored record.
+    try {
+      const paymentLines = allResults
+        .map((r: any) => (r && !r.error ? (r.paymentReceipt ?? r.result?.paymentReceipt) : null))
+        .filter((l: any): l is string => typeof l === "string" && l.length > 0);
+      if (paymentLines.length > 0) finalReply = composePaymentReply(paymentLines, finalReply || "");
+    } catch (e: any) {
+      logger.warn("ai", `[payment-receipt] reply compose skipped: ${e?.message || e}`);
     }
 
     // No raw database ids and no "let me look that up" preamble reach the
