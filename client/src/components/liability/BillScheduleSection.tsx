@@ -15,10 +15,16 @@ import {
   type BillingModel, type OccurrenceCharge,
 } from "@shared/liability-billing";
 import { formatFullDate, formatMoneyCents, parseLocalDate } from "@/lib/format";
+import type { OccurrencePaymentStatus } from "@shared/autopay";
+import { PaymentStatusBadge, PaymentStatusControls } from "./PaymentStatusControls";
 
-type OccStatus = BillStatus | "skipped";
+type OccStatus = BillStatus | "skipped" | "missed";
 interface Occ {
   date: string; effectiveDate: string; amount: number; status: OccStatus;
+  /** Auto Pay view: scheduled / assumed paid / paid / missed / delayed / partial. */
+  paymentStatus?: OccurrencePaymentStatus;
+  autopay?: boolean;
+  expectedAmount?: number;
   notes?: string; occurrenceId: string; paymentId?: string;
   // Per-occurrence money (shared/liability-billing.ts). `amount` is already the
   // resolved total for the period — these break it down and say whether it has
@@ -57,6 +63,7 @@ const toneClass: Record<string, string> = {
 type Filter = "all" | "upcoming" | "completed" | "missed" | "skipped";
 
 function StatusBadge({ status }: { status: OccStatus }) {
+  if (status === "missed") return <Badge variant="outline" className="text-red-600 border-red-600 text-xs h-5">Missed</Badge>;
   if (status === "skipped") return <Badge variant="outline" className="text-muted-foreground text-xs h-5">Skipped</Badge>;
   const meta = BILL_STATUS_META[status];
   return <Badge variant="outline" className={`text-xs h-5 ${toneClass[meta.tone]}`}>{meta.label}</Badge>;
@@ -114,14 +121,14 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
     if (filter === "all") return true;
     if (filter === "upcoming") return o.status === "upcoming" || o.status === "due_today";
     if (filter === "completed") return o.status === "paid";
-    if (filter === "missed") return o.status === "overdue";
+    if (filter === "missed") return o.status === "overdue" || o.status === "missed";
     if (filter === "skipped") return o.status === "skipped";
     return true;
   });
   const counts = {
     upcoming: occ.filter((o) => o.status === "upcoming" || o.status === "due_today").length,
     completed: occ.filter((o) => o.status === "paid").length,
-    missed: occ.filter((o) => o.status === "overdue").length,
+    missed: occ.filter((o) => o.status === "overdue" || o.status === "missed").length,
     skipped: occ.filter((o) => o.status === "skipped").length,
   };
 
@@ -268,6 +275,7 @@ function OccurrenceRow({
   const [chargeKind, setChargeKind] = useState("usage");
   const [chargeLabel, setChargeLabel] = useState("");
   const [showBreakdown, setShowBreakdown] = useState(false);
+  // A missed payment can still be paid late, so it keeps the Pay button.
   const open = occ.status !== "paid" && occ.status !== "skipped";
   const base = `/api/liabilities/${liabilityId}/occurrences/${occ.date}`;
   const charges = occ.charges || [];
@@ -291,7 +299,11 @@ function OccurrenceRow({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-[14px] font-semibold tabular-nums">{dt(occ.effectiveDate)}</span>
-              <StatusBadge status={occ.status} />
+              {/* The Auto Pay status when the server sent one: "Assumed paid"
+                  is never rendered as plain "Paid". */}
+              {occ.paymentStatus && occ.paymentStatus !== "due" && occ.paymentStatus !== "overdue"
+                ? <PaymentStatusBadge status={occ.paymentStatus} autopay={occ.autopay} />
+                : <StatusBadge status={occ.status} />}
               {/* The word beside the money is the honest one: a forecast is
                   never rendered as though the bill had posted. */}
               {variable && occ.isEstimate && (
@@ -309,6 +321,7 @@ function OccurrenceRow({
                   {usd(occ.baseAmount ?? 0)} base + {usd(occ.chargeTotal ?? 0)} charges
                 </button>
               )}
+              {occ.paymentStatus === "partial" && occ.expectedAmount ? ` of ${usd(occ.expectedAmount)} scheduled` : ""}
               {occ.notes ? ` · ${occ.notes}` : ""}
             </span>
           </div>
@@ -324,6 +337,14 @@ function OccurrenceRow({
                 aria-label="Skip this bill" title="Skip"
                 data-testid={`occ-skip-${occ.date}`}><SkipForward className="w-3.5 h-3.5" /></Button>
             </>
+          )}
+          {occ.paymentStatus && occ.status !== "skipped" && (
+            <PaymentStatusControls
+              target={{ liabilityId, occurrenceDate: occ.date, paymentId: occ.status === "paid" ? occ.paymentId : null }}
+              status={occ.paymentStatus}
+              amount={occ.expectedAmount ?? occ.amount}
+              date={occ.effectiveDate}
+            />
           )}
           <Popover>
             <PopoverTrigger asChild><Button size="sm" variant="ghost" className="h-7 px-2 text-xs" aria-label="Edit this occurrence" title="Edit" data-testid={`occ-edit-${occ.date}`}><Pencil className="w-3.5 h-3.5" /></Button></PopoverTrigger>

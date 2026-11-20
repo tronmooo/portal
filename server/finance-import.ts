@@ -302,14 +302,29 @@ function summarize(bySection: Record<string, SectionCount>, warnings: number): I
  */
 export interface ImportFailure { section: string; uniqueId: string; label: string; error: string }
 
+/** An imported bank transaction that turned out to BE a payment already on the books. */
+export interface ReconciledTransaction { uniqueId: string; label: string; paymentId?: string; liabilityName?: string }
+
+export interface ImportHooks {
+  /**
+   * Asked before an imported spend becomes a new expense: is this transaction
+   * a payment Auto Pay already recorded? A match confirms THAT payment and the
+   * transaction is not written again (server/autopay reconcileBankTransaction).
+   */
+  reconcile?: (txn: { id: string; amount: number; date: string; description: string }) =>
+    Promise<{ matched: boolean; paymentId?: string; liabilityName?: string }>;
+}
+
 export async function applyImport(
   store: FinanceImportStore,
   payload: FinanceImportPayload,
   profileId: string,
   plan: ImportPlan,
   opts: ImportClock = {},
-): Promise<{ batchId: string; summary: ImportSummary; record: FinanceImportRecord; failed: ImportFailure[] }> {
+  hooks: ImportHooks = {},
+): Promise<{ batchId: string; summary: ImportSummary; record: FinanceImportRecord; failed: ImportFailure[]; reconciled: ReconciledTransaction[] }> {
   const batchId = plan.batchId;
+  const reconciled: ReconciledTransaction[] = [];
   const created: CreatedRecords = { expenses: [], obligations: [], incomes: [], profiles: [], budgets: [] };
   // One record that fails to write must not abort the batch with the rows
   // already written and no batch record to undo them with: each write is
@@ -334,6 +349,15 @@ export async function applyImport(
         });
         created.incomes.push(row.id);
       } else {
+        // The bank's record of a payment Auto Pay already assumed: confirm
+        // that one payment; a second expense would count the money twice.
+        const match = hooks.reconcile
+          ? await hooks.reconcile({ id: t.unique_id, amount: t.amount, date: t.date.slice(0, 10), description: t.merchant }).catch(() => null)
+          : null;
+        if (match?.matched) {
+          reconciled.push({ uniqueId: t.unique_id, label: `${t.merchant} ${fmtMoney(t.amount)}`, paymentId: match.paymentId, liabilityName: match.liabilityName });
+          return;
+        }
         const row = await store.createExpense({
           amount: t.amount, category: normalizeCategory(t.category), description: t.merchant, vendor: t.merchant,
           date: t.date.slice(0, 10), isRecurring: false, linkedProfiles: [profileId], tags: tag(t.confidence),
@@ -427,7 +451,7 @@ export async function applyImport(
     recordCount: created.expenses.length + created.obligations.length + created.incomes.length + created.profiles.length + created.budgets.length,
     createdRecords: created,
   });
-  return { batchId, summary: plan.summary, record, failed };
+  return { batchId, summary: plan.summary, record, failed, reconciled };
 }
 
 /** Reverse a committed import: delete every row it created, put back every

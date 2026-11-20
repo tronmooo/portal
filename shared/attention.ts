@@ -16,6 +16,7 @@
 //
 // score = urgency (shared curve) + impact. Higher surfaces sooner.
 
+import { isQuietAutoPayBill } from "./autopay";
 import { dayLabel, urgencyScore } from "./now-rank";
 import { ruleClaimKey, dateRuleVerbs, DOC_UPCOMING_WINDOW_DAYS, type DateRuleType } from "./date-rules";
 import { isHabitDueOn, isHabitDoneOn, type HabitScheduleShape } from "./habit-schedule";
@@ -287,6 +288,8 @@ export function computeAttention(
     if (!b?.id) continue;
     const du = typeof b.daysUntil === "number" ? b.daysUntil : daysBetween(today, b.dueDate);
     if (du == null || du > cfg.billsWithinDays) continue;
+    // Auto Pay handles it: nothing for the user to do, so it is not attention.
+    if (isQuietAutoPayBill(b, du)) continue;
     const amt = Number(b.amount) || 0;
     // Money at risk is real impact; autopay collects itself, so it's a notice.
     const impact = Math.min(220, amt / 25) + (b.autopay ? -120 : 0);

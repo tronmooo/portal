@@ -18,6 +18,7 @@ import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp, stopPropAndDefault } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { useSectionFilter, activeViewFilters, showFilterControls, emptyReason } from "@/lib/view-filters";
+import { isAutoPayOn } from "@shared/autopay";
 import { ActiveFilterNotice, FilteredEmptyState } from "@/components/ActiveFilterNotice";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAssetsValuationSweep } from "@/hooks/useAssetValuation";
@@ -5601,7 +5602,17 @@ export default function TrackersPage() {
   ];
   const activeAssetFilterLabels = activeViewFilters(assetFilterStates).map(f => f.label);
   const clearAssetFilters = () => { setAssetTypeFilter("all"); setAssetNesting("all"); };
-  const liabilityFilterStates = [{ key: "liabilityCategory", label: subCatFilter, value: subCatFilter, defaultValue: "all" }];
+  // Auto Pay vs manual pay: a second chip on the Liabilities tab. Like every
+  // section filter it lives in component state and resets with the tab.
+  const [payModeFilter, setPayModeFilter] = useSectionFilter<"all" | "autopay" | "manual">(sectionFilter, "liabilityPayMode", "all");
+  const PAY_MODE_LABEL: Record<string, string> = { all: "All", autopay: "Auto Pay", manual: "Manual pay" };
+  const matchesPayMode = (p: any) => payModeFilter === "all" || (payModeFilter === "autopay") === isAutoPayOn(p?.fields);
+  const liabilityFilterStates = [
+    { key: "liabilityCategory", label: subCatFilter, value: subCatFilter, defaultValue: "all" },
+    { key: "liabilityPayMode", label: PAY_MODE_LABEL[payModeFilter], value: payModeFilter, defaultValue: "all" },
+  ];
+  const activeLiabilityFilterLabels = activeViewFilters(liabilityFilterStates).map(f => f.label);
+  const clearLiabilityFilters = () => { setSubCatFilter("all"); setPayModeFilter("all"); };
   const docFilterStates = [{ key: "docType", label: String(docTypeFilter).replace(/_/g, " "), value: docTypeFilter, defaultValue: "all" }];
   const trackerFilterStates = [{ key: "trackerCategory", label: trackerCatFilter, value: trackerCatFilter, defaultValue: "all" }];
   // Collapsible sections
@@ -6207,8 +6218,23 @@ export default function TrackersPage() {
         />
       )}
 
-      {sectionFilter === "liabilities" && showFilterControls(liabilityCategoryOptions.length, liabilityFilterStates) && (
+      {sectionFilter === "liabilities" && showFilterControls(liabilityCategoryOptions.length + 2, liabilityFilterStates) && (
         <div className="flex flex-wrap items-center gap-1.5 pb-0.5" data-testid="category-filter-chips-liabilities">
+          {(["autopay", "manual"] as const).map((mode) => {
+            const isActive = payModeFilter === mode;
+            return (
+              <button
+                key={mode}
+                onClick={() => setPayModeFilter(isActive ? "all" : mode)}
+                aria-pressed={isActive}
+                className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                data-testid={`filter-liability-pay-${mode}`}
+              >
+                {PAY_MODE_LABEL[mode]}
+              </button>
+            );
+          })}
+          <span className="w-px h-4 bg-border/60 mx-0.5" aria-hidden="true" />
           <button
             onClick={() => setSubCatFilter("all")}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${subCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
@@ -6366,6 +6392,7 @@ export default function TrackersPage() {
             if (!isLiabilityLikeProfile(p)) return;
             // Honor the liability sub-category sub-filter in list view too.
             if (sectionFilter === "liabilities" && subCatFilter !== "all" && liabilitySubcategoryOf(p) !== subCatFilter) return;
+            if (sectionFilter === "liabilities" && !matchesPayMode(p)) return;
             const pParent = p.parentProfileId;
             // Include co-owners via liability_profile_links.
             if (!isShowAll && !isLiabilityVisible(p.id, pParent)) return;
@@ -6952,6 +6979,8 @@ export default function TrackersPage() {
           if (sectionFilter === "liabilities" && subCatFilter !== "all") {
             if (liabilitySubcategoryOf(p) !== subCatFilter) return false;
           }
+          // Auto Pay / Manual pay chip — Liabilities tab only.
+          if (sectionFilter === "liabilities" && !matchesPayMode(p)) return false;
           return true;
         });
         // Same rule as the Assets section above: a co-owned liability reaches
@@ -6964,12 +6993,12 @@ export default function TrackersPage() {
           </div>
         );
         // Rule 4: a category chip hiding every liability is a filtered view.
-        if (liabs.length === 0 && sectionFilter === "liabilities" && subCatFilter !== "all" && filteredLiabilityCount > 0) return (
+        if (liabs.length === 0 && sectionFilter === "liabilities" && activeLiabilityFilterLabels.length > 0 && filteredLiabilityCount > 0) return (
           <FilteredEmptyState
             total={filteredLiabilityCount}
             noun={{ one: "liability", many: "liabilities" }}
-            labels={[subCatFilter]}
-            onClear={() => setSubCatFilter("all")}
+            labels={activeLiabilityFilterLabels}
+            onClear={clearLiabilityFilters}
             testId="liabilities-filtered-empty"
           />
         );
@@ -7111,6 +7140,7 @@ export default function TrackersPage() {
                 if (lender) meta.push({ label: "Creditor", value: String(lender) });
                 if (apr != null && apr > 0) meta.push({ label: "APR", value: `${apr < 1 ? (apr * 100).toFixed(2) : apr.toFixed(2)}%` });
                 if (due && !hasProgress) meta.push({ label: "Due", value: due });
+                const autoPay = isAutoPayOn(fields);
 
                 return (
                   <Link key={liab.id} href={`/profiles/${liab.id}`} className="block h-full" onMouseEnter={() => warmProfileDetail(liab.id)} onTouchStart={() => warmProfileDetail(liab.id)}>
@@ -7131,9 +7161,14 @@ export default function TrackersPage() {
                       // The countdown is the one thing you actually want off a
                       // liability card at a glance, and it fills the bottom third
                       // that used to be blank.
-                      pills={dueIn != null
-                        ? <StatusPill tone={toneForDays(dueIn)}>{dayLabel(dueIn)}</StatusPill>
-                        : <StatusPill tone="neutral">No due date</StatusPill>}
+                      pills={<>
+                        {dueIn != null
+                          // Auto Pay records it on the day: an upcoming date is
+                          // information, not a warning.
+                          ? <StatusPill tone={autoPay && dueIn >= 0 ? "neutral" : toneForDays(dueIn)}>{dayLabel(dueIn)}</StatusPill>
+                          : <StatusPill tone="neutral">No due date</StatusPill>}
+                        {autoPay && <StatusPill tone="neutral" data-testid={`liab-autopay-${liab.id}`}>Auto Pay</StatusPill>}
+                      </>}
                       actions={<Pencil className="h-3.5 w-3.5 text-muted-foreground/60" aria-hidden="true" />}
                       data-testid={`liab-card-${liab.id}`}
                     />

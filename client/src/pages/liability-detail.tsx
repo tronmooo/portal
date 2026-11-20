@@ -56,6 +56,9 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import { BillScheduleSection } from "@/components/liability/BillScheduleSection";
+import { AutoPaySection } from "@/components/liability/AutoPaySection";
+import { PaymentStatusBadge, PaymentStatusControls } from "@/components/liability/PaymentStatusControls";
+import { autoPaySettingPatch, isAutoPayOn, type OccurrencePaymentStatus } from "@shared/autopay";
 import { DetailHero, type HeroStat } from "@/components/profile/DetailHero";
 import { Pill } from "@/components/dashboard/visuals";
 import { MetricCard } from "@/components/ui/metric-card";
@@ -143,6 +146,11 @@ interface LiabilityPayment {
   remainingBalanceAfter?: number | null;
   notes?: string | null;
   createdAt?: string;
+  /** Auto Pay view of this payment (GET /api/liabilities/:id/payments). */
+  status?: OccurrencePaymentStatus;
+  occurrenceDate?: string | null;
+  autopay?: boolean;
+  expectedAmount?: number | null;
 }
 
 const SUBTYPE_LABELS: Record<string, string> = {
@@ -588,8 +596,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       // reads autopay/autoPay, the Details row also honours autoRenew), so the
       // toggle has to set every one it could be read through — otherwise
       // turning autopay off leaves the row still reading "On".
-      fields.autopay = v.autopay;
-      fields.autoPay = v.autopay;
+      // …and the day it was switched on is stamped with it, by the one
+      // shared patch (shared/autopay): Auto Pay must not back-fill a payment
+      // that was due before the switch.
+      Object.assign(fields, autoPaySettingPatch(f2, v.autopay, todayISO));
       if (f2.autoRenew !== undefined) fields.autoRenew = v.autopay;
 
       return fields;
@@ -623,7 +633,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     setBCount(billTotalTerm != null ? String(billTotalTerm) : "");
     setBEnd((schedule?.recurrenceEnd || "").slice(0, 10));
     setBReminder(billReminderLead != null ? String(billReminderLead) : "");
-    setBAutopay(!!(f2.autopay || f2.autoPay || f2.autoRenew));
+    setBAutopay(isAutoPayOn(f2));
     setEditingBill(true);
   };
 
@@ -1447,8 +1457,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   </div>
                   <div className="flex items-center justify-between rounded-lg border px-3 py-2">
                     <div>
-                      <Label className="text-xs">Autopay</Label>
-                      <p className="text-[11px] text-muted-foreground">This bill is paid automatically.</p>
+                      <Label className="text-xs">Auto Pay</Label>
+                      <p className="text-[11px] text-muted-foreground">Record each payment on its due date. No reminders.</p>
                     </div>
                     <Switch checked={bAutopay} onCheckedChange={setBAutopay} data-testid="switch-bill-autopay" />
                   </div>
@@ -1494,7 +1504,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   {missedCount > 0 && <Row label="Missed" value={`${missedCount}`} />}
                   <Row label="Annual total" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : "—"} />
                   <Row label="Reminder" value={billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : "None"} />
-                  <Row label="Autopay" value={(f2.autopay || f2.autoPay || f2.autoRenew) ? "On" : "Off"} />
+                  <Row label="Auto Pay" value={isAutoPayOn(f2) ? "On" : "Off"} />
                 </CardContent>
               </Card>
             ) : editingTerms ? (
@@ -1601,6 +1611,11 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 and when" — history is the record, the schedule is the plan.
                 No micro-label above it: the card carries its own title, and
                 stacking a second heading on top just says it twice. */}
+            {/* Auto Pay: every liability has the setting. On = payments are
+                recorded on their due date (assumed until confirmed) and no
+                reminders are raised. */}
+            <AutoPaySection liabilityId={profile.id} />
+
             <BillScheduleSection liabilityId={profile.id} />
 
             {/* Section 2: Payment history */}
@@ -1970,8 +1985,15 @@ function PaymentRow({
   return (
     <div className="px-3 py-2 flex items-center justify-between gap-3" data-testid={`payment-row-${p.id}`}>
       <div className="min-w-0">
-        <div className="text-sm font-medium">{fmtUSD(Number(p.amount) || 0)}</div>
-        <div className="text-xs text-muted-foreground">{fmtDate(p.paymentDate)}</div>
+        <div className="text-sm font-medium flex items-center gap-2 flex-wrap">
+          {fmtUSD(Number(p.amount) || 0)}
+          {/* Assumed (Auto Pay recorded it) is never shown as plainly "paid". */}
+          {p.status ? <PaymentStatusBadge status={p.status} autopay={p.autopay} /> : null}
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {fmtDate(p.paymentDate)}
+          {p.status === "partial" && p.expectedAmount ? ` · ${fmtUSD(p.expectedAmount)} was scheduled` : ""}
+        </div>
         {expanded && p.notes ? (
           <div className="text-xs text-muted-foreground mt-0.5 truncate">{p.notes}</div>
         ) : null}
@@ -1984,6 +2006,14 @@ function PaymentRow({
             <div className="mt-0.5">Bal {fmtUSD(Number(p.remainingBalanceAfter) || 0)}</div>
           ) : null}
         </div>
+        {expanded && p.status ? (
+          <PaymentStatusControls
+            target={{ liabilityId: p.liabilityProfileId, paymentId: p.id }}
+            status={p.status}
+            amount={Number(p.expectedAmount ?? p.amount) || 0}
+            date={String(p.paymentDate || "").slice(0, 10)}
+          />
+        ) : null}
         {expanded && onReverse ? (
           <Button
             variant="ghost"

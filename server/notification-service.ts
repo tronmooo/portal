@@ -6,6 +6,7 @@
 // `dismissed_notifications` preference (a JSON array of id strings) and the
 // client filters by set membership. Caching and the profile filter stay in the
 // route — this module is pure "compute the list".
+import { isQuietAutoPayBill, missedPayments } from "@shared/autopay";
 import type { IStorage } from "./storage";
 import { syncLog } from "@shared/sync-log";
 import { getUserToday, parseLocalDate } from "@shared/timezone";
@@ -316,6 +317,9 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
         entityType: "obligation",
         dueDate: ob.nextDueDate,
       });
+    } else if (isQuietAutoPayBill(ob as any, diff)) {
+      // Auto Pay records it on the due day; no due-soon alert unless the user
+      // asked to keep reminders.
     } else if (diff <= 3) {
       notifications.push({
         id: `bill-soon-${ob.id}-${String(ob.nextDueDate).slice(0, 10)}`,
@@ -337,6 +341,27 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
         entityId: ob.id,
         entityType: "obligation",
         dueDate: ob.nextDueDate,
+      });
+    }
+  }
+
+  // --- Payments marked missed (the one Auto Pay exception) ---
+  // A missed payment needs a decision (pay it late or let it go), so it is
+  // raised for every liability, loans and cards included, until it is paid,
+  // rescheduled or dismissed. Derived from the occurrence stamp; resolving
+  // the occurrence resolves the alert (Rule 5).
+  for (const p of profiles as any[]) {
+    if (!p || (p.type !== "liability" && p.type !== "loan")) continue;
+    for (const m of missedPayments(p.fields, todayStr)) {
+      notifications.push({
+        id: `payment-missed-${p.id}-${m.date}`,
+        type: "bill_due",
+        severity: "critical",
+        title: `Missed payment: ${p.name}`,
+        message: `${m.amount != null ? `$${m.amount.toFixed(2)} ` : ""}due ${prettyDate(m.date)} was marked missed`,
+        entityId: p.id,
+        entityType: "profile",
+        dueDate: m.date,
       });
     }
   }

@@ -23,6 +23,7 @@
 // every other section is the complete list for its own window, capped only for
 // display.
 
+import { isQuietAutoPayBill } from "./autopay";
 import { computeAttention, BIRTHDAY_RE, type AttentionItem, type AttentionInputs, type AttentionConfig } from "./attention";
 import { relativeTimeShort } from "./relative-time";
 import { ruleClaimKey, dateRuleVerbs, DOC_UPCOMING_WINDOW_DAYS, type DateRuleType } from "./date-rules";
@@ -604,6 +605,7 @@ export function buildExecutiveSections(
     if (!b?.id) continue;
     const du = typeof b.daysUntil === "number" ? b.daysUntil : daysBetween(today, b.dueDate);
     if (du == null || du > (config?.billsWithinDays ?? 30)) continue;
+    if (isQuietAutoPayBill(b, du)) continue; // Auto Pay handles it
     if (du < 0) overdueBills++;
     const amt = Number(b.amount) || 0;
     cand.bills.push({

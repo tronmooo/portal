@@ -35,6 +35,8 @@ import { collectMetrics, activityHistory, labPanels, weeklyBrief, resolveWellnes
 import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD, dependenciesForPrefix } from "@shared/cache-domains";
 import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
+import { isAutoPayOn, wantsDueReminders, stampOfPayment, occurrencePaymentStatus } from "@shared/autopay";
+import { runAutopayForLiability, setAutoPay, setOccurrenceStatus, reconcileBankTransaction } from "./autopay";
 import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { enrichNutritionEntry, rescaleNutritionEntry, forgetEnrichmentMode } from "./nutrition-enrichment";
@@ -2672,9 +2674,18 @@ export async function registerRoutes(
                 const profiles = await scoped.getProfiles();
                 // Paused and cancelled bills are skipped entirely (D222): the
                 // scan kept reminding — and auto-paying — a paused bill.
-                const bills = profiles.filter((p: any) => isRecurringBillProfile(p) && !isPausedBillFields(p.fields) && !isEndedBillFields(p.fields));
-                const existingTasks = await scoped.getTasks().catch(() => [] as any[]);
                 let userWrote = false;
+                const bills = profiles.filter((p: any) => isRecurringBillProfile(p) && !isPausedBillFields(p.fields) && !isEndedBillFields(p.fields));
+                // Auto Pay on a loan, card or one-time debt (one record: no
+                // bill beside it). The bills loop below covers recurring bills.
+                for (const debt of profiles.filter((p: any) => (p.type === "liability" || p.type === "loan") && !isRecurringBillProfile(p) && isAutoPayOn(p.fields))) {
+                  try {
+                    const paid = await runAutopayForLiability(scoped, debt, todayISO, userTz, log);
+                    if (paid?.ok) userWrote = true;
+                    if (paid?.ok && !paid.deduped && paid.amount > 0) autopaid++;
+                  } catch { /* per-debt best effort */ }
+                }
+                const existingTasks = await scoped.getTasks().catch(() => [] as any[]);
                 // Doubles left by earlier overlapping runs (D260) heal here,
                 // whether or not this run writes anything else for the user.
                 if (await collapseDuplicateBillReminders(scoped, log, existingTasks).catch(() => 0)) userWrote = true;
@@ -2700,28 +2711,23 @@ export async function registerRoutes(
                     }, log, existingTasks);
                   }
                   if (!due || due > windowEnd) continue; // not due within the window
-                  const autopay = f.autopay === true || f.autoPay === true || String(f.autopay ?? "").toLowerCase() === "true";
+                  const autopay = isAutoPayOn(f);
+                  let paidNow = false;
                   if (autopay) {
-                    // Already settled (manually or by a prior run)? Never pay twice.
-                    const ov = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences[dueKey] : null;
-                    if (ov?.status === "paid" || ov?.status === "skipped") continue;
-                    // The one pay operation: real occurrence total (not the
-                    // definition's base price), occurrence stamped, due date
-                    // advanced from the occurrence, expense logged.
+                    // Recorded ON the due day (never ahead of it), once: the
+                    // shared rule answers null for an occurrence that is paid,
+                    // skipped, marked missed, not due yet, or older than the
+                    // day Auto Pay was switched on (shared/autopay).
                     try {
-                      const paid = await payBillOccurrence(scoped, bill.id, {
-                        occurrenceDate: dueKey,
-                        // An autopay debits on the due day. A catch-up run on
-                        // an occurrence that already passed is dated to that
-                        // day, so its expense lands in the month it belongs
-                        // to; a future occurrence paid ahead is today's money.
-                        paymentDate: due && due < todayISO ? due : todayISO,
-                        notes: "Autopay",
-                        source: "autopay",
-                      });
-                      if (paid.ok) userWrote = true;
-                      if (paid.ok && paid.amount > 0) autopaid++;
+                      const paid = await runAutopayForLiability(scoped, bill, todayISO, userTz, log);
+                      if (paid?.ok) { userWrote = true; paidNow = true; }
+                      if (paid?.ok && !paid.deduped && paid.amount > 0) autopaid++;
                     } catch { /* per-bill best effort */ }
+                  }
+                  // Auto Pay raises no reminder unless the user asked to keep
+                  // them — and never one for the occurrence it just recorded.
+                  if (paidNow || !wantsDueReminders(f)) {
+                    continue;
                   } else {
                     // Non-autopay: surface a timed TASK at the due date, deduped
                     // on title + date. A task is checkable and lands on the
@@ -7371,10 +7377,12 @@ Rules:
       const tz = getTimezone(req);
       const clock = { month: getUserCurrentMonth(tz), today: getUserToday(tz) };
       const plan = await planImport(storage, validation.data, profileId, clock);
-      const result = await applyImport(storage, validation.data, profileId, plan, clock);
+      const result = await applyImport(storage, validation.data, profileId, plan, clock, {
+        reconcile: (txn) => reconcileBankTransaction(storage, txn, tz, log),
+      });
       // `failed` names the records the commit could not write (the batch is
       // still recorded and undoable for everything that landed).
-      res.json({ ok: result.failed.length === 0, batchId: result.batchId, summary: result.summary, failed: result.failed, plan, profileId });
+      res.json({ ok: result.failed.length === 0, batchId: result.batchId, summary: result.summary, failed: result.failed, reconciled: result.reconciled, plan, profileId });
     } finally {
       await storage.releaseUserLock("finance-import").catch(() => {});
     }
@@ -12063,7 +12071,109 @@ No emojis. No prose outside the JSON.`,
   // ---- Payments ----
   app.get("/api/liabilities/:id/payments", asyncHandler(async (req, res) => {
     const rows = await storage.getLiabilityPayments(req.params.id);
-    res.json(rows);
+    // Each row carries its Auto Pay status (assumed / confirmed / partial),
+    // read from the occurrence stamp that names it — the one place that state
+    // lives (shared/autopay). A row with no stamp is a payment a person
+    // recorded: confirmed.
+    const todayISO = getUserToday(getTimezone(req));
+    const owners = new Map<string, any>();
+    for (const id of new Set(rows.map((r: any) => String(r.liabilityProfileId)))) {
+      owners.set(id, await storage.getProfile(id).catch(() => undefined));
+    }
+    res.json(rows.map((r: any) => {
+      const hit = stampOfPayment(owners.get(String(r.liabilityProfileId))?.fields, r.id);
+      return {
+        ...r,
+        occurrenceDate: hit?.date ?? null,
+        status: occurrencePaymentStatus(hit?.stamp ?? null, hit?.date ?? String(r.paymentDate || ""), todayISO, { paid: true }),
+        autopay: hit?.stamp?.autopay === true,
+        expectedAmount: hit?.stamp?.partial === true ? Number(hit.stamp.expectedAmount) || null : null,
+      };
+    }));
+  }));
+
+  // ---- Auto Pay ----
+  // The setting: on/off, the account it draws from, optional reminders.
+  // Turning it off stops future recording only (history and schedule stay).
+  app.post("/api/liabilities/:id/autopay", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const { enabled, accountId, reminders } = req.body || {};
+    if (enabled !== undefined && typeof enabled !== "boolean") return res.status(400).json({ error: "enabled must be true or false" });
+    if (reminders !== undefined && typeof reminders !== "boolean") return res.status(400).json({ error: "reminders must be true or false" });
+    if (accountId !== undefined && accountId !== null && typeof accountId !== "string") return res.status(400).json({ error: "accountId must be a string or null" });
+    if (enabled === undefined && reminders === undefined && accountId === undefined) return res.status(400).json({ error: "Nothing to change" });
+    if (typeof accountId === "string" && accountId) {
+      const account: any = await storage.getProfile(accountId);
+      if (!account || account.type !== "account") return res.status(400).json({ error: "Payment source must be one of your accounts" });
+    }
+    const updated = await setAutoPay(storage, req.params.id, { enabled, accountId, reminders }, getTimezone(req), log);
+    if (!updated) return res.status(404).json({ error: "Liability not found" });
+    bustBillCaches(uid);
+    res.json(updated);
+  }));
+
+  // One occurrence's status: missed, delayed (moved), partial, confirmed, or
+  // back to scheduled. Addressed by its date, or by the payment that settled
+  // it. Never changes the recurring schedule.
+  const occurrenceStatusHandler = (target: (req: any) => { liabilityId: string | null; occurrenceDate?: string | null; paymentId?: string | null } | Promise<{ liabilityId: string | null; occurrenceDate?: string | null; paymentId?: string | null }>) =>
+    asyncHandler(async (req, res) => {
+      const uid = cacheUserKey(req as AuthenticatedRequest);
+      const body = (req.body && typeof req.body === "object") ? req.body : {};
+      const status = String(body.status || "");
+      const t = await target(req);
+      if (!t.liabilityId) return res.status(404).json({ error: "Payment not found" });
+      let change: any;
+      if (status === "missed" || status === "scheduled") change = { status };
+      else if (status === "confirmed") {
+        if (body.amount != null && !(Number(body.amount) > 0)) return res.status(400).json({ error: "amount must be greater than zero" });
+        change = { status, amount: body.amount != null ? Number(body.amount) : null, via: "manual" };
+      } else if (status === "delayed") {
+        if (!isCalendarDay(String(body.movedTo || ""))) return res.status(400).json({ error: "movedTo must be YYYY-MM-DD" });
+        change = { status, movedTo: String(body.movedTo) };
+      } else if (status === "partial") {
+        const amountError = validateTransactionAmount(Number(body.amount));
+        if (amountError) return res.status(400).json({ error: amountError });
+        change = { status, amount: toCents(Number(body.amount)) };
+      } else {
+        return res.status(400).json({ error: "status must be one of: missed, scheduled, confirmed, delayed, partial" });
+      }
+      const result = await setOccurrenceStatus(storage, t.liabilityId, { occurrenceDate: t.occurrenceDate, paymentId: t.paymentId }, change, getTimezone(req), log);
+      bustBillCaches(uid);
+      if (!result.ok) {
+        const code = result.reason === "not_found" ? 404 : result.reason === "reversal_failed" || result.reason === "payment_failed" ? 500 : 400;
+        const message = result.reason === "not_paid" ? "There is no recorded payment to confirm for this date"
+          : result.reason === "reversal_failed" ? "The recorded payment could not be fully reversed; nothing else was changed"
+          : result.reason === "payment_failed" ? "The payment could not be recorded"
+          : result.reason === "not_found" ? "Liability not found" : "That payment or date is not valid";
+        return res.status(code).json({ error: message });
+      }
+      res.json({ ...result, schedule: await storage.getLiabilitySchedule(t.liabilityId) });
+    });
+  app.post("/api/liabilities/:id/occurrences/:date/status", occurrenceStatusHandler((req) => ({
+    liabilityId: isCalendarDay(req.params.date) ? req.params.id : null,
+    occurrenceDate: req.params.date,
+    paymentId: typeof req.body?.paymentId === "string" ? req.body.paymentId : null,
+  })));
+  app.post("/api/liability-payments/:id/status", occurrenceStatusHandler(async (req) => {
+    const row: any = await storage.getLiabilityPayment(req.params.id);
+    return { liabilityId: row ? String(row.liabilityProfileId) : null, paymentId: req.params.id };
+  }));
+
+  // A bank transaction that IS an Auto Pay payment already on the books
+  // confirms that payment. It never becomes a second expense: `matched: false`
+  // means the caller may record it as a new transaction; `matched: true` means
+  // it already exists.
+  app.post("/api/autopay/reconcile", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const { id, amount, date, description } = req.body || {};
+    if (!(Math.abs(Number(amount)) > 0)) return res.status(400).json({ error: "amount must be a non-zero number" });
+    if (!isCalendarDay(String(date || ""))) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const result = await reconcileBankTransaction(storage, {
+      id: typeof id === "string" ? id : null, amount: Number(amount), date: String(date),
+      description: typeof description === "string" ? description : null,
+    }, getTimezone(req), log);
+    if (result.matched && !result.alreadyMatched) bustBillCaches(uid);
+    res.json(result);
   }));
   app.post("/api/liabilities/:id/payments", asyncHandler(async (req, res) => {
     // Ownership: the liability profile must belong to the requester.

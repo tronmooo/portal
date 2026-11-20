@@ -137,6 +137,7 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { isTestEntity } from "../shared/test-data";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth, sumMonthIncomeToDate } from "../shared/obligation-windows";
+import { isAutoPayOn, autoPayRemindersOn, withAutoPaySince } from "../shared/autopay";
 
 // PostgREST `.or()` filters are built by string concatenation, so a value
 // containing `,` `(` `)` or `.` breaks out of its operand and appends
@@ -1966,6 +1967,8 @@ export class SupabaseStorage implements IStorage {
     // See shared/date-rules.
     if (data.fields && typeof data.fields === "object") {
       data = { ...data, fields: this._prepareFieldsForWrite(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (data as any).typeKey, todayISO: getUserToday(this._timezone) }, { entityType: String(data.type ?? "profile") }) };
+      // Created with Auto Pay on: it is on from today (shared/autopay).
+      data = { ...data, fields: withAutoPaySince(null, data.fields as Record<string, any>, getUserToday(this._timezone)) };
     }
     // An unrecognised type used to be stored as "person" — the last door by
     // which "tires for my Dodge Ram" became a human being. The canonical rule
@@ -2239,12 +2242,14 @@ export class SupabaseStorage implements IStorage {
     const normalizedIncoming = data.fields && typeof data.fields === "object"
       ? this._prepareFieldsForWrite(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? existing.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (existing as any).type_key ?? (existing as any).typeKey, todayISO: getUserToday(this._timezone) }, { entityType: String(data.type ?? existing.type ?? "profile"), entityId: id })
       : data.fields;
-    const incomingFields: Record<string, any> = {};
+    let incomingFields: Record<string, any> = {};
     const deletionIntents: string[] = [];
     for (const [k, v] of Object.entries(normalizedIncoming || {})) {
       if (v === null || v === undefined) deletionIntents.push(k);
       else incomingFields[k] = v;
     }
+    // Whichever door switches Auto Pay on, the day goes with it (shared/autopay).
+    incomingFields = withAutoPaySince(existing.fields as any, incomingFields, getUserToday(this._timezone));
     const write = mergeFieldWrite(existing.fields || {}, incomingFields);
     // Superseded twins come back as null markers — drop exactly those, so a
     // null a caller legitimately stored on some other field survives untouched.
@@ -6004,7 +6009,8 @@ export class SupabaseStorage implements IStorage {
       billingModel, baseAmount, amountIsEstimate: money.isEstimate,
       category: String(f.category ?? "general"),
       nextDueDate: nextDueDate || "",
-      autopay: f.autopay === true || f.autoPay === true,
+      autopay: isAutoPayOn(f),
+      autopayReminders: autoPayRemindersOn(f),
       // The obligation surface speaks active | paused | cancelled; the
       // liability fields also carry lifecycle words ("upcoming", "overdue",
       // written by the pay path). Echoing those back made an edit form that
@@ -6412,7 +6418,10 @@ export class SupabaseStorage implements IStorage {
         chargeTotal: next.chargeTotal, charges: next.charges,
       } : null,
       lastPaid: history[0]?.date ?? f.lastPaidDate ?? null,
-      autopay: f.autopay === true || f.autoPay === true,
+      autopay: isAutoPayOn(f),
+      autopayReminders: autoPayRemindersOn(f),
+      autoRecordSince: f.autoRecordSince ?? null,
+      autopayAccountId: f.autopayAccountId ?? null,
       paused: f.paused === true,
       pausedUntil: f.pausedUntil ?? null,
       gracePeriodDays: f.gracePeriodDays ?? null,
@@ -8231,7 +8240,7 @@ export class SupabaseStorage implements IStorage {
       const daysUntil = calendarDaysUntil(o.nextDueDate, today, this._timezone);
       return {
         id: o.id, name: o.name, amount: o.amount, dueDate: o.nextDueDate, daysUntil,
-        autopay: o.autopay, category: o.category,
+        autopay: o.autopay, autopayReminders: (o as any).autopayReminders === true, category: o.category,
         // Bills-as-liabilities: each bill is backed by a liability record; the
         // Bills popup deep-links to it and shows the lifecycle status.
         linkedLiabilityId: (o as any).linkedLiabilityId || null,

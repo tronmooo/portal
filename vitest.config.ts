@@ -336,6 +336,8 @@ export default defineConfig({
       'tests/cache-key-domains.test.ts',
       'tests/liability-payment-parity.test.ts',
       'tests/bill-payment-op.test.ts',
+      'tests/autopay-liabilities.test.ts',
+      'tests/autopay-controls.dom.test.tsx',
       'tests/bill-unpay-op.test.ts',
       'tests/bill-entry-point-parity.test.ts',
       'tests/habit-uncomplete-op.test.ts',

@@ -3003,7 +3003,9 @@ describe("D257 cron writes invalidate the user's caches", () => {
     expect(scan).toMatch(/if \(userWrote\) \{[\s\S]{0,400}await afterCronWrites\(u\.id\)/);
     // Every write path in the scan marks the user as written to.
     expect(scan.indexOf("userWrote = true")).toBeLessThan(scan.indexOf("closeBillReminderTasksWhere("));
-    expect((scan.match(/userWrote = true/g) || []).length).toBe(4);
+    // Auto Pay on a loan, the duplicate collapse, the reminder close, Auto
+    // Pay on a bill, the reminder create.
+    expect((scan.match(/userWrote = true/g) || []).length).toBe(5);
   });
 });
 

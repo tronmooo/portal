@@ -761,6 +761,8 @@ export interface Obligation {
   kind: ObligationKind;          // Wave 16 — life-shape classifier
   nextDueDate: string;
   autopay: boolean;
+  /** Auto Pay is on but the user still wants due-date reminders. */
+  autopayReminders?: boolean;
   status: ObligationStatus;
   leadTimeDays: number;          // Wave 16 — how many days in advance to remind
   autoLogExpense: boolean;       // Wave 16 — when done, also create an expense row

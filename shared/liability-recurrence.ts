@@ -224,12 +224,17 @@ export function advanceLiabilityDueDate(fields: any, todayISO: string): string {
   return next;
 }
 
-/** Has this series date already been paid or skipped via a per-occurrence override? */
+/**
+ * Has this series date already been closed via a per-occurrence override?
+ * Paid and skipped close it; so does "missed" (shared/autopay): the user said
+ * that payment did not happen, the series carries on with the next cycle, and
+ * the missed one is raised as an exception instead of holding the due date.
+ */
 export function isSettledOccurrence(fields: any, dateISO: string): boolean {
   const occ = (fields || {}).occurrences;
   if (!occ || typeof occ !== "object") return false;
   const status = occ[String(dateISO || "").slice(0, 10)]?.status;
-  return status === "paid" || status === "skipped";
+  return status === "paid" || status === "skipped" || status === "missed";
 }
 
 /**
@@ -256,7 +261,7 @@ export function isEndedBillFields(fields: any, nextDueISO?: string | null): bool
     const occ = f.occurrences && typeof f.occurrences === "object" ? f.occurrences : {};
     const settled = Object.values(occ as Record<string, any>).filter((o) => {
       const st = String(o?.status || "").toLowerCase();
-      return st === "paid" || st === "skipped";
+      return st === "paid" || st === "skipped" || st === "missed";
     }).length;
     if (settled >= count) return true;
   }

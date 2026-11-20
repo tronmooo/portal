@@ -21,6 +21,7 @@ import { deriveScheduleFields, liabilityAmount } from "@shared/liability-schedul
 import { isAccountProfile, isDebtAccount } from "@shared/finance-accounts";
 import { billPaymentExpenseCategory } from "@shared/category-canon";
 import { getUserToday, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { ASSUMED_EXPENSE_TAG, DEBT_COST_TAG_PREFIX, debtPaymentExpenseAmount, type PaymentVerification } from "@shared/autopay";
 import type { IStorage } from "./storage";
 import { randomUUID } from "crypto";
 
@@ -526,6 +527,12 @@ export interface PayBillInput {
   paymentType?: LiabilityPaymentType | null;
   /** Override the per-liability autoLogExpense flag for this payment. */
   logExpense?: boolean;
+  /**
+   * How sure Portol is that the money moved. Default: "assumed" when Auto Pay
+   * recorded it (nobody saw the debit), "confirmed" for every door a person
+   * or a document went through.
+   */
+  verification?: PaymentVerification | null;
   source: PayBillSource;
 }
 
@@ -879,6 +886,15 @@ export async function payBillOccurrence(
   // already being paid; the loser sees 0 rows and answers with the winner's
   // payment. Storages without the CAS (tests, in-memory) keep the old order.
   const paymentId = randomUUID();
+  // Assumed vs confirmed lives on the occurrence stamp, beside the id of the
+  // one ledger row this payment is (shared/autopay). `partial` and
+  // `expectedAmount` belong to a previous record of this occurrence, so a
+  // fresh payment clears them.
+  const verification: PaymentVerification = input.verification ?? (input.source === "autopay" ? "assumed" : "confirmed");
+  const verificationStamp: Record<string, any> = {
+    verification, autopay: input.source === "autopay",
+    partial: input.paymentType === "partial",
+  };
   let dueDateAdvanced = false;
   let nextDueDate: string | null = null;
   let claimed = false;
@@ -890,6 +906,7 @@ export async function payBillOccurrence(
     const stamp = {
       status: "paid", paymentId, amount, actualAmount: amount, paidAmount: amount,
       postedAt: new Date().toISOString(), paymentDate, ...(account ? { accountId: account.id } : {}),
+      ...verificationStamp,
     };
     // "Last paid" is the LATEST payment, so it never moves backwards: paying
     // the Aug 15 cycle after the Sep 15 one had already been settled used to
@@ -971,7 +988,9 @@ export async function payBillOccurrence(
       actualAmount: amount,
       paidAmount: amount,
       postedAt: new Date().toISOString(),
+      paymentDate,
       ...(account ? { accountId: account.id } : {}),
+      ...verificationStamp,
     };
     const patch: any = { occurrences: occ, lastPaidDate: laterDay(f.lastPaidDate, paymentDate) };
     if (curDue && curDue === occurrenceDate) {
@@ -1024,6 +1043,36 @@ export async function payBillOccurrence(
   // was most of the "General" slice.
   let expenseId: string | null = null;
   const logExpense = input.logExpense ?? (recurring && f.autoLogExpense !== false);
+  const assumedTags = verification === "assumed" ? [ASSUMED_EXPENSE_TAG] : [];
+  // A loan or card payment is not all spending: the principal pays the debt
+  // down (the balance fell above), the interest and fees are what it cost.
+  // Only that cost is an expense — the whole $400 as an expense would count
+  // the principal twice, once as spending and once as a lower debt.
+  const debtCost = !recurring && (input.logExpense ?? f.autoLogExpense !== false) ? debtPaymentExpenseAmount(payment) : 0;
+  if (debtCost > 0) {
+    try {
+      const parties = await Promise.resolve((storage as any).getLiabilityProfileLinks?.(liabilityId))
+        .then((rows: any) => (Array.isArray(rows) ? rows.map((l: any) => l?.partyProfileId).filter((x: any) => typeof x === "string" && x) : []))
+        .catch(() => [] as string[]);
+      const owners = Array.from(new Set([(liability as any).parentProfileId || liabilityId, ...parties]));
+      const expense = await storage.createExpense({
+        amount: debtCost,
+        category: "debt",
+        description: `${liability.name} — interest & fees — ${occurrenceDate}`,
+        date: paymentDate,
+        linkedProfiles: owners,
+        // payment-cost:<id> (not payment:<id>): this expense is PART of the
+        // payment, so editing its amount must not re-price the payment. The
+        // inverse retracts it by this tag.
+        tags: ["loan-interest", `liability:${liabilityId}`, `${DEBT_COST_TAG_PREFIX}${payment?.id}`, ...assumedTags],
+      } as any);
+      expenseId = expense?.id ?? null;
+      steps.push({ step: "expense", ok: true });
+    } catch (e: any) {
+      steps.push({ step: "expense", ok: false, error: e?.message || String(e) });
+      logger.warn(`[payBillOccurrence] interest expense log failed for ${liability.name}:`, e?.message || e);
+    }
+  }
   if (recurring && logExpense && amount > 0) {
     try {
       // The bill's owners, as the bills list reports them (D207): its parent
@@ -1047,7 +1096,7 @@ export async function payBillOccurrence(
         linkedProfiles: owners,
         // The payment:<id> tag is the join key unpayBillOccurrence uses to
         // retract this exact expense. Not display metadata — an inverse's key.
-        tags: ["bill-payment", `liability:${liabilityId}`, `payment:${payment?.id}`],
+        tags: ["bill-payment", `liability:${liabilityId}`, `payment:${payment?.id}`, ...assumedTags],
       } as any);
       expenseId = expense?.id ?? null;
       steps.push({ step: "expense", ok: true });
@@ -1209,6 +1258,8 @@ export async function unpayBillOccurrence(
     try {
       await storage.updateOccurrenceOverride(liabilityId, occurrenceDate, {
         status: null, paymentId: null, paidAmount: null, postedAt: null, accountId: null,
+        verification: null, autopay: null, partial: null, expectedAmount: null, paymentDate: null,
+        confirmedAt: null, confirmedVia: null, bankTransactionId: null,
       });
       occurrenceCleared = true;
       steps.push({ step: "occurrence_clear", ok: true });
@@ -1316,14 +1367,14 @@ export async function unpayBillOccurrence(
   // ── 6. retract the expense this payment logged ──────────────────────────
   let expenseDeleted = false;
   try {
-    const tag = `payment:${target.id}`;
+    const tags = [`payment:${target.id}`, `${DEBT_COST_TAG_PREFIX}${target.id}`];
     const expenses = await storage.getExpenses();
-    const logged = (expenses || []).find((e: any) => Array.isArray(e.tags) && e.tags.includes(tag));
-    if (logged) {
-      await storage.deleteExpense(logged.id);
+    const logged = (expenses || []).filter((e: any) => Array.isArray(e.tags) && tags.some((t) => e.tags.includes(t)));
+    for (const row of logged) {
+      await storage.deleteExpense(row.id);
       expenseDeleted = true;
-      steps.push({ step: "expense_delete", ok: true });
     }
+    if (expenseDeleted) steps.push({ step: "expense_delete", ok: true });
   } catch (e: any) {
     steps.push({ step: "expense_delete", ok: false, error: e?.message || String(e) });
     logger.warn(`[unpayBillOccurrence] expense retract failed:`, e?.message || e);
@@ -1392,15 +1443,20 @@ export async function stripDanglingPaymentTags(storage: IStorage, tags: unknown)
   const kept: string[] = [];
   let hasPayment = false;
   for (const t of list) {
-    if (t.startsWith(PAYMENT_TAG_PREFIX)) {
-      const id = t.slice(PAYMENT_TAG_PREFIX.length).trim();
+    // Both keys name a ledger row: `payment:` (the expense IS the payment)
+    // and `payment-cost:` (the expense is a loan payment's interest and fees).
+    const prefix = t.startsWith(PAYMENT_TAG_PREFIX) ? PAYMENT_TAG_PREFIX : t.startsWith(DEBT_COST_TAG_PREFIX) ? DEBT_COST_TAG_PREFIX : null;
+    if (prefix) {
+      const id = t.slice(prefix.length).trim();
       const row = id ? await storage.getLiabilityPayment(id).catch(() => null) : null;
       if (!row) continue;
       hasPayment = true;
     }
     kept.push(t);
   }
-  return hasPayment ? kept : kept.filter((t) => t !== "bill-payment");
+  // Without its payment, an expense cannot be a bill payment, a loan's
+  // interest, or an Auto Pay assumption.
+  return hasPayment ? kept : kept.filter((t) => t !== "bill-payment" && t !== "loan-interest" && t !== ASSUMED_EXPENSE_TAG);
 }
 
 /**

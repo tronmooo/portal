@@ -158,7 +158,7 @@ describe("payBillOccurrence — full canonical side-effect set", () => {
     expect(storage.expenses).toHaveLength(0);
   });
 
-  it("moves a loan's balance under every field name — and logs NO expense", async () => {
+  it("moves a loan's balance under every field name — and logs only the interest as an expense", async () => {
     const storage = fakeStorage([CAR_LOAN]);
     const out = await payBillOccurrence(storage, "loan-1", {
       amount: 400, occurrenceDate: "2026-08-15", source: "ai",
@@ -171,8 +171,15 @@ describe("payBillOccurrence — full canonical side-effect set", () => {
     expect(loan.fields.loanBalance).toBeCloseTo(9_650, 2);
     // The occurrence is stamped for loans too — the schedule card agrees.
     expect(loan.fields.occurrences["2026-08-15"].status).toBe("paid");
-    // Principal is not consumption.
-    expect(storage.expenses).toHaveLength(0);
+    // Principal is not consumption: the $350 that paid the loan down is not
+    // an expense. The $50 of interest is what the payment cost (Auto Pay rule
+    // A4), tagged so the inverse retracts it and so editing it never
+    // re-prices the payment.
+    expect(storage.expenses).toHaveLength(1);
+    expect(storage.expenses[0].amount).toBe(50);
+    expect(storage.expenses[0].category).toBe("debt");
+    expect(storage.expenses[0].tags).toContain(`payment-cost:${out.payment.id}`);
+    expect(storage.expenses[0].tags.some((t: string) => t.startsWith("payment:"))).toBe(false);
   });
 
   it("debits the source account, linked to the payment row", async () => {

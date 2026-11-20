@@ -8,6 +8,8 @@
 //
 // score = Urgency (dominant) + Impact + Confidence. Higher = surfaces sooner.
 
+import { isQuietAutoPayBill } from "./autopay";
+
 export type NowKind = "task" | "bill" | "event" | "document" | "goal";
 export type NowAction = "complete" | "pay" | "open";
 
@@ -146,6 +148,7 @@ export function computeNowItems(input: NowInputs): NowItem[] {
     if (!b || !b.id) continue;
     const du = typeof b.daysUntil === "number" ? b.daysUntil : daysBetween(now, b.dueDate);
     if (du != null && du > Math.min(horizon, 30)) continue; // bills: keep the next-30 window
+    if (isQuietAutoPayBill(b, du)) continue; // Auto Pay handles it
     const amt = Number(b.amount) || 0;
     // Money at risk is real impact; autopay reduces urgency (it self-charges).
     const impact = Math.min(220, amt / 25) + (b.autopay ? -120 : 0);

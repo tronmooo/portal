@@ -19,12 +19,13 @@ import { readMonthlyPayment, readStoredDueDate } from "./liability-fields";
 import { getRecordTemporalStatus } from "./temporal-status";
 import { liabilityBillStatus, type BillStatus } from "./liability-status";
 import { liabilityFamily } from "./liability-types";
+import { occurrencePaymentStatus, type OccurrencePaymentStatus } from "./autopay";
 import {
   resolveBillingModel, resolveOccurrenceAmount,
   type BillingModel, type OccurrenceCharge, type OccurrenceOverride,
 } from "./liability-billing";
 
-export type OccurrenceStatus = BillStatus | "skipped";
+export type OccurrenceStatus = BillStatus | "skipped" | "missed";
 
 export interface ScheduleOccurrence {
   /** Canonical series date (the unshifted due date) — the override key. */
@@ -61,6 +62,16 @@ export interface ScheduleOccurrence {
   amountLabel: "Estimated" | "Current" | "Actual";
   /** Account the payment came from, when recorded. */
   accountId?: string;
+  /**
+   * The Auto Pay view of this occurrence (shared/autopay): scheduled, assumed
+   * paid, confirmed paid, missed, delayed, partial. `status` stays the coarse
+   * lifecycle word older readers switch on.
+   */
+  paymentStatus: OccurrencePaymentStatus;
+  /** Recorded by Auto Pay (as opposed to by the user). */
+  autopay?: boolean;
+  /** The scheduled amount, when less than it was paid (a partial payment). */
+  expectedAmount?: number;
 }
 
 export interface Liabilityish {
@@ -289,8 +300,12 @@ export function generateSchedule(
     const paymentId = ov?.paymentId ?? paidByDate.get(cur) ?? paidByDate.get(effectiveDate);
     const isPaid = ov?.status === "paid" || paymentId != null;
     const isSkipped = ov?.status === "skipped";
+    // "Missed" is the user's word on a payment that did not happen: it is not
+    // paid and it is not still due (the series moved on to the next cycle).
+    const isMissed = ov?.status === "missed" && !isPaid;
     const status: OccurrenceStatus = isSkipped
       ? "skipped"
+      : isMissed ? "missed"
       : liabilityBillStatus(effectiveDate, today, isPaid);
     // The per-occurrence money model. `amount` is whatever THIS period costs —
     // the definition's amount is only the starting point, never the answer.
@@ -314,6 +329,9 @@ export function generateSchedule(
       isEstimate: money.isEstimate && !isPaid,
       amountLabel: isPaid ? "Actual" : money.label,
       accountId: ov?.accountId || undefined,
+      paymentStatus: occurrencePaymentStatus(ov, effectiveDate, today, { paid: isPaid }),
+      ...(ov?.autopay === true ? { autopay: true } : {}),
+      ...(ov?.partial === true && Number(ov?.expectedAmount) > 0 ? { expectedAmount: Number(ov.expectedAmount) } : {}),
     });
     return out.length < cap;
   };
@@ -362,7 +380,7 @@ export function nextDueOccurrence(
 ): ScheduleOccurrence | null {
   const sched = generateSchedule(liability, payments, { todayISO, windowStart: todayISO, months: 18, billingModel });
   for (const o of sched) {
-    if (o.status !== "paid" && o.status !== "skipped") return o;
+    if (o.status !== "paid" && o.status !== "skipped" && o.status !== "missed") return o;
   }
   return null;
 }
@@ -422,7 +440,7 @@ const round2s = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 export function monthlyTotals(occurrences: readonly ScheduleOccurrence[]): PeriodTotal[] {
   const byPeriod = new Map<string, PeriodTotal>();
   for (const o of occurrences || []) {
-    if (o.status === "skipped") continue;
+    if (o.status === "skipped" || o.status === "missed") continue;
     const period = String(o.effectiveDate || o.date).slice(0, 7);
     if (!period) continue;
     const row = byPeriod.get(period) ?? {
@@ -447,7 +465,7 @@ export function totalForWindow(
 ): { total: number; actual: number; estimated: number; count: number } {
   let total = 0, actual = 0, estimated = 0, count = 0;
   for (const o of occurrences || []) {
-    if (o.status === "skipped") continue;
+    if (o.status === "skipped" || o.status === "missed") continue;
     const d = o.effectiveDate || o.date;
     if (d < startISO || d > endISO) continue;
     total += o.amount;

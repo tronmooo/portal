@@ -224,6 +224,57 @@ these. After deleting a liability the app returns to the Liabilities list
 *Guards:* `tests/autosave-edit-forms.dom.test.tsx`, `tests/profile-autosave.test.ts`,
 `tests/liability-qa-2026-11-18-followup.test.ts`.
 
+## Auto Pay rules (routine payments record themselves; the books stay honest)
+
+Every liability (bill, subscription, loan, card) has an Auto Pay setting. The
+rules are in `shared/autopay.ts`, the operations in `server/autopay.ts`; money
+still moves only through `payBillOccurrence` / `unpayBillOccurrence`. Read
+them before touching the due-scan cron (`runLiabilityDueScan`,
+`server/routes.ts`), `AutoPaySection` or `PaymentStatusControls`.
+*Guards:* `tests/autopay-liabilities.test.ts` (car loan, mortgage, phone bill,
+subscription over the real pay pipeline), `tests/autopay-controls.dom.test.tsx`.
+
+**A1. Recorded on the due day, once.** `autopayDueOccurrence` is the only
+answer to "what does Auto Pay record now": never before the due day, never for
+a day before Auto Pay was switched on (`autoRecordSince`, stamped by the
+storage layer whichever door flips the switch), never for an occurrence that
+is paid, skipped or missed. The occurrence is claimed before the ledger row is
+written, so a retry, a second run or a page load cannot add a payment. Only
+the cron records; no screen does (Rule 3).
+
+**A2. Assumed is not confirmed.** A payment Auto Pay recorded carries
+`verification: "assumed"` on its occurrence stamp, the one place that state
+lives; a payment a person or a document recorded is confirmed. Show a payment's
+status through `occurrencePaymentStatus` / `PaymentStatusBadge`; never print
+"Paid" for an assumed one. Its expense carries `ASSUMED_EXPENSE_TAG` until it
+is confirmed.
+
+**A3. One occurrence, not the schedule.** Missed, delayed, partial, confirmed
+and back-to-scheduled go through `setOccurrenceStatus`
+(`POST …/occurrences/:date/status`, `POST /api/liability-payments/:id/status`).
+It never writes the liability's amount, due day or Auto Pay flag. Marking a
+recorded payment missed reverses it (expense, balance, account) and takes two
+taps (Rule 8); the series moves on, and the missed payment is raised as an
+alert derived from the stamp (Rule 5) until it is paid, moved or reopened.
+
+**A4. Principal is not spending.** A loan or card payment lowers the balance
+by its principal (L5); only its interest and fees are logged as an expense
+(`debtPaymentExpenseAmount`), tagged `payment-cost:<id>`. A recurring bill's
+whole payment is the expense, tagged `payment:<id>`. Never log a loan's full
+payment as an expense: the principal would count twice.
+
+**A5. One payment, however it is confirmed.** A bank transaction that is an
+assumed payment confirms that payment (`reconcileBankTransaction`; the
+statement import asks it before creating an expense). It is re-priced to the
+bank's amount in place and never becomes a second expense. A transaction id
+matched once answers the same payment again and writes nothing.
+
+**A6. Quiet unless something is wrong.** An upcoming Auto Pay bill is not in
+Needs Attention and raises no reminder task or due-soon alert
+(`isQuietAutoPayBill`, `wantsDueReminders`) unless the user turned "Remind me
+anyway" on. An overdue Auto Pay bill and a missed payment are the exceptions
+that show. Turning Auto Pay off stops future recording only.
+
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
 

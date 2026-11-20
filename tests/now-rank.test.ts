@@ -22,19 +22,24 @@ describe("computeNowItems", () => {
     expect(items[0].daysUntil).toBeLessThan(0);
   });
 
-  it("maps task → complete, manual bill → pay, autopay bill → open", () => {
+  it("maps task → complete, manual bill → pay; an upcoming autopay bill is not listed, an overdue one opens", () => {
     const items = computeNowItems({
       now: NOW,
       overdueTasks: [{ id: "t1", title: "Task", dueDate: dayOffset(0) }],
       bills: [
         { id: "b1", name: "Manual", amount: 100, dueDate: dayOffset(1), daysUntil: 1, autopay: false },
         { id: "b2", name: "Autopay", amount: 100, dueDate: dayOffset(1), daysUntil: 1, autopay: true },
+        { id: "b3", name: "Autopay not recorded", amount: 100, dueDate: dayOffset(-2), daysUntil: -2, autopay: true },
+        { id: "b4", name: "Autopay with reminders", amount: 100, dueDate: dayOffset(1), daysUntil: 1, autopay: true, autopayReminders: true },
       ],
     });
     const byId = Object.fromEntries(items.map(i => [i.sourceId, i]));
     expect(byId.t1.action).toBe("complete");
     expect(byId.b1.action).toBe("pay");
-    expect(byId.b2.action).toBe("open");
+    // Auto Pay handles b2: nothing for the user to do, so it is not listed.
+    expect(byId.b2).toBeUndefined();
+    expect(byId.b3.action).toBe("open");
+    expect(byId.b4.action).toBe("open");
   });
 
   it("includes overdue goals but excludes on-track ones", () => {

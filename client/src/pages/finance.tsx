@@ -1,3 +1,4 @@
+import { isAssumedExpense } from "@shared/autopay";
 import { changedFieldsOnly } from "@shared/field-patch";
 import { localTodayISO, formatLocalDate, monthKeyLabel } from "@/lib/dates";
 import { addDays } from "@shared/timezone";
@@ -1730,7 +1731,16 @@ export default function FinancePage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm truncate">{expense.description}</p>
-                        <span className="text-xs text-muted-foreground">{formatListDate(expense.date)}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {formatListDate(expense.date)}
+                          {/* Recorded by Auto Pay and not confirmed yet: it counts
+                              in the totals, and says what it is. */}
+                          {isAssumedExpense(expense) && (
+                            <span className="ml-1.5 text-sky-600" title="Recorded automatically because Auto Pay is on. Confirm it on the liability's Payments tab, or it is confirmed when your bank transaction matches." data-testid={`expense-assumed-${expense.id}`}>
+                              · Assumed (Auto Pay)
+                            </span>
+                          )}
+                        </span>
                       </div>
                       <span className="text-sm font-semibold tabular-nums shrink-0">{formatMoney(expense.amount)}</span>
                     </>
