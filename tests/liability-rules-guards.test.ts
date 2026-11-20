@@ -83,6 +83,6 @@ describe("the rules are written down", () => {
     const rules = src("CLAUDE.md");
     expect(rules).toContain("## Liability rules");
     expect(rules).toContain("tests/liability-rules-guards.test.ts");
-    for (const n of ["L1", "L2", "L3", "L4", "L5", "L6", "L7"]) expect(rules, n).toContain(`**${n}.`);
+    for (const n of ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"]) expect(rules, n).toContain(`**${n}.`);
   });
 });
