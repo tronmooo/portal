@@ -22,6 +22,7 @@ export default defineConfig({
       'tests/chat-debt-and-payment-one-card.test.ts',
       'tests/chat-payment-recorded.test.ts',
       'tests/liability-rate-unit.test.ts',
+      'tests/liability-term-and-status.test.ts',
       'tests/profile-activity-tab.dom.test.tsx',
       'tests/profile-autosave.test.ts',
       'tests/autosave-edit-forms.dom.test.tsx',

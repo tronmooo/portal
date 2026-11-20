@@ -4248,7 +4248,8 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         monthlyPayment: { type: "number", description: "Required monthly payment amount." },
         minimumPayment: { type: "number", description: "Minimum payment due (credit_card / bnpl). Often the floor before late fees kick in." },
         creditLimit: { type: "number", description: "Credit limit (credit_card / heloc only). Used to compute utilization on the Overview tab." },
-        remainingTermMonths: { type: "number", description: "Months remaining on a fixed-term loan. Omit for revolving (credit_card)." },
+        termMonths: { type: "number", description: "The loan's ORIGINAL contract term in months: 'a 36-month loan' → 36, '30-year mortgage' → 360. Use THIS for the term the user states. Omit for revolving (credit_card)." },
+        remainingTermMonths: { type: "number", description: "Months still LEFT to pay — ONLY when the user says how many are left ('28 months left', '5 years remaining'). Never put the original term here." },
         firstPaymentDate: { type: "string", description: "YYYY-MM-DD of the first scheduled payment." },
         dueDay: { type: "number", description: "Day-of-month the payment is due (1-31). The loan appears on the calendar from this." },
         lender: { type: "string", description: "Lender / bank / servicer name. e.g. 'Chase', 'Sallie Mae', 'Wells Fargo', 'Affirm', 'IRS'." },
@@ -10140,7 +10141,20 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (input.monthlyPayment != null) fields.monthlyPayment = Number(input.monthlyPayment);
       if (input.minimumPayment != null) fields.minimumPayment = Number(input.minimumPayment);
       if (input.creditLimit != null) fields.creditLimit = Number(input.creditLimit);
-      if (input.remainingTermMonths != null) fields.remainingTermMonths = Number(input.remainingTermMonths);
+      // The stated term is the ORIGINAL term; what is left is derived from it
+      // and the first payment (shared/loan-facts loanStoredTermMonths). A
+      // "remaining" the user never described as remaining, on a loan that has
+      // already started, is the original term under the wrong name.
+      {
+        const saidLeft = /\b(left|remaining|remain|to go)\b/i.test(String((input as any).__userMessage || ""));
+        const started = /^\d{4}-\d{2}-\d{2}/.test(String(input.firstPaymentDate || ""))
+          && String(input.firstPaymentDate).slice(0, 10) < new Date().toLocaleDateString("en-CA", { timeZone: aiUserTimezone() });
+        if (input.termMonths != null) fields.termMonths = Number(input.termMonths);
+        if (input.remainingTermMonths != null) {
+          if (input.termMonths == null && started && !saidLeft) fields.termMonths = Number(input.remainingTermMonths);
+          else fields.remainingTermMonths = Number(input.remainingTermMonths);
+        }
+      }
       if (input.firstPaymentDate) fields.firstPaymentDate = input.firstPaymentDate;
       if (input.dueDay != null) fields.dueDay = Number(input.dueDay);
       if (input.lender) fields.lender = input.lender;
@@ -10471,6 +10485,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if (k === "subtype") continue;
         setField(k, v);
       }
+      // A new ORIGINAL term (a refinance: "30 years") supersedes an old
+      // "months left" figure, which would otherwise keep winning.
+      if (ch.termMonths != null && ch.remainingTermMonths == null) delete newFields.remainingTermMonths;
       // Refinance flow: the new loan starts at the new balance.
       if (input.refinance) {
         if (ch.originalBalance == null) setField("originalBalance", sharedReadBalance(newFields));

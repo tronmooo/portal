@@ -82,7 +82,7 @@ export function deriveLiabilityMetrics(
   // header chip shows — never at the loan's origin.
   const summary = loanPayoff(f, todayISO, { extraPerPeriod: opts.extraPerPeriod, nextDueISO: nextDue.nextOccurrence });
   const hasSchedule = balance > 0 && summary.monthlyPayment > 0 && !summary.neverAmortizes && summary.remainingMonths > 0;
-  const storedTerm = loanStoredTermMonths(f);
+  const storedTerm = loanStoredTermMonths(f, todayISO);
   const monthsRemaining = balance <= 0 ? 0 : hasSchedule ? summary.remainingMonths : storedTerm > 0 ? storedTerm : null;
   const linked = opts.linkedAssetValue;
   return {
@@ -114,7 +114,7 @@ export function deriveLiabilityAmortization(
   const f = fields || {};
   const nextDue = getRecordTemporalStatus({ kind: "liability", fields: f, row: opts.row, typeKey: opts.typeKey }, todayISO);
   const payment = readMonthlyPayment(f);
-  const term = loanStoredTermMonths(f);
+  const term = loanStoredTermMonths(f, todayISO);
   return buildAmortization({
     currentBalance: readBalance(f),
     // The DECIMAL: the engine re-guesses a bare number's unit, and a percent

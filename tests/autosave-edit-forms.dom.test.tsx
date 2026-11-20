@@ -94,6 +94,21 @@ describe("useAutosave", () => {
     expect(result.current.status).toBe("saved");
   });
 
+  it("remembers what the form opened with, however many saves happen (Undo changes)", async () => {
+    const { rerender, result } = setup({ rate: "6.25", balance: "312400" });
+    expect(result.current.changedSinceOpen).toBe(false);
+    rerender({ enabled: true, snapshot: { rate: "5.5", balance: "312400" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS + 10); });
+    rerender({ enabled: true, snapshot: { rate: "5.5", balance: "305000" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS + 10); });
+    // Saved twice — the opened values are still the ones to go back to.
+    expect(result.current.opened).toEqual({ rate: "6.25", balance: "312400" });
+    expect(result.current.changedSinceOpen).toBe(true);
+    // Putting them back is a change like any other: it is saved.
+    rerender({ enabled: true, snapshot: { rate: "6.25", balance: "312400" } });
+    expect(result.current.changedSinceOpen).toBe(false);
+  });
+
   it("names its state for the form", () => {
     expect(autosaveStatusLabel("idle")).toMatch(/save automatically/i);
     expect(autosaveStatusLabel("saving")).toBe("Saving…");

@@ -17,6 +17,7 @@ import { billRecurrenceRule } from "./liability-recurrence";
 import { normalizeDateString } from "./extraction-normalize";
 import { readMonthlyPayment, readStoredDueDate } from "./liability-fields";
 import { getRecordTemporalStatus } from "./temporal-status";
+import { loanStoredTermMonths } from "./loan-facts";
 import { liabilityBillStatus, type BillStatus } from "./liability-status";
 import { liabilityFamily } from "./liability-types";
 import { occurrencePaymentStatus, type OccurrencePaymentStatus } from "./autopay";
@@ -184,7 +185,9 @@ export function deriveScheduleFields(
   let count: number | null = null;
   if (fam === "one_time") count = 1;
   else if (fam === "amortizing") {
-    const rt = parseInt(String(f.remainingTermMonths ?? f.termMonths ?? ""), 10);
+    // ONE reader for "payments left" (shared/loan-facts): an original term
+    // with a first-payment date counts down, it is not the count from today.
+    const rt = loanStoredTermMonths(f, todayISO);
     if (rt > 0) count = rt;
     else {
       const bal = Number(f.currentBalance ?? f.originalBalance ?? 0);
