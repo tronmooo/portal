@@ -137,7 +137,26 @@ export async function journalContextBlock(
     return `[JOURNAL] The user is asking about their journal${day ? ` for ${day}` : ""}. There is NO journal entry${day ? " for that day" : ""}. Say so plainly; do not open a document and do not write anything.`;
   }
   const body = rows.map((e) => `— ${e.date} · mood ${moodLabel(e.mood)}:\n${e.content}`).join("\n\n");
-  return `[JOURNAL] The user is asking about their journal. This is the stored text — answer from it (do not open a document, do not write anything):\n${body}`;
+  return `[JOURNAL] The user is asking about their journal. You HAVE the journal: the stored text is below, in full. Answer from it directly — ` +
+    `no tool call is needed, do not open a document, do not write anything, do not ask the user to paste it, and never say you cannot see or access the journal.\n${body}`;
+}
+
+const REFUSAL = /\b(?:i\s+(?:don'?t|do\s+not)\s+have\s+access\s+to|i\s+(?:can'?t|cannot|am\s+unable\s+to|can\s+only)\s+(?:see|read|access|view))\b[^.?!]*\b(?:journal|diary|entr(?:y|ies)|dates|text)\b/i;
+
+/**
+ * When the entry's text WAS handed to the model, a sentence saying it cannot
+ * see the journal is false. Drop it and the follow-up question it leads into
+ * ("Did you want to paste today's journal text…?"); what the model said about
+ * the entry stays. Returns null when nothing but the refusal was said, so the
+ * caller can show the entry itself instead.
+ */
+export function dropFalseJournalRefusal(reply: string): string | null {
+  const text = String(reply || "");
+  if (!REFUSAL.test(text)) return text;
+  const sentences = text.split(/(?<=[.?!])\s+/);
+  const at = sentences.findIndex((x) => REFUSAL.test(x));
+  const kept = sentences.slice(0, at).join(" ").trim();
+  return kept.length >= 20 ? kept : null;
 }
 
 /** The reply to "find my note about buying new tires". */

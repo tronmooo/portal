@@ -100,7 +100,9 @@ async function main() {
     const r3 = await chat("Find my note about buying new tires");
     check(r3.reply.includes(tag) && /Honda/.test(r3.reply) && !r3.raw?.documentPreview, `#7 "Find my note about buying new tires" shows the note (reply: ${r3.reply.slice(0, 100)})`);
     const r4 = await chat("Summarize what I wrote in my journal today");
-    check(/frustrat|overwhelm|grocer|work/i.test(r4.reply) && !/only see|can't see|cannot see|don't have access/i.test(r4.reply), `#7 "Summarize what I wrote in my journal today" summarises the text (reply: ${r4.reply.slice(0, 140)})`);
+    // The refusal it used to give: "I can only see dates and moods, not the text".
+    const refused = /(?:can only|can't|cannot|unable to) see (?:the |your )?(?:dates|text|journal|content)|don't have access to (?:the |your )?journal/i.test(r4.reply);
+    check(/frustrat|overwhelm/i.test(r4.reply) && /grocer/i.test(r4.reply) && !refused, `#7 "Summarize what I wrote in my journal today" summarises the text (reply: ${r4.reply.replace(/\s+/g, " ").slice(0, 400)})`);
     check((await created()).filter((j) => j.date === entryDate).length === 1, `the four questions wrote nothing to the journal`);
 
     // ── #8  "last written" time ───────────────────────────────────────────

@@ -157,6 +157,27 @@ describe("reading", () => {
     expect(res.reply).toMatch(/frustrating/);
   });
 
+  // Live check 2026-11-20: the model summarised the entry and then added "I
+  // don't have access to your journal entries. Did you want to paste…?"
+  it("a summary never ends with a false 'I don't have access to your journal'", async () => {
+    seedToday();
+    script = [done("Today's entry (mood: **Bad**): you felt frustrated and overwhelmed with work. I don't have access to your journal entries. Did you want to paste today's journal text so I can summarize it?")];
+    const res = await processMessage("Summarize what I wrote in my journal today", [], "u1");
+    expect(res.reply).toMatch(/frustrated and overwhelmed with work\.$/);
+    expect(res.reply).not.toMatch(/don't have access|paste/i);
+    // The text is handed over, so the model is not also told to fetch it.
+    expect(lastUserText()).toContain("You HAVE the journal");
+    expect(lastUserText()).not.toMatch(/Call read_journal/);
+  });
+
+  it("a reply that is ONLY the refusal is replaced by the entry itself", async () => {
+    seedToday();
+    script = [done("I don't have access to your journal entries.")];
+    const res = await processMessage("Summarize what I wrote in my journal today", [], "u1");
+    expect(res.reply).toContain(FRUSTRATED);
+    expect(res.reply).not.toMatch(/don't have access/i);
+  });
+
   it("read_journal returns the text and mood of an entry", async () => {
     seedToday();
     script = [round(use("read_journal", { date: "today" })), done("ok")];

@@ -120,7 +120,7 @@ import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF, mergeDismissedNotific
 import { upcomingEventOccurrences } from "@shared/event-upcoming";
 import { rankByName } from "@shared/entity-resolution";
 import { journalFilingContent, parseJournalReadIntent, parseNoteFindIntent, rankNotesByTopic } from "@shared/journal-intent";
-import { answerJournalRead, answerNoteFind, journalContextBlock, journalEntriesFor, resolveJournalDay, moodLabel, longDay } from "./journal-read";
+import { answerJournalRead, answerNoteFind, journalContextBlock, journalEntriesFor, resolveJournalDay, moodLabel, longDay, dropFalseJournalRefusal } from "./journal-read";
 import { markOccurrence as markRecurringOccurrence, pruneOccurrenceTags as pruneRecurringOccurrenceTags } from "@shared/recurring-dates";
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, entityTypeForTool, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
@@ -15644,7 +15644,11 @@ export function buildContentRoutingDirective(userMessage: string, profiles?: Arr
   // is a read. Telling the model to "write the object the user named" there
   // is wrong, and nothing may be written during a read turn anyway.
   const readTurn = classifyTurnScope(userMessage).allowedMutations === "none";
-  if (readTurn && named.some((a) => a.kind === "journal")) {
+  // …unless the entry's text is already handed over beside this directive
+  // (journalContextBlock): told both "here is the text" and "call
+  // read_journal", the model summarised the entry and then added "I don't
+  // have access to your journal entries" (live check, 2026-11-20).
+  if (readTurn && named.some((a) => a.kind === "journal") && !parseJournalReadIntent(userMessage)) {
     lines.push(`[ROUTER] This is a QUESTION about the journal. Call read_journal to see the entries' text and mood, then answer. Write nothing, and do not open a document.`);
   }
   if (readTurn && named.some((a) => a.kind === "note")) {
@@ -18687,6 +18691,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         const docName = documentPreviews[0].name;
         textReply = `Here's your "${docName}".`;
       }
+    }
+
+    // The entry's text was handed to the model, so "I don't have access to
+    // your journal" in its reply is false: drop it (and show the entry itself
+    // if that was all it said).
+    if (journalReadIntent && /stored text is below/.test(journalReadDirective)) {
+      const cleaned = dropFalseJournalRefusal(textReply);
+      textReply = cleaned
+        ?? (await answerJournalRead(storage, { kind: "show", day: journalReadIntent.day }, aiUserTimezone()).catch(() => null))
+        ?? textReply;
     }
 
     // CHART SAFETY NET: If the user explicitly asked for a chart/visualization but the AI
