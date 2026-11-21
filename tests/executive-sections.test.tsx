@@ -200,6 +200,37 @@ describe("ExecutiveBriefing", () => {
     expect(tasks).toContain("Overdue");
   });
 
+  // 2026-11-21 (owner): "make everything smaller so it fits … a more
+  // truncated view so I can see everything at a glance". A card lists its
+  // first rows and says how many it is holding back; the rest is one tap away.
+  it("at a glance: a long task list shows three rows and a link to the rest", async () => {
+    stubRoutes({
+      "/api/tasks": ["One", "Two", "Three", "Four", "Five"].map((n, i) => (
+        { id: `t-${i}`, title: `Task ${n}`, status: "todo", tags: [] })),
+    });
+    await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+    const card = screen.getByTestId("exec-card-tasks");
+    await waitFor(() => expect(card.textContent).toContain("Task One"));
+    expect(card.querySelectorAll("[data-testid^='exec-task-complete-']")).toHaveLength(3);
+    // The count above the list is still the whole list, not the three shown.
+    expect(card.textContent).toContain("5Remaining");
+    const more = screen.getByTestId("exec-tasks-more");
+    expect(more.textContent).toContain("2 more tasks");
+    fireEvent.click(more);
+    await screen.findByTestId("popup-tasks");
+  });
+
+  it("at a glance: Recent Activity is a card of the grid, and the page menu sits in the top bar", async () => {
+    const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
+    wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={{}} enhanced={enhancedWith()}
+      overviewEnd={<button data-testid="page-menu">menu</button>} />);
+    const activity = await screen.findByTestId("exec-card-activity");
+    expect(activity.parentElement!.className).toContain("exec-grid");
+    expect(screen.getByTestId("exec-card-attention").parentElement).toBe(activity.parentElement);
+    // Beside the overview cells, in the same bar — not a row of its own.
+    expect(screen.getByTestId("exec-overview").parentElement!.contains(screen.getByTestId("page-menu"))).toBe(true);
+  });
+
   it("never names an event that already happened today as Next Important", async () => {
     const inDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA"); };
     stubRoutes({

@@ -30,8 +30,12 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { scopeLabel, setFilterEveryone } from "@/lib/profileFilter";
 
 export function EmptyState({
-  icon, label, hint, ctaLabel, onCta, tone = "neutral", accent, className = "", testId, scope = "none",
+  icon, label, hint, ctaLabel, onCta, tone = "neutral", accent, className = "", testId, scope = "none", compact = false,
 }: {
+  /** One or two short lines, no medallion — for a card that has to stay
+   *  small (the Executive tab's at-a-glance grid). The scope notice and its
+   *  "Show everyone" are kept (Rule 4), just worded shorter. */
+  compact?: boolean;
   icon?: LucideIcon;
   /** State the outcome, not the absence. "You're clear for 14 days". */
   label: string;
@@ -51,6 +55,35 @@ export function EmptyState({
 }) {
   const active = useProfileScope();
   const scoped = scope === "global" && active.isFiltered;
+  if (compact) {
+    const Icon = icon ?? Inbox;
+    return (
+      <div
+        className={cn("flex flex-col items-center justify-center text-center gap-0.5 py-1 px-1", className)}
+        role="status"
+        data-testid={testId ?? "empty-state"}
+      >
+        <p className="text-[12px] font-medium text-foreground/80 leading-snug" data-testid="empty-state-title">
+          <Icon className="inline h-3.5 w-3.5 mr-1.5 -mt-0.5" style={{ color: `hsl(${accent ?? tonePalette(tone)})` }} aria-hidden="true" />
+          {label}
+        </p>
+        {scoped && (
+          <p className="text-[11px] text-muted-foreground leading-snug" data-testid="empty-state-scope">
+            Filtered to <span className="font-medium text-foreground">{scopeLabel(active.selectedNames, active.mode, active.selectedIds.length)}</span>
+            {" "}— others are hidden, not deleted.{" "}
+            <button
+              type="button"
+              onClick={() => setFilterEveryone()}
+              className="font-medium text-primary hover:underline"
+              data-testid="empty-state-scope-clear"
+            >
+              Show everyone
+            </button>
+          </p>
+        )}
+      </div>
+    );
+  }
   return (
     <div
       className={cn("flex flex-col items-center justify-center text-center gap-2.5 py-8 px-4", className)}

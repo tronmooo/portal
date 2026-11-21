@@ -969,13 +969,23 @@ button, a, [role="button"], .card-lift {
    viewport, so the page looks frozen almost everywhere you point.
 
    The cards do not need it anyway: every list inside them is already capped
-   (slice(0, 4-6) plus a "View all (N)" expander), so a card grows only when
+   (the first 2-4 rows plus a "View all (N)" expander), so a card grows only when
    the user asks it to. Content bounding belongs in those expanders, not in a
    scroll region that competes with the page. */
-@media (min-width: 768px) {
-  /* Odd card count → the last one takes the full width instead of leaving a
-     blank cell beside it. */
+/* The last card takes whatever is left of its row instead of leaving a blank
+   cell beside it — at every column count the grid uses (2 from 768px, 3 from
+   1280px, 4 from 1800px; ExecutiveBriefing.tsx). */
+@media (min-width: 768px) and (max-width: 1279.98px) {
   .exec-grid > *:last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
+@media (min-width: 1280px) and (max-width: 1799.98px) {
+  .exec-grid > *:last-child:nth-child(3n + 1) { grid-column: 1 / -1; }
+  .exec-grid > *:last-child:nth-child(3n + 2) { grid-column: span 2; }
+}
+@media (min-width: 1800px) {
+  .exec-grid > *:last-child:nth-child(4n + 1) { grid-column: 1 / -1; }
+  .exec-grid > *:last-child:nth-child(4n + 2) { grid-column: span 3; }
+  .exec-grid > *:last-child:nth-child(4n + 3) { grid-column: span 2; }
 }
 
 /* Large icon medallion — the coloured circle behind a section's icon. */
