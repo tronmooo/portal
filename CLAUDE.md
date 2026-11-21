@@ -454,7 +454,13 @@ reports stay on `/details`. Never put the Details panel back on a record page.
 field of its own: editing it moves the birth year (`birthdayForAge`,
 `client/src/lib/profile-fields.ts`) and removing it removes the birthday;
 Birthday has an X like every other field.
-*Guard:* `tests/info-tab-editable.dom.test.tsx`.
+Asset and liability profiles have the same Add field (`AddFieldPanel`,
+`client/src/components/AddFieldPanel.tsx`): on an asset what is added shows
+in the Overview, where every field can be changed or removed (two taps); on a
+liability the free-form fields are listed under it. Money, rate, date, switch
+and schedule fields are never listed there as text (L2/L3).
+*Guards:* `tests/info-tab-editable.dom.test.tsx`, `tests/add-field-panel.dom.test.tsx`,
+`tests/overview-render.dom.test.tsx`.
 
 ## Recurring occurrence rules (one date at a time; the series keeps its schedule)
 

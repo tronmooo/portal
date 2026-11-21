@@ -17,6 +17,7 @@ export default defineConfig({
       'tests/record-details-routes.test.ts',
       'tests/chat-record-details.test.ts',
       'tests/record-details-panel.dom.test.tsx',
+      'tests/add-field-panel.dom.test.tsx',
       'tests/chat-save-verify-confirm.test.ts',
       'tests/chat-unbacked-write-retry.test.ts',
       'tests/now-rank.test.ts',
