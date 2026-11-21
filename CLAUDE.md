@@ -456,6 +456,37 @@ field of its own: editing it moves the birth year (`birthdayForAge`,
 Birthday has an X like every other field.
 *Guard:* `tests/info-tab-editable.dom.test.tsx`.
 
+## Recurring occurrence rules (one date at a time; the series keeps its schedule)
+
+Owner request 2026-11-21 ("Mow the Lawn": skip December 15, January 15 stays).
+Read them before touching `CalendarItemDetail` / `detail/EditSeriesScreen`
+(`client/src/components/calendar/`), `shared/calendar-capabilities.ts`, the
+task recurrence engine (`shared/recurrence.ts`) or the occurrence routes.
+*Guards:* `tests/recurring-occurrence-actions.test.ts` (rule, adapters, real
+routes), `tests/calendar-detail-redesign.dom.test.tsx` (the screens).
+
+**O1. Skipping never deletes.** A skip is a mark on that one date (event:
+`rd:skip:`; task: `rskip:`); the series steps over it and every later date
+stays. Only "End series" / "Delete" (two taps, Rule 8) stop a series.
+**O2. A moved occurrence does not re-anchor the series.** A task moved for
+one date carries `rfrom:<scheduled date>`; the next occurrence steps from the
+SCHEDULED date (`scheduledDateOf`). Never move one occurrence by PATCHing a
+recurring task's `dueDate`.
+**O3. Occurrence state is written on the stored row** (Rule 6):
+`POST /api/tasks/:id/occurrence`, `POST /api/tasks/:id/schedule`,
+`POST /api/events/:id/occurrence`, `POST /api/events/:id/series-settings`.
+Never PATCH a rebuilt `tags` array from the client.
+**O4. An action that does not apply is not on the screen.** What one date
+offers is `occurrenceMenuFor` (a birthday: nothing; a task: only its open
+occurrence can be completed). Never render a disabled button whose reason is
+a tooltip. Each action says how far it reaches (`hint`).
+**O5. History is derived** (`shared/occurrence-history.ts`) from the marks
+and rows the series already has (Rule 5). No stored outcome table.
+**O6. Edit happens where the schedule lives** (`editsInPlace`): an event and
+a task are edited in the sheet; a bill, a profile's birthday and a document
+date open their source. The edit form has a Save button (owner's design); it
+writes nothing on open (Rule 3) and sends only what changed.
+
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
 

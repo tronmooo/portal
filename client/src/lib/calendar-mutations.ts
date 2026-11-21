@@ -102,6 +102,14 @@ export async function applyCalendarAction(input: ApplyActionInput): Promise<void
         await apiRequest("POST", `/api/obligation-occurrences/${id}:${date}/status`, {
           status: mode === "done" ? "done" : "skipped",
         });
+      } else if (system === "task") {
+        if (mode === "done") {
+          // Completing the open row is what spawns the next occurrence.
+          await apiRequest("PATCH", `/api/tasks/${id}`, { status: "done" });
+        } else {
+          // Recorded as skipped on the stored row; the series keeps its schedule.
+          await setTaskOccurrence(id, "skip", date);
+        }
       } else {
         throw new UnsupportedCalendarAction(action, series);
       }
@@ -139,6 +147,14 @@ export async function applyCalendarAction(input: ApplyActionInput): Promise<void
         await apiRequest("POST", `/api/obligation-occurrences/${id}:${date}/reschedule`, {
           newDueAt: newDate,
         });
+      } else if (system === "task") {
+        if (!series.recurrence || series.recurrence === "none") {
+          await apiRequest("PATCH", `/api/tasks/${id}`, { dueDate: newDate });
+        } else {
+          // Only this occurrence moves; the series still steps from its
+          // scheduled date (shared/recurrence `rfrom:`).
+          await setTaskOccurrence(id, "move", date, newDate);
+        }
       } else {
         throw new UnsupportedCalendarAction(action, series);
       }
@@ -158,7 +174,10 @@ export async function applyCalendarAction(input: ApplyActionInput): Promise<void
       } else if (system === "liability") {
         await apiRequest("PATCH", `/api/profiles/${id}`, { fields: { recurrenceEnd: end } });
       } else if (system === "task") {
-        await apiRequest("PATCH", `/api/tasks/${id}`, { tags: ["rpaused"] });
+        // Ends the series the day before, on the stored row. (This used to
+        // PATCH `tags: ["rpaused"]`, which replaced the task's whole tag list
+        // — the recurrence rule and the user's own tags went with it.)
+        await setTaskOccurrence(id, "endBefore", occurrence.date);
       } else {
         throw new UnsupportedCalendarAction(action, series);
       }
@@ -180,6 +199,30 @@ export async function applyCalendarAction(input: ApplyActionInput): Promise<void
       throw new UnsupportedCalendarAction(action, series);
   }
 
+  await refreshCalendarSurfaces();
+}
+
+/** Skip / move / restore ONE occurrence of a recurring task, applied server-side to the stored row. */
+export function setTaskOccurrence(
+  taskId: string,
+  action: "skip" | "unskip" | "move" | "unmove" | "endBefore",
+  date: string,
+  newDate?: string,
+): Promise<Response> {
+  return apiRequest("POST", `/api/tasks/${taskId}/occurrence`, {
+    action, date: String(date).slice(0, 10), ...(newDate ? { newDate: String(newDate).slice(0, 10) } : {}),
+  });
+}
+
+/**
+ * Take back a done / skipped mark on ONE occurrence. Offered only where
+ * `occurrenceMenuFor` says the system can do it.
+ */
+export async function restoreOccurrence(series: CalendarSeries, occurrence: CalendarOccurrence): Promise<void> {
+  const { system, id } = series.source;
+  if (system === "event") await setEventOccurrence(id, occurrence.date, "clear");
+  else if (system === "task") await setTaskOccurrence(id, "unskip", occurrence.date);
+  else throw new Error(`This ${series.kind} is restored on its own page.`);
   await refreshCalendarSurfaces();
 }
 

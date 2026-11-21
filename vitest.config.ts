@@ -11,6 +11,8 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
+      'tests/recurring-occurrence-actions.test.ts',
+      'tests/calendar-detail-redesign.dom.test.tsx',
       'tests/record-details.test.ts',
       'tests/record-details-routes.test.ts',
       'tests/chat-record-details.test.ts',
