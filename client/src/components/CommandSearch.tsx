@@ -37,6 +37,7 @@ import {
   Settings as SettingsIcon,
   Bell,
   Sparkles,
+  SlidersHorizontal,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { hashNavigate } from "@/lib/hashNavigate";
@@ -196,6 +197,7 @@ export const QUICK_ACTIONS = [
   { label: "Go to Bills",     icon: Bell,            path: "/bills", shortcut: "O" },
   { label: "Go to Settings",  icon: SettingsIcon,    path: "/settings", shortcut: "S" },
   { label: "Insights",        icon: Sparkles,        path: "/insights", shortcut: "I" },
+  { label: "Details & characteristics", icon: SlidersHorizontal, path: "/details", shortcut: "E" },
 ];
 
 // Actions that create a new artifact/entity. Shown as their own group above

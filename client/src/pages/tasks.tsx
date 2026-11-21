@@ -11,7 +11,6 @@ import { accentScope, accentTriple } from "@/components/tracker-detail/theme";
 // full list doesn't feel like leaving the app.
 const TASKS_ACCENT = "262 70% 62%";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday, addDays as tzAddDays, formatClockTime } from "@shared/timezone";
 import { taskSummaryTiles, openTaskBucket, countOpenDueWithin, type OpenTaskBucket } from "@shared/task-counts";
@@ -542,20 +541,20 @@ function TaskItem({
         className={`td-scope bubble-row relative ${task.status === "done" ? "opacity-60" : ""}`}
         style={accentScope(tone.hs, tone.hs2)}
       >
-        <div className="px-3 py-2.5 flex items-start gap-3">
+        <div className="px-3 py-2 flex items-center gap-2.5">
           <Checkbox
             checked={task.status === "done"}
             onCheckedChange={() => toggleMutation.mutate()}
             disabled={toggleMutation.isPending}
-            className={`mt-0.5 h-5 w-5 rounded-full border-2 border-[hsl(var(--td-hs)_var(--td-l))] data-[state=checked]:bg-[hsl(var(--td-hs)_var(--td-l))] data-[state=checked]:text-background [&_svg]:h-3.5 [&_svg]:w-3.5 ${toggleMutation.isPending ? "opacity-50 animate-pulse" : ""}`}
+            className={`h-5 w-5 rounded-full border-2 border-[hsl(var(--td-hs)_var(--td-l))] data-[state=checked]:bg-[hsl(var(--td-hs)_var(--td-l))] data-[state=checked]:text-background [&_svg]:h-3.5 [&_svg]:w-3.5 ${toggleMutation.isPending ? "opacity-50 animate-pulse" : ""}`}
             data-testid={`checkbox-task-${task.id}`}
           />
           <div
             className="flex-1 min-w-0 cursor-pointer"
             onClick={() => onEdit(task)}
             // a11y: keyboard-operable stand-in for a click target that wraps
-            // block content (can't be a <button> — it contains EditableTitle's
-            // own interactive controls, and nested buttons are invalid HTML).
+            // block content (can't be a <button> — it contains the row's own
+            // date control, and nested buttons are invalid HTML).
             role="button"
             tabIndex={0}
             aria-label={`Edit task: ${task.title}`}
@@ -567,31 +566,20 @@ function TaskItem({
             }}
             data-testid={`task-edit-trigger-${task.id}`}
           >
-            <div
-              className={`text-sm font-medium ${task.status === "done" ? "line-through text-muted-foreground" : ""}`}
+            {/* One line, cut with an ellipsis: a row is a line in a list, and
+                the whole title is one tap away in the editor (and in the
+                tooltip). Renaming is in the editor too. */}
+            <p
+              className={`text-sm font-medium leading-tight truncate ${task.status === "done" ? "line-through text-muted-foreground" : ""}`}
+              title={task.title}
               data-testid={`text-task-title-${task.id}`}
-              onClick={(e) => e.stopPropagation()}
             >
-              {/* A long title wraps to two lines inside its column; it used to
-                  run on one line straight under the delete button. */}
-              <EditableTitle
-                value={task.title}
-                className="flex max-w-full items-start [&>span:first-child]:whitespace-normal [&>span:first-child]:line-clamp-2 [&>span:first-child]:break-words"
-                onSave={async (newTitle) => {
-                  try {
-                    await apiRequest("PATCH", `/api/tasks/${task.id}`, { title: newTitle });
-                    invalidateTaskQueries();
-                    toast({ title: `Renamed to "${newTitle}"` });
-                  } catch (err: any) {
-                    toast({ title: "Failed to rename task", description: formatApiError(err), variant: "destructive" });
-                  }
-                }}
-              />
-            </div>
+              {task.title}
+            </p>
             {task.description && (
-              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{task.description}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{task.description}</p>
             )}
-            <div className="flex items-center gap-x-2 gap-y-1 mt-1 flex-wrap min-w-0">
+            <div className="flex items-center gap-2 mt-1 flex-nowrap overflow-hidden min-w-0 [&>*]:shrink-0">
               {/* Inline edits on the row itself (QA 2026-09-18 F-30): the
                   title already edits in place; priority cycles on a tap and
                   the date opens a picker. Both go through the same PATCH the
@@ -644,14 +632,14 @@ function TaskItem({
                   {humanSummary(parseRecurrence(task.tags || []), task.dueDate || undefined)}
                 </Badge>
               )}
-              {/* BUG-TSK-002: tags must wrap and never truncate. A migration's
-                  bookkeeping tag (migrated:reminder) is not a label (F-29). */}
+              {/* The meta line is one line; tags past its end are clipped here
+                  and listed in full in the editor. A migration's bookkeeping
+                  tag (migrated:reminder) is not a label (F-29). */}
               {userTags(task.tags).filter(tag => !isMigrationTag(tag)).map(tag => (
                 <Badge
                   key={tag}
                   variant="outline"
-                  className="text-xs max-w-full whitespace-normal break-words leading-tight py-0.5"
-                  style={{ height: "auto" }}
+                  className="text-xs whitespace-nowrap leading-tight py-0.5"
                   data-testid={`badge-task-tag-${task.id}-${tag}`}
                 >
                   {tag}
@@ -1110,7 +1098,7 @@ export default function TasksPage() {
                 <div className="relative z-[1]">
                   <button
                     type="button"
-                    className="w-full flex items-center gap-3 px-3.5 py-3 text-left"
+                    className="w-full flex items-center gap-3 px-3 py-2.5 text-left"
                     onClick={() => setCollapsed(c => ({ ...c, [def.kind]: !c[def.kind] }))}
                     aria-expanded={!isCollapsed}
                     data-testid={`tasks-group-toggle-${def.kind}`}
@@ -1131,7 +1119,7 @@ export default function TasksPage() {
                   </button>
 
                   {!isCollapsed && (
-                    <div className="px-2 pb-2 space-y-1.5" data-testid={`tasks-group-rows-${def.kind}`}>
+                    <div className="px-1.5 pb-1.5 space-y-1" data-testid={`tasks-group-rows-${def.kind}`}>
                       {sec.openTotal === 0 && (
                         <p className="px-2 py-1 text-xs text-muted-foreground">Nothing open here.</p>
                       )}
@@ -1143,7 +1131,7 @@ export default function TasksPage() {
                           return (
                             // One asset or liability and the tasks tied to it.
                             // The header opens that item's own page.
-                            <div key={profile.id} className="rounded-[1.15rem] p-1.5 space-y-1.5" style={{ boxShadow: `inset 0 0 0 1px hsl(var(--td-hs) var(--td-l) / 0.18)`, background: `hsl(var(--td-hs) var(--td-l) / 0.05)` }} data-testid={`tasks-item-${profile.id}`}>
+                            <div key={profile.id} className="rounded-[1.15rem] p-1 space-y-1" style={{ boxShadow: `inset 0 0 0 1px hsl(var(--td-hs) var(--td-l) / 0.18)`, background: `hsl(var(--td-hs) var(--td-l) / 0.05)` }} data-testid={`tasks-item-${profile.id}`}>
                               <button
                                 type="button"
                                 className="w-full flex items-center gap-2.5 px-1.5 py-1 text-left rounded-xl pressable"
