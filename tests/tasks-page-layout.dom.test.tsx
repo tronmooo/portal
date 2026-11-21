@@ -108,6 +108,22 @@ describe("Tasks page layout", () => {
     expect(flag("done")).toBeNull();
   });
 
+  // 2026-11-21 follow-up: the cards were all the same neutral grey. Each one
+  // now carries its bucket's colour the way a tracker card carries its kind's
+  // (accentScope → --accent-hsl / --td-hs on a .td-scope bubble).
+  it("a card is tinted with its bucket's colour, like a tracker card", async () => {
+    const page = await renderTasks();
+    const card = (id: string) => within(page).getByTestId(`card-task-${id}`);
+    const tones = ["late1", "today", "soon", "undated", "done"].map(id => card(id).getAttribute("data-tone"));
+    expect(tones).toEqual(["overdue", "dueToday", "upcoming", "undated", "done"]);
+    const accents = ["late1", "today", "soon", "undated", "done"].map(id => card(id).style.getPropertyValue("--accent-hsl"));
+    expect(accents.every(a => /^\d+ \d+% \d+%$/.test(a))).toBe(true);
+    expect(new Set(accents).size).toBe(5);
+    expect(card("late1").style.getPropertyValue("--accent-hsl")).toBe(card("late2").style.getPropertyValue("--accent-hsl"));
+    expect(card("late1").className).toContain("td-scope");
+    expect(card("late1").className).toContain("bubble");
+  });
+
   it("a tile brings its rows back when the tab was hiding them", async () => {
     const page = await renderTasks();
     fireEvent.click(within(page).getByTestId("tab-completed"));

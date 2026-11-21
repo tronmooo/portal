@@ -5,6 +5,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page-shell";
 import { MetricCard } from "@/components/ui/metric-card";
+import { accentScope, accentTriple } from "@/components/tracker-detail/theme";
 
 // Tasks live on the Executive tab; the page takes its accent so opening the
 // full list doesn't feel like leaving the app.
@@ -77,13 +78,24 @@ const TASK_NOUN = { one: "task", many: "tasks" };
 // The open list is grouped by when a task is due, in the order it needs
 // attention. The same four buckets (shared/task-counts) cut the summary tiles,
 // so the number on a tile is the number of rows under the heading it opens.
-const OPEN_SECTIONS: { bucket: OpenTaskBucket; label: string; accent: string | null; icon: LucideIcon }[] = [
-  { bucket: "overdue", label: "Overdue", accent: "0 72% 55%", icon: AlertTriangle },
-  { bucket: "dueToday", label: "Today", accent: "43 85% 52%", icon: Flame },
-  { bucket: "upcoming", label: "Upcoming", accent: "200 80% 55%", icon: CalendarDays },
-  { bucket: "undated", label: "No date", accent: null, icon: Inbox },
+// Each bucket has the two-stop colour identity a tracker card has ("H S%"
+// pairs, components/tracker-detail/theme): the section heading, its summary
+// tile and every card under it share it, so a late task is red the way a
+// Nutrition tracker is orange.
+type TaskTone = { hs: string; hs2: string; icon: LucideIcon };
+const TASK_TONES: Record<OpenTaskBucket | "done", TaskTone> = {
+  overdue:  { hs: "0 72%",   hs2: "24 88%",  icon: AlertTriangle },
+  dueToday: { hs: "43 85%",  hs2: "24 90%",  icon: Flame },
+  upcoming: { hs: "200 80%", hs2: "228 78%", icon: CalendarDays },
+  undated:  { hs: "262 70%", hs2: "292 65%", icon: Inbox },
+  done:     { hs: "155 60%", hs2: "178 62%", icon: CheckCircle2 },
+};
+const OPEN_SECTIONS: { bucket: OpenTaskBucket; label: string }[] = [
+  { bucket: "overdue", label: "Overdue" },
+  { bucket: "dueToday", label: "Today" },
+  { bucket: "upcoming", label: "Upcoming" },
+  { bucket: "undated", label: "No date" },
 ];
-const DONE_ACCENT = "155 60% 48%";
 const BUCKET_ORDER: Record<OpenTaskBucket, number> = { overdue: 0, dueToday: 1, upcoming: 2, undated: 3 };
 const PRIORITY_CYCLE = ["low", "medium", "high"];
 /** The priority a tap on the row's badge moves to: low → medium → high → low. */
@@ -345,7 +357,10 @@ function TaskItem({
   /** The user's calendar day: an open task due before it shows its date in red. */
   today: string;
 }) {
-  const isOverdue = task.status !== "done" && openTaskBucket(task, today) === "overdue";
+  const bucket = task.status === "done" ? "done" : openTaskBucket(task, today);
+  const isOverdue = bucket === "overdue";
+  const tone = TASK_TONES[bucket];
+  const ToneIcon = tone.icon;
   const { toast } = useToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [dateEditing, setDateEditing] = useState(false);
@@ -470,14 +485,21 @@ function TaskItem({
       <Card
         data-testid={`card-task-${task.id}`}
         data-record-id={task.id}
-        className={`transition-colors ${task.status === "done" ? "opacity-60" : ""}`}
+        // The tracker card's surface: the bubble tinted by --accent-hsl, a
+        // soft glow in one corner and the kind's icon, oversized and faint,
+        // in the other.
+        className={`td-scope relative overflow-hidden transition-colors ${task.status === "done" ? "opacity-60" : ""}`}
+        style={accentScope(tone.hs, tone.hs2)}
+        data-tone={bucket}
       >
-        <CardContent className="px-4 py-3 flex items-start gap-3">
+        <ToneIcon aria-hidden className="pointer-events-none absolute -bottom-3 right-8 h-20 w-20 select-none" style={{ color: `hsl(var(--td-hs) var(--td-l))`, opacity: 0.07 }} strokeWidth={1.6} />
+        <span aria-hidden className="pointer-events-none absolute -top-12 -left-12 h-32 w-32 rounded-full" style={{ background: `radial-gradient(circle, hsl(var(--td-hs2) 55% / 0.18), transparent 70%)` }} />
+        <CardContent className="relative px-4 py-3 flex items-start gap-3">
           <Checkbox
             checked={task.status === "done"}
             onCheckedChange={() => toggleMutation.mutate()}
             disabled={toggleMutation.isPending}
-            className={`mt-0.5 ${toggleMutation.isPending ? "opacity-50 animate-pulse" : ""}`}
+            className={`mt-0.5 h-5 w-5 rounded-full border-2 border-[hsl(var(--td-hs)_var(--td-l))] data-[state=checked]:bg-[hsl(var(--td-hs)_var(--td-l))] data-[state=checked]:text-background [&_svg]:h-3.5 [&_svg]:w-3.5 ${toggleMutation.isPending ? "opacity-50 animate-pulse" : ""}`}
             data-testid={`checkbox-task-${task.id}`}
           />
           <div
@@ -561,7 +583,8 @@ function TaskItem({
               ) : (task.dueDate || task.status !== "done") && (
                 <button
                   type="button"
-                  className={`text-xs flex items-center gap-1 ${isOverdue ? "text-red-600 dark:text-red-400 font-medium" : "text-muted-foreground hover:text-foreground"}`}
+                  className={`text-xs flex items-center gap-1 ${task.dueDate && task.status !== "done" ? "font-medium" : "text-muted-foreground hover:text-foreground"}`}
+                  style={task.dueDate && task.status !== "done" ? { color: `hsl(var(--td-hs) var(--td-l))` } : undefined}
                   onClick={stopProp(() => setDateEditing(true))}
                   data-overdue={isOverdue ? "true" : undefined}
                   aria-label={task.dueDate ? "Change due date" : "Add due date"}
@@ -851,10 +874,10 @@ export default function TasksPage() {
           it jumps to the rows it counts. */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="tasks-summary">
         {[
-          { key: "overdue", label: "Overdue", value: taskSummary.overdue, accent: "0 72% 55%", icon: AlertTriangle },
-          { key: "dueToday", label: "Today", value: taskSummary.dueToday, accent: "43 85% 52%", icon: Flame },
-          { key: "upcoming", label: "Upcoming", value: taskSummary.upcoming, accent: "200 80% 55%", icon: CalendarDays },
-          { key: "done", label: "Done today", value: taskSummary.doneToday, accent: DONE_ACCENT, icon: CheckCircle2 },
+          { key: "overdue", label: "Overdue", value: taskSummary.overdue, accent: accentTriple(TASK_TONES.overdue.hs), icon: AlertTriangle },
+          { key: "dueToday", label: "Today", value: taskSummary.dueToday, accent: accentTriple(TASK_TONES.dueToday.hs), icon: Flame },
+          { key: "upcoming", label: "Upcoming", value: taskSummary.upcoming, accent: accentTriple(TASK_TONES.upcoming.hs), icon: CalendarDays },
+          { key: "done", label: "Done today", value: taskSummary.doneToday, accent: accentTriple(TASK_TONES.done.hs), icon: CheckCircle2 },
         ].map((s, i) => (
           // Rendered as a plain value, not a count-up: the animation started
           // every tile at "0" and sat there for seconds while the long list
@@ -868,17 +891,13 @@ export default function TasksPage() {
 
       {/* Tab filters, with the profile filter beside them */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
-        <div className="flex items-center gap-1" data-testid="task-tab-filters">
+        <div className="td-scope td-seg" style={accentScope("262 70%", "292 65%")} data-testid="task-tab-filters">
           {(["all", "open", "completed"] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setTabFilter(tab)}
               aria-pressed={tabFilter === tab}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                tabFilter === tab
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted"
-              }`}
+              className="td-seg-item"
               data-testid={`tab-${tab}`}
             >
               {tab === "all" ? `All (${visibleTasks.length})`
@@ -932,12 +951,13 @@ export default function TasksPage() {
                   // heading is the whole bucket.
                   const rows = shownActive.filter(t => openTaskBucket(t, todayStr) === section.bucket);
                   if (rows.length === 0) return null;
+                  const SectionIcon = TASK_TONES[section.bucket].icon;
                   const total = sortedActive.filter(t => openTaskBucket(t, todayStr) === section.bucket).length;
                   return (
-                    <section key={section.bucket} id={`tasks-section-${section.bucket}`} className="space-y-2 scroll-mt-4" data-testid={`tasks-section-${section.bucket}`}>
+                    <section key={section.bucket} id={`tasks-section-${section.bucket}`} className="td-scope space-y-2 scroll-mt-4" style={accentScope(TASK_TONES[section.bucket].hs, TASK_TONES[section.bucket].hs2)} data-testid={`tasks-section-${section.bucket}`}>
                       <h2 className="micro-label flex items-center gap-1.5 px-1 text-muted-foreground">
-                        <section.icon className="h-3.5 w-3.5" style={section.accent ? { color: `hsl(${section.accent})` } : undefined} />
-                        <span style={section.accent ? { color: `hsl(${section.accent})` } : undefined}>{section.label}</span>
+                        <SectionIcon className="h-3.5 w-3.5" style={{ color: `hsl(var(--td-hs) var(--td-l))` }} />
+                        <span className="td-gradient-text">{section.label}</span>
                         <span>· {total}</span>
                       </h2>
                       {rows.map(task => (
@@ -998,10 +1018,10 @@ export default function TasksPage() {
             </div>
           )}
           {(tabFilter === "all" || tabFilter === "completed") && (
-            <div id="tasks-section-done" className="space-y-2 scroll-mt-4" data-testid="tasks-section-done">
+            <div id="tasks-section-done" className="td-scope space-y-2 scroll-mt-4" style={accentScope(TASK_TONES.done.hs, TASK_TONES.done.hs2)} data-testid="tasks-section-done">
               <h2 className="micro-label flex items-center gap-1.5 px-1 text-muted-foreground">
-                <CheckCircle2 className="h-3.5 w-3.5" style={{ color: `hsl(${DONE_ACCENT})` }} />
-                <span>Completed</span>
+                <CheckCircle2 className="h-3.5 w-3.5" style={{ color: `hsl(var(--td-hs) var(--td-l))` }} />
+                <span className="td-gradient-text">Completed</span>
                 <span>· {completedTasks.length}</span>
               </h2>
               {completedTasks.length === 0 ? (
