@@ -61,6 +61,7 @@ export default defineConfig({
       'tests/profile-loan-sync.test.ts',
       'tests/habits-visuals.dom.test.tsx',
       'tests/dialog-touch-scroll.dom.test.tsx',
+      'tests/pull-to-refresh-scroll.dom.test.tsx',
       'tests/clipboard-copy.dom.test.tsx',
       'tests/tracker-hero-countup.dom.test.tsx',
       'tests/liability-calc.test.ts',
