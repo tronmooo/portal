@@ -91,8 +91,10 @@ export function PullToRefresh() {
   locationRef.current = location;
 
   useEffect(() => {
-    const main = document.getElementById("main-content");
-    if (!main) return;
+    // Listen on the document and look <main> up per gesture: this component
+    // mounts before the auth gate renders #main-content, so binding to the
+    // element at mount found nothing after a sign-in and the pull never armed.
+    let main: HTMLElement | null = null;
 
     const reset = () => {
       startY.current = null;
@@ -105,6 +107,11 @@ export function PullToRefresh() {
     };
 
     const onTouchStart = (e: TouchEvent) => {
+      main = document.getElementById("main-content");
+      if (!main || !(e.target instanceof Node) || !main.contains(e.target)) {
+        startY.current = null;
+        return;
+      }
       // A gesture inside a dialog/sheet scrolls that, never the page.
       const t = e.target as Element | null;
       if (t instanceof Element && t.closest('[role="dialog"], [data-radix-dialog-content]')) {
@@ -120,7 +127,7 @@ export function PullToRefresh() {
     };
 
     const onTouchMove = (e: TouchEvent) => {
-      if (startY.current === null) return;
+      if (startY.current === null || !main) return;
       // The finger went up (content scrolls down) or the scroller moved off
       // its top: this is a scroll, not a pull.
       const dy = e.touches[0].clientY - startY.current;
@@ -138,7 +145,7 @@ export function PullToRefresh() {
     };
 
     const onTouchEnd = async (e: TouchEvent) => {
-      if (startY.current === null) return;
+      if (startY.current === null || !main) return;
       const dy = e.changedTouches[0].clientY - startY.current;
       const stillAtTop = isScrolledToTop(startTarget.current, main);
       reset();
@@ -159,15 +166,15 @@ export function PullToRefresh() {
       }
     };
 
-    main.addEventListener("touchstart", onTouchStart, { passive: true });
-    main.addEventListener("touchmove", onTouchMove, { passive: true });
-    main.addEventListener("touchend", onTouchEnd, { passive: true });
-    main.addEventListener("touchcancel", reset, { passive: true });
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("touchmove", onTouchMove, { passive: true });
+    document.addEventListener("touchend", onTouchEnd, { passive: true });
+    document.addEventListener("touchcancel", reset, { passive: true });
     return () => {
-      main.removeEventListener("touchstart", onTouchStart);
-      main.removeEventListener("touchmove", onTouchMove);
-      main.removeEventListener("touchend", onTouchEnd);
-      main.removeEventListener("touchcancel", reset);
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("touchmove", onTouchMove);
+      document.removeEventListener("touchend", onTouchEnd);
+      document.removeEventListener("touchcancel", reset);
     };
   }, []);
 

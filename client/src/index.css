@@ -211,6 +211,32 @@ html, body, #root {
      the keyboard nudges the visual viewport. */
   overscroll-behavior-x: none;
 }
+/* iPhone (2026-11-21): "scroll all the way down and it won't scroll back up",
+   on every page. `overflow-x: hidden` forces `overflow-y` to compute to
+   `auto`, so body and #root were each a scroll container wrapped around the
+   page's own scroller (#main-content > * > .overflow-y-auto). On iOS, a swipe
+   that ran the page scroller into its bottom chained on to those outer
+   containers and rubber-banded the root, and the next swipe up went to the
+   bouncing root instead of the page. Three rules stop that:
+     1. body/#root clip sideways overflow WITHOUT becoming scroll containers
+        (`clip`, where supported; the `hidden` above stays as the fallback);
+     2. the root never rubber-bands vertically;
+     3. each page's outermost scroller keeps its own swipes. Only that one:
+        `contain` on nested card scrollers made the Executive tab feel frozen
+        (see the note above .exec-grid below), and nothing here touches them.
+   Guard: tests/ios-scroll-chain.test.ts. */
+@supports (overflow-x: clip) {
+  body, #root {
+    overflow-x: clip;
+  }
+}
+html, body {
+  overscroll-behavior-y: none;
+}
+#main-content > .overflow-y-auto,
+#main-content > * > .overflow-y-auto {
+  overscroll-behavior-y: contain;
+}
 /* Neutralise Radix's body-scroll-lock padding compensation. With h-dvh +
    scrollbar-gutter above, the body never actually scrolls and never needs
    compensation — forcing 0 keeps the centered shell from jumping right
