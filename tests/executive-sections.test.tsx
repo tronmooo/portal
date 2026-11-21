@@ -143,7 +143,7 @@ describe("ExecutiveBriefing", () => {
   it("keeps bills out of Needs Attention: an overdue bill leads the Money card instead", async () => {
     await mount(enhancedWith());
     const attn = screen.getByTestId("exec-card-attention");
-    expect(attn.textContent).toContain("Documents, renewals & deadlines");
+    expect(attn.textContent).toContain("Expirations & renewals");
     expect(attn.textContent).not.toContain("Phone");
     expect(screen.queryByTestId("exec-item-bill:b1")).toBeNull();
     const money = screen.getByTestId("exec-card-money");
@@ -158,8 +158,12 @@ describe("ExecutiveBriefing", () => {
     await mount(enhancedWith());
     const attn = screen.getByTestId("exec-card-attention");
     expect(attn.textContent).toContain("Passport");
-    // Grouped by urgency: 12 days out is "This month".
-    expect(screen.getByTestId("exec-attention-band-month")).toBeTruthy();
+    // Its date sits in a pill beside it (the reference screenshot's "Dec 28"),
+    // and the card's badge counts it.
+    const pill = screen.getAllByTestId(/^exec-item-pill-/);
+    expect(pill).toHaveLength(1);
+    expect(pill[0].textContent).toMatch(/^[A-Z][a-z]{2} \d{1,2}$/);
+    expect(screen.getByTestId("exec-card-count-attention").textContent).toBe("1");
     // The Documents card is the library now: counts, not a second list.
     const docs = screen.getByTestId("exec-card-documents");
     expect(docs.textContent).not.toContain("Passport");
@@ -192,8 +196,10 @@ describe("ExecutiveBriefing", () => {
     const attn = screen.getByTestId("exec-card-attention").textContent || "";
     expect(attn).not.toContain("Renew gym badge");
     expect(attn).not.toContain("Water bill overdue");
-    // A real alert that isn't about a bill or task still belongs here.
-    await waitFor(() => expect(screen.getByTestId("exec-card-attention").textContent).toContain("Call the insurer"));
+    // 2026-11-21 (owner): Needs Attention is expirations only — a free-form
+    // alert lives in the bell, not here.
+    await waitFor(() => expect(fetchStub.mock.calls.some((c: any[]) => String(c[0]).includes("/api/notifications"))).toBe(true));
+    expect(screen.getByTestId("exec-card-attention").textContent).not.toContain("Call the insurer");
     // The Tasks card lists the overdue task first, marked overdue.
     const tasks = screen.getByTestId("exec-card-tasks").textContent || "";
     expect(tasks.indexOf("Renew gym badge")).toBeLessThan(tasks.indexOf("Someday thing"));
@@ -396,7 +402,9 @@ describe("ExecutiveBriefing", () => {
   }
   const today = () => new Date().toLocaleDateString("en-CA");
 
-  it("renders a due medication under Needs Attention, with Taken rather than Pay", async () => {
+  // 2026-11-21 (owner): "I want the needs attention not to include tasks or
+  // stuff like that" — a dose due now moved to the Wellness card, Taken intact.
+  it("renders a due medication under Wellness (not Needs Attention), with Taken rather than Pay", async () => {
     stubRoutes({
       "/api/obligations": [{
         id: "o1", name: "Lisinopril 10mg", kind: "medication",
@@ -405,8 +413,9 @@ describe("ExecutiveBriefing", () => {
     });
     await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
     await waitFor(() => {
-      expect(screen.getByTestId("exec-card-attention").textContent).toContain("Lisinopril 10mg");
+      expect(screen.getByTestId("exec-card-wellness").textContent).toContain("Lisinopril 10mg");
     });
+    expect(screen.getByTestId("exec-card-attention").textContent).not.toContain("Lisinopril 10mg");
     expect(screen.getByTestId("exec-action-med:o1").textContent).toContain("Taken");
   });
 

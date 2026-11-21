@@ -6,8 +6,11 @@ const item = (o: Partial<AttentionItem> & Pick<AttentionItem, "key" | "kind">): 
   sourceKey: o.key, title: o.key, reason: "", tier: "upcoming", daysUntil: 5, score: 0, href: "/", ...o,
 });
 
-describe("Needs Attention: documents, renewals and deadlines — not bills or tasks", () => {
-  it("drops bills, tasks and alerts derived from them; keeps documents, goals, health and other alerts", () => {
+describe("Needs Attention: expirations and renewals only", () => {
+  // 2026-11-21 (owner): "I want the needs attention not to include tasks or
+  // stuff like that … more on the expiration dates and things that are
+  // important." Doses, goals and free-form alerts left with bills and tasks.
+  it("keeps documents and renewal alerts; drops bills, tasks, doses, goals and other alerts", () => {
     const rows = selectAttentionRows({
       immediate: [
         item({ key: "bill:b1", kind: "bill", sourceKey: "obligation:b1", daysUntil: -2, tier: "immediate" }),
@@ -19,25 +22,28 @@ describe("Needs Attention: documents, renewals and deadlines — not bills or ta
         item({ key: "doc:r0", kind: "document", daysUntil: -10, tier: "immediate" }),
       ],
       health: [
-        // A dose is an obligation row too — and it belongs here.
+        // A dose or an appointment is not an expiration.
         item({ key: "med:o1", kind: "reminder", sourceKey: "obligation:o1", daysUntil: 0, tier: "immediate" }),
         item({ key: "appt:o2", kind: "event", sourceKey: "obligation:o2", daysUntil: 6, tier: "soon" }),
       ],
       documents: [item({ key: "doc:r1", kind: "document", daysUntil: 12 })],
     });
-    // Expirations and renewals (documents, and the profile renewal alert)
-    // lead; then health and goals — each group soonest first.
-    expect(rows.map((r) => r.key)).toEqual(["doc:r0", "alert:n3", "doc:r1", "goal:g1", "med:o1"]);
+    // Expirations and renewals (documents, and the profile renewal alert),
+    // soonest first. Nothing else.
+    expect(rows.map((r) => r.key)).toEqual(["doc:r0", "alert:n3", "doc:r1"]);
   });
 
-  it("puts an expiration above a sooner non-expiry item (2026-10-21)", () => {
+  it("a late goal, a due dose or a plain alert never pushes an expiration off the card", () => {
     const rows = selectAttentionRows({
-      immediate: [item({ key: "goal:late", kind: "goal", daysUntil: -9, tier: "immediate" })],
+      immediate: [
+        item({ key: "goal:late", kind: "goal", daysUntil: -9, tier: "immediate" }),
+        item({ key: "alert:custom", kind: "alert", sourceKey: "notification:c", daysUntil: null, tier: "immediate" }),
+      ],
       health: [item({ key: "med:now", kind: "reminder", sourceKey: "obligation:m", daysUntil: 0, tier: "immediate" })],
       documents: [item({ key: "doc:passport", kind: "document", sourceKey: "rule:p", daysUntil: 40 })],
     });
-    expect(rows.map((r) => r.key)).toEqual(["doc:passport", "goal:late", "med:now"]);
-    expect(rows.map((r) => attentionHeading(r))).toEqual(["later", "other", "other"]);
+    expect(rows.map((r) => r.key)).toEqual(["doc:passport"]);
+    expect(rows.map((r) => attentionHeading(r))).toEqual(["later"]);
     expect(isExpiryItem(item({ key: "a", kind: "alert", sourceKey: "rule:x" }))).toBe(true);
     expect(isExpiryItem(item({ key: "a", kind: "alert", sourceKey: "notification:x" }))).toBe(false);
   });
