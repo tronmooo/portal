@@ -72,8 +72,8 @@ describe("Rule 4 guard: every scoped EmptyState declares its scope", () => {
 
   it("the Tasks page's own list empty states disclose the scope", () => {
     const src = fs.readFileSync(path.join(ROOT, "pages/tasks.tsx"), "utf8");
-    expect(src).toMatch(/<EmptyState scope="global"[\s\S]*?label="No active tasks"/);
-    expect(src).toMatch(/<EmptyState scope="global"[\s\S]*?label="No completed tasks"/);
+    // The per-tab empty state (Mine / Assets / Liabilities with nothing in it).
+    expect(src).toMatch(/<EmptyState key=\{def\.kind\} scope="global"[\s\S]*?"No personal tasks"/);
     // "Nothing on your list" is reached only when the scope hides nothing.
     expect(src).toMatch(/visibleTasks\.length === 0 && hiddenByScope > 0 \?[\s\S]*?<FilteredEmptyState/);
   });
