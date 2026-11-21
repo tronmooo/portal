@@ -132,11 +132,51 @@ describe("RecordDetailsPanel", () => {
     await waitFor(() => expect(screen.queryByTestId("record-detail-condition")).toBeNull());
   });
 
-  it("'Add detail' defines a new typed characteristic on the spot", async () => {
+  it("'Cracked screen' + Enter in the panel is the whole flow: a yes/no flag on the record", async () => {
+    renderPanel();
+    const input = await screen.findByTestId("record-details-quick-input");
+    fireEvent.change(input, { target: { value: "cracked screen" } });
+    fireEvent.submit(screen.getByTestId("record-details-quick-add"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0]).toMatchObject({
+      method: "POST",
+      url: "/api/details/profile/car",
+      body: { definition: { label: "Cracked screen", kind: "boolean", appliesTo: ["vehicle"] }, value: true },
+    });
+    await waitFor(() => expect(screen.getByTestId("record-detail-cracked-screen")).toBeTruthy());
+    expect(screen.queryByTestId("add-detail-dialog")).toBeNull();
+  });
+
+  it("the dialog's one box saves 'Color: Blue' without asking for a type", async () => {
+    renderPanel();
+    fireEvent.click(await screen.findByTestId("record-details-add"));
+    const dialog = await screen.findByTestId("add-detail-dialog");
+    fireEvent.change(within(dialog).getByTestId("add-detail-name"), { target: { value: "Color: Blue" } });
+    expect(within(dialog).queryByTestId("add-detail-kinds")).toBeNull();
+    expect(within(dialog).getByTestId("add-detail-preview").textContent).toMatch(/Color · Blue/);
+    fireEvent.click(within(dialog).getByTestId("add-detail-save"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0].body).toMatchObject({ definition: { label: "Color", kind: "text", appliesTo: ["vehicle"] }, value: "Blue" });
+  });
+
+  it("a bare existing name typed in the panel opens the dialog to pick its value", async () => {
+    server.details = emptyRecordDetails();
+    renderPanel();
+    fireEvent.change(await screen.findByTestId("record-details-quick-input"), { target: { value: "Condition" } });
+    fireEvent.submit(screen.getByTestId("record-details-quick-add"));
+    const dialog = await screen.findByTestId("add-detail-dialog");
+    expect(writes()).toHaveLength(0);
+    fireEvent.click(within(dialog).getByTestId("add-detail-value-Good"));
+    fireEvent.click(within(dialog).getByTestId("add-detail-save"));
+    await waitFor(() => expect(writes()[0]?.body).toEqual({ definition: { label: "Condition" }, value: "Good" }));
+  });
+
+  it("'Choose a type yourself' still defines a new typed characteristic on the spot", async () => {
     renderPanel();
     fireEvent.click(await screen.findByTestId("record-details-add"));
     const dialog = await screen.findByTestId("add-detail-dialog");
     fireEvent.change(within(dialog).getByTestId("add-detail-name"), { target: { value: "Tire tread" } });
+    fireEvent.click(within(dialog).getByTestId("add-detail-advanced"));
     fireEvent.click(within(dialog).getByTestId("add-detail-kind-condition"));
     // Default scope is the record's own kind.
     expect(within(dialog).getByTestId("add-detail-scope-vehicle").getAttribute("aria-checked")).toBe("true");
@@ -159,7 +199,6 @@ describe("RecordDetailsPanel", () => {
     fireEvent.click(await screen.findByTestId("record-details-add"));
     const dialog = await screen.findByTestId("add-detail-dialog");
     fireEvent.change(within(dialog).getByTestId("add-detail-name"), { target: { value: "condition" } });
-    expect(within(dialog).getByTestId("add-detail-existing").textContent).toMatch(/existing Condition/);
     expect(within(dialog).queryByTestId("add-detail-kinds")).toBeNull();
     fireEvent.click(within(dialog).getByTestId("add-detail-value-Excellent"));
     fireEvent.click(within(dialog).getByTestId("add-detail-save"));

@@ -14,18 +14,19 @@ import { Link } from "wouter";
 import { AlertTriangle, Info, Loader2, Plus, SlidersHorizontal, Sparkles, X, OctagonAlert } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { queryClient } from "@/lib/queryClient";
 import {
-  clearDetailValue, detailErrorMessage, detailsKey, setDetailValue, useDetailDefinitions, useRecordDetails,
+  clearDetailValue, defineAndSetDetail, detailErrorMessage, detailsKey, setDetailValue, useDetailDefinitions, useRecordDetails,
 } from "@/lib/record-details";
 import type { DetailRowShape, RecordDetailsPayloadShape } from "@/lib/record-details-types";
 import { DetailInput } from "./DetailInput";
 import { AddDetailDialog, type AddDetailPreset } from "./AddDetailDialog";
-import { formatDetailValue, type DetailEntityType, type DetailFlag, type DetailSeverity, type DetailValue } from "@shared/record-details";
+import { formatDetailValue, parseQuickDetail, type DetailDefinition, type DetailEntityType, type DetailFlag, type DetailSeverity, type DetailValue } from "@shared/record-details";
 
 const ACCENT = "262 70% 60%";
 
@@ -73,6 +74,8 @@ export function RecordDetailsPanel({
   const [preset, setPreset] = useState<AddDetailPreset>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const { confirm, isArmed } = useConfirmArm();
+  const [quickText, setQuickText] = useState("");
+  const [quickSaving, setQuickSaving] = useState(false);
 
   const openAdd = (p: AddDetailPreset) => { setPreset(p); setDialogOpen(true); };
 
@@ -90,6 +93,27 @@ export function RecordDetailsPanel({
       void queryClient.invalidateQueries({ queryKey: detailsKey(entityType, entityId) });
     } finally {
       setSaving(null);
+    }
+  };
+
+  // The one-line box: "Cracked screen" + Enter is the whole flow. A line that
+  // still needs a value ("Condition") opens the dialog with it filled in.
+  const quickAdd = async (allDefs: DetailDefinition[], payload: RecordDetailsPayloadShape) => {
+    const q = parseQuickDetail(quickText, allDefs, payload.scopeTokens);
+    if (!q) return;
+    if (q.status !== "ready") { openAdd({ text: quickText }); return; }
+    setQuickSaving(true);
+    try {
+      const definition = (q.existing
+        ? { label: q.existing.label }
+        : { ...q.input, label: q.label, appliesTo: [payload.defaultScope] }) as Partial<DetailDefinition> & { label: string };
+      const res = await defineAndSetDetail(entityType, entityId, definition, q.value);
+      setQuickText("");
+      toast({ title: res.createdDefinition ? `Added ${q.display}` : `Saved ${q.display}` });
+    } catch (err) {
+      toast({ title: `Couldn't save ${q.label}`, description: detailErrorMessage(err), variant: "destructive" });
+    } finally {
+      setQuickSaving(false);
     }
   };
 
@@ -206,9 +230,29 @@ export function RecordDetailsPanel({
         </div>
       ) : (
         <p className="text-xs text-muted-foreground mt-3" data-testid="record-details-empty">
-          No details on {data.name} yet. Add any characteristic — its condition, a rating, a choice from a list, a date — and it becomes searchable and reportable.
+          No details on {data.name} yet. Type what's true about it below — “Cracked screen”, “Color: Blue”, “Mileage 45000”.
         </p>
       )}
+
+      <form
+        className="flex items-center gap-1.5 mt-3"
+        onSubmit={(e) => { e.preventDefault(); void quickAdd(allDefs, data); }}
+        data-testid="record-details-quick-add"
+      >
+        <Input
+          value={quickText}
+          onChange={(e) => setQuickText(e.target.value)}
+          placeholder="Add a detail — e.g. Cracked screen"
+          aria-label={`Add a detail to ${data.name}`}
+          className="h-8 text-xs flex-1"
+          maxLength={200}
+          disabled={quickSaving}
+          data-testid="record-details-quick-input"
+        />
+        <Button type="submit" size="sm" className="h-8 text-xs" disabled={quickSaving || !quickText.trim()} data-testid="record-details-quick-save">
+          {quickSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Add"}
+        </Button>
+      </form>
 
       {(quickDefs.length > 0 || quickTemplates.length > 0) && (
         <div className="flex flex-wrap items-center gap-1 mt-3" data-testid="record-details-quick">

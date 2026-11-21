@@ -1149,3 +1149,141 @@ export function inferDetailDefinition(label: string, value: unknown, tokens: rea
 export function fieldKeyIdentity(key: string): string {
   return labelIdentity(String(key || "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " "));
 }
+
+// ── Quick add: one line of what the user typed → a typed detail ─────────────
+//
+// Owner request 2026-11-21: "I have a cracked screen on my iPhone. I type
+// 'Cracked screen' — that's it." One box, no characteristic/type/value form:
+//   "Cracked screen"          → Cracked screen = Yes   (a yes/no flag)
+//   "Color: Blue" / "Color = Blue"
+//                             → Color = Blue            (label : value)
+//   "Condition good"          → Condition = Good        (a known name + value)
+//   "Mileage 45000"           → Mileage = 45,000        (a trailing number)
+//   "Condition"               → asks for a value (an existing non-yes/no name)
+// The result is still a TYPED value (Rule D2): a flag is a yes/no, a value is
+// inferred by `inferDetailDefinition`, and an existing name keeps its type.
+
+export type QuickDetail =
+  | {
+      status: "ready";
+      label: string;
+      /** The existing characteristic this reuses, if any. */
+      existing: DetailDefinition | null;
+      /** The new characteristic to define (null when reusing). */
+      input: DefinitionInput | null;
+      kind: DetailKind;
+      value: DetailValue;
+      /** "Cracked screen · Yes" — what will be saved. */
+      display: string;
+    }
+  | {
+      status: "needs_value";
+      label: string;
+      existing: DetailDefinition | null;
+      input: DefinitionInput | null;
+      kind: DetailKind;
+    }
+  | { status: "invalid"; label: string; error: string };
+
+const TRAILING_PREPOSITION = /\b(in|on|at|since|from|for|of|by|to|with|about)$/i;
+
+function sentenceCase(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+function cleanQuickLabel(s: string): string {
+  return sentenceCase(String(s || "").trim().replace(/\s+/g, " ").replace(/[.!]+$/, "")).slice(0, MAX_LABEL_LENGTH);
+}
+
+function applicableTemplate(label: string, tokens: readonly string[]): DetailTemplate | undefined {
+  const id = labelIdentity(label);
+  return DETAIL_TEMPLATES
+    .filter((t) => labelIdentity(t.label) === id && (t.scope === "*" || tokens.includes(t.scope)))
+    .sort((a, b) => (a.scope === "*" ? 1 : 0) - (b.scope === "*" ? 1 : 0))[0];
+}
+
+function inputAsDefinition(input: DefinitionInput, label: string): Pick<DetailDefinition, "kind" | "options" | "min" | "max" | "scaleMax" | "label" | "unit"> {
+  return {
+    label,
+    kind: isDetailKind(input.kind) ? input.kind : "text",
+    options: Array.isArray(input.options) ? (input.options as string[]) : undefined,
+    unit: typeof input.unit === "string" ? input.unit : undefined,
+    scaleMax: typeof input.scaleMax === "number" ? input.scaleMax : undefined,
+  };
+}
+
+/** A label and a value the user typed → the characteristic it lands in. */
+function resolveQuickPair(labelRaw: string, valueRaw: string, defs: readonly DetailDefinition[], tokens: readonly string[]): QuickDetail {
+  const existing = findDefinitionByLabel(defs, labelRaw);
+  if (existing) {
+    const v = normalizeDetailValue(existing, valueRaw);
+    if (!v.ok) return { status: "invalid", label: existing.label, error: v.error };
+    return { status: "ready", label: existing.label, existing, input: null, kind: existing.kind, value: v.value, display: `${existing.label} · ${formatDetailValue(existing, v.value)}` };
+  }
+  const label = cleanQuickLabel(labelRaw);
+  const template = applicableTemplate(label, tokens);
+  const candidates: DefinitionInput[] = [];
+  if (template) candidates.push(templateToInput(template));
+  candidates.push(inferDetailDefinition(label, valueRaw, tokens));
+  for (const c of candidates) {
+    const input = { ...c, label: template && c.label === template.label ? template.label : label };
+    const def = inputAsDefinition(input, String(input.label));
+    const v = normalizeDetailValue(def, valueRaw);
+    if (v.ok) return { status: "ready", label: def.label, existing: null, input, kind: def.kind, value: v.value, display: `${def.label} · ${formatDetailValue(def, v.value)}` };
+  }
+  return { status: "invalid", label, error: `Couldn't read "${valueRaw}" as ${label}` };
+}
+
+export function parseQuickDetail(text: string, defs: readonly DetailDefinition[], tokens: readonly string[]): QuickDetail | null {
+  const t = String(text || "").trim().replace(/\s+/g, " ");
+  if (!t) return null;
+
+  // 1. "Label: value" / "Label = value".
+  const pair = /^([^:=]+?)\s*[:=]\s*(.+)$/.exec(t);
+  if (pair && pair[1].trim() && pair[2].trim()) return resolveQuickPair(pair[1], pair[2].trim(), defs, tokens);
+
+  // 2. The whole line names a characteristic already tracked (or a library one).
+  const existing = findDefinitionByLabel(defs, t);
+  if (existing) {
+    if (existing.kind === "boolean") {
+      return { status: "ready", label: existing.label, existing, input: null, kind: "boolean", value: true, display: `${existing.label} · Yes` };
+    }
+    return { status: "needs_value", label: existing.label, existing, input: null, kind: existing.kind };
+  }
+  const template = applicableTemplate(t, tokens);
+  if (template) {
+    const input = templateToInput(template);
+    if (template.kind === "boolean") {
+      return { status: "ready", label: template.label, existing: null, input, kind: "boolean", value: true, display: `${template.label} · Yes` };
+    }
+    return { status: "needs_value", label: template.label, existing: null, input, kind: template.kind };
+  }
+
+  // 3. A known name followed by its value: "Condition good", "Year built 1998".
+  const known = [
+    ...defs.map((d) => d.label),
+    ...DETAIL_TEMPLATES.filter((tp) => tp.scope === "*" || tokens.includes(tp.scope)).map((tp) => tp.label),
+  ].sort((a, b) => b.length - a.length);
+  const lower = labelIdentity(t);
+  for (const name of known) {
+    const id = labelIdentity(name);
+    if (lower.startsWith(`${id} `)) {
+      const rest = t.slice(id.length).trim();
+      const r = resolveQuickPair(name, rest, defs, tokens);
+      if (r.status === "ready") return r;
+    }
+  }
+
+  // 4. A trailing number, amount or percent: "Mileage 45000", "Battery health 87%".
+  const num = /^(.*[a-z].*?)\s+(\$?\s?-?[\d,]*\.?\d+\s?%?)$/i.exec(t);
+  if (num && !TRAILING_PREPOSITION.test(num[1].trim())) {
+    const r = resolveQuickPair(num[1], num[2], defs, tokens);
+    if (r.status === "ready" && r.kind !== "text") return r;
+  }
+
+  // 5. Anything else is a flag on the record: "Cracked screen" → Yes.
+  const label = cleanQuickLabel(t);
+  if (!label) return null;
+  const input: DefinitionInput = { label, kind: "boolean" };
+  return { status: "ready", label, existing: null, input, kind: "boolean", value: true, display: `${label} · Yes` };
+}

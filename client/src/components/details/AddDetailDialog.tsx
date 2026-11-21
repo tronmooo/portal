@@ -1,4 +1,9 @@
-// ── "Add detail" — name a characteristic, pick its type, give its value ─────
+// ── "Add detail" — type what's true about it, save ─────────────────────────
+// Owner request 2026-11-21: one line is enough. "Cracked screen" saves a
+// yes/no flag, "Color: Blue" a value, "Condition good" reuses Condition, a
+// bare existing name asks for its value (`parseQuickDetail`, shared). The full
+// type/options/scope form is still one tap away ("Choose a type yourself").
+//
 // Typing a name that already exists REUSES that characteristic (one
 // "Condition" across the car, the house and the guitar) — its type is fixed
 // and the dialog says so. A new name asks for a type; a dropdown or
@@ -15,13 +20,15 @@ import { DetailInput } from "./DetailInput";
 import { defineAndSetDetail, detailErrorMessage } from "@/lib/record-details";
 import type { RecordDetailsPayloadShape } from "@/lib/record-details-types";
 import {
-  DEFAULT_CONDITION_SCALE, DETAIL_KINDS, DETAIL_KIND_LABELS, findDefinitionByLabel, labelIdentity, scopeLabel,
+  DEFAULT_CONDITION_SCALE, DETAIL_KINDS, DETAIL_KIND_LABELS, findDefinitionByLabel, labelIdentity, parseQuickDetail, scopeLabel,
   type DetailDefinition, type DetailKind, type DetailTemplate, type DetailValue,
 } from "@shared/record-details";
 
 export type AddDetailPreset =
   | { definition: DetailDefinition }
   | { template: DetailTemplate }
+  /** What was typed in the panel's quick box, when it still needs a value. */
+  | { text: string }
   | null;
 
 const FAMILIES = ["asset", "liability", "person"];
@@ -59,6 +66,7 @@ export function AddDetailDialog({
   const [value, setValue] = useState<DetailValue | string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [advanced, setAdvanced] = useState(false);
 
   // Reset whenever the dialog opens, from the preset if there is one.
   useEffect(() => {
@@ -67,8 +75,14 @@ export function AddDetailDialog({
     setSaving(false);
     setValue(null);
     setScope(payload.defaultScope);
+    setAdvanced(false);
     if (preset && "definition" in preset) {
       setName(preset.definition.label);
+    } else if (preset && "text" in preset) {
+      setName(preset.text);
+      setKind("text");
+      setOptionsText("");
+      setUnit("");
     } else if (preset && "template" in preset) {
       const t = preset.template;
       setName(t.label);
@@ -126,8 +140,27 @@ export function AddDetailDialog({
     return { defs, templates };
   }, [name, definitions, payload]);
 
+  // Simple mode: what the one line means.
+  const quick = useMemo(
+    () => (advanced ? null : parseQuickDetail(name, definitions, payload.scopeTokens)),
+    [advanced, name, definitions, payload.scopeTokens],
+  );
+  const quickDraft: DetailDefinition | null = quick && quick.status === "needs_value"
+    ? quick.existing || {
+        id: "draft",
+        label: quick.label,
+        kind: quick.kind,
+        ...(Array.isArray(quick.input?.options) ? { options: quick.input!.options as string[] } : {}),
+        ...(typeof quick.input?.unit === "string" ? { unit: quick.input.unit } : {}),
+        ...(typeof quick.input?.scaleMax === "number" ? { scaleMax: quick.input.scaleMax } : {}),
+        appliesTo: [payload.defaultScope],
+        createdAt: "",
+        updatedAt: "",
+      }
+    : null;
+
   const hasValue = value !== null && value !== "" && !(Array.isArray(value) && value.length === 0);
-  const canSave = !!name.trim() && hasValue && !saving && (existing || !needsOptions || kind === "condition" || options.length > 0);
+  const canSaveAdvanced = !!name.trim() && hasValue && !saving && (existing || !needsOptions || kind === "condition" || options.length > 0);
 
   const applyTemplate = (t: DetailTemplate) => {
     setName(t.label);
@@ -137,8 +170,33 @@ export function AddDetailDialog({
     setValue(null);
   };
 
+  const canSaveQuick = !saving && !!quick && (quick.status === "ready" || (quick.status === "needs_value" && hasValue));
+  const canSave = advanced ? canSaveAdvanced : canSaveQuick;
+
+  const persist = async (definition: Partial<DetailDefinition> & { label: string }, v: unknown) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await defineAndSetDetail(payload.entityType, payload.entityId, definition, v);
+      onSaved?.(res.definition.label, res.createdDefinition);
+      onOpenChange(false);
+    } catch (err) {
+      setError(detailErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const save = async () => {
     if (!canSave) return;
+    if (!advanced) {
+      if (!quick || quick.status === "invalid") return;
+      const definition = (quick.existing
+        ? { label: quick.existing.label }
+        : { ...quick.input, label: quick.label, appliesTo: [payload.defaultScope] }) as Partial<DetailDefinition> & { label: string };
+      await persist(definition, quick.status === "ready" ? quick.value : value);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -169,21 +227,22 @@ export function AddDetailDialog({
         <DialogHeader>
           <DialogTitle>Add a detail</DialogTitle>
           <DialogDescription>
-            Record any characteristic of {payload.name} — define a new one or reuse one you already track.
+            Type what's true about {payload.name} — like “Cracked screen” or “Color: Blue”.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <label className="micro-label text-muted-foreground" htmlFor="detail-name">Characteristic</label>
+            <label className="micro-label text-muted-foreground" htmlFor="detail-name">{advanced ? "Name" : "Detail"}</label>
             <Input
               id="detail-name"
               value={name}
               onChange={(e) => { setName(e.target.value); setValue(null); }}
-              placeholder="Condition, Color, Roof age, Signed…"
+              placeholder={advanced ? "Condition, Color, Roof age, Signed…" : "Cracked screen, Color: Blue, Mileage 45000…"}
+              onKeyDown={(e) => { if (e.key === "Enter" && canSave) { e.preventDefault(); void save(); } }}
               className="h-9 text-sm"
               autoFocus={!preset}
-              maxLength={60}
+              maxLength={advanced ? 60 : 200}
               data-testid="add-detail-name"
             />
             {(quickPicks.defs.length > 0 || quickPicks.templates.length > 0) && !existing && !templateMatch && (
@@ -206,7 +265,41 @@ export function AddDetailDialog({
             )}
           </div>
 
-          {existing ? (
+          {!advanced && quick && (
+            <div className="space-y-1.5" data-testid="add-detail-quick">
+              {quick.status === "ready" && (
+                <p className="text-xs text-muted-foreground rounded-md bg-muted/50 px-2.5 py-2" data-testid="add-detail-preview">
+                  Saves <span className="font-medium text-foreground">{quick.display}</span>
+                  {quick.existing ? "" : quick.kind === "boolean" ? " — a yes/no you can switch off later" : ` — a new ${DETAIL_KIND_LABELS[quick.kind].toLowerCase()} detail`}
+                </p>
+              )}
+              {quick.status === "needs_value" && quickDraft && (
+                <>
+                  <span className="micro-label text-muted-foreground">{quickDraft.label}</span>
+                  <DetailInput
+                    key={`quick-${quickDraft.id}-${quickDraft.label}`}
+                    definition={quickDraft}
+                    value={(value ?? null) as DetailValue | null}
+                    onChange={(v) => setValue(v)}
+                    testId="add-detail-value"
+                  />
+                </>
+              )}
+              {quick.status === "invalid" && (
+                <p className="text-xs text-destructive" data-testid="add-detail-quick-invalid">{quick.error}</p>
+              )}
+            </div>
+          )}
+
+          {!advanced && name.trim() && (
+            <button type="button" onClick={() => { setAdvanced(true); setValue(null); }}
+              className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              data-testid="add-detail-advanced">
+              Choose a type yourself
+            </button>
+          )}
+
+          {!advanced ? null : existing ? (
             <p className="text-xs text-muted-foreground rounded-md bg-muted/50 px-2.5 py-2" data-testid="add-detail-existing">
               Uses your existing <span className="font-medium text-foreground">{existing.label}</span> ({DETAIL_KIND_LABELS[existing.kind].toLowerCase()}
               {existing.appliesTo.includes("*") ? ", on every record" : `, for ${existing.appliesTo.map(scopeLabel).join(", ").toLowerCase()}`}).
@@ -269,7 +362,7 @@ export function AddDetailDialog({
             </>
           ) : null}
 
-          {name.trim() && (!needsOptions || existing || (draft.options || []).length > 0) && (
+          {advanced && name.trim() && (!needsOptions || existing || (draft.options || []).length > 0) && (
             <div className="space-y-1.5">
               <span className="micro-label text-muted-foreground">Value</span>
               <DetailInput
@@ -289,7 +382,7 @@ export function AddDetailDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>Close</Button>
           <Button onClick={save} disabled={!canSave} data-testid="add-detail-save">
             {saving && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
-            Add
+            Save
           </Button>
         </DialogFooter>
       </DialogContent>

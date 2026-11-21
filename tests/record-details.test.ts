@@ -6,7 +6,7 @@ import {
   applyDetailChange, buildDefinition, buildRecordDetailsView, definitionAppliesTo, emptyRecordDetails,
   evaluateDetailRules, formatDetailValue, matchesDetail, normalizeDetailValue, parseDefinitions,
   parseRecordDetails, parseRecordDetailsKey, recordDetailsKey, recordScopeTokens, slugifyDetailId,
-  suggestedTemplates, valueDistribution, defaultScopeFor, HISTORY_LIMIT,
+  suggestedTemplates, valueDistribution, defaultScopeFor, parseQuickDetail, HISTORY_LIMIT,
   type DetailDefinition,
 } from "../shared/record-details";
 
@@ -232,5 +232,34 @@ describe("inferring a new characteristic's type from chat", () => {
     expect(inferDetailDefinition("Last detailed", "2026-10-02", []).kind).toBe("date");
     expect(inferDetailDefinition("Nickname", "Blue Thunder", []).kind).toBe("text");
     expect(fieldKeyIdentity("roofCondition")).toBe("roof condition");
+  });
+});
+
+// ── Quick add (owner request 2026-11-21: "I type 'Cracked screen', that's it") ──
+describe("parseQuickDetail", () => {
+  const cond = buildDefinition({ label: "Condition", kind: "condition", appliesTo: ["vehicle"] }, { id: "condition", now: "2026-11-21T00:00:00Z" });
+  const defs = cond.ok ? [cond.value] : [];
+  const tokens = ["profile", "asset", "vehicle"];
+  const ready = (s: string) => {
+    const r = parseQuickDetail(s, defs, tokens);
+    if (!r || r.status !== "ready") throw new Error(`expected ready for ${s}: ${JSON.stringify(r)}`);
+    return r;
+  };
+  it("a bare phrase is a yes/no flag, never free text", () => {
+    const r = ready("cracked screen");
+    expect(r).toMatchObject({ label: "Cracked screen", kind: "boolean", value: true, existing: null });
+    expect(r.input).toMatchObject({ label: "Cracked screen", kind: "boolean" });
+  });
+  it("label: value, known name + value, trailing numbers", () => {
+    expect(ready("Color: Blue")).toMatchObject({ label: "Color", kind: "text", value: "Blue" });
+    expect(ready("condition good")).toMatchObject({ kind: "condition", value: "Good", input: null });
+    expect(ready("condition good").existing?.id).toBe("condition");
+    expect(ready("Mileage 45000")).toMatchObject({ label: "Mileage", kind: "number", value: 45000 });
+    expect(ready("Battery health 87%")).toMatchObject({ kind: "percent", value: 87 });
+  });
+  it("a bare existing non-yes/no name asks for its value; a wrong value is refused", () => {
+    expect(parseQuickDetail("Condition", defs, tokens)).toMatchObject({ status: "needs_value", kind: "condition" });
+    expect(parseQuickDetail("Condition: meh", defs, tokens)).toMatchObject({ status: "invalid" });
+    expect(parseQuickDetail("   ", defs, tokens)).toBeNull();
   });
 });

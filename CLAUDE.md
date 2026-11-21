@@ -445,6 +445,12 @@ defined, `update_profile` is unchanged.
 is the panel's error state with a retry (Rule 7); removing a value takes two
 taps (Rule 8); opening it writes nothing (Rule 3). Suggestions come from the
 fixed `DETAIL_TEMPLATES` library for the record's kind, never random.
+**D7. Adding a detail is one line.** "Cracked screen" + Enter saves a yes/no
+flag; "Color: Blue", "Condition good", "Mileage 45000" save typed values
+(`parseQuickDetail`, `shared/record-details.ts`) from the panel's box or the
+dialog. A bare existing name ("Condition") asks only for its value. The
+type/options/scope form stays behind "Choose a type yourself" — never make it
+the default again (owner request 2026-11-21).
 
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
