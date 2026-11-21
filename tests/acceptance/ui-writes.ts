@@ -77,7 +77,8 @@ export async function uiEdit(page: Page, rig: Rig): Promise<Result[]> {
   await gotoHash(page, "/dashboard");
   await page.waitForTimeout(150);
   await openTasks(page);
-  await page.click('[data-testid="tab-open"]');
+  // Completed tasks are folded away inside their section by default, so the
+  // page as it opens lists open tasks only.
   const r = await navigateAndRecord(page, "/tasks", '[data-testid="page-tasks"]', original, { settleMs: 2500, control });
   const shownAfterEdit = r.frames.filter((f) => f.mounted && f.present).length;
   return [shownAfterEdit === 0
@@ -107,6 +108,7 @@ export async function uiDelete(page: Page, rig: Rig): Promise<Result[]> {
   await navigateAndRecord(page, "/calendar", '[data-testid="calendar-page"]', doomed, { settleMs: 900 });
 
   await openTasks(page);
+  await page.click(`[data-testid="button-task-menu-${row.id}"]`);
   await page.click(`[data-testid="button-delete-task-${row.id}"]`);
   await page.waitForSelector('[data-testid="button-confirm-delete-task"]', { timeout: 10000 });
   await page.click('[data-testid="button-confirm-delete-task"]');
