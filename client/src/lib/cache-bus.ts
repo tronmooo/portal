@@ -267,6 +267,11 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   preferences: [
     ["/api/preferences"],
   ],
+  // Record details (shared/record-details): ["/api/details", type, id] per
+  // record, plus the definitions catalog and the report — all one prefix.
+  details: [
+    ["/api/details"],
+  ],
   dashboard: [
     ["/api/dashboard-enhanced"],
     ["/api/stats"],

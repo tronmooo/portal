@@ -15,6 +15,7 @@
 // detail page uses (["/api/profiles", id, "detail"]), so it's instant when
 // you've already visited the profile and edits here reflect there too.
 import { NewNoteForm } from "@/components/notes/NewNoteForm";
+import { RecordDetailsPanel } from "@/components/details/RecordDetailsPanel";
 import { formatStoredDate } from "@/lib/dates";
 import { isBirthDateField, formatYearMonth } from "@shared/date-precision";
 import { useState, useRef, useEffect } from "react";
@@ -701,6 +702,11 @@ function SingleProfileInfo({ id }: { id: string }) {
           </div>
         </Card>
       ))}
+
+      {/* Structured characteristics (shared/record-details): blood type,
+          relationship, shirt size, anything the user defines — typed values
+          that search and reports can use, beside the free-form fields above. */}
+      <RecordDetailsPanel entityType="profile" entityId={profile.id} />
 
       {/* Notes + Tags */}
       <NotesTags

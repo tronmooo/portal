@@ -89,6 +89,12 @@ describe("AI tool registry", () => {
       // Reads that carry their own action type instead of sitting in
       // READ_ONLY_TOOLS: nothing is written, so nothing is routed.
       "recall_memory", "refresh_financial_data",
+      // A characteristic written onto WHATEVER record it names (a car, a
+      // contract, a task). It creates no entity and updates none of an
+      // entity's own fields, so no intent entity fits — and gating it as an
+      // update would refuse "create a car in Good condition", whose second
+      // half is this call on the record the first half just created.
+      "set_record_detail",
     ]);
     const writeTools = toolNames.filter((n) => !READ_ONLY_TOOLS.has(n) && !NON_ENTITY_TOOLS.has(n));
     const unmapped = writeTools.filter((n) => !TOOL_INTENT_ENTITY[n]);

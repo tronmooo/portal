@@ -47,6 +47,8 @@ import { getValuationSnapshot, refreshValuation, isValuableProfile, getValuation
 import { isAutoValuationEnabled } from "@shared/valuation/context";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
+import { registerRecordDetailRoutes } from "./record-details-routes";
+import { appendDetailSearchHits } from "./record-details";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import {
@@ -9801,7 +9803,9 @@ Rules:
   app.get("/api/search", asyncHandler(async (req, res) => {
     const q = (req.query.q as string) || "";
     try {
-      let results = await storage.search(q);
+      // Records whose characteristic values match ("poor", "signed") join the
+      // results BEFORE the scope filter below, so they are scoped like the rest.
+      let results = await appendDetailSearchHits(await storage.search(q), q);
       // Honor the active profile filter so global search reflects what the
       // user is currently focused on. Profiles themselves are filtered by id;
       // other entities are filtered by linkedProfiles.
@@ -11645,7 +11649,9 @@ No emojis. No prose outside the JSON.`,
       // Block writes to sensitive / system-managed preference keys to prevent
       // clients from overwriting OAuth tokens or onboarding state.
       const key = req.params.key;
-      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_"];
+      // `details:` rows and the detail catalog are written only through
+      // /api/details/*, which validates each value against its definition.
+      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_", "details:", "detail_definitions"];
       const PREF_KEY_DENYLIST = new Set([
         "gcal_refresh_token", "gcal_access_token",
         "onboarding_completed", "ai_digest", "admin_override",
@@ -12850,6 +12856,7 @@ No emojis. No prose outside the JSON.`,
   // middleware, CORS and no-store cache headers. The webhook route inside is
   // exempted from bearer auth in server/auth.ts and authenticates by signature.
   registerFinanceRoutes(app);
+  registerRecordDetailRoutes(app);
 
   // Unknown API paths are 404 JSON, never the SPA shell. Without this the
   // static fallback answered `POST /api/profiles/:id/restore` (no such

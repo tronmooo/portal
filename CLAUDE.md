@@ -400,6 +400,52 @@ Needs Attention and raises no reminder task or due-soon alert
 anyway" on. An overdue Auto Pay bill and a missed payment are the exceptions
 that show. Turning Auto Pay off stops future recording only.
 
+## Record details rules (a characteristic is a typed, reportable value on any record)
+
+Owner request 2026-11-21: "Condition = Good on my car" had nowhere to go but
+free text. The detail layer lets the user define a characteristic once and
+record it on any record. The rules are in `shared/record-details.ts`, the
+operations in `server/record-details.ts`, the routes at `/api/details/*`
+(`server/record-details-routes.ts`). The UI is `RecordDetailsPanel`
+(`client/src/components/details/`) on the profile Info tab, the person Info
+page, the liability Overview and the document Overview, plus the `/details`
+page (report, catalog, flags).
+*Guards:* `tests/record-details.test.ts`, `tests/record-details-routes.test.ts`,
+`tests/chat-record-details.test.ts`, `tests/record-details-panel.dom.test.tsx`.
+
+**D1. One definition per name, reused everywhere.** "Condition" on the car,
+the house and the guitar is ONE definition (`findDefinitionByLabel`). Naming
+an existing one reuses it and widens its scope to the new record's kind;
+naming it with a different type is a 409, never a second "Condition".
+**D2. Values are typed and validated, never a text fallback.** Every write goes
+through `normalizeDetailValue` ("good" → "Good" on a condition scale; a
+rating is a whole number on its scale; min/max are enforced). A value the
+type can't hold is a 400 with the reason. The chat infers a new
+characteristic's type from the library and the value (`inferDetailDefinition`),
+never defaulting to text for something that is plainly a condition, number,
+date or yes/no.
+**D3. Storage is preferences rows, written under a lock.** `detail_definitions`
+holds the catalog, `details:<entityType>:<entityId>` one record's values
+(no table, no migration — the valuation precedent). Every read-modify-write
+runs inside `withLock` and re-reads the row inside it (Rule 6). The generic
+`PUT /api/preferences/:key` refuses these keys. Writes journal under the
+`details` cache domain.
+**D4. Flags are derived from the current value (Rule 5).** Rules
+(`evaluateDetailRules`) and report filters share ONE comparison
+(`matchesDetail`), so "flagged Fair or worse" and "show me Fair or worse" can't
+disagree. No stored resolved state. `required` flags a record the
+characteristic applies to that lacks it.
+**D5. One source per value with profile fields.** Chat's `update_profile`
+writes a field named like a DEFINED characteristic to that characteristic
+(`divertDefinedDetails`) — unless the record already carries that key as a
+field (moving one of two copies would leave them disagreeing), or the value
+doesn't fit (then nothing is lost: it stays a field). With no characteristics
+defined, `update_profile` is unchanged.
+**D6. The panel never takes down its page.** An unexpected or failed response
+is the panel's error state with a retry (Rule 7); removing a value takes two
+taps (Rule 8); opening it writes nothing (Rule 3). Suggestions come from the
+fixed `DETAIL_TEMPLATES` library for the record's kind, never random.
+
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
 
