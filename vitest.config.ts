@@ -157,6 +157,7 @@ export default defineConfig({
       'tests/dated-item-owner-guard.test.ts',
       'tests/profile-creation-rules.test.ts',
       'tests/profile-suggestion-card.dom.test.tsx',
+      'tests/document-detail-tabs.dom.test.tsx',
       'tests/recurring-important-dates.test.tsx',
       'tests/recurring-scope-and-purity.test.ts',
       'tests/calendar-crud.test.ts',
