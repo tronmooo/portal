@@ -80,11 +80,22 @@ export function countTasksByDay(tasks: readonly CountableTask[] | null | undefin
       if (isDoneToday(t, todayISO, timezone)) counts.doneToday++;
       continue;
     }
-    const d = String(t.dueDate || "").slice(0, 10);
-    if (!DAY_RE.test(d)) counts.undated++;
-    else if (d < todayISO) counts.overdue++;
-    else if (d === todayISO) counts.dueToday++;
-    else counts.upcoming++;
+    counts[openTaskBucket(t, todayISO)]++;
   }
   return counts;
+}
+
+export type OpenTaskBucket = "overdue" | "dueToday" | "upcoming" | "undated";
+
+/**
+ * Which day bucket an OPEN task falls in. The counts above are cut with this
+ * rule, and the Tasks page groups its rows with it, so a tile's number is
+ * always the number of rows under the heading of the same name.
+ */
+export function openTaskBucket(t: CountableTask, todayISO: string): OpenTaskBucket {
+  const d = String(t.dueDate || "").slice(0, 10);
+  if (!DAY_RE.test(d)) return "undated";
+  if (d < todayISO) return "overdue";
+  if (d === todayISO) return "dueToday";
+  return "upcoming";
 }

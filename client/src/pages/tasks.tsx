@@ -13,7 +13,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday, addDays as tzAddDays, formatClockTime } from "@shared/timezone";
-import { taskSummaryTiles } from "@shared/task-counts";
+import { taskSummaryTiles, openTaskBucket, type OpenTaskBucket } from "@shared/task-counts";
 import { isRecurring, humanSummary, parseRecurrence, userTags } from "@shared/recurrence";
 import { isMigrationTag, isRetiredMigratedReminderTask } from "@shared/legacy-reminder-tasks";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -59,7 +59,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { showUndoToast } from "@/lib/undo-delete";
-import { ListTodo, Calendar, CalendarDays, AlertCircle, AlertTriangle, Flame, Plus, Trash2, CheckCircle2, Repeat } from "lucide-react";
+import { ListTodo, Calendar, CalendarDays, AlertCircle, AlertTriangle, Flame, Plus, Trash2, CheckCircle2, Repeat, Inbox, type LucideIcon } from "lucide-react";
 import { Link } from "wouter";
 import type { Task, Profile } from "@shared/schema";
 import { useState, useEffect, useRef, useMemo } from "react";
@@ -73,6 +73,18 @@ const PRIORITY_COLORS: Record<string, string> = {
 };
 
 const TASK_NOUN = { one: "task", many: "tasks" };
+
+// The open list is grouped by when a task is due, in the order it needs
+// attention. The same four buckets (shared/task-counts) cut the summary tiles,
+// so the number on a tile is the number of rows under the heading it opens.
+const OPEN_SECTIONS: { bucket: OpenTaskBucket; label: string; accent: string | null; icon: LucideIcon }[] = [
+  { bucket: "overdue", label: "Overdue", accent: "0 72% 55%", icon: AlertTriangle },
+  { bucket: "dueToday", label: "Today", accent: "43 85% 52%", icon: Flame },
+  { bucket: "upcoming", label: "Upcoming", accent: "200 80% 55%", icon: CalendarDays },
+  { bucket: "undated", label: "No date", accent: null, icon: Inbox },
+];
+const DONE_ACCENT = "155 60% 48%";
+const BUCKET_ORDER: Record<OpenTaskBucket, number> = { overdue: 0, dueToday: 1, upcoming: 2, undated: 3 };
 const PRIORITY_CYCLE = ["low", "medium", "high"];
 /** The priority a tap on the row's badge moves to: low → medium → high → low. */
 
@@ -326,10 +338,14 @@ function TaskDialog({
 function TaskItem({
   task,
   onEdit,
+  today,
 }: {
   task: Task;
   onEdit: (t: Task) => void;
+  /** The user's calendar day: an open task due before it shows its date in red. */
+  today: string;
 }) {
+  const isOverdue = task.status !== "done" && openTaskBucket(task, today) === "overdue";
   const { toast } = useToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [dateEditing, setDateEditing] = useState(false);
@@ -456,7 +472,7 @@ function TaskItem({
         data-record-id={task.id}
         className={`transition-colors ${task.status === "done" ? "opacity-60" : ""}`}
       >
-        <CardContent className="p-4 flex items-start gap-3">
+        <CardContent className="px-4 py-3 flex items-start gap-3">
           <Checkbox
             checked={task.status === "done"}
             onCheckedChange={() => toggleMutation.mutate()}
@@ -486,8 +502,11 @@ function TaskItem({
               data-testid={`text-task-title-${task.id}`}
               onClick={(e) => e.stopPropagation()}
             >
+              {/* A long title wraps to two lines inside its column; it used to
+                  run on one line straight under the delete button. */}
               <EditableTitle
                 value={task.title}
+                className="flex max-w-full items-start [&>span:first-child]:whitespace-normal [&>span:first-child]:line-clamp-2 [&>span:first-child]:break-words"
                 onSave={async (newTitle) => {
                   try {
                     await apiRequest("PATCH", `/api/tasks/${task.id}`, { title: newTitle });
@@ -502,7 +521,7 @@ function TaskItem({
             {task.description && (
               <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{task.description}</p>
             )}
-            <div className="flex items-center gap-2 mt-2 flex-wrap min-w-0">
+            <div className="flex items-center gap-x-2 gap-y-1.5 mt-1.5 flex-wrap min-w-0">
               {/* Inline edits on the row itself (QA 2026-09-18 F-30): the
                   title already edits in place; priority cycles on a tap and
                   the date opens a picker. Both go through the same PATCH the
@@ -542,8 +561,9 @@ function TaskItem({
               ) : (task.dueDate || task.status !== "done") && (
                 <button
                   type="button"
-                  className="text-xs text-muted-foreground flex items-center gap-1 hover:text-foreground"
+                  className={`text-xs flex items-center gap-1 ${isOverdue ? "text-red-600 dark:text-red-400 font-medium" : "text-muted-foreground hover:text-foreground"}`}
                   onClick={stopProp(() => setDateEditing(true))}
+                  data-overdue={isOverdue ? "true" : undefined}
                   aria-label={task.dueDate ? "Change due date" : "Add due date"}
                   data-testid={`btn-task-due-${task.id}`}
                 >
@@ -584,7 +604,7 @@ function TaskItem({
           <Button
             size="icon"
             variant="ghost"
-            className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+            className="h-8 w-8 -mr-1.5 -mt-1 text-muted-foreground/70 hover:text-destructive shrink-0"
             onClick={stopProp(() => setDeleteOpen(true))}
             disabled={deleteMutation.isPending}
             aria-label="Delete task"
@@ -634,7 +654,7 @@ function SwipeableItem({ children, onSwipeLeft, onSwipeRight, leftLabel = '✓ D
   const threshold = 72;
 
   return (
-    <div className="relative overflow-hidden rounded-lg">
+    <div className="relative overflow-hidden rounded-[1.5rem]">
       {/* Background actions */}
       <div className="absolute inset-0 flex items-center">
         <div className="flex-1 h-full flex items-center px-4" style={{ background: leftColor + '30' }}>
@@ -646,7 +666,7 @@ function SwipeableItem({ children, onSwipeLeft, onSwipeRight, leftLabel = '✓ D
       </div>
       {/* Swipeable content */}
       <div
-        style={{ transform: `translateX(${offsetX}px)`, transition: offsetX === 0 ? 'transform 0.2s ease' : 'none', background: 'hsl(var(--card))', position: 'relative' }}
+        style={{ transform: `translateX(${offsetX}px)`, transition: offsetX === 0 ? 'transform 0.2s ease' : 'none', background: 'hsl(var(--card))', borderRadius: '1.5rem', position: 'relative' }}
         onTouchStart={e => { startX.current = e.touches[0].clientX; }}
         onTouchMove={e => {
           if (startX.current === null) return;
@@ -758,7 +778,23 @@ export default function TasksPage() {
   const [visibleActive, setVisibleActive] = useState(TASK_PAGE);
   const [visibleCompleted, setVisibleCompleted] = useState(TASK_PAGE);
   useEffect(() => { setVisibleActive(TASK_PAGE); setVisibleCompleted(TASK_PAGE); }, [tabFilter, filterMode, filterIds.join(",")]);
-  const sortedActive = useMemo(() => activeTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')), [activeTasks]);
+  // Open tasks in the order they need attention: overdue (oldest first),
+  // today, upcoming (soonest first), then undated. They used to be listed
+  // A–Z, which put a bill 52 days late below one due next month.
+  const sortedActive = useMemo(() => activeTasks.slice().sort((a, b) =>
+    BUCKET_ORDER[openTaskBucket(a, todayStr)] - BUCKET_ORDER[openTaskBucket(b, todayStr)]
+    || String(a.dueDate || "").slice(0, 10).localeCompare(String(b.dueDate || "").slice(0, 10))
+    || String(a.dueTime || "").localeCompare(String(b.dueTime || ""))
+    || (a.title || '').localeCompare(b.title || '')), [activeTasks, todayStr]);
+  const shownActive = useMemo(() => sortedActive.slice(0, visibleActive), [sortedActive, visibleActive]);
+  // A summary tile opens the rows it counts: make sure their tab is showing,
+  // then bring the heading to the top. Nothing is filtered away.
+  const jumpToSection = (key: string) => {
+    setTabFilter(tab => (key === "done" ? (tab === "open" ? "all" : tab) : (tab === "completed" ? "all" : tab)));
+    requestAnimationFrame(() => {
+      document.getElementById(`tasks-section-${key}`)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    });
+  };
   const sortedCompleted = useMemo(() => completedTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')), [completedTasks]);
   // v2 summary band: overdue / today / upcoming / done.
   // The buckets are the shared rule (shared/task-counts) so this band, the
@@ -793,8 +829,10 @@ export default function TasksPage() {
 
   return (
     <PageContainer testId="page-tasks">
-      {/* The page had no title at all — a bare back arrow and a filter chip.
-          PageHeader is the same medallion + bold title every hub tab uses. */}
+      {/* Title, counts and the one primary action — the header every hub
+          page has. The profile filter used to sit here too, and on a phone the
+          two controls squeezed the title down to "T."; it is a list control
+          and lives on the toolbar below. */}
       <PageHeader
         title="Tasks"
         subtitle={`${activeTasks.length} active · ${completedTasks.length} completed`}
@@ -802,51 +840,56 @@ export default function TasksPage() {
         accent={TASKS_ACCENT}
         backHref="/dashboard"
         actions={
-          <>
-            <MultiProfileFilter onChange={() => {}} compact />
-            <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="button-new-task">
-              <Plus className="h-3.5 w-3.5 mr-1" /> New Task
-            </Button>
-          </>
+          <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="button-new-task">
+            <Plus className="h-3.5 w-3.5 mr-1" /> New Task
+          </Button>
         }
       />
 
-      {/* Summary band — the app's one stat tile, and each one now opens the
-          filter it describes instead of being a number you can't act on. */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="tasks-summary">
+      {/* Summary band — the app's dense stat tile (four full-size tiles took
+          half a phone screen before the first task). A tile with something in
+          it jumps to the rows it counts. */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="tasks-summary">
         {[
-          { label: "Overdue", value: taskSummary.overdue, accent: "0 72% 55%", icon: AlertTriangle },
-          { label: "Today", value: taskSummary.dueToday, accent: "43 85% 52%", icon: Flame },
-          { label: "Upcoming", value: taskSummary.upcoming, accent: "200 80% 55%", icon: CalendarDays },
-          { label: "Done today", value: taskSummary.doneToday, accent: "155 60% 48%", icon: CheckCircle2 },
+          { key: "overdue", label: "Overdue", value: taskSummary.overdue, accent: "0 72% 55%", icon: AlertTriangle },
+          { key: "dueToday", label: "Today", value: taskSummary.dueToday, accent: "43 85% 52%", icon: Flame },
+          { key: "upcoming", label: "Upcoming", value: taskSummary.upcoming, accent: "200 80% 55%", icon: CalendarDays },
+          { key: "done", label: "Done today", value: taskSummary.doneToday, accent: DONE_ACCENT, icon: CheckCircle2 },
         ].map((s, i) => (
           // Rendered as a plain value, not a count-up: the animation started
           // every tile at "0" and sat there for seconds while the long list
           // below was still being laid out, reading as a real zero (F-25).
-          <MetricCard key={s.label} label={s.label} value={s.value == null ? "—" : s.value} accent={s.accent}
+          <MetricCard key={s.label} density="dense" label={s.label} value={s.value == null ? "—" : s.value} accent={s.accent}
             icon={s.icon} testId={`tasks-summary-${s.label.toLowerCase()}`}
-            className="bubble-enter" style={{ ["--i" as any]: i }} />
+            onClick={s.value ? () => jumpToSection(s.key) : undefined}
+            className="bubble-enter px-3 py-2.5" style={{ ["--i" as any]: i }} />
         ))}
       </div>
 
-      {/* Tab filters */}
-      <div className="flex items-center gap-1" data-testid="task-tab-filters">
-        {(["all", "open", "completed"] as const).map(tab => (
-          <button
-            key={tab}
-            onClick={() => setTabFilter(tab)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-              tabFilter === tab
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-muted"
-            }`}
-            data-testid={`tab-${tab}`}
-          >
-            {tab === "all" ? `All (${visibleTasks.length})`
-              : tab === "open" ? `Open (${activeTasks.length})`
-              : `Completed (${completedTasks.length})`}
-          </button>
-        ))}
+      {/* Tab filters, with the profile filter beside them */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+        <div className="flex items-center gap-1" data-testid="task-tab-filters">
+          {(["all", "open", "completed"] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setTabFilter(tab)}
+              aria-pressed={tabFilter === tab}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                tabFilter === tab
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted"
+              }`}
+              data-testid={`tab-${tab}`}
+            >
+              {tab === "all" ? `All (${visibleTasks.length})`
+                : tab === "open" ? `Open (${activeTasks.length})`
+                : `Completed (${completedTasks.length})`}
+            </button>
+          ))}
+        </div>
+        <div className="sm:ml-auto min-w-0">
+          <MultiProfileFilter onChange={() => {}} compact />
+        </div>
       </div>
 
       {hiddenByScope > 0 && visibleTasks.length > 0 && (
@@ -880,15 +923,25 @@ export default function TasksPage() {
       ) : (
         <>
           {(tabFilter === "all" || tabFilter === "open") && (
-            <div className="space-y-2">
-              <h2 className="micro-label text-muted-foreground">
-                Active ({activeTasks.length})
-              </h2>
+            <div className="space-y-4" data-testid="tasks-open">
               {activeTasks.length === 0 ? (
                 <EmptyState scope="global" icon={ListTodo} label="No active tasks" hint="All tasks are completed or create a new one." />
               ) : (
-                sortedActive.slice(0, visibleActive).map(task => (
-                  <SwipeableItem
+                OPEN_SECTIONS.map(section => {
+                  // Only the rows on this page of the list; the count in the
+                  // heading is the whole bucket.
+                  const rows = shownActive.filter(t => openTaskBucket(t, todayStr) === section.bucket);
+                  if (rows.length === 0) return null;
+                  const total = sortedActive.filter(t => openTaskBucket(t, todayStr) === section.bucket).length;
+                  return (
+                    <section key={section.bucket} id={`tasks-section-${section.bucket}`} className="space-y-2 scroll-mt-4" data-testid={`tasks-section-${section.bucket}`}>
+                      <h2 className="micro-label flex items-center gap-1.5 px-1 text-muted-foreground">
+                        <section.icon className="h-3.5 w-3.5" style={section.accent ? { color: `hsl(${section.accent})` } : undefined} />
+                        <span style={section.accent ? { color: `hsl(${section.accent})` } : undefined}>{section.label}</span>
+                        <span>· {total}</span>
+                      </h2>
+                      {rows.map(task => (
+                        <SwipeableItem
                     key={task.id}
                     onSwipeLeft={async () => {
                       // Optimistic update: mark task done immediately
@@ -928,9 +981,12 @@ export default function TasksPage() {
                       }
                     }}
                   >
-                    <TaskItem task={task} onEdit={setEditTask} />
+                    <TaskItem task={task} onEdit={setEditTask} today={todayStr} />
                   </SwipeableItem>
-                ))
+                      ))}
+                    </section>
+                  );
+                })
               )}
               {sortedActive.length > visibleActive && (
                 <div className="pt-2 flex justify-center">
@@ -942,9 +998,11 @@ export default function TasksPage() {
             </div>
           )}
           {(tabFilter === "all" || tabFilter === "completed") && (
-            <div className="space-y-2">
-              <h2 className="micro-label text-muted-foreground">
-                Completed ({completedTasks.length})
+            <div id="tasks-section-done" className="space-y-2 scroll-mt-4" data-testid="tasks-section-done">
+              <h2 className="micro-label flex items-center gap-1.5 px-1 text-muted-foreground">
+                <CheckCircle2 className="h-3.5 w-3.5" style={{ color: `hsl(${DONE_ACCENT})` }} />
+                <span>Completed</span>
+                <span>· {completedTasks.length}</span>
               </h2>
               {completedTasks.length === 0 ? (
                 <EmptyState scope="global" icon={CheckCircle2} label="No completed tasks" hint="Complete a task to see it here." />
@@ -971,7 +1029,7 @@ export default function TasksPage() {
                       }
                     }}
                   >
-                    <TaskItem task={task} onEdit={setEditTask} />
+                    <TaskItem task={task} onEdit={setEditTask} today={todayStr} />
                   </SwipeableItem>
                 ))
               )}
