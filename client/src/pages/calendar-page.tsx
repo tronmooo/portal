@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, type CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import CalendarView from "@/components/CalendarView";
@@ -15,7 +15,7 @@ import type { ProfileSelection } from "@shared/profile-selection";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 import { rollupOccurrences } from "@shared/dated-items";
 import type { CalendarOccurrence, OccurrenceKind } from "@shared/calendar-occurrences";
-import { ArrowLeft, CalendarDays, Repeat } from "lucide-react";
+import { ArrowLeft, Calendar as CalendarBlank, CalendarDays, CalendarRange, Repeat } from "lucide-react";
 import { Link } from "wouter";
 
 import { ScopeFilterNotice } from "@/components/ActiveFilterNotice";
@@ -123,29 +123,37 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {/* Calendar | Recurring & Important Dates tab toggle */}
-      <div className="flex gap-1 rounded-xl bg-muted/50 p-1 mb-2" data-testid="calendar-tabs">
+      {/* Calendar | Recurring & Important Dates tab toggle. The active tab is
+          the solid cyan control from the owner's reference (2026-11-21). */}
+      <div className="cal-seg p-1 mb-3" data-testid="calendar-tabs">
         {([["calendar", "Calendar", CalendarDays], ["recurring", "Recurring & Important", Repeat]] as const).map(([key, label, Icon]) => (
           <button key={key} type="button" onClick={() => setTab(key)}
-            className={`flex-1 rounded-lg py-1.5 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors ${tab === key ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            aria-pressed={tab === key}
+            className={`flex-1 rounded-full h-10 px-2 text-[13px] sm:text-sm inline-flex items-center justify-center gap-2 whitespace-nowrap transition-colors ${tab === key ? "cal-cta font-bold" : "font-medium text-foreground/85 hover:text-foreground"}`}
             data-testid={`calendar-tab-${key}`}>
-            <Icon className="h-3.5 w-3.5" /> {label}
+            <Icon className="h-4 w-4 shrink-0" /> {label}
           </button>
         ))}
       </div>
 
       {tab === "calendar" ? (
         <>
-          {/* v2 summary band */}
-          <div className="grid grid-cols-3 gap-2 mb-2" data-testid="calendar-summary">
+          {/* Summary band: each tile is washed in its own colour, with the
+              count and the icon in that colour. Number first, then the label:
+              the order the tiles are read (and tested) in. */}
+          <div className="grid grid-cols-3 gap-2 mb-3" data-testid="calendar-summary">
             {[
-              { label: "Today", value: evSummary.today, color: "200 80% 55%" },
-              { label: "This Week", value: evSummary.week, color: "262 70% 62%" },
-              { label: "Next 30 Days", value: evSummary.horizon, color: "155 60% 48%" },
+              { label: "Today", value: evSummary.today, color: "205 95% 60%", Icon: CalendarBlank },
+              { label: "This Week", value: evSummary.week, color: "262 90% 70%", Icon: CalendarRange },
+              { label: "Next 30 Days", value: evSummary.horizon, color: "152 72% 52%", Icon: CalendarDays },
             ].map(s => (
-              <div key={s.label} className="bubble p-2.5 text-center">
-                <p className="text-lg font-bold tabular-nums leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
-                <p className="mt-1 micro-label text-muted-foreground">{s.label}</p>
+              <div key={s.label} className="cal-stat flex items-center gap-2 px-2.5 py-3 sm:px-4 min-w-0"
+                style={{ "--accent-hsl": s.color } as CSSProperties}>
+                <s.Icon className="h-6 w-6 shrink-0" style={{ color: `hsl(${s.color})` }} aria-hidden="true" />
+                <div className="min-w-0">
+                  <p className="text-2xl font-bold tabular-nums leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
+                  <p className="mt-1 text-xs text-foreground/85 leading-tight">{s.label}</p>
+                </div>
               </div>
             ))}
           </div>

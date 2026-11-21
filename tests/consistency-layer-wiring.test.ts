@@ -64,9 +64,11 @@ describe("wiring: one rule, one place", () => {
     const routes = read("server/routes.ts");
     expect(routes).toMatch(/if \(isObligationFieldKey\(key\)\) keptOffProfile\.push\(key\)/);
   });
-  it("Documents and Artifacts are split by purpose; the calendar opens on Agenda on a phone; the hub does not repeat KPIs", () => {
+  it("Documents and Artifacts are split by purpose; the calendar opens on Month; the hub does not repeat KPIs", () => {
     expect(read("client/src/pages/artifacts.tsx")).toMatch(/libraryPurposeOf\(a as any\)/);
-    expect(read("client/src/components/CalendarView.tsx")).toMatch(/matchMedia\("\(max-width: 640px\)"\)\.matches \? "agenda" : "month"/);
+    // Owner's reference screen (2026-11-21): the calendar opens on the month
+    // grid on a phone too. It used to open on Agenda there.
+    expect(read("client/src/components/CalendarView.tsx")).toMatch(/useState<"month" \| "week" \| "day" \| "agenda">\("month"\)/);
     const exec = read("client/src/components/dashboard/ExecutiveBriefing.tsx");
     expect(exec).toMatch(/const hubEmbedded = useHubChrome\(\)/);
     expect(exec).toMatch(/\{!hubEmbedded && <OverviewCell/);

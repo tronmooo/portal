@@ -12,7 +12,7 @@ export function MobileBottomNav() {
   return (
     <nav
       className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-border/50"
-      style={{ background: "hsl(var(--background) / 0.92)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", WebkitTapHighlightColor: "transparent" }}
+      style={{ background: "hsl(var(--background) / 0.72)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", WebkitTapHighlightColor: "transparent" }}
       role="navigation"
       aria-label="Main navigation"
     >
@@ -43,7 +43,7 @@ export function MobileBottomNav() {
                 WebkitTapHighlightColor: "transparent",
                 touchAction: "manipulation",
                 ...(isActive
-                  ? { background: `linear-gradient(160deg, hsl(${tab.accent} / 0.20), hsl(${tab.accent} / 0.07))`, boxShadow: `inset 0 0 0 1px hsl(${tab.accent} / 0.28)`, color }
+                  ? { background: `linear-gradient(160deg, hsl(${tab.accent} / 0.30), hsl(${tab.accent} / 0.10))`, boxShadow: `inset 0 0 0 1px hsl(${tab.accent} / 0.60), 0 0 16px -4px hsl(${tab.accent} / 0.55)`, color }
                   : { color: "hsl(var(--muted-foreground))" }),
               }}
               data-testid={`mobile-nav-${tab.label.toLowerCase()}`}
