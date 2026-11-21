@@ -9,7 +9,7 @@
 // Rules this honours: a load failure is an error with a retry, never an empty
 // panel (Rule 7); opening it writes nothing (Rule 3); removing a value takes
 // two taps (Rule 8); flags are derived from the current values (Rule 5).
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "wouter";
 import { AlertTriangle, Info, Loader2, Plus, SlidersHorizontal, Sparkles, X, OctagonAlert } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -26,7 +26,7 @@ import {
 import type { DetailRowShape, RecordDetailsPayloadShape } from "@/lib/record-details-types";
 import { DetailInput } from "./DetailInput";
 import { AddDetailDialog, type AddDetailPreset } from "./AddDetailDialog";
-import { formatDetailValue, parseQuickDetail, type DetailDefinition, type DetailEntityType, type DetailFlag, type DetailSeverity, type DetailValue } from "@shared/record-details";
+import { detailValueHint, formatDetailValue, parseDetailPair, type DetailDefinition, type DetailEntityType, type DetailFlag, type DetailSeverity, type DetailValue } from "@shared/record-details";
 
 const ACCENT = "262 70% 60%";
 
@@ -74,7 +74,12 @@ export function RecordDetailsPanel({
   const [preset, setPreset] = useState<AddDetailPreset>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const { confirm, isArmed } = useConfirmArm();
-  const [quickText, setQuickText] = useState("");
+  const [adding, setAdding] = useState<boolean | null>(null);
+  const [quickLabel, setQuickLabel] = useState("");
+  const [quickValue, setQuickValue] = useState("");
+  const [quickError, setQuickError] = useState<string | null>(null);
+  const valueRef = useRef<HTMLInputElement>(null);
+  const labelRef = useRef<HTMLInputElement>(null);
   const [quickSaving, setQuickSaving] = useState(false);
 
   const openAdd = (p: AddDetailPreset) => { setPreset(p); setDialogOpen(true); };
@@ -96,25 +101,38 @@ export function RecordDetailsPanel({
     }
   };
 
-  // The one-line box: "Cracked screen" + Enter is the whole flow. A line that
-  // still needs a value ("Condition") opens the dialog with it filled in.
+  // Detail | Value | Add — like a profile's "Add field". A blank value means
+  // the detail is simply true ("Cracked screen" → Yes); the value is typed by
+  // the characteristic it lands in (parseDetailPair, Rule D2/D7).
   const quickAdd = async (allDefs: DetailDefinition[], payload: RecordDetailsPayloadShape) => {
-    const q = parseQuickDetail(quickText, allDefs, payload.scopeTokens);
+    const q = parseDetailPair(quickLabel, quickValue, allDefs, payload.scopeTokens);
     if (!q) return;
-    if (q.status !== "ready") { openAdd({ text: quickText }); return; }
+    if (q.status === "invalid") { setQuickError(q.error); return; }
+    if (q.status === "needs_value") { setQuickError(`${q.label} needs a value`); valueRef.current?.focus(); return; }
+    setQuickError(null);
     setQuickSaving(true);
     try {
       const definition = (q.existing
         ? { label: q.existing.label }
         : { ...q.input, label: q.label, appliesTo: [payload.defaultScope] }) as Partial<DetailDefinition> & { label: string };
       const res = await defineAndSetDetail(entityType, entityId, definition, q.value);
-      setQuickText("");
+      setQuickLabel("");
+      setQuickValue("");
       toast({ title: res.createdDefinition ? `Added ${q.display}` : `Saved ${q.display}` });
+      labelRef.current?.focus();
     } catch (err) {
-      toast({ title: `Couldn't save ${q.label}`, description: detailErrorMessage(err), variant: "destructive" });
+      setQuickError(detailErrorMessage(err));
     } finally {
       setQuickSaving(false);
     }
+  };
+
+  const startAdd = (label = "") => {
+    setAdding(true);
+    setQuickLabel(label);
+    setQuickValue("");
+    setQuickError(null);
+    setTimeout(() => (label ? valueRef : labelRef).current?.focus(), 0);
   };
 
   const remove = async (row: DetailRowShape) => {
@@ -152,6 +170,8 @@ export function RecordDetailsPanel({
 
   const data: RecordDetailsPayloadShape = details.data;
   const allDefs = Array.isArray(defs.data?.definitions) ? defs.data!.definitions : data.available.concat(data.rows.map((r) => r.definition));
+  // The form is open when asked for, and from the start on a record with no details.
+  const formOpen = adding ?? data.rows.length === 0;
   const quickDefs = data.available.slice(0, 6);
   const quickTemplates = data.suggestions.slice(0, Math.max(0, 6 - quickDefs.length));
 
@@ -172,7 +192,7 @@ export function RecordDetailsPanel({
             <Link href="/details" className="text-[11px] text-muted-foreground hover:text-foreground underline-offset-2 hover:underline" data-testid="record-details-manage">
               Manage
             </Link>
-            <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => openAdd(null)} data-testid="record-details-add">
+            <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => (formOpen ? setAdding(false) : startAdd())} data-testid="record-details-add">
               <Plus className="h-3.5 w-3.5" /> Add detail
             </Button>
           </div>
@@ -230,42 +250,62 @@ export function RecordDetailsPanel({
         </div>
       ) : (
         <p className="text-xs text-muted-foreground mt-3" data-testid="record-details-empty">
-          No details on {data.name} yet. Type what's true about it below — “Cracked screen”, “Color: Blue”, “Mileage 45000”.
+          No details on {data.name} yet. Add one below — like “Cracked screen”, or Color with the value Blue.
         </p>
       )}
 
-      <form
-        className="flex items-center gap-1.5 mt-3"
-        onSubmit={(e) => { e.preventDefault(); void quickAdd(allDefs, data); }}
-        data-testid="record-details-quick-add"
-      >
-        <Input
-          value={quickText}
-          onChange={(e) => setQuickText(e.target.value)}
-          placeholder="Add a detail — e.g. Cracked screen"
-          aria-label={`Add a detail to ${data.name}`}
-          className="h-8 text-xs flex-1"
-          maxLength={200}
-          disabled={quickSaving}
-          data-testid="record-details-quick-input"
-        />
-        <Button type="submit" size="sm" className="h-8 text-xs" disabled={quickSaving || !quickText.trim()} data-testid="record-details-quick-save">
-          {quickSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Add"}
-        </Button>
-      </form>
+      {formOpen && (
+        <form
+          className="bubble mt-3 p-3 flex flex-wrap items-end gap-2"
+          onSubmit={(e) => { e.preventDefault(); void quickAdd(allDefs, data); }}
+          data-testid="record-details-quick-add"
+        >
+          <div className="flex-1 min-w-[120px]">
+            <label className="micro-label text-muted-foreground" htmlFor="detail-quick-label">Detail</label>
+            <Input
+              id="detail-quick-label" ref={labelRef}
+              value={quickLabel}
+              onChange={(e) => { setQuickLabel(e.target.value); setQuickError(null); }}
+              placeholder="e.g. Cracked screen"
+              className="h-8 text-xs" maxLength={120} disabled={quickSaving}
+              data-testid="record-details-quick-input"
+            />
+          </div>
+          <div className="flex-1 min-w-[120px]">
+            <label className="micro-label text-muted-foreground" htmlFor="detail-quick-value">Value</label>
+            <Input
+              id="detail-quick-value" ref={valueRef}
+              value={quickValue}
+              onChange={(e) => { setQuickValue(e.target.value); setQuickError(null); }}
+              placeholder={detailValueHint(quickLabel, allDefs, data.scopeTokens)}
+              className="h-8 text-xs" maxLength={200} disabled={quickSaving}
+              data-testid="record-details-quick-value"
+            />
+          </div>
+          <Button type="submit" size="sm" className="h-8 text-xs" disabled={quickSaving || !quickLabel.trim()} data-testid="record-details-quick-save">
+            {quickSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Add"}
+          </Button>
+          <button type="button" onClick={() => openAdd(quickLabel.trim() ? { text: quickLabel } : null)}
+            className="basis-full text-left text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+            data-testid="record-details-more-options">
+            More options (pick a type, a list of choices…)
+          </button>
+          {quickError && <p className="basis-full text-xs text-destructive" role="alert" data-testid="record-details-quick-error">{quickError}</p>}
+        </form>
+      )}
 
       {(quickDefs.length > 0 || quickTemplates.length > 0) && (
         <div className="flex flex-wrap items-center gap-1 mt-3" data-testid="record-details-quick">
           <span className="text-[11px] text-muted-foreground mr-0.5">Add:</span>
           {quickDefs.map((d) => (
-            <button key={d.id} type="button" onClick={() => openAdd({ definition: d })}
+            <button key={d.id} type="button" onClick={() => startAdd(d.label)}
               className="h-6 rounded-full border border-border px-2 text-[11px] hover:bg-muted inline-flex items-center gap-0.5"
               data-testid={`record-details-quick-${d.id}`}>
               <Plus className="h-3 w-3" /> {d.label}
             </button>
           ))}
           {quickTemplates.map((t) => (
-            <button key={`t-${t.label}`} type="button" onClick={() => openAdd({ template: t })}
+            <button key={`t-${t.label}`} type="button" onClick={() => startAdd(t.label)}
               className="h-6 rounded-full border border-dashed border-border px-2 text-[11px] text-muted-foreground hover:bg-muted inline-flex items-center gap-1"
               data-testid={`record-details-suggest-${t.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}>
               <Sparkles className="h-3 w-3" /> {t.label}

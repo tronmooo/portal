@@ -1287,3 +1287,38 @@ export function parseQuickDetail(text: string, defs: readonly DetailDefinition[]
   const input: DefinitionInput = { label, kind: "boolean" };
   return { status: "ready", label, existing: null, input, kind: "boolean", value: true, display: `${label} · Yes` };
 }
+
+/**
+ * The two-box form (Detail | Value, like a profile's "Add field"): a value
+ * box left empty means the detail is simply true ("Cracked screen" → Yes);
+ * a bare existing name with no value asks for one.
+ */
+export function parseDetailPair(label: string, value: string, defs: readonly DetailDefinition[], tokens: readonly string[]): QuickDetail | null {
+  const l = String(label || "").trim().replace(/\s+/g, " ");
+  const v = String(value || "").trim();
+  if (!l) return null;
+  if (!v) return parseQuickDetail(l, defs, tokens);
+  return resolveQuickPair(l, v, defs, tokens);
+}
+
+/** The Value box's placeholder for what's in the Detail box ("Excellent, Good, Fair, Poor"). */
+export function detailValueHint(label: string, defs: readonly DetailDefinition[], tokens: readonly string[]): string {
+  const l = String(label || "").trim();
+  const def: Pick<DetailDefinition, "kind" | "options" | "unit" | "scaleMax"> | undefined = l
+    ? findDefinitionByLabel(defs, l) || (() => {
+        const t = applicableTemplate(l, tokens);
+        return t ? { kind: t.kind, options: t.options, unit: t.unit, scaleMax: t.scaleMax } : undefined;
+      })()
+    : undefined;
+  if (!def) return "Optional — blank means Yes";
+  switch (def.kind) {
+    case "condition": case "select": case "multiselect": return optionsFor(def).join(", ");
+    case "boolean": return "Yes or No";
+    case "rating": return `1 to ${ratingMax(def)}`;
+    case "date": return "YYYY-MM-DD";
+    case "currency": return "$ amount";
+    case "percent": return "%";
+    case "number": return def.unit ? `Number (${def.unit})` : "Number";
+    default: return "Value";
+  }
+}
