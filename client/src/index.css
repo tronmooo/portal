@@ -972,6 +972,22 @@ button, a, [role="button"], .card-lift {
    (the first 2-4 rows plus a "View all (N)" expander), so a card grows only when
    the user asks it to. Content bounding belongs in those expanders, not in a
    scroll region that competes with the page. */
+/* PHONE (under 640px): the grid is two columns, so a half-width card is
+   ~160px inside. `.exec-opt` marks what such a card can do without — the row
+   icon, the grey detail beside a title that already has its date, the row's
+   button — and `.exec-short` / `.exec-long` swap a header link's label for a
+   short one. Full-row cards (Habits, Money, Recent Activity) are not
+   `.exec-half` and keep everything. ExecCard in ExecutiveBriefing.tsx. */
+.exec-short { display: none; }
+@media (max-width: 639.98px) {
+  .exec-half .exec-opt { display: none !important; }
+  .exec-half .exec-long { display: none; }
+  .exec-half .exec-short { display: inline; }
+  .exec-half .exec-time { width: 3.25rem; font-size: 11px; }
+  .exec-half .exec-tile { padding-inline: 0; text-align: center; }
+  .exec-half .exec-tile .micro-label { text-transform: none; letter-spacing: 0; }
+}
+
 /* The last card takes whatever is left of its row instead of leaving a blank
    cell beside it — at every column count the grid uses (2 from 768px, 3 from
    1280px, 4 from 1800px; ExecutiveBriefing.tsx). */

@@ -165,19 +165,32 @@ function ViewLink({ label, onClick, accent, testId }: {
     <button
       onClick={onClick}
       data-testid={testId}
+      aria-label={label}
       className="shrink-0 inline-flex items-center gap-0.5 text-[11px] font-semibold transition-colors hover:underline"
       style={{ color: accent ? `hsl(${accent})` : undefined }}
     >
-      {label}
+      <span className="exec-long">{label}</span>
+      <span className="exec-short" aria-hidden="true">All</span>
       <ChevronRight className="h-3 w-3" aria-hidden="true" />
     </button>
   );
 }
 
-function ExecCard({ id, icon: Icon, title, accent, headerRight, children, className = "", index = 0 }: {
+function ExecCard({ id, icon: Icon, title, accent, headerRight, children, className = "", index = 0, wide = false, order, shortTitle }: {
   id: string; icon: LucideIcon; title: string; accent: string;
   headerRight?: ReactNode; children: ReactNode; className?: string; index?: number;
+  /** PHONE LAYOUT (2026-11-21, owner: "I want the mobile view to be
+   *  affected"). Under 768px the grid is TWO columns, not one. A card is half
+   *  the screen (`exec-half`: index.css drops its row icons and grey detail
+   *  under 640px so a title and its date still fit) unless it is `wide`
+   *  (Habits, Money, Recent Activity need the full row). `order` is the
+   *  card's place on a phone, so the half cards pair up; from 768px the
+   *  source order applies. */
+  wide?: boolean; order: number;
+  /** The title a phone's half card shows when the full one will not fit. */
+  shortTitle?: string;
 }) {
+  const phone = `${PHONE_ORDER[order] ?? ""} md:order-none ${wide ? "col-span-2 md:col-span-1" : "exec-half"}`;
   // h-full + flex column is what makes a card FILL its grid row instead of
   // hugging its content and leaving the rest of the cell black (user report
   // 2026-08-20: "there's a lot of empty space in the executive tab").
@@ -188,16 +201,18 @@ function ExecCard({ id, icon: Icon, title, accent, headerRight, children, classN
   // lives in the ExpandableRows caps below instead. See index.css.
   return (
     <section
-      className={`bubble bubble-enter p-2.5 sm:p-3 h-full flex flex-col ${className}`}
+      className={`bubble bubble-enter p-2.5 sm:p-3 h-full flex flex-col min-w-0 ${phone} ${className}`}
       style={{ ["--accent-hsl" as any]: accent, ["--i" as any]: index }}
       data-testid={`exec-card-${id}`}
       aria-label={title}
     >
       <div className="flex items-center justify-between gap-2 mb-1.5 shrink-0">
         <div className="flex items-center gap-1.5 min-w-0">
-          <RowIcon icon={Icon} hsl={accent} />
+          {/* Needs Attention carries two header buttons: on a phone's half
+              card its icon gives way so the title is whole. */}
+          <RowIcon icon={Icon} hsl={accent} opt={!!shortTitle} />
           <h3 className="micro-label truncate" style={{ color: `hsl(${accent})` }}>
-            {title}
+            {shortTitle ? <><span className="exec-long">{title}</span><span className="exec-short" aria-hidden="true">{shortTitle}</span></> : title}
           </h3>
         </div>
         {headerRight}
@@ -206,6 +221,12 @@ function ExecCard({ id, icon: Icon, title, accent, headerRight, children, classN
     </section>
   );
 }
+
+/** Literal class names, so Tailwind emits them. */
+const PHONE_ORDER: Record<number, string> = {
+  1: "order-1", 2: "order-2", 3: "order-3", 4: "order-4", 5: "order-5",
+  6: "order-6", 7: "order-7", 8: "order-8", 9: "order-9",
+};
 
 /** An empty card still fills its cell — the message centres in the space
  *  rather than sitting at the top with a black void under it. */
@@ -272,10 +293,14 @@ function FooterLink({ onClick, testId, children }: {
 // ── Rows ─────────────────────────────────────────────────────────────────────
 
 /** The tinted icon square every row on this tab leads with (ItemRow's). */
-function RowIcon({ icon: Icon, hsl }: { icon: LucideIcon; hsl: string }) {
+function RowIcon({ icon: Icon, hsl, opt = false }: {
+  icon: LucideIcon; hsl: string;
+  /** Dropped on a phone's half-width card (index.css `.exec-opt`). */
+  opt?: boolean;
+}) {
   return (
     <span
-      className="h-6 w-6 rounded-md flex items-center justify-center shrink-0"
+      className={`h-6 w-6 rounded-md flex items-center justify-center shrink-0 ${opt ? "exec-opt" : ""}`}
       style={{ background: `hsl(${hsl} / 0.15)`, color: `hsl(${hsl})` }}
       aria-hidden="true"
     >
@@ -370,7 +395,7 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
       data-testid={`exec-item-${item.key}`}
       title={item.reason ? `${item.title} — ${item.reason}` : item.title}
     >
-      <RowIcon icon={Icon} hsl={hsl} />
+      <RowIcon icon={Icon} hsl={hsl} opt />
       <div className="flex-1 min-w-0 flex items-center gap-2">
         <p className="text-[13px] font-semibold leading-tight flex items-center gap-1.5 min-w-0 flex-1">
           <span className="truncate min-w-0">{titleMain}</span>
@@ -382,19 +407,24 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
             </span>
           )}
         </p>
-        {item.reason && <p className="text-[11px] text-muted-foreground truncate shrink-0 max-w-[45%]">{item.reason}</p>}
+        {item.reason && <p className={`text-[11px] text-muted-foreground truncate shrink-0 max-w-[45%] ${right ? "exec-opt" : ""}`}>{item.reason}</p>}
       </div>
       {right && (
         <span className="shrink-0 text-[12px] font-bold tabular-nums" style={{ color: `hsl(${hsl})` }}>
           {right}
         </span>
       )}
-      <ActionButton
-        item={item}
-        busy={!!busyKeys?.has(item.key)}
-        armed={armedKey === item.key}
-        onAction={onAction}
-      />
+      {/* On a phone's half card a row with a date keeps the date and drops
+          the button (the row itself opens the item); a row with no date —
+          a dose due now — keeps its button. */}
+      <span className={`shrink-0 inline-flex empty:hidden ${right ? "exec-opt" : ""}`}>
+        <ActionButton
+          item={item}
+          busy={!!busyKeys?.has(item.key)}
+          armed={armedKey === item.key}
+          onAction={onAction}
+        />
+      </span>
     </div>
   );
 }
@@ -544,7 +574,8 @@ function OverviewCell({ icon: Icon, accent, label, value, sub, subClass, onClick
 /** A wellness metric tile. Pressing one opens the Wellness tab's own popup for
  *  that metric — the 7-day chart with latest/average/best — rather than a
  *  second version of it built here. */
-function WellTile({ icon: Icon, label, value, accent, onClick, testId }: {
+function WellTile({ icon: Icon, label, value, accent, onClick, testId, className = "" }: {
+  className?: string;
   icon: LucideIcon; label: string; value: string; accent: string;
   onClick?: () => void; testId?: string;
 }) {
@@ -553,7 +584,7 @@ function WellTile({ icon: Icon, label, value, accent, onClick, testId }: {
     <Tag
       {...(onClick ? { onClick, type: "button" as const, "aria-label": `${label} — view detail` } : {})}
       data-testid={testId}
-      className={`bubble-row flex flex-col items-center justify-center text-center px-1.5 py-1 w-full min-w-0 ${onClick ? "touch-hit" : ""}`}
+      className={`bubble-row flex flex-col items-center justify-center text-center px-1.5 py-1 w-full min-w-0 ${className} ${onClick ? "touch-hit" : ""}`}
       style={{ ["--accent-hsl" as any]: accent }}
     >
       <p className="text-[12px] font-bold leading-tight truncate max-w-full">
@@ -1412,7 +1443,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       </div>
 
       {feedLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" data-testid="exec-cards-loading" aria-label="Loading dashboard">
+        <div className="grid grid-cols-2 xl:grid-cols-3 gap-2" data-testid="exec-cards-loading" aria-label="Loading dashboard">
           {[0, 1, 2, 3, 4, 5].map((i) => <BubbleSkeleton key={i} rows={2} height={120} index={i} />)}
         </div>
       ) : (
@@ -1420,12 +1451,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           {/* exec-grid: rows stretch so both cards in a row are the same
               height, and a trailing odd card spans the full width — no blank
               cell, no black gap under a short card (index.css). */}
-          <div className="exec-grid grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 min-[1800px]:grid-cols-4 gap-2">
+          <div className="exec-grid grid grid-cols-2 xl:grid-cols-3 min-[1800px]:grid-cols-4 gap-2">
 
             {/* ── Needs Attention ──────────────────────────────────────────── */}
             <ExecCard
               id="attention" icon={TriangleAlert} title="Needs Attention"
-              accent={CARD_ACCENTS.attention} index={1}
+              accent={CARD_ACCENTS.attention} index={1} order={1} shortTitle="Attention"
               headerRight={
                 <div className="flex items-center gap-1">
                   {/* Advice costs a model call, so it stays a deliberate tap. */}
@@ -1573,7 +1604,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             {/* ── Tasks ────────────────────────────────────────────────────── */}
             <ExecCard
               id="tasks" icon={CheckSquare} title="Tasks"
-              accent={CARD_ACCENTS.tasks} index={2}
+              accent={CARD_ACCENTS.tasks} index={2} order={2}
               headerRight={<ViewLink label="View all tasks" accent={CARD_ACCENTS.tasks} onClick={() => go("/dashboard/tasks")} testId="exec-view-tasks" />}
             >
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 mb-1.5 text-[11px] text-muted-foreground">
@@ -1612,7 +1643,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                         />
                         <div className="flex-1 min-w-0 flex items-center gap-2 cursor-pointer" title={`${t.title} — ${sub}`} onClick={() => { setTaskFocus({ id: t.id, tab: du != null && du > 0 ? "upcoming" : "today" }); setPopup("tasks"); }}>
                           <p className="text-[13px] font-semibold leading-tight truncate flex-1 min-w-0">{t.title}</p>
-                          <p className={`text-[11px] truncate shrink-0 max-w-[50%] ${du != null && du < 0 ? "text-red-500" : "text-muted-foreground"}`}>{sub}</p>
+                          <p className={`text-[11px] truncate shrink-0 max-w-[50%] ${du != null && du < 0 ? "text-red-500" : "text-muted-foreground"}`}>
+                            <span className="exec-long">{sub}</span>
+                            {/* A phone's half card: just the day (red when overdue). */}
+                            <span className="exec-short" aria-hidden="true">{du == null ? "" : du === 0 ? "Today" : fmtShortDate(dateFromDays(du))}</span>
+                          </p>
                         </div>
                       </div>
                     );
@@ -1629,7 +1664,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             {/* ── Schedule ─────────────────────────────────────────────────── */}
             <ExecCard
               id="schedule" icon={CalendarDays} title="Schedule"
-              accent={CARD_ACCENTS.schedule} index={3}
+              accent={CARD_ACCENTS.schedule} index={3} order={3}
               headerRight={<ViewLink label="View schedule" accent={CARD_ACCENTS.schedule} onClick={() => setPopup("events")} testId="exec-view-calendar" />}
             >
               <div className="flex items-baseline gap-2 mb-1.5 min-w-0 text-[11px] text-muted-foreground">
@@ -1638,7 +1673,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   {eventsToday.length === 1 ? "event today" : "events today"}
                 </span>
                 {nextUp && (
-                  <span className="flex-1 min-w-0 truncate text-right" title={nextUp.title}>
+                  <span className="exec-opt flex-1 min-w-0 truncate text-right" title={nextUp.title}>
                     Next up{" "}
                     <span className="text-[12px] font-semibold" style={{ color: `hsl(${CARD_ACCENTS.schedule})` }}>{nextUp.title}</span>
                     {nextUp.time && <> · {timeLabel12h(nextUp.time)}</>}
@@ -1664,7 +1699,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                         style={{ ["--accent-hsl" as any]: CARD_ACCENTS.schedule }}
                       >
                         <span className="h-2 w-2 rounded-full shrink-0" style={{ background: `hsl(${DOT_ROTATION[idx % DOT_ROTATION.length]})` }} aria-hidden="true" />
-                        <span className="text-[12px] font-semibold tabular-nums text-muted-foreground w-[64px] shrink-0">
+                        <span className="exec-time text-[12px] font-semibold tabular-nums text-muted-foreground w-[64px] shrink-0">
                           {e.allDay || !e.time ? "All day" : timeLabel12h(e.time)}
                         </span>
                         <span className="text-[13px] font-semibold truncate flex-1">{e.title}</span>
@@ -1688,7 +1723,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   a block nobody knows to look for. */}
               <div className="mt-1.5 pt-1.5 border-t border-border/60" data-testid="exec-important-dates">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="micro-label text-muted-foreground">Dates to remember</p>
+                  <p className="micro-label text-muted-foreground"><span className="exec-long">Dates to remember</span><span className="exec-short" aria-hidden="true">Dates</span></p>
                   <ViewLink
                     label="View all dates"
                     accent={CARD_ACCENTS.schedule}
@@ -1726,7 +1761,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             {/* ── Habits ───────────────────────────────────────────────────── */}
             <ExecCard
               id="habits" icon={Flame} title="Habits"
-              accent={CARD_ACCENTS.habits} index={4}
+              accent={CARD_ACCENTS.habits} index={4} order={5} wide
               headerRight={<ViewLink label="View habits" accent={CARD_ACCENTS.habits} onClick={() => setPopup("habits")} testId="exec-view-habits" />}
             >
               {habitsDueToday.length === 0 ? (
@@ -1800,7 +1835,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             {/* ── Money ────────────────────────────────────────────────────── */}
             <ExecCard
               id="money" icon={DollarSign} title="Money"
-              accent={CARD_ACCENTS.money} index={5}
+              accent={CARD_ACCENTS.money} index={5} order={6} wide
               // Explicit navigation, and labelled as such: Finance is a tab,
               // not an expansion of this card.
               headerRight={<ViewLink label="Open finances" accent={CARD_ACCENTS.money} onClick={() => go("/dashboard/finance")} testId="exec-view-finances" />}
@@ -1877,7 +1912,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             {/* ── Documents ────────────────────────────────────────────────── */}
             <ExecCard
               id="documents" icon={FolderOpen} title="Documents"
-              accent={CARD_ACCENTS.documents} index={6}
+              accent={CARD_ACCENTS.documents} index={6} order={7}
               headerRight={<ViewLink label="View documents" accent={CARD_ACCENTS.documents} onClick={() => setPopup("docs")} testId="exec-view-documents" />}
             >
               {/* 2026-10-21: the expiring LIST lives in Needs Attention now, so
@@ -1887,10 +1922,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 {([
                   { key: "expired", label: "Expired", n: docsUrgency.expired, hs: "0 72% 58%" },
                   { key: "soon", label: "Expiring", n: docsSoonCount, hs: "25 90% 56%" },
-                  { key: "total", label: "In library", n: recentDocsRes?.total ?? (recentDocsRes ? recentDocsRes.rows.length : null), hs: CARD_ACCENTS.documents },
+                  { key: "total", label: "Library", n: recentDocsRes?.total ?? (recentDocsRes ? recentDocsRes.rows.length : null), hs: CARD_ACCENTS.documents },
                 ] as const).map((c) => (
                   <button key={c.key} type="button" onClick={() => setPopup("docs")}
-                    className="bubble-row px-2 py-1 text-left min-w-0" style={{ ["--accent-hsl" as any]: c.hs }}
+                    className="exec-tile bubble-row px-2 py-1 text-left min-w-0" style={{ ["--accent-hsl" as any]: c.hs }}
                     data-testid={`exec-docs-count-${c.key}`}>
                     <p className="micro-label text-muted-foreground truncate">{c.label}</p>
                     <p className="text-[13px] font-bold tabular-nums"
@@ -1900,7 +1935,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   </button>
                 ))}
               </div>
-              <p className="text-[11px] text-muted-foreground mt-1 truncate" data-testid="exec-docs-caption">
+              <p className="text-[11px] text-muted-foreground mt-1 truncate" data-testid="exec-docs-caption"
+                title={visibleDocs.length === 0 ? undefined : docsUrgency.label || undefined}>
                 {visibleDocs.length === 0 ? "Nothing expiring in the next 90 days." : (docsUrgency.label || "") + " · listed under Needs Attention"}
               </p>
               <p className="micro-label text-muted-foreground mt-1.5 mb-1">Recently added</p>
@@ -1921,10 +1957,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       style={{ ["--accent-hsl" as any]: CARD_ACCENTS.documents }}
                       data-testid={`exec-docs-recent-${d.id}`}
                     >
-                      <RowIcon icon={FileText} hsl={CARD_ACCENTS.documents} />
+                      <RowIcon icon={FileText} hsl={CARD_ACCENTS.documents} opt />
                       <div className="flex-1 min-w-0 flex items-center gap-2">
                         <p className="text-[13px] font-semibold leading-tight truncate flex-1 min-w-0">{d.name || d.title || "Document"}</p>
-                        <p className="text-[11px] text-muted-foreground truncate shrink-0 max-w-[50%]">
+                        <p className="exec-opt text-[11px] text-muted-foreground truncate shrink-0 max-w-[50%]">
                           {[d.type ? String(d.type).replace(/_/g, " ") : null, d.createdAt ? `added ${relativeTimeShort(d.createdAt)}` : null].filter(Boolean).join(" · ")}
                         </p>
                       </div>
@@ -1937,7 +1973,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             {/* ── Wellness ─────────────────────────────────────────────────── */}
             <ExecCard
               id="wellness" icon={Heart} title="Wellness"
-              accent={CARD_ACCENTS.wellness} index={7}
+              accent={CARD_ACCENTS.wellness} index={7} order={8}
               headerRight={<ViewLink label="View wellness" accent={CARD_ACCENTS.wellness} onClick={() => setPopup("wellness:score")} testId="exec-view-wellness" />}
             >
               {!hasWellness && latestVitals.length === 0 ? (
@@ -1957,35 +1993,32 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                           className={`bubble-row w-full flex items-center ${ROW} text-left`}
                           style={{ ["--accent-hsl" as any]: CARD_ACCENTS.wellness }}
                           data-testid={`exec-wellness-vital-${r.key}`}>
-                          <RowIcon icon={VITAL_ICONS[r.key] ?? ActivityIcon} hsl={CARD_ACCENTS.wellness} />
+                          <RowIcon icon={VITAL_ICONS[r.key] ?? ActivityIcon} hsl={CARD_ACCENTS.wellness} opt />
                           <span className="flex-1 min-w-0 flex items-center gap-2">
                             <span className="text-[13px] font-semibold leading-tight truncate flex-1 min-w-0">{r.label}</span>
-                            {r.at && <span className="text-[11px] text-muted-foreground truncate shrink-0">{relTime(r.at)}</span>}
+                            {r.at && <span className="exec-opt text-[11px] text-muted-foreground truncate shrink-0">{relTime(r.at)}</span>}
                           </span>
                           <span className="shrink-0 text-[13px] font-bold tabular-nums">{r.value}</span>
                         </button>
                       ))}
                     </div>
                   )}
+                  {/* One grid: 3 + 2 tiles from 640px, pairs on a phone. */}
                   {hasWellness && (
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <WellTile icon={Footprints} accent={CARD_ACCENTS.wellness} label="Steps"
+                  <div className="grid grid-cols-2 sm:grid-cols-6 gap-1.5">
+                    <WellTile className="sm:col-span-2" icon={Footprints} accent={CARD_ACCENTS.wellness} label="Steps"
                       value={vitals.steps.value != null ? Math.round(vitals.steps.value).toLocaleString() : "—"}
                       onClick={() => setPopup("wellness:activity")} testId="exec-well-steps" />
-                    <WellTile icon={Moon} accent="262 70% 62%" label="Sleep"
+                    <WellTile className="sm:col-span-2" icon={Moon} accent="262 70% 62%" label="Sleep"
                       value={vitals.sleep.value != null ? fmtSleep(vitals.sleep.value) : "—"}
                       onClick={() => setPopup("wellness:sleep")} testId="exec-well-sleep" />
-                    <WellTile icon={ActivityIcon} accent="217 91% 65%" label="Exercise"
+                    <WellTile className="sm:col-span-2" icon={ActivityIcon} accent="217 91% 65%" label="Exercise"
                       value={exerciseLabel}
                       onClick={() => setPopup("wellness:activity")} testId="exec-well-exercise" />
-                  </div>
-                  )}
-                  {hasWellness && (
-                  <div className="grid grid-cols-2 gap-1.5 mt-1.5">
-                    <WellTile icon={Flame} accent="25 95% 58%" label="Calories"
+                    <WellTile className="sm:col-span-3" icon={Flame} accent="25 95% 58%" label="Calories"
                       value={vitals.calories.value != null ? `${Math.round(vitals.calories.value).toLocaleString()} kcal` : "—"}
                       onClick={() => setPopup("wellness:calories")} testId="exec-well-calories" />
-                    <WellTile icon={Droplets} accent="199 89% 60%" label="Water"
+                    <WellTile className="col-span-2 sm:col-span-3" icon={Droplets} accent="199 89% 60%" label="Water"
                       value={vitals.hydration.value != null ? `${Math.round(vitals.hydration.value)} ${vitals.hydration.unit || "oz"}` : "—"}
                       onClick={() => setPopup("wellness:hydration")} testId="exec-well-water" />
                   </div>
@@ -1997,7 +2030,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             {/* ── Upcoming ─────────────────────────────────────────────────── */}
             <ExecCard
               id="upcoming" icon={Clock} title="Upcoming"
-              accent={CARD_ACCENTS.upcoming} index={8}
+              accent={CARD_ACCENTS.upcoming} index={8} order={4}
               headerRight={<ViewLink label="View all upcoming" accent={CARD_ACCENTS.upcoming} onClick={() => setPopup("upcoming")} testId="exec-view-upcoming" />}
             >
               {upcomingPreview.length === 0 ? (
@@ -2023,7 +2056,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               trailing card whatever is left of its row) ─────────────────── */}
           <ExecCard
             id="activity" icon={History} title="Recent Activity"
-            accent={CARD_ACCENTS.activity} index={9}
+            accent={CARD_ACCENTS.activity} index={9} order={9} wide
           >
             {activityItems.length === 0 ? (
               <CardEmpty icon={History} accent={CARD_ACCENTS.activity}>

@@ -231,6 +231,28 @@ describe("ExecutiveBriefing", () => {
     expect(screen.getByTestId("exec-overview").parentElement!.contains(screen.getByTestId("page-menu"))).toBe(true);
   });
 
+  // 2026-11-21 (owner): "I want the mobile view to be affected". A phone
+  // shows the cards two to a row; the three that need the width take a full
+  // row, and the half cards are ordered so each has a partner.
+  it("phone layout: two columns, half cards paired, wide cards on their own row", async () => {
+    await mount(enhancedWith());
+    const grid = screen.getByTestId("exec-card-attention").parentElement!;
+    expect(grid.className).toMatch(/(^| )grid-cols-2( |$)/);
+    const cls = (id: string) => screen.getByTestId(`exec-card-${id}`).className;
+    for (const id of ["habits", "money", "activity"]) {
+      expect(cls(id), id).toContain("col-span-2");
+      expect(cls(id), id).not.toContain("exec-half");
+    }
+    const halves = ["attention", "tasks", "schedule", "upcoming", "documents", "wellness"];
+    for (const id of halves) expect(cls(id), id).toContain("exec-half");
+    const order = (id: string) => Number(/(?:^| )order-(\d)(?: |$)/.exec(cls(id))![1]);
+    // Pairs: 1-2, 3-4, then two wide cards (5, 6), 7-8, then the last wide one.
+    expect(halves.map(order)).toEqual([1, 2, 3, 4, 7, 8]);
+    expect(["habits", "money", "activity"].map(order)).toEqual([5, 6, 9]);
+    // From 768px the source order applies again.
+    for (const id of [...halves, "habits", "money", "activity"]) expect(cls(id)).toContain("md:order-none");
+  });
+
   it("never names an event that already happened today as Next Important", async () => {
     const inDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA"); };
     stubRoutes({
