@@ -151,7 +151,31 @@ describe("ExecutiveBriefing", () => {
     expect(money.contains(row)).toBe(true);
     expect(row.textContent).toContain("Phone");
     expect(row.textContent).toContain("2d overdue");
-    expect(money.textContent).toContain("1 overdue");
+    // Two days late is inside the seven-day window: its own red group.
+    expect(screen.getByTestId("bills-group-overdue").contains(row)).toBe(true);
+  });
+
+  it("Money card bills: due today, the last seven days overdue, the next 30 — nothing older, no Pay (2026-11-21)", async () => {
+    await mount(enhancedWith({
+      financeSnapshot: { upcomingBills: [
+        { id: "old", name: "Storage unit", amount: 90, daysUntil: -8, status: "overdue" },
+        { id: "edge", name: "Gym", amount: 40, daysUntil: -7, status: "overdue" },
+        { id: "now", name: "Electric", amount: 120, daysUntil: 0, status: "due_today" },
+        { id: "soon", name: "Internet", amount: 60, daysUntil: 30, status: "upcoming", autopay: true },
+      ] },
+    }));
+    const money = screen.getByTestId("exec-card-money");
+    expect(screen.getByTestId("bills-group-today").textContent).toContain("Electric");
+    expect(screen.getByTestId("bills-group-overdue").textContent).toContain("Gym");
+    expect(screen.getByTestId("bills-group-next").textContent).toContain("Internet");
+    expect(screen.getByTestId("bill-status-soon").textContent).toContain("Auto Pay");
+    // Eight days late: out of the overview, and the card says so.
+    expect(screen.queryByTestId("exec-money-bill-old")).toBeNull();
+    expect(money.textContent).not.toContain("Storage unit");
+    expect(screen.getByTestId("bills-overview-older").textContent).toContain("1 unpaid bill more than 7 days overdue");
+    // A readout: nothing in the card pays a bill.
+    expect(money.querySelector("[data-testid^='exec-action-bill']")).toBeNull();
+    expect(Array.from(money.querySelectorAll("button")).some((b) => /^\s*Pay\b/.test(b.textContent || ""))).toBe(false);
   });
 
   it("lists an expiring document once — under Needs Attention — and the Documents card counts it", async () => {
@@ -285,13 +309,11 @@ describe("ExecutiveBriefing", () => {
     expect(screen.getByTestId("bills-view-all")).toBeTruthy();
   });
 
-  it("offers a one-tap action on a row, and arms a payment before taking it", async () => {
+  it("has no Pay button on the tab itself: paying lives in the Bills panel a row opens", async () => {
     await mount(enhancedWith());
-    const pay = screen.getByTestId("exec-action-bill:b1");
-    expect(pay.textContent).toContain("Pay");
-    // Money moves on the second tap, never the first.
-    fireEvent.click(pay);
-    expect(screen.getByTestId("exec-action-bill:b1").textContent).toContain("Confirm");
+    expect(screen.queryByTestId("exec-action-bill:b1")).toBeNull();
+    fireEvent.click(screen.getByTestId("exec-money-bill-b1"));
+    expect(await screen.findByTestId("bills-popup")).toBeTruthy();
   });
 
   it("shows a real all-clear when nothing needs attention", async () => {
@@ -306,7 +328,7 @@ describe("ExecutiveBriefing", () => {
         { id: "b1", name: "Verizon Phone Bill payment", amount: 86.5, daysUntil: -3, status: "overdue" },
         { id: "b2", name: "Phone Bill payment", amount: 86.5, daysUntil: -3, status: "overdue" },
         { id: "b3", name: "QA Test Subscription", amount: 15.99, daysUntil: 5, status: "upcoming" },
-        { id: "b4", name: "rent the 1st", amount: 2500, daysUntil: -28, status: "overdue" },
+        { id: "b4", name: "rent the 1st", amount: 2500, daysUntil: -5, status: "overdue" },
         { id: "b5", name: "rent", amount: 300, daysUntil: 3, status: "upcoming" },
       ] },
       expiringDocuments: [],

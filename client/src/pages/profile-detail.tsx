@@ -153,6 +153,8 @@ function PastActivityList({
 import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
+import { hashNavigate } from "@/lib/hashNavigate";
+import { profileListing } from "@/lib/profile-listing";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
@@ -13109,7 +13111,10 @@ export default function ProfileDetailPage() {
       toast({ title: `Profile deleted`, description: "All linked data has been removed" });
       // Cascade: profile delete also removes linked obligations, events, expenses, etc.
       invalidateDomains("profiles", "obligations", "events", "expenses", "tasks", "trackers");
-      navigate("/profiles");
+      // Back to the list this profile was IN — the same place its Back button
+      // goes (lib/profile-listing). An asset returns to Assets, not to the
+      // Info tab, which never listed it.
+      hashNavigate(profileListing(profile?.type).href);
     },
     onError: (err: Error) => {
       toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
@@ -13330,9 +13335,8 @@ export default function ProfileDetailPage() {
   // (Liability/loan profiles returned above into LiabilityProfilePage, so the
   // only linked types reaching here are assets and the subscription/insurance
   // family.)
-  const listedUnderAssets = ["vehicle", "asset", "investment", "property"].includes(profile.type);
-  const backHref = listedUnderAssets ? "/linked?tab=assets" : isLinkedType ? "/linked" : "/profiles";
-  const backLabel = listedUnderAssets ? "Back to Assets" : isLinkedType ? "Back to Linked" : "Back to Profiles";
+  // ONE rule for Back and for where a delete returns to (lib/profile-listing).
+  const { href: backHref, label: backLabel } = profileListing(profile.type);
 
   // The whole profile, not just its type: an account's KIND picks its glyph
   // and colour, so a credit card doesn't wear the same green bank icon as a

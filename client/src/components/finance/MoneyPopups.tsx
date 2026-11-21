@@ -36,9 +36,9 @@ import {
   Receipt, RefreshCw, Sparkles, Waves, Zap, ShoppingCart, Utensils, Car,
   HeartPulse, Home, Film, CreditCard, Package, PiggyBank, Pencil, Trash2,
 } from "lucide-react";
-import { toMonthlyAmount, canonicalIncomeFrequency, isReceivedPaycheck, paycheckReceivedDay, paycheckAmount } from "@shared/obligation-windows";
+import { billsOverview, toMonthlyAmount, canonicalIncomeFrequency, isReceivedPaycheck, paycheckReceivedDay, paycheckAmount } from "@shared/obligation-windows";
 import { formatLocalDate } from "@/lib/dates";
-import { dayLabel } from "@shared/now-rank";
+import { BillsOverviewList } from "@/components/finance/BillsOverviewList";
 import type { MoneyBill } from "@/components/finance/MoneyOverview";
 
 const fmt = (n: number) => Math.round(Math.abs(n)).toLocaleString("en-US");
@@ -520,110 +520,36 @@ export function IncomePopup({
 // 4 · BILLS DUE — rose timeline
 // ═════════════════════════════════════════════════════════════════════════════
 
-function DueChip({ dueDate }: { dueDate?: string }) {
-  // parseDate pins a bare "YYYY-MM-DD" to local noon; `new Date(dueDate)` read
-  // it as UTC midnight and the chip showed the day BEFORE the due date for
-  // every negative-offset user.
-  const d = parseDate(dueDate);
-  const ok = !!d;
-  return (
-    <div className="w-10 shrink-0 rounded-lg border border-border overflow-hidden text-center">
-      <div className="micro-label bg-red-500/80 text-white py-0.5">
-        {ok ? d!.toLocaleDateString("en-US", { month: "short" }) : "—"}
-      </div>
-      <div className="py-0.5 text-sm font-bold tabular-nums bg-card">{ok ? d!.getDate() : "?"}</div>
-    </div>
-  );
-}
-
 export function BillsDuePopup({
-  open, onOpenChange, bills, onPayBill, payingId,
+  open, onOpenChange, bills,
 }: {
   open: boolean; onOpenChange: (o: boolean) => void;
-  bills: MoneyBill[]; onPayBill?: (b: MoneyBill) => void; payingId?: string | null;
+  bills: MoneyBill[];
 }) {
-  const rose = "hsl(350 80% 58%)";
   const [, navigate] = useLocation();
   // Close before navigating (same body pointer-events fix as HeroKPIPopups).
-  const goBill = (b: any) => {
-    if (!b.linkedLiabilityId) return;
-    onOpenChange(false);
-    setTimeout(() => navigate(`/profiles/${b.linkedLiabilityId}`), 0);
-  };
-  const total = bills.reduce((s, b) => s + (Number(b.amount) || 0), 0);
-  const groups = useMemo(() => {
-    const g: Array<{ key: string; label: string; items: MoneyBill[] }> = [
-      { key: "overdue", label: "Overdue", items: [] },
-      { key: "today", label: "Due today", items: [] },
-      { key: "week", label: "Next 7 days", items: [] },
-      { key: "later", label: "Later this month", items: [] },
-    ];
-    for (const b of bills) {
-      const d = Number(b.daysUntil);
-      if (d < 0) g[0].items.push(b);
-      else if (d === 0) g[1].items.push(b);
-      else if (d <= 7) g[2].items.push(b);
-      else g[3].items.push(b);
-    }
-    return g.filter((x) => x.items.length > 0);
-  }, [bills]);
-  const overdueCount = bills.filter((b) => Number(b.daysUntil) < 0).length;
+  const leave = (path: string) => { onOpenChange(false); setTimeout(() => navigate(path), 0); };
+  // The same split the Finance Bills card and the dashboard Money card draw
+  // (shared/obligation-windows): due today, overdue in the last seven days,
+  // the next 30 days. A readout — no Pay button; a row opens the bill.
+  const o = useMemo(() => billsOverview(bills), [bills]);
+  const total = o.visible.reduce((s, b) => s + (Number(b.amount) || 0), 0);
+  const late = o.recentlyOverdue.length;
 
   return (
     <BubbleModal open={open} onClose={() => onOpenChange(false)} testId="popup-bills"
-      title="Bills due · next 30 days" icon={CalendarDays} accent={ROSE} count={bills.length}>
+      title="Bills · today and the next 30 days" icon={CalendarDays} accent={ROSE} count={o.visible.length}>
       <PopupHero accent={ROSE}
-        value={<>{bills.length}<span className="text-sm font-semibold text-muted-foreground ml-2">bills · ${fmt(total)}</span></>}
-        caption={overdueCount > 0
-          ? <span className="font-semibold text-red-500">{overdueCount} overdue — needs attention</span>
-          : <span className="text-muted-foreground">nothing overdue 🎉</span>} />
-
-      <div>
-        {bills.length === 0 ? (
-          <p className="text-xs text-muted-foreground text-center py-8">No bills due in the next 30 days.</p>
-        ) : (
-          <div className="relative pl-3">
-            {/* timeline rail */}
-            <div className="absolute left-[3px] top-1 bottom-1 w-px bg-border" />
-            <div className="space-y-4">
-              {groups.map((g) => (
-                <div key={g.key}>
-                  <div className="relative mb-1.5">
-                    <span className="absolute -left-[13.5px] top-1 h-2.5 w-2.5 rounded-full border-2 border-background"
-                      style={{ background: g.key === "overdue" ? "hsl(0 72% 58%)" : g.key === "today" ? "hsl(38 96% 54%)" : rose }} />
-                    <p className="micro-label"
-                      style={{ color: g.key === "overdue" ? "hsl(0 72% 58%)" : g.key === "today" ? "hsl(38 96% 54%)" : "hsl(var(--muted-foreground))" }}>
-                      {g.label} · {g.items.length}
-                    </p>
-                  </div>
-                  <div className="space-y-1.5">
-                    {g.items.map((b: any) => (
-                      <div key={b.id} className="flex items-center gap-2.5 bubble px-2.5 py-2" data-testid={`bill-row-${b.id}`}>
-                        <DueChip dueDate={b.dueDate} />
-                        <button type="button" onClick={() => goBill(b)} disabled={!b.linkedLiabilityId}
-                          className={`flex-1 min-w-0 text-left ${b.linkedLiabilityId ? "cursor-pointer" : "cursor-default"}`}>
-                          <p className="text-xs font-semibold truncate">{b.name}</p>
-                          <p className="text-[11px] text-muted-foreground capitalize truncate">
-                            {[b.category, (b as any).autopay ? "autopay" : null, dayLabel(Number(b.daysUntil))].filter(Boolean).join(" · ")}
-                          </p>
-                        </button>
-                        <span className="text-sm font-bold tabular-nums shrink-0">${fmt(Number(b.amount) || 0)}</span>
-                        {onPayBill && (
-                          <Button size="sm" variant={Number(b.daysUntil) < 0 ? "destructive" : "outline"}
-                            className="h-7 text-xs shrink-0" disabled={payingId === b.id}
-                            onClick={() => onPayBill(b)} data-testid={`bill-pay-${b.id}`}>
-                            {payingId === b.id ? "…" : "Pay"}
-                          </Button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+        value={<>{o.visible.length}<span className="text-sm font-semibold text-muted-foreground ml-2">bills · ${fmt(total)}</span></>}
+        caption={o.dueToday.length > 0
+          ? <span className="font-semibold text-amber-600 dark:text-amber-400">{o.dueToday.length} due today{late > 0 ? ` · ${late} recently overdue` : ""}</span>
+          : late > 0
+            ? <span className="font-semibold text-red-500">{late} overdue in the last 7 days</span>
+            : <span className="text-muted-foreground">nothing due today</span>} />
+      <BillsOverviewList bills={bills}
+        onOpenBill={(b) => { if (b.linkedLiabilityId) leave(`/profiles/${b.linkedLiabilityId}`); else leave("/dashboard/obligations"); }}
+        onViewAll={() => leave("/dashboard/obligations")}
+        emptyLabel="No bills due today or in the next 30 days." />
     </BubbleModal>
   );
 }

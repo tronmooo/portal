@@ -143,6 +143,50 @@ green. After a push to `main`:
     *Guards:* `tests/profile-creation-rules.test.ts`,
     `tests/profile-suggestion-card.dom.test.tsx`.
 
+## Dashboard rules (it scrolls, it shows today, and an overview is a readout)
+
+Every rule below is from one owner report (2026-11-21). Read them before
+touching the app shell (`client/src/App.tsx`, `components/hub/HubShell.tsx`),
+`components/dashboard/ExecutiveBriefing.tsx` or a bills list.
+*Live check (deployed app, smoke account, real browser, phone and desktop):*
+`npx tsx tests/live-dashboard-check.ts`.
+
+**D1. One page scroller, and nothing above it is a dead zone.** `#main-content`
+never scrolls; each page owns one scroller, and `client/src/lib/page-scroll.ts`
+is the only code that says which element that is. Pull-to-refresh arms only
+when `isScrolledToTop` (it used to ask `main.scrollTop === 0`, always true, so
+every swipe back UP refetched the dashboard — "it won't let me scroll back
+up"). The hub header hands vertical drags and the wheel to the page
+(`forwardScrollToPage`): a swipe may start anywhere. Never give a dashboard
+card its own `overflow-y`/`max-height`; cap the list and link to the rest.
+*Guard:* `tests/dashboard-scroll.dom.test.tsx`.
+
+**D2. A bills overview is three questions, and it has no Pay button.** Due
+today, the next 30 days, overdue within the last 7 days: the one split is
+`billsOverview` (`shared/obligation-windows.ts`), drawn by
+`BillsOverviewList` (`client/src/components/finance/`) on the Finance Bills
+card, the Bills Due popup and the dashboard Money card. A bill overdue longer
+is not listed there, and the list says how many and links to the Bills page
+(Rule 4); the record, its payments and its alerts are untouched. The window is
+a DISPLAY rule: never apply it in the server's bill list, the cron or Auto Pay.
+Payments are recorded on the bill's page, the Bills panel, chat or by Auto Pay.
+*Guard:* `tests/bills-overview.test.tsx`.
+
+**D3. The Tasks and Habits cards show today and act in place.** Tasks:
+Overdue / Due today / Upcoming / Completed today, from one split of the open
+list; add, complete, reopen and edit without leaving the tab. Habits: today's
+habits in a stable order (never sorted by completion), done-of-total, what is
+left, one check-in button each. Both bodies are presentational
+(`components/dashboard/ExecTodayCards.tsx`); `ExecutiveBriefing` owns the
+mutations, which are the ones the popups, chat and pages use.
+*Guards:* `tests/exec-today-cards.dom.test.tsx`, `tests/executive-sections.test.tsx`.
+
+**D4. A delete returns to the list the record was in.** The same place its
+Back button goes: `profileListing` (`client/src/lib/profile-listing.ts`). An
+asset returns to Assets, a liability to Liabilities (L7) — never to `/profiles`
+by default.
+*Guard:* `tests/delete-returns-to-listing.test.ts`.
+
 ## Liability rules (a debt reads the same everywhere, and a confirmed change is a stored change)
 
 Every rule below is a bug the owner hit in one session (Liabilities tutorial,

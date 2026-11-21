@@ -94,43 +94,43 @@ describe("BubbleModal keeps its actions connected", () => {
   });
 });
 
-describe("BillsDuePopup — the Pay path survived the shell migration", () => {
+describe("BillsDuePopup — a readout whose rows still go somewhere", () => {
+  // 2026-11-21 (owner request): the Bills overview has no Pay button. What
+  // must survive is that a row is a working control, and that the labels are
+  // right.
   const bills = [
-    { id: "b1", name: "Lubi", amount: 10, daysUntil: -27, dueDate: "2026-07-03", category: "subscriptions" },
+    { id: "b1", name: "Lubi", amount: 10, daysUntil: -4, dueDate: "2026-07-26", category: "subscriptions" },
     { id: "b2", name: "Progressive Auto", amount: 155, daysUntil: 0, dueDate: "2026-07-30", category: "insurance" },
     { id: "b3", name: "ChatGPT Pro", amount: 20, daysUntil: 4, dueDate: "2026-08-03", category: "subscriptions" },
+    { id: "b4", name: "Old gym", amount: 30, daysUntil: -27, dueDate: "2026-07-03", category: "subscriptions" },
   ] as any;
 
-  it("calls onPayBill with the bill that was pressed", () => {
-    const onPayBill = vi.fn();
-    wrap(<BillsDuePopup open onOpenChange={() => {}} bills={bills} onPayBill={onPayBill} />);
+  it("has no Pay button, and each row is a button that closes the popup to open the bill", () => {
+    const onOpenChange = vi.fn();
+    wrap(<BillsDuePopup open onOpenChange={onOpenChange} bills={bills} />);
+    expect(screen.getByTestId("popup-bills").textContent).not.toMatch(/\bPay\b/);
     const row = screen.getByTestId("bill-row-b2");
-    fireEvent.click(row.querySelector("button:last-of-type")!);
-    expect(onPayBill).toHaveBeenCalledTimes(1);
-    expect(onPayBill.mock.calls[0][0].id).toBe("b2");
+    expect(row.tagName).toBe("BUTTON");
+    fireEvent.click(row);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("labels an overdue bill as overdue, not as a negative countdown", () => {
-    // Regression: the row keyed its label off `b.status` while the OVERDUE
-    // group above it keyed off daysUntil < 0, so a bill with a negative
-    // daysUntil and no status rendered "in -27d".
-    wrap(<BillsDuePopup open onOpenChange={() => {}} bills={bills} onPayBill={() => {}} />);
+    // Regression: a bill with a negative daysUntil and no status rendered
+    // "in -27d".
+    wrap(<BillsDuePopup open onOpenChange={() => {}} bills={bills} />);
     const row = screen.getByTestId("bill-row-b1");
-    expect(row.textContent).toContain("27d overdue");
-    expect(row.textContent).not.toContain("-27d");
-    expect(screen.getByTestId("bill-row-b2").textContent).toContain("today");
+    expect(row.textContent).toContain("4d overdue");
+    expect(row.textContent).not.toContain("-4d");
+    expect(screen.getByTestId("bill-row-b2").textContent).toContain("Due today");
     expect(screen.getByTestId("bill-row-b3").textContent).toContain("in 4d");
   });
 
-  it("disables Pay only for the bill being paid", () => {
-    const { container } = wrap(
-      <BillsDuePopup open onOpenChange={() => {}} bills={bills} onPayBill={() => {}} payingId="b2" />,
-    );
-    const btn = (id: string) =>
-      screen.getByTestId(`bill-row-${id}`).querySelector("button:last-of-type") as HTMLButtonElement;
-    expect(btn("b2").disabled).toBe(true);
-    expect(btn("b1").disabled).toBe(false);
-    expect(container).toBeTruthy();
+  it("leaves a bill more than seven days overdue out, and says so", () => {
+    wrap(<BillsDuePopup open onOpenChange={() => {}} bills={bills} />);
+    expect(screen.queryByTestId("bill-row-b4")).toBeNull();
+    expect(screen.getByTestId("bills-overview-older").textContent).toContain("1 unpaid bill more than 7 days overdue");
+    expect(screen.getByTestId("bills-overview-older-link")).toBeTruthy();
   });
 });
 

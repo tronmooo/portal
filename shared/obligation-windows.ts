@@ -28,14 +28,64 @@ export const MS_PER_DAY = 86_400_000;
 export const UPCOMING_BILLS_EMPTY_COPY = `Nothing due in the next ${UPCOMING_BILL_WINDOW_DAYS} days`;
 
 /**
- * The bills a surface shows as "due soon": everything the server's
- * UPCOMING_BILL_WINDOW_DAYS list holds — overdue ones first (still owed) —
- * soonest first. No surface re-filters this with a window of its own.
+ * How long an unpaid bill stays in a bills OVERVIEW after its due date. Owner
+ * decision 2026-11-21: the overview answers "what is due today, what is coming
+ * in the next 30 days, what became overdue in the last seven" — an old overdue
+ * row is history, not a to-do, and lives on the Bills page and the liability's
+ * own page (record, payments and status untouched).
+ */
+export const OVERDUE_BILL_VISIBLE_DAYS = 7;
+
+export interface BillsOverview<T> {
+  /** Due today. */
+  dueToday: T[];
+  /** Due tomorrow … UPCOMING_BILL_WINDOW_DAYS, soonest first. */
+  upcoming: T[];
+  /** Overdue by 1 … OVERDUE_BILL_VISIBLE_DAYS days, most recently due first. */
+  recentlyOverdue: T[];
+  /** Overdue by more than OVERDUE_BILL_VISIBLE_DAYS: NOT shown in an overview.
+   *  Surfaces say how many there are and link to the Bills page (Rule 4: a
+   *  filter must not look like deletion). */
+  olderOverdue: T[];
+  /** recentlyOverdue (oldest first) + dueToday + upcoming: by due date. */
+  visible: T[];
+}
+
+/**
+ * THE bills overview: one split of the server's upcoming-bills list that the
+ * Finance Bills card, the Bills Due tile and popup, and the dashboard Money
+ * card all render. No surface applies a window of its own.
+ */
+export function billsOverview<T extends { daysUntil?: number | null }>(bills: readonly T[] | null | undefined): BillsOverview<T> {
+  const rows = (bills || [])
+    .filter((b) => b && typeof b.daysUntil === "number" && Number.isFinite(b.daysUntil))
+    .slice()
+    .sort((a, b) => (a.daysUntil as number) - (b.daysUntil as number));
+  const dueToday: T[] = [], upcoming: T[] = [], recent: T[] = [], older: T[] = [];
+  for (const b of rows) {
+    const d = b.daysUntil as number;
+    if (d > UPCOMING_BILL_WINDOW_DAYS) continue;
+    if (d > 0) upcoming.push(b);
+    else if (d === 0) dueToday.push(b);
+    else if (d >= -OVERDUE_BILL_VISIBLE_DAYS) recent.push(b);
+    else older.push(b);
+  }
+  return {
+    dueToday, upcoming,
+    recentlyOverdue: recent.slice().reverse(),
+    olderOverdue: older,
+    visible: [...recent, ...dueToday, ...upcoming],
+  };
+}
+
+/**
+ * The bills a surface shows as "due soon": `billsOverview(...).visible` —
+ * overdue by at most OVERDUE_BILL_VISIBLE_DAYS, due today, and due within
+ * UPCOMING_BILL_WINDOW_DAYS, by due date. No surface re-filters this with a
+ * window of its own.
  */
 export function selectUpcomingBills<T extends { daysUntil?: number | null }>(bills: readonly T[] | null | undefined): T[] {
-  return (bills || [])
-    .filter((b) => b && typeof b.daysUntil === "number" && Number.isFinite(b.daysUntil) && b.daysUntil <= UPCOMING_BILL_WINDOW_DAYS)
-    .sort((a, b) => (a.daysUntil as number) - (b.daysUntil as number));
+  return billsOverview(bills).visible;
 }
 
 export interface UpcomingBillCheckInput {

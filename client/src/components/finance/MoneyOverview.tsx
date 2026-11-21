@@ -18,9 +18,9 @@ import {
   Wallet, ArrowLeftRight, TrendingUp, Receipt, PiggyBank, Scale, PieChart,
   BarChart3, Target, Landmark, TrendingDown, Sparkles, type LucideIcon,
 } from "lucide-react";
-import { dayLabel } from "@shared/now-rank";
 import { categoryLabel } from "@shared/category-canon";
-import { UPCOMING_BILL_WINDOW_DAYS, UPCOMING_BILLS_EMPTY_COPY, selectUpcomingBills } from "@shared/obligation-windows";
+import { UPCOMING_BILL_WINDOW_DAYS, UPCOMING_BILLS_EMPTY_COPY, billsOverview } from "@shared/obligation-windows";
+import { BillsOverviewList } from "./BillsOverviewList";
 import { savingsRatePct } from "@shared/expense-ledger";
 import { Medallion, MiniBars } from "@/components/dashboard/visuals";
 import { AreaChart } from "@/components/tracker-viz";
@@ -31,6 +31,7 @@ import { SectionHeading } from "@/components/ui/section-heading";
 export interface MoneyBill {
   id: string; name: string; amount: number; dueDate?: string;
   daysUntil: number; status?: string; category?: string;
+  autopay?: boolean | null; linkedLiabilityId?: string | null;
 }
 export interface Breakdown { id: string; name: string; type: string; value: number; }
 
@@ -165,8 +166,11 @@ export function MoneyOverview(props: {
   assetBreakdown: Breakdown[];
   liabilityBreakdown: Breakdown[];
   monthLabel: string;
-  onPayBill: (bill: MoneyBill) => void;
-  payingId?: string | null;
+  /** Opens a bill's own page — where a payment is recorded. The Bills card
+   *  itself is a readout with no Pay button (owner request 2026-11-21). */
+  onOpenBill?: (bill: MoneyBill) => void;
+  /** The Bills page: every bill, including ones overdue past the overview. */
+  onViewAllBills?: () => void;
   onOpenNetWorth?: () => void;
   onOpenCashFlow?: () => void;
   onOpenBudget?: () => void;
@@ -185,7 +189,7 @@ export function MoneyOverview(props: {
     spendTrendPct, incomeMtd = 0, incomeParts, budgets, spendByCategory = {}, alerts = [],
     assetBreakdown, liabilityBreakdown, monthLabel,
     cashTrend = [], spendSeries, incomeSeries, billsSeries,
-    onPayBill, payingId,
+    onOpenBill, onViewAllBills,
     onOpenNetWorth, onOpenCashFlow, onOpenBudget, onCategoryClick,
     onOpenSpend, onOpenIncome, onOpenBills, onOpenSavings, onOpenOverview,
   } = props;
@@ -221,7 +225,8 @@ export function MoneyOverview(props: {
   })();
   // THE upcoming-bills list (shared/obligation-windows): the tile, the card
   // and the dashboard MONEY card all render this selection (F-54).
-  const bills = selectUpcomingBills(props.bills);
+  const billsSplit = billsOverview(props.bills);
+  const bills = billsSplit.visible;
   const billsTotal = bills.reduce((s, b) => s + (Number(b.amount) || 0), 0);
   // Ranked category slices with their share of spend. Past seven categories
   // the tail folds into one "Other" slice — it used to be cut off at eight
@@ -255,8 +260,9 @@ export function MoneyOverview(props: {
           sub={incomeParts ?? "this month"}
           series={incomeSeries} chartKind="bars"
           onClick={() => (onOpenIncome ?? onOpenCashFlow)?.()} testId="money-income" />
-        <KpiCard label="Bills Due" icon={Receipt} value={String(bills.length)} tone={bills.some(b => b.status === "overdue") ? "neg" : "warn"}
-          sub={bills.length === 0 ? UPCOMING_BILLS_EMPTY_COPY : `${money(billsTotal)} upcoming`} series={billsSeries} chartKind="bars"
+        <KpiCard label="Bills Due" icon={Receipt} value={String(bills.length)} tone={billsSplit.dueToday.length + billsSplit.recentlyOverdue.length > 0 ? "neg" : "warn"}
+          sub={bills.length === 0 ? UPCOMING_BILLS_EMPTY_COPY
+            : [billsSplit.dueToday.length > 0 ? `${billsSplit.dueToday.length} today` : null, `${money(billsTotal)} due`].filter(Boolean).join(" · ")} series={billsSeries} chartKind="bars"
           onClick={() => (onOpenBills ?? onOpenCashFlow)?.()} testId="money-bills-kpi" />
         <KpiCard label="Savings Rate" icon={PiggyBank} value={savingsRate != null ? `${savingsRate}%` : "—"}
           tone={savingsRate != null && savingsRate >= 15 ? "pos" : savingsRate != null && savingsRate < 0 ? "neg" : "neutral"}
@@ -388,30 +394,17 @@ export function MoneyOverview(props: {
       {/* Bills + Balance sheet */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Card className="p-4" data-testid="money-bills">
-          <SectionHeading title={`Bills · next ${UPCOMING_BILL_WINDOW_DAYS}d`} icon={Receipt} accent="25 90% 58%" count={bills.length} />
-          {bills.length === 0 ? (
-            <EmptyState tone="good" icon={Receipt} label={`You're clear for ${UPCOMING_BILL_WINDOW_DAYS} days`}
-              hint={`${UPCOMING_BILLS_EMPTY_COPY}.`} />
-          ) : (
-            <div className="space-y-1.5">
-              {bills.map(b => (
-                <div key={b.id} className="flex items-center gap-3 py-1.5" data-testid={`money-bill-${b.id}`}>
-                  <span className="text-[11px] font-semibold uppercase w-14 shrink-0 text-muted-foreground">
-                    {b.status === "overdue" ? <span className="text-red-500">overdue</span>
-                      : b.daysUntil === 0 ? <span className="text-amber-500">today</span>
-                      : dayLabel(b.daysUntil)}
-                  </span>
-                  <span className="flex-1 text-sm truncate">{b.name}</span>
-                  <span className="text-sm font-semibold tabular-nums">{money2(b.amount)}</span>
-                  <Button
-                    size="sm" variant="outline" className="h-7 text-xs shrink-0"
-                    disabled={payingId === b.id}
-                    onClick={() => onPayBill(b)}
-                    data-testid={`money-pay-${b.id}`}
-                  >{payingId === b.id ? "…" : "Pay"}</Button>
-                </div>
-              ))}
-            </div>
+          <SectionHeading title="Bills" icon={Receipt} accent="25 90% 58%" count={bills.length}
+            meta={`Due today · next ${UPCOMING_BILL_WINDOW_DAYS} days`} />
+          <BillsOverviewList bills={props.bills} testIdPrefix="money-bill"
+            onOpenBill={onOpenBill ? (b) => onOpenBill(b as MoneyBill) : undefined}
+            onViewAll={onViewAllBills} />
+          {onViewAllBills && billsSplit.olderOverdue.length === 0 && (
+            <button type="button" onClick={onViewAllBills}
+              className="mt-3 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="money-bills-view-all">
+              All bills &amp; payment history →
+            </button>
           )}
         </Card>
 

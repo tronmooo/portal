@@ -107,22 +107,20 @@ describe("MoneyPopups", () => {
     expect(onDeleteIncome).toHaveBeenCalledWith(expect.objectContaining({ id: "i2" }));
   });
 
-  it("BillsDuePopup groups bills on the timeline and Pay fires the callback", () => {
-    const onPayBill = vi.fn();
-    render(<BillsDuePopup open onOpenChange={noop} onPayBill={onPayBill} payingId={null}
+  it("BillsDuePopup groups bills by when they are due and has no Pay button", () => {
+    render(<BillsDuePopup open onOpenChange={noop}
       bills={[
         { id: "b1", name: "Rent", amount: 2500, daysUntil: -2, status: "overdue", dueDate: "2026-07-18" },
         { id: "b2", name: "Electric bill", amount: 140, daysUntil: 3, status: "upcoming", dueDate: "2026-07-23" },
         { id: "b3", name: "Car Insurance", amount: 350, daysUntil: 12, status: "upcoming", dueDate: "2026-08-01" },
       ] as any} />);
     const el = screen.getByTestId("popup-bills");
-    expect(el.textContent).toContain("Overdue");
-    expect(el.textContent).toContain("Next 7 days");
-    expect(el.textContent).toContain("Later this month");
-    expect(el.textContent).toContain("Rent");
+    expect(screen.getByTestId("bills-group-overdue").textContent).toContain("Rent");
+    expect(screen.getByTestId("bills-group-next").textContent).toContain("Electric bill");
+    expect(screen.getByTestId("bills-group-next").textContent).toContain("Car Insurance");
     expect(el.textContent).toContain("$2,990"); // header total
-    fireEvent.click(screen.getByTestId("bill-pay-b2"));
-    expect(onPayBill).toHaveBeenCalledWith(expect.objectContaining({ id: "b2" }));
+    expect(document.querySelector("[data-testid^='bill-pay-']")).toBeNull();
+    expect(el.textContent).not.toMatch(/\bPay\b/);
   });
 
   it("SavingsRatePopup renders the gauge, equation and active band", () => {

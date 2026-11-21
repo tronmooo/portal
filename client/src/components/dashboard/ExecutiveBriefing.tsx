@@ -5,7 +5,7 @@
 //
 //   · Overview bar — Net Worth · Cash Flow · Tasks Remaining · Next Important
 //   · Card grid    — Needs Attention | Tasks
-//                    Schedule        | Habits
+//                    Habits          | Schedule
 //                    Money           | Documents
 //                    Wellness        | Upcoming
 //   · Recent Activity, full-width, at the very bottom.
@@ -21,7 +21,7 @@
 // in, Pay arms then commits (money moves on the SECOND tap), medications get
 // "Taken", managed recurring dates get "Done". Popups are the same components
 // the dashboard KPI tiles use.
-import { sumMonthIncomeNow, selectUpcomingBills, UPCOMING_BILLS_EMPTY_COPY } from "@shared/obligation-windows";
+import { sumMonthIncomeNow, UPCOMING_BILLS_EMPTY_COPY } from "@shared/obligation-windows";
 import { setEventOccurrence } from "@/lib/event-occurrence";
 import { isDoneToday } from "@shared/task-counts";
 import { relativeTimeShort, elapsedDays } from "@shared/relative-time";
@@ -69,7 +69,7 @@ import { hashNavigate } from "@/lib/hashNavigate";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { BubbleModal } from "@/components/ui/bubble-modal";
 import { EmptyState } from "@/components/ui/empty-state";
-import { ProgressRing, Medallion, toneForDays, tonePalette, type PillTone } from "@/components/dashboard/visuals";
+import { Medallion, toneForDays, tonePalette, type PillTone } from "@/components/dashboard/visuals";
 import { DeltaChip } from "@/components/tracker-detail/primitives";
 import { formatMoney, formatMoneyRound } from "@/lib/format";
 import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
@@ -82,7 +82,10 @@ import { groupDocumentDates, summarizeDocumentUrgency } from "@shared/document-d
 import { selectAttentionRows, attentionHeading, ATTENTION_HEADINGS } from "@shared/executive-attention";
 import { buildExecutiveSections, normalizeAiSuggestions, type AiSuggestion, type ExecSectionId } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
-import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
+import { habitsDayRollup, bestHabitStreak } from "@shared/habit-progress";
+import { parseQuickTaskText } from "@shared/quick-add";
+import { TasksCardBody, HabitsCardBody, type ExecTask } from "@/components/dashboard/ExecTodayCards";
+import { BillsOverviewList } from "@/components/finance/BillsOverviewList";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import { extractVitals, countWellnessTrackers } from "@/lib/wellness-metrics";
@@ -209,12 +212,14 @@ function ExecCard({ id, icon: Icon, title, accent, headerRight, children, classN
 
 /** An empty card still fills its cell — the message centres in the space
  *  rather than sitting at the top with a black void under it. */
-function CardEmpty({ children, accent, icon, tone }: {
+function CardEmpty({ children, accent, icon, tone, ctaLabel, onCta }: {
   children: string; accent?: string; icon?: LucideIcon; tone?: PillTone;
+  ctaLabel?: string; onCta?: () => void;
 }) {
   return (
     <div className="flex-1 flex items-center justify-center">
-      <EmptyState scope="global" label={children} icon={icon} tone={tone} accent={tone ? undefined : accent} className="py-2 gap-1.5" />
+      <EmptyState scope="global" label={children} icon={icon} tone={tone} accent={tone ? undefined : accent}
+        ctaLabel={ctaLabel} onCta={onCta} className="py-2 gap-1.5" />
     </div>
   );
 }
@@ -582,10 +587,6 @@ const habitIcon = (name: string): LucideIcon =>
 // events read as distinct at a glance (matches the mock's colored dots).
 const DOT_ROTATION = ["217 91% 65%", "262 70% 62%", "25 95% 58%", "155 65% 45%", "330 80% 62%"];
 
-/** Habits listed on the Executive card before the rest fold into a "N more"
- *  link. Anything past this was previously dropped without a trace. */
-const HABIT_CARD_LIMIT = 6;
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, ready = true, enhancedError = false, enhancedFetching = false }: {
@@ -611,6 +612,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const [popup, setPopup] = useState<PopupKind>(null);
   // The task a tapped row asked the Tasks popup to open at (see openItem).
   const [taskFocus, setTaskFocus] = useState<{ id: string; tab: "today" | "upcoming" } | null>(null);
+  // The tab a Tasks-card chip asked for when no single task is focused.
+  const [taskTab, setTaskTab] = useState<"today" | "upcoming">("today");
   // Which item's money-moving button is armed for the confirming second tap.
   const [armedKey, setArmedKey] = useState<string | null>(null);
   const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
@@ -963,8 +966,14 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // finished this morning east of Greenwich (or last night in the US) read
   // as "0 completed today".
   const doneToday = (tasks || []).filter((t: any) => isDoneToday(t, todayStr, BROWSER_TIMEZONE)).length;
+  const doneTodayTasks: ExecTask[] = (tasks || []).filter((t: any) => isDoneToday(t, todayStr, BROWSER_TIMEZONE));
   const sortedPending = pending.slice().sort((a: any, b: any) =>
     (daysFromToday(a.dueDate) ?? 9e9) - (daysFromToday(b.dueDate) ?? 9e9));
+  // The Tasks card's three open groups — one split of `sortedPending`, so the
+  // chips, the group headers and the rows can never disagree. An undated task
+  // is "upcoming": it has no day to be late for.
+  const dueTodayTasks: ExecTask[] = sortedPending.filter((t: any) => daysFromToday(t.dueDate) === 0);
+  const upcomingTasks: ExecTask[] = sortedPending.filter((t: any) => (daysFromToday(t.dueDate) ?? 1) > 0);
 
   // Next Important — the soonest dated thing across every domain. Falls back
   // to the most urgent attention row when nothing is coming up.
@@ -991,26 +1000,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       String(a.createdAt || "").localeCompare(String(b.createdAt || "")) ||
       String(a.id || "").localeCompare(String(b.id || "")));
   const habitsNotScheduled = (habits || []).length - habitsDueToday.length;
+  const habitStreak = bestHabitStreak(habits as any[]);
   // "N / M complete today" = habits complete over habits scheduled, from the
   // ONE rollup the Habits modal reads (shared/habit-progress habitsDayRollup).
   const habitsRollup = habitsDayRollup(habitsDueToday, todayStr);
   const habitsDoneCount = habitsRollup.habitsComplete;
-  const habitPct = habitsRollup.habitsScheduled > 0 ? Math.round((habitsDoneCount / habitsRollup.habitsScheduled) * 100) : 0;
-
-  // Money — THE upcoming-bills list (shared/obligation-windows): the same
-  // window the Finance BILLS DUE tile and the Upcoming card show, overdue
-  // first. A private 21-day filter here said "Nothing due in 3 weeks" while
-  // the Finance tab counted one bill due in 27 days (F-54).
-  // 2026-10-21: bills left Needs Attention, so the Money card lists the WHOLE
-  // window — overdue first, in red, with the two-tap Pay — not just the
-  // not-yet-due part.
-  const billsDueSoon = selectUpcomingBills(allBills as any[])
-    .slice()
-    .sort((a: any, b: any) => (a.daysUntil ?? 0) - (b.daysUntil ?? 0));
-  const overdueBillCount = billsDueSoon.filter((b: any) => (b.daysUntil ?? 0) < 0).length;
-  const billItemFor = (id: string): AttentionItem | undefined =>
-    [...secItems("immediate"), ...secItems("bills")].find((i) => i.kind === "bill" && i.sourceKey === `obligation:${id}`);
-
   // Documents
   // Grouped to ONE CARD PER RECORD PER DAY so this card, its count and the
   // popup all report the same number — a policy that expires and takes its
@@ -1153,6 +1147,37 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     mutationFn: async (id: string) => { await apiRequest("PATCH", `/api/tasks/${id}`, { status: "done" }); },
     onSuccess: () => { toast({ title: "Task completed" }); invalidateDomain("tasks"); },
     onError: () => toast({ title: "Couldn't complete task", variant: "destructive" }),
+  });
+  // Un-completing from the card's "Completed today" list — the same PATCH the
+  // Tasks panel's checkbox sends.
+  const reopenTask = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("PATCH", `/api/tasks/${id}`, { status: "todo" }); },
+    onSuccess: () => { toast({ title: "Task reopened" }); invalidateDomain("tasks"); },
+    onError: () => toast({ title: "Couldn't reopen task", variant: "destructive" }),
+  });
+  // Quick add from the card. Same payload rules as the Tasks panel: a date in
+  // the sentence is read (shared/quick-add), and under a one-person scope the
+  // task is attributed to that person so it does not vanish behind the filter.
+  const createTask = useMutation({
+    mutationFn: async (text: string) => {
+      const parsed = parseQuickTaskText(text, todayStr);
+      const r = await apiRequest("POST", "/api/tasks", {
+        status: "todo", priority: "medium", title: parsed.title,
+        ...(parsed.dueDate ? { dueDate: parsed.dueDate } : {}),
+        ...(mode === "selected" && ids.length === 1 ? { linkedProfiles: [ids[0]] } : {}),
+      });
+      return r.json();
+    },
+    onSuccess: (task: any) => {
+      // Show it at once (Rule 2): the list query refetches behind this.
+      if (task?.id) {
+        queryClient.setQueryData<any[]>(["/api/tasks", mode, ...ids], (old) =>
+          (old || []).some((t: any) => t.id === task.id) ? old : [task, ...(old || [])]);
+      }
+      toast({ title: "Task added" });
+      invalidateDomain("tasks");
+    },
+    onError: () => toast({ title: "Couldn't add task", variant: "destructive" }),
   });
   // Checking a habit off from the dashboard goes through the same completion
   // pipeline as chat and the Habits page (server/habit-completion.ts), so it
@@ -1546,64 +1571,74 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               accent={CARD_ACCENTS.tasks} index={2}
               headerRight={<ViewLink label="View all tasks" accent={CARD_ACCENTS.tasks} onClick={() => go("/dashboard/tasks")} testId="exec-view-tasks" />}
             >
-              <div className="grid grid-cols-3 gap-2 mb-3 text-center">
-                <div>
-                  <p className="metric-value text-2xl" style={{ color: `hsl(${CARD_ACCENTS.tasks})` }}>{pending.length}</p>
-                  <p className="text-[11px] text-muted-foreground">Remaining</p>
-                </div>
-                <div>
-                  <p className="metric-value text-2xl" style={{ color: "hsl(0 72% 58%)" }}>{overdueTasks.length}</p>
-                  <p className="text-[11px] text-muted-foreground">Overdue</p>
-                </div>
-                <div>
-                  <p className="metric-value text-2xl" style={{ color: "hsl(155 65% 45%)" }}>{doneToday}</p>
-                  <p className="text-[11px] text-muted-foreground">Completed today</p>
-                </div>
-              </div>
-              {sortedPending.length === 0 ? (
-                <CardEmpty icon={CheckCircle2} accent={CARD_ACCENTS.tasks} tone={doneToday > 0 ? "good" : undefined}>{doneToday > 0 ? "Everything done — nice work." : "No open tasks."}</CardEmpty>
-              ) : (
-                <div className="space-y-1.5">
-                  {sortedPending.slice(0, 4).map((t: any) => {
-                    const du = daysFromToday(t.dueDate);
-                    const busy = busyKeys.has(`task:${t.id}`);
-                    const sub = du == null ? "No due date"
-                      : du < 0 ? `Overdue · Due ${fmtShortDate(dateFromDays(du))}`
-                      : du === 0 ? "Due today"
-                      : `Due ${fmtShortDate(dateFromDays(du))}`;
-                    return (
-                      <div key={t.id}
-                        className={`bubble-row flex items-center gap-2.5 px-2.5 py-2 ${leavingKeys.has(`task:${t.id}`) ? "row-leaving" : ""}`}
-                        style={{ ["--accent-hsl" as any]: CARD_ACCENTS.tasks }}
-                      >
-                        <button
-                          onClick={() => {
-                            markBusy(`task:${t.id}`, true);
-                            completeTask.mutateAsync(t.id)
-                              .then(() => markLeaving(`task:${t.id}`))
-                              .catch(() => {})
-                              .finally(() => markBusy(`task:${t.id}`, false));
-                          }}
-                          disabled={busy}
-                          className={`h-[18px] w-[18px] rounded-full border-2 shrink-0 transition-colors hover:border-emerald-500 ${busy ? "animate-pulse border-emerald-500" : "border-muted-foreground/50"}`}
-                          aria-label={`Complete ${t.title}`}
-                          data-testid={`exec-task-complete-${t.id}`}
-                        />
-                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => { setTaskFocus({ id: t.id, tab: du != null && du > 0 ? "upcoming" : "today" }); setPopup("tasks"); }}>
-                          <p className="text-[13px] font-semibold leading-tight truncate">{t.title}</p>
-                          <p className={`text-[11px] truncate mt-0.5 ${du != null && du < 0 ? "text-red-500" : "text-muted-foreground"}`}>{sub}</p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              {/* Overdue / Due today / Upcoming / Completed today, each its
+                  own group; complete, reopen, edit and add without leaving
+                  the tab (components/dashboard/ExecTodayCards). */}
+              <TasksCardBody
+                overdue={overdueTasks.slice().sort((a: any, b: any) => (daysFromToday(a.dueDate) ?? 0) - (daysFromToday(b.dueDate) ?? 0))}
+                dueToday={dueTodayTasks}
+                upcoming={upcomingTasks}
+                doneToday={doneTodayTasks}
+                daysFromToday={daysFromToday}
+                formatDue={(du) => fmtWeekdayDate(dateFromDays(du))}
+                busyKeys={busyKeys}
+                leavingKeys={leavingKeys}
+                onComplete={(t) => {
+                  markBusy(`task:${t.id}`, true);
+                  completeTask.mutateAsync(t.id)
+                    .then(() => markLeaving(`task:${t.id}`))
+                    .catch(() => {})
+                    .finally(() => markBusy(`task:${t.id}`, false));
+                }}
+                onReopen={(t) => {
+                  markBusy(`task:${t.id}`, true);
+                  reopenTask.mutateAsync(t.id).catch(() => {}).finally(() => markBusy(`task:${t.id}`, false));
+                }}
+                onOpenTask={(t, tab) => { setTaskFocus({ id: t.id, tab }); setPopup("tasks"); }}
+                onOpenAll={(tab) => { setTaskFocus(null); setTaskTab(tab); setPopup("tasks"); }}
+                onAdd={(title) => createTask.mutate(title)}
+                adding={createTask.isPending}
+                emptyState={<CardEmpty icon={CheckCircle2} accent={CARD_ACCENTS.tasks}>No open tasks.</CardEmpty>}
+              />
+            </ExecCard>
+
+            {/* ── Habits ───────────────────────────────────────────────────────
+                Second row on a phone, beside Schedule on a desktop: today's
+                habits with a one-tap check-in each, the day's progress and
+                what is left (owner request 2026-11-21). */}
+            <ExecCard
+              id="habits" icon={Flame} title="Habits"
+              accent={CARD_ACCENTS.habits} index={3}
+              headerRight={<ViewLink label="View habits" accent={CARD_ACCENTS.habits} onClick={() => setPopup("habits")} testId="exec-view-habits" />}
+            >
+              <HabitsCardBody
+                habitsDueToday={habitsDueToday}
+                doneCount={habitsDoneCount}
+                notScheduled={habitsNotScheduled}
+                bestStreak={habitStreak}
+                todayStr={todayStr}
+                accent={CARD_ACCENTS.habits}
+                busyKeys={busyKeys}
+                iconFor={habitIcon}
+                onCheckIn={(h) => {
+                  markBusy(`habit:${h.id}`, true);
+                  checkinHabit.mutateAsync(h.id).catch(() => {}).finally(() => markBusy(`habit:${h.id}`, false));
+                }}
+                onOpenAll={() => setPopup("habits")}
+                emptyState={
+                  // "Nothing today" and "no habits at all" are different
+                  // states: the second one offers the way to start.
+                  (habits || []).length > 0
+                    ? <CardEmpty icon={Flame} accent={CARD_ACCENTS.habits} ctaLabel={`See all ${habits.length} habit${habits.length === 1 ? "" : "s"}`} onCta={() => setPopup("habits")}>No habits scheduled today.</CardEmpty>
+                    : <CardEmpty icon={Flame} accent={CARD_ACCENTS.habits} ctaLabel="Add a habit" onCta={() => setPopup("habits")}>No habits yet.</CardEmpty>
+                }
+              />
             </ExecCard>
 
             {/* ── Schedule ─────────────────────────────────────────────────── */}
             <ExecCard
               id="schedule" icon={CalendarDays} title="Schedule"
-              accent={CARD_ACCENTS.schedule} index={3}
+              accent={CARD_ACCENTS.schedule} index={4}
               headerRight={<ViewLink label="View schedule" accent={CARD_ACCENTS.schedule} onClick={() => setPopup("events")} testId="exec-view-calendar" />}
             >
               <div className="flex items-start gap-3 mb-3">
@@ -1692,80 +1727,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               </div>
             </ExecCard>
 
-            {/* ── Habits ───────────────────────────────────────────────────── */}
-            <ExecCard
-              id="habits" icon={Flame} title="Habits"
-              accent={CARD_ACCENTS.habits} index={4}
-              headerRight={<ViewLink label="View habits" accent={CARD_ACCENTS.habits} onClick={() => setPopup("habits")} testId="exec-view-habits" />}
-            >
-              {habitsDueToday.length === 0 ? (
-                <CardEmpty icon={Flame} accent={CARD_ACCENTS.habits}>No habits scheduled today.</CardEmpty>
-              ) : (
-                <div className="flex items-start gap-4">
-                  <div className="shrink-0 flex flex-col items-center gap-1.5">
-                    <ProgressRing
-                      value={habitsDoneCount} total={habitsDueToday.length}
-                      accent={CARD_ACCENTS.habits} size={72} stroke={6}
-                      label={`${habitPct}%`}
-                    />
-                    <p className="text-[11px] text-muted-foreground text-center leading-tight">
-                      {habitsDoneCount} / {habitsDueToday.length} complete<br />today
-                      {habitsNotScheduled > 0 && <><br /><span className="text-muted-foreground/70">{habitsNotScheduled} not scheduled</span></>}
-                    </p>
-                  </div>
-                  <div className="flex-1 min-w-0 space-y-1.5">
-                    {habitsDueToday.slice(0, HABIT_CARD_LIMIT).map((h: any) => {
-                      const hp = habitDayProgress(h, todayStr);
-                      const done = isHabitDoneOn(h, todayStr);
-                      const HIcon = habitIcon(String(h.name || ""));
-                      const busy = busyKeys.has(`habit:${h.id}`);
-                      const pct = hp.required > 0 ? Math.min(100, (hp.completed / hp.required) * 100) : done ? 100 : 0;
-                      return (
-                        <button key={h.id}
-                          onClick={() => {
-                            if (done) { setPopup("habits"); return; }
-                            markBusy(`habit:${h.id}`, true);
-                            checkinHabit.mutateAsync(h.id).catch(() => {}).finally(() => markBusy(`habit:${h.id}`, false));
-                          }}
-                          disabled={busy}
-                          className="bubble-row w-full flex items-center gap-2.5 px-2.5 py-2 text-left disabled:opacity-60"
-                          style={{ ["--accent-hsl" as any]: CARD_ACCENTS.habits }}
-                          data-testid={`exec-habit-checkin-${h.id}`}
-                          aria-label={done ? `${h.name} — done today` : `Check in ${h.name}`}
-                        >
-                          <RowIcon icon={HIcon} hsl={CARD_ACCENTS.habits} size="sm" />
-                          <span className="text-[13px] font-semibold leading-tight truncate flex-1">{h.name}</span>
-                          {hp.required > 1 ? (
-                            <>
-                              <span className="h-1.5 w-8 rounded-full bg-muted overflow-hidden shrink-0" aria-hidden="true">
-                                <span className="block h-full rounded-full" style={{ width: `${pct}%`, background: `hsl(${CARD_ACCENTS.habits})` }} />
-                              </span>
-                              <span className="text-[11px] tabular-nums text-muted-foreground shrink-0">{hp.completed}/{hp.required}</span>
-                            </>
-                          ) : done ? (
-                            // A finished habit keeps its count beside the tick:
-                            // an icon-only row read as "no count" next to the
-                            // "0/1" of its siblings (QA 2026-09-18 F-42).
-                            <span className="flex items-center gap-1 shrink-0">
-                              <span className="text-[11px] tabular-nums text-muted-foreground">{hp.completed}/{hp.required || 1}</span>
-                              <CheckCircle2 className="h-4 w-4" style={{ color: `hsl(${CARD_ACCENTS.habits})` }} aria-label="Done" />
-                            </span>
-                          ) : (
-                            <span className="text-[11px] tabular-nums text-muted-foreground shrink-0">0/1</span>
-                          )}
-                        </button>
-                      );
-                    })}
-                    {habitsDueToday.length > HABIT_CARD_LIMIT && (
-                      <FooterLink onClick={() => setPopup("habits")} testId="exec-habits-more">
-                        {habitsDueToday.length - HABIT_CARD_LIMIT} more habit{habitsDueToday.length - HABIT_CARD_LIMIT === 1 ? "" : "s"} today
-                      </FooterLink>
-                    )}
-                  </div>
-                </div>
-              )}
-            </ExecCard>
-
             {/* ── Money ────────────────────────────────────────────────────── */}
             <ExecCard
               id="money" icon={DollarSign} title="Money"
@@ -1799,50 +1760,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   </div>
                 ))}
               </div>
-              <p className="micro-label text-muted-foreground mt-3 mb-1.5">
-                Bills{overdueBillCount > 0 && <span className="text-red-500"> · {overdueBillCount} overdue</span>}
-              </p>
-              {billsDueSoon.length === 0 ? (
-                <p className="text-[12px] text-muted-foreground">{UPCOMING_BILLS_EMPTY_COPY}.</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {billsDueSoon.slice(0, 3).map((b: any) => {
-                    const hsl = tonePalette(toneForDays(b.daysUntil));
-                    const overdue = (b.daysUntil ?? 0) < 0;
-                    // The routed row for this bill carries its Pay action (two
-                    // taps, autopay → none) — the same onAction path the
-                    // attention list used, so paying behaves identically.
-                    const item = billItemFor(b.id);
-                    return (
-                      <div
-                        key={b.id}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => setPopup("bills")}
-                        onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setPopup("bills"); } }}
-                        className="bubble-row w-full flex items-center gap-2.5 px-2.5 py-2 min-w-0 text-left cursor-pointer"
-                        style={{ ["--accent-hsl" as any]: hsl }}
-                        data-testid={`exec-money-bill-${b.id}`}
-                      >
-                        <RowIcon icon={Receipt} hsl={hsl} />
-                        <span className="flex-1 min-w-0">
-                          <span className="block text-[13px] font-semibold leading-tight truncate">{b.name}</span>
-                          <span className={`block text-[11px] truncate mt-0.5 ${overdue ? "text-red-500 font-semibold" : "text-muted-foreground"}`}>
-                            {overdue ? `${Math.abs(b.daysUntil)}d overdue · was due ${fmtShortDate(dateFromDays(b.daysUntil))}`
-                              : b.daysUntil === 0 ? "Due today" : `Due ${fmtShortDate(dateFromDays(b.daysUntil))}`}
-                          </span>
-                        </span>
-                        <span className="shrink-0 text-[13px] font-bold tabular-nums" style={overdue ? { color: `hsl(${hsl})` } : undefined}>
-                          {formatMoney(Number(b.amount || 0))}
-                        </span>
-                        {item && item.action?.kind === "pay" && (
-                          <ActionButton item={item} busy={busyKeys.has(item.key)} armed={armedKey === item.key} onAction={onAction} />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              {/* Bills: the same readout the Finance tab's Bills card draws
+                  (components/finance/BillsOverviewList over the one split in
+                  shared/obligation-windows) — due today, overdue in the last
+                  seven days, the next 30 days. No Pay button here; a row opens
+                  the Bills panel, where a payment is recorded. */}
+              <p className="micro-label text-muted-foreground mt-3 mb-1.5">Bills</p>
+              <BillsOverviewList bills={allBills as any[]} limit={4} testIdPrefix="exec-money-bill"
+                onOpenBill={() => setPopup("bills")} onViewAll={() => setPopup("bills")}
+                emptyLabel={`${UPCOMING_BILLS_EMPTY_COPY}.`} />
               {/* A different place than the header's "Open finances": the
                   Bills panel, over this tab. */}
               <FooterLink onClick={() => setPopup("bills")} testId="exec-view-bills">View all bills</FooterLink>
@@ -2038,7 +1964,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           any of them leaves the tab exactly where it was. */}
       {popup === "tasks" && (
         <TasksPopup open onClose={() => { setPopup(null); setTaskFocus(null); }} filterMode={mode} filterIds={ids}
-          initialTab={taskFocus?.tab ?? "today"} focusTaskId={taskFocus?.id ?? null} />
+          initialTab={taskFocus?.tab ?? taskTab} focusTaskId={taskFocus?.id ?? null} />
       )}
       {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={allBills} />}

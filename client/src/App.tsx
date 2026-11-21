@@ -8,6 +8,7 @@ import { pageTitleFor } from "@shared/domain/route-metadata";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { warmup } from "@/lib/warmup";
 import { hashNavigate } from "./lib/hashNavigate";
+import { isScrolledToTop } from "./lib/page-scroll";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -368,6 +369,7 @@ function isArtifactsRoute(location: string): boolean {
 function PullToRefresh() {
   const pullRef = useRef<HTMLDivElement>(null);
   const startY = useRef<number | null>(null);
+  const startX = useRef(0);
   const [pulling, setPulling] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const threshold = 80;
@@ -382,12 +384,27 @@ function PullToRefresh() {
     if (!main) return;
 
     const onTouchStart = (e: TouchEvent) => {
-      if (main.scrollTop === 0) startY.current = e.touches[0].clientY;
+      // Armed ONLY when the page under the finger is at its very top.
+      // `main` itself never scrolls (each page owns its scroller), so asking
+      // `main.scrollTop === 0` armed this on every touch: scrolling a page
+      // back UP from the bottom was read as a pull and refetched the whole
+      // dashboard under the user's finger (lib/page-scroll.ts).
+      startY.current = null;
+      startX.current = e.touches[0].clientX;
+      if (e.touches.length === 1 && isScrolledToTop(e.target, main)) startY.current = e.touches[0].clientY;
     };
 
     const onTouchMove = (e: TouchEvent) => {
       if (startY.current === null) return;
       const dy = e.touches[0].clientY - startY.current;
+      // A sideways swipe (tab strip, swipe-nav) or a page that has started
+      // scrolling is not a pull.
+      if (Math.abs(e.touches[0].clientX - startX.current) > Math.abs(dy) || !isScrolledToTop(e.target, main)) {
+        startY.current = null;
+        if (pullRef.current) { pullRef.current.style.transform = ''; pullRef.current.style.opacity = '0'; }
+        setPulling(false);
+        return;
+      }
       if (dy > 0 && dy < threshold * 1.5) {
         setPulling(true);
         if (pullRef.current) {
@@ -426,13 +443,21 @@ function PullToRefresh() {
       }
     };
 
+    const onTouchCancel = () => {
+      startY.current = null;
+      if (pullRef.current) { pullRef.current.style.transform = ''; pullRef.current.style.opacity = '0'; }
+      setPulling(false);
+    };
+
     main.addEventListener('touchstart', onTouchStart, { passive: true });
     main.addEventListener('touchmove', onTouchMove, { passive: true });
     main.addEventListener('touchend', onTouchEnd, { passive: true });
+    main.addEventListener('touchcancel', onTouchCancel, { passive: true });
     return () => {
       main.removeEventListener('touchstart', onTouchStart);
       main.removeEventListener('touchmove', onTouchMove);
       main.removeEventListener('touchend', onTouchEnd);
+      main.removeEventListener('touchcancel', onTouchCancel);
     };
   }, []);
 

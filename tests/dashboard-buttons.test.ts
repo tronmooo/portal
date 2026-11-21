@@ -26,7 +26,9 @@ const REQUIRED: Record<string, string[]> = {
     // Expenses header) rather than in the overview's Budgets card — the
     // overview is for reading your money, not entering it.
     "money-networth", "money-cashflow", "money-spend",
-    "money-budgets-header", "money-asset-", "money-liability-", "money-pay-",
+    // "money-pay-" left on 2026-11-21: the Bills card is a readout (owner
+    // request) — a row opens the bill, where a payment is recorded.
+    "money-budgets-header", "money-asset-", "money-liability-", "money-bills-view-all",
   ],
   "client/src/pages/finance.tsx": [
     "button-add-expense", "button-save-expense",

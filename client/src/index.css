@@ -211,6 +211,20 @@ html, body, #root {
      the keyboard nudges the visual viewport. */
   overscroll-behavior-x: none;
 }
+/* The document itself never scrolls (the shell is h-dvh and every page owns
+   its scroller), so it must not rubber-band or run the browser's own
+   pull-to-refresh either. On a phone, a swipe that reached the end of the page
+   scroller chained to the document: the whole app bounced, and the next swipe
+   — the one meant to scroll back up — was spent settling that bounce. The
+   dashboard "gets stuck at the bottom" (owner report 2026-11-21). */
+html, body {
+  overscroll-behavior-y: none;
+}
+/* …and a page's scroller keeps its own overscroll: reaching either end never
+   hands the gesture to anything behind it. */
+#main-content [data-testid^="page-"] {
+  overscroll-behavior-y: contain;
+}
 /* Neutralise Radix's body-scroll-lock padding compensation. With h-dvh +
    scrollbar-gutter above, the body never actually scrolls and never needs
    compensation — forcing 0 keeps the centered shell from jumping right

@@ -11,6 +11,10 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
+      'tests/bills-overview.test.tsx',
+      'tests/delete-returns-to-listing.test.ts',
+      'tests/dashboard-scroll.dom.test.tsx',
+      'tests/exec-today-cards.dom.test.tsx',
       'tests/chat-save-verify-confirm.test.ts',
       'tests/chat-unbacked-write-retry.test.ts',
       'tests/now-rank.test.ts',

@@ -23,6 +23,7 @@ import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { readFileSync } from "fs";
 import { resolve as resolvePath } from "path";
 import { pageTitleFor } from "../shared/domain/route-metadata";
+import { profileListing } from "../client/src/lib/profile-listing";
 import { ExpandableRows } from "../client/src/components/dashboard/ExecutiveBriefing";
 
 const read = (p: string) => readFileSync(resolvePath(__dirname, "..", p), "utf8");
@@ -154,13 +155,17 @@ describe("tracker rows in the Linked list", () => {
 describe("profile back link", () => {
   const src = read("client/src/pages/profile-detail.tsx");
 
+  // The rule moved to lib/profile-listing (2026-11-21) so Back and the
+  // after-delete redirect share it; the page must read it from there.
   it("sends assets to the Assets listing rather than the Trackers page", () => {
-    expect(/const backHref = listedUnderAssets \? "\/linked\?tab=assets"/.test(src)).toBe(true);
+    expect(profileListing("asset").href).toBe("/linked?tab=assets");
+    expect(profileListing("vehicle").href).toBe("/linked?tab=assets");
+    expect(src).toContain("const { href: backHref, label: backLabel } = profileListing(profile.type);");
     expect(/backHref = isLinkedType \? "\/trackers"/.test(src)).toBe(false);
   });
 
   it("labels it for the place it actually goes", () => {
-    expect(src.includes('"Back to Assets"')).toBe(true);
+    expect(profileListing("property").label).toBe("Back to Assets");
   });
 });
 

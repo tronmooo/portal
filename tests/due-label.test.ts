@@ -58,7 +58,8 @@ describe("the screens that had their own copy now share one", () => {
   const FILES = [
     "client/src/components/dashboard/ExecutiveBriefing.tsx",
     "client/src/pages/dashboard.tsx",
-    "client/src/components/finance/MoneyOverview.tsx",
+    // The Finance Bills card's rows are drawn by the shared bills readout.
+    "client/src/components/finance/BillsOverviewList.tsx",
   ];
 
   it.each(FILES)("%s imports the shared formatter", (f) => {

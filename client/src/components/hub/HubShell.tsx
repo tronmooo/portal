@@ -17,6 +17,7 @@ import { hashNavigate, hashReplace } from "@/lib/hashNavigate";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useResumeTick } from "@/hooks/useResumeTick";
 import { useOverflowX } from "@/hooks/useOverflowX";
+import { forwardScrollToPage } from "@/lib/page-scroll";
 import { HUB_TABS, activeHubTab, hubTabAccent, infoTabRoute, reconcileInfoRoute } from "./hub-routes";
 import { HubKpiStrip } from "./HubKpiStrip";
 import { HubProfileSwitcher } from "./HubProfileSwitcher";
@@ -58,6 +59,18 @@ export function HubShell() {
 
   const [tabsRef, tabsClipped] = useOverflowX<HTMLDivElement>([]);
 
+  // NO DEAD ZONE (2026-11-21): this header sits above the page's scroller and
+  // covers ~40% of a phone screen. A drag or wheel that started on it scrolled
+  // nothing — and the swipe that scrolls a page back UP is the one that starts
+  // near the top, so the dashboard felt stuck at the bottom. The header now
+  // hands vertical drags and wheel to the page beneath it (lib/page-scroll).
+  const shellRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = shellRef.current;
+    if (!el) return;
+    return forwardScrollToPage(el);
+  }, []);
+
   // QA 2026-09-18 BUG-25: switching tabs kept the previous tab's scroll
   // offset, so a short tab opened past its own end as a blank viewport. The
   // shell is the one thing that survives a tab switch, so it resets every
@@ -87,6 +100,7 @@ export function HubShell() {
     // underline, and every SectionHeading on the page below. One variable, so a
     // tab is one colour instead of three files each picking their own.
     <div
+      ref={shellRef}
       className="shrink-0 border-b border-border/50 bg-background/95 px-3 md:px-6 pt-2 pb-0 space-y-2"
       style={{ ["--tab-accent" as any]: hubTabAccent(active) }}
       data-testid="hub-shell"

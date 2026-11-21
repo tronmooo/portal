@@ -44,7 +44,6 @@ const baseProps = {
   liabilityBreakdown: [{ id: "l1", name: "Visa — Chase", type: "credit", value: 6800 }],
   monthLabel: "JUL",
   onAddExpense: () => {},
-  onPayBill: () => {},
   payingId: null,
 };
 
@@ -107,12 +106,14 @@ describe("MoneyOverview", () => {
     expect(screen.getByTestId("money-budget-groceries").textContent).toContain("68%");
   });
 
-  it("renders bills with a working Pay button", () => {
-    const onPayBill = vi.fn();
-    render(<MoneyOverview {...baseProps} onPayBill={onPayBill} />);
+  it("renders bills as a readout: a row opens the bill, and there is no Pay button", () => {
+    const onOpenBill = vi.fn();
+    render(<MoneyOverview {...baseProps} onOpenBill={onOpenBill} />);
     expect(screen.getByTestId("money-bill-b1").textContent).toContain("Rent — Maple St");
-    fireEvent.click(screen.getByTestId("money-pay-b1"));
-    expect(onPayBill).toHaveBeenCalledWith(expect.objectContaining({ id: "b1" }));
+    expect(document.querySelector("[data-testid^='money-pay-']")).toBeNull();
+    expect(screen.getByTestId("money-bills").textContent).not.toMatch(/\bPay\b/);
+    fireEvent.click(screen.getByTestId("money-bill-b1"));
+    expect(onOpenBill).toHaveBeenCalledWith(expect.objectContaining({ id: "b1" }));
   });
 
   it("renders the balance sheet and breakdowns", () => {

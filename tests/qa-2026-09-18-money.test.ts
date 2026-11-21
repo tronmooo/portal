@@ -260,6 +260,8 @@ describe("F-54 one upcoming-bills list and one empty sentence for every surface"
     ];
     expect(selectUpcomingBills(bills).map((b) => b.id)).toEqual(["b", "d", "a"]);
     expect(selectUpcomingBills([])).toEqual([]);
+    // 2026-11-21: "overdue" means the last seven days. Day 7 is in, day 8 is out.
+    expect(selectUpcomingBills([{ id: "x", daysUntil: -7 }, { id: "y", daysUntil: -8 }]).map((b) => b.id)).toEqual(["x"]);
     expect(UPCOMING_BILLS_EMPTY_COPY).toBe("Nothing due in the next 30 days");
   });
 });

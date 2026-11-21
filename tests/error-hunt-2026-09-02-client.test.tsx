@@ -52,7 +52,7 @@ describe("item 3: Bills Due KPI / card / popup are one list", () => {
   ];
   const props: any = {
     netWorth: 1, assets: 1, liabilities: 0, momPct: null, nwSeries: [], cashIn: 0, cashOut: 0, spendMtd: 0,
-    budgets: [], bills, assetBreakdown: [], liabilityBreakdown: [], monthLabel: "SEP", onPayBill: () => {}, payingId: null,
+    budgets: [], bills, assetBreakdown: [], liabilityBreakdown: [], monthLabel: "SEP",
   };
 
   it("counts every bill in the 30-day window on the KPI and the card, and names the window", () => {
@@ -60,12 +60,12 @@ describe("item 3: Bills Due KPI / card / popup are one list", () => {
     expect(screen.getByTestId("money-bills-kpi").textContent).toContain("3");
     const card = screen.getByTestId("money-bills");
     expect(card.querySelectorAll("[data-testid^='money-bill-']")).toHaveLength(3);
-    expect(card.textContent).toContain("next 30d");
+    expect(card.textContent).toContain("next 30 days");
     expect(card.textContent).not.toContain("14d");
   });
 
   it("the popup opened from that tile lists the same rows", () => {
-    render(<BillsDuePopup open onOpenChange={() => {}} bills={bills as any} onPayBill={() => {}} />);
+    render(<BillsDuePopup open onOpenChange={() => {}} bills={bills as any} />);
     expect(screen.getAllByTestId(/^bill-row-/)).toHaveLength(3);
   });
 });
@@ -73,7 +73,7 @@ describe("item 3: Bills Due KPI / card / popup are one list", () => {
 // ── Item 2: DueChip shows the stored day, not the UTC-rolled-back one ───────
 describe("item 2: DueChip renders the due day the row carries", () => {
   it("a bill due on the 23rd shows 23 / Jul in a US zone", () => {
-    render(<BillsDuePopup open onOpenChange={() => {}} onPayBill={() => {}}
+    render(<BillsDuePopup open onOpenChange={() => {}}
       bills={[{ id: "b1", name: "Electric", amount: 140, daysUntil: 3, status: "upcoming", dueDate: "2026-07-23" }] as any} />);
     const row = screen.getByTestId("bill-row-b1");
     expect(row.textContent).toContain("Jul");
