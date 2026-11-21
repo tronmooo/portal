@@ -69,7 +69,7 @@ import { hashNavigate } from "@/lib/hashNavigate";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { BubbleModal } from "@/components/ui/bubble-modal";
 import { EmptyState } from "@/components/ui/empty-state";
-import { ProgressRing, toneForDays, tonePalette, type PillTone } from "@/components/dashboard/visuals";
+import { toneForDays, tonePalette, type PillTone } from "@/components/dashboard/visuals";
 import { DeltaChip } from "@/components/tracker-detail/primitives";
 import { formatMoney, formatMoneyRound } from "@/lib/format";
 import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
@@ -79,7 +79,7 @@ import type { AttentionItem } from "@shared/attention";
 // is what once produced "Lawn care ($40) due in -29d".
 import { dayLabel } from "@shared/now-rank";
 import { groupDocumentDates, summarizeDocumentUrgency } from "@shared/document-dates";
-import { selectAttentionRows, attentionHeading, ATTENTION_HEADINGS } from "@shared/executive-attention";
+import { selectAttentionRows } from "@shared/executive-attention";
 import { buildExecutiveSections, normalizeAiSuggestions, type AiSuggestion, type ExecSectionId } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
@@ -141,6 +141,22 @@ function timeLabel12h(t: string | null | undefined): string {
   return `${hour}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
+const capitalize = (t: string) => (t ? t[0].toUpperCase() + t.slice(1) : t);
+
+/** An event's end time, stored as "15:00" or (from Google) "3:00 PM". */
+function clockLabel(t: string | null | undefined): string {
+  const raw = String(t || "").trim();
+  if (!raw) return "";
+  return timeLabel12h(raw) || (/^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(raw) ? raw.toUpperCase() : "");
+}
+
+/** A day `n` days before `ymd`, as YYYY-MM-DD (calendar arithmetic, no zone). */
+function ymdMinus(ymd: string, n: number): string {
+  const d = new Date(`${ymd}T12:00:00`);
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 // QA 2026-09-18 BUG-15: one relative-time rule (shared/relative-time).
 function relTime(iso: string | null | undefined): string {
   return relativeTimeShort(iso);
@@ -170,15 +186,18 @@ function ViewLink({ label, onClick, accent, testId }: {
       style={{ color: accent ? `hsl(${accent})` : undefined }}
     >
       <span className="exec-long">{label}</span>
-      <span className="exec-short" aria-hidden="true">All</span>
-      <ChevronRight className="h-3 w-3" aria-hidden="true" />
+      <ChevronRight className="h-4 w-4" aria-hidden="true" />
     </button>
   );
 }
 
-function ExecCard({ id, icon: Icon, title, accent, headerRight, children, className = "", index = 0, wide = false, order, shortTitle }: {
+function ExecCard({ id, icon: Icon, title, accent, headerRight, children, className = "", index = 0, wide = false, order, shortTitle, subtitle, count }: {
   id: string; icon: LucideIcon; title: string; accent: string;
   headerRight?: ReactNode; children: ReactNode; className?: string; index?: number;
+  /** One grey line under the title ("Today · Sat, Nov 21"). */
+  subtitle?: ReactNode;
+  /** A count badge beside the title (Needs Attention's red "5"). */
+  count?: number;
   /** PHONE LAYOUT (2026-11-21, owner: "I want the mobile view to be
    *  affected"). Under 768px the grid is TWO columns, not one. A card is half
    *  the screen (`exec-half`: index.css drops its row icons and grey detail
@@ -200,23 +219,36 @@ function ExecCard({ id, icon: Icon, title, accent, headerRight, children, classN
   // to the card under the pointer instead of the page), so content bounding
   // lives in the ExpandableRows caps below instead. See index.css.
   return (
+    // 2026-11-21 (owner, reference screenshot): each card is tinted in its
+    // own colour (`.exec-card`, index.css) with a title-case heading, its icon
+    // in a tinted square, and an optional grey subtitle under it.
     <section
-      className={`bubble bubble-enter p-2.5 sm:p-3 h-full flex flex-col min-w-0 ${phone} ${className}`}
+      className={`bubble exec-card bubble-enter p-2.5 sm:p-3.5 h-full flex flex-col min-w-0 ${phone} ${className}`}
       style={{ ["--accent-hsl" as any]: accent, ["--i" as any]: index }}
       data-testid={`exec-card-${id}`}
       aria-label={title}
     >
-      <div className="flex items-center justify-between gap-2 mb-1.5 shrink-0">
-        <div className="flex items-center gap-1.5 min-w-0">
+      <div className="flex items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
           {/* Needs Attention carries two header buttons: on a phone's half
               card its icon gives way so the title is whole. */}
-          <RowIcon icon={Icon} hsl={accent} opt={!!shortTitle} />
-          <h3 className="micro-label truncate" style={{ color: `hsl(${accent})` }}>
+          <RowIcon icon={Icon} hsl={accent} opt={!!shortTitle} size="lg" />
+          <h3 className="exec-card-title truncate">
             {shortTitle ? <><span className="exec-long">{title}</span><span className="exec-short" aria-hidden="true">{shortTitle}</span></> : title}
           </h3>
+          {count != null && count > 0 && (
+            <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold tabular-nums text-white inline-flex items-center justify-center"
+              style={{ background: `hsl(${accent})` }} data-testid={`exec-card-count-${id}`}>
+              {count}
+            </span>
+          )}
         </div>
         {headerRight}
       </div>
+      {subtitle != null && subtitle !== "" && (
+        <p className="text-[11px] sm:text-[12px] text-muted-foreground mt-0.5 line-clamp-2 shrink-0" data-testid={`exec-card-subtitle-${id}`}>{subtitle}</p>
+      )}
+      <div className="mb-2 shrink-0" aria-hidden="true" />
       <div className="exec-card-body flex-1 min-h-0 flex flex-col">{children}</div>
     </section>
   );
@@ -293,18 +325,21 @@ function FooterLink({ onClick, testId, children }: {
 // ── Rows ─────────────────────────────────────────────────────────────────────
 
 /** The tinted icon square every row on this tab leads with (ItemRow's). */
-function RowIcon({ icon: Icon, hsl, opt = false }: {
+function RowIcon({ icon: Icon, hsl, opt = false, size = "sm" }: {
   icon: LucideIcon; hsl: string;
   /** Dropped on a phone's half-width card (index.css `.exec-opt`). */
   opt?: boolean;
+  /** "lg": a card heading's or a two-line row's icon. */
+  size?: "sm" | "lg";
 }) {
+  const lg = size === "lg";
   return (
     <span
-      className={`h-6 w-6 rounded-md flex items-center justify-center shrink-0 ${opt ? "exec-opt" : ""}`}
-      style={{ background: `hsl(${hsl} / 0.15)`, color: `hsl(${hsl})` }}
+      className={`${lg ? "h-7 w-7 sm:h-8 sm:w-8 rounded-lg" : "h-6 w-6 rounded-md"} flex items-center justify-center shrink-0 ${opt ? "exec-opt" : ""}`}
+      style={{ background: `hsl(${hsl} / 0.15)`, color: `hsl(${hsl})`, boxShadow: lg ? `inset 0 0 0 1px hsl(${hsl} / 0.25)` : undefined }}
       aria-hidden="true"
     >
-      <Icon className="h-3.5 w-3.5" strokeWidth={2.1} />
+      <Icon className={lg ? "h-4 w-4" : "h-3.5 w-3.5"} strokeWidth={2.1} />
     </span>
   );
 }
@@ -365,12 +400,20 @@ export function splitKindSuffix(title: string): { main: string; suffix: string |
   return { main: parts.slice(0, -1).join(" — "), suffix };
 }
 
-function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
+function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen, stacked = false, sub, pill = true }: {
   item: AttentionItem;
   busyKeys?: Set<string>; armedKey?: string | null; leavingKeys?: Set<string>;
   onAction: (i: AttentionItem) => void;
   onOpen: (i: AttentionItem) => void;
+  /** Two lines — title over its detail — with the date in a tinted pill and
+   *  a chevron (the reference screenshot's Needs Attention / Upcoming rows). */
+  stacked?: boolean;
+  /** The second line, when it is not the item's own reason. */
+  sub?: string;
+  /** Stacked rows only: show the date pill (Upcoming says the date in `sub`). */
+  pill?: boolean;
 }) {
+  if (stacked) return <StackedItemRow item={item} busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys} onAction={onAction} onOpen={onOpen} sub={sub} pill={pill} />;
   const tone: PillTone = item.kind === "alert" ? "critical" : toneForDays(item.daysUntil);
   const hsl = tonePalette(tone);
   const Icon = KIND_ICON[item.kind] ?? TriangleAlert;
@@ -425,6 +468,64 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
           onAction={onAction}
         />
       </span>
+    </div>
+  );
+}
+
+function StackedItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen, sub, pill }: {
+  item: AttentionItem;
+  busyKeys?: Set<string>; armedKey?: string | null; leavingKeys?: Set<string>;
+  onAction: (i: AttentionItem) => void;
+  onOpen: (i: AttentionItem) => void;
+  sub?: string; pill: boolean;
+}) {
+  const tone: PillTone = item.kind === "alert" ? "critical" : toneForDays(item.daysUntil);
+  const hsl = tonePalette(tone);
+  const Icon = KIND_ICON[item.kind] ?? TriangleAlert;
+  // BUG-20 still holds: the kind suffix ("Expiration", "Payment") is what
+  // tells two rows for one record apart, so it keeps its own coloured word —
+  // on the detail line now, where it can no longer collide with the title.
+  const { main: titleMain, suffix: titleSuffix } = splitKindSuffix(item.title);
+  const detail = sub ?? item.reason;
+  const pillText = item.amount
+    ? fmtUSD(item.amount)
+    : item.daysUntil != null ? fmtShortDate(dateFromDays(item.daysUntil)) : null;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(item)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(item); } }}
+      className={`bubble-row w-full flex items-center gap-2 px-2 py-1.5 text-left cursor-pointer ${leavingKeys?.has(item.key) ? "row-leaving" : ""}`}
+      style={{ ["--accent-hsl" as any]: hsl }}
+      data-testid={`exec-item-${item.key}`}
+      title={item.reason ? `${item.title} — ${item.reason}` : item.title}
+    >
+      <RowIcon icon={Icon} hsl={hsl} size="lg" opt />
+      <div className="flex-1 min-w-0">
+        <p className="text-[13px] font-semibold leading-tight truncate">{titleMain}</p>
+        {(titleSuffix || detail) && (
+          <p className="text-[11px] text-muted-foreground leading-tight truncate mt-0.5">
+            {titleSuffix && (
+              <span className="font-semibold" style={{ color: `hsl(${hsl})` }} data-testid={`exec-item-kind-${item.key}`}>
+                {titleSuffix}{detail ? " · " : ""}
+              </span>
+            )}
+            {detail}
+          </p>
+        )}
+      </div>
+      {pill && pillText && (
+        <span className="shrink-0 rounded-full px-1.5 sm:px-2 py-0.5 text-[11px] font-bold tabular-nums"
+          style={{ background: `hsl(${hsl} / 0.16)`, color: `hsl(${hsl})`, boxShadow: `inset 0 0 0 1px hsl(${hsl} / 0.35)` }}
+          data-testid={`exec-item-pill-${item.key}`}>
+          {pillText}
+        </span>
+      )}
+      <span className={`shrink-0 inline-flex empty:hidden ${pillText ? "exec-opt" : ""}`}>
+        <ActionButton item={item} busy={!!busyKeys?.has(item.key)} armed={armedKey === item.key} onAction={onAction} />
+      </span>
+      <ChevronRight className="exec-opt h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
     </div>
   );
 }
@@ -620,7 +721,7 @@ const DOT_ROTATION = ["217 91% 65%", "262 70% 62%", "25 95% 58%", "155 65% 45%",
 
 /** Habits listed on the Executive card before the rest fold into a "N more"
  *  link. Anything past this was previously dropped without a trace. */
-const HABIT_CARD_LIMIT = 4;
+const HABIT_CARD_LIMIT = 5;
 
 /** The Executive tab is an at-a-glance view: every row is ONE line (title,
  *  then its detail in grey on the same line, then the amount), every list
@@ -973,6 +1074,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sections]);
 
+  // Doses due now. They left Needs Attention with everything that isn't an
+  // expiration (2026-11-21); the Wellness card keeps them, with "Taken".
+  const dosesDue = useMemo(() => secItems("health")
+    .filter((i) => (i.daysUntil ?? 0) <= 0 && i.action?.kind === "taken"),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sections]);
+
   const activityItems = useMemo(() => secItems("activity"),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sections]);
@@ -1047,7 +1155,20 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // ONE rollup the Habits modal reads (shared/habit-progress habitsDayRollup).
   const habitsRollup = habitsDayRollup(habitsDueToday, todayStr);
   const habitsDoneCount = habitsRollup.habitsComplete;
-  const habitPct = habitsRollup.habitsScheduled > 0 ? Math.round((habitsDoneCount / habitsRollup.habitsScheduled) * 100) : 0;
+  // The last seven days (today included) a habit was scheduled, and how many
+  // of them were kept. A day before the habit existed is not a missed day.
+  const habitWeek = (h: any): { done: number; due: number } => {
+    const born = String(h?.createdAt || "").slice(0, 10);
+    let due = 0, done = 0;
+    for (let k = 0; k < 7; k++) {
+      const day = ymdMinus(todayStr, k);
+      if (born && day < born) break;
+      if (!isHabitDueOn(h, day)) continue;
+      due++;
+      if (isHabitDoneOn(h, day)) done++;
+    }
+    return { done, due };
+  };
 
   // Money — THE upcoming-bills list (shared/obligation-windows): the same
   // window the Finance BILLS DUE tile and the Upcoming card show, overdue
@@ -1457,13 +1578,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="attention" icon={TriangleAlert} title="Needs Attention"
               accent={CARD_ACCENTS.attention} index={1} order={1} shortTitle="Attention"
+              count={attentionItems.length}
+              subtitle="Upcoming expirations and important dates."
               headerRight={
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
                   {/* Advice costs a model call, so it stays a deliberate tap. */}
                   <button
                     onClick={generateRecommendations}
                     disabled={adviceLoading}
-                    className="inline-flex items-center gap-1 rounded-md border border-border h-[26px] px-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
+                    className="inline-flex items-center justify-center gap-1 rounded-md border border-border h-6 min-w-6 px-1 sm:h-[26px] sm:px-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
                     data-testid="exec-recommendations-generate"
                     aria-label="Generate AI advice"
                     title={recommendations ? "Refresh AI advice" : "AI advice"}
@@ -1473,7 +1596,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   </button>
                   <button
                     onClick={() => setFiltersOpen(o => !o)}
-                    className="inline-flex items-center justify-center rounded-md border border-border h-[26px] w-[26px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                    className="inline-flex items-center justify-center rounded-md border border-border h-6 w-6 sm:h-[26px] sm:w-[26px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                     data-testid="attention-filters-toggle"
                     aria-expanded={filtersOpen}
                     aria-label="Attention filters"
@@ -1486,7 +1609,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               {/* What this card covers (bills are under Money, tasks under
                   Tasks). Read out and kept in the DOM; not a visible line —
                   the at-a-glance cards have no room for captions. */}
-              <p className="sr-only" data-testid="exec-attention-scope">Documents, renewals &amp; deadlines</p>
+              <p className="sr-only" data-testid="exec-attention-scope">Expirations &amp; renewals</p>
               {filtersOpen && <div className="mb-2"><AttentionFilters prefs={prefs} onChange={setPrefs} /></div>}
               {/* AI advice renders HERE, next to the button that asked for it —
                   not in a separate card at the foot of the grid, where a user
@@ -1568,34 +1691,20 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     You're all caught up
                   </p>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
-                    Nothing expiring or due — documents and renewals look good.
+                    Nothing expiring — documents and renewals look good.
                   </p>
                 </div>
               ) : (
                 <div className={LIST}>
-                  <ExpandableRows id="attention" count={attentionItems.length} cap={CARD_ROWS}>
-                    {attentionItems.map((i, n) => {
-                      // A coloured header over the first row of each group:
-                      // expirations by urgency (expired / this week / this
-                      // month / later) first, then "Also needs attention".
-                      const band = attentionHeading(i);
-                      const head = n === 0 || attentionHeading(attentionItems[n - 1]) !== band
-                        ? ATTENTION_HEADINGS[band] : null;
-                      return (
-                        <div key={i.key} className={LIST}>
-                          {head && (
-                            <p className={`micro-label flex items-center gap-1.5 ${n > 0 ? "pt-0.5" : ""}`}
-                              style={{ color: `hsl(${head.hs} 55%)` }} data-testid={`exec-attention-band-${band}`}>
-                              <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: `hsl(${head.hs} 55%)` }} aria-hidden="true" />
-                              {head.label}
-                            </p>
-                          )}
-                          <ItemRow item={i}
-                            busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
-                            onAction={onAction} onOpen={openItem} />
-                        </div>
-                      );
-                    })}
+                  {/* Expirations only, soonest first; each row's date pill is
+                      coloured by how close it is (red: expired or this week). */}
+                  <ExpandableRows id="attention" count={attentionItems.length} cap={CARD_ROWS}
+                    moreLabel={`View all ${attentionItems.length} items`}>
+                    {attentionItems.map((i) => (
+                      <ItemRow key={i.key} item={i} stacked
+                        busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
+                        onAction={onAction} onOpen={openItem} />
+                    ))}
                   </ExpandableRows>
                 </div>
               )}
@@ -1607,10 +1716,19 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               accent={CARD_ACCENTS.tasks} index={2} order={2}
               headerRight={<ViewLink label="View all tasks" accent={CARD_ACCENTS.tasks} onClick={() => go("/dashboard/tasks")} testId="exec-view-tasks" />}
             >
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 mb-1.5 text-[11px] text-muted-foreground">
-                <span><span className="metric-value text-base mr-1" style={{ color: `hsl(${CARD_ACCENTS.tasks})` }}>{pending.length}</span>Remaining</span>
-                <span><span className="metric-value text-base mr-1" style={{ color: "hsl(0 72% 58%)" }}>{overdueTasks.length}</span>Overdue</span>
-                <span><span className="metric-value text-base mr-1" style={{ color: "hsl(155 65% 45%)" }}>{doneToday}</span>Completed today</span>
+              <div className="grid grid-cols-3 divide-x divide-border/60 mb-2 text-center" data-testid="exec-tasks-stats">
+                {([
+                  { key: "remaining", n: pending.length, label: "Remaining", short: "Left", hsl: CARD_ACCENTS.tasks },
+                  { key: "overdue", n: overdueTasks.length, label: "Overdue", short: "Overdue", hsl: "0 72% 58%" },
+                  { key: "done", n: doneToday, label: "Completed today", short: "Done", hsl: "155 65% 45%" },
+                ] as const).map((c) => (
+                  <div key={c.key} className="min-w-0 px-1">
+                    <span className="block metric-value text-lg sm:text-xl leading-tight tabular-nums" style={{ color: `hsl(${c.hsl})` }}>{c.n}</span>
+                    <span className="block text-[11px] text-muted-foreground truncate">
+                      <span className="exec-long">{c.label}</span><span className="exec-short" aria-hidden="true">{c.short}</span>
+                    </span>
+                  </div>
+                ))}
               </div>
               {sortedPending.length === 0 ? (
                 <CardEmpty icon={CheckCircle2} accent={CARD_ACCENTS.tasks} tone={doneToday > 0 ? "good" : undefined}>{doneToday > 0 ? "Everything done — nice work." : "No open tasks."}</CardEmpty>
@@ -1643,7 +1761,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                         />
                         <div className="flex-1 min-w-0 flex items-center gap-2 cursor-pointer" title={`${t.title} — ${sub}`} onClick={() => { setTaskFocus({ id: t.id, tab: du != null && du > 0 ? "upcoming" : "today" }); setPopup("tasks"); }}>
                           <p className="text-[13px] font-semibold leading-tight truncate flex-1 min-w-0">{t.title}</p>
-                          <p className={`text-[11px] truncate shrink-0 max-w-[50%] ${du != null && du < 0 ? "text-red-500" : "text-muted-foreground"}`}>
+                          <p className={`text-[11px] font-semibold truncate shrink-0 max-w-[50%] ${du != null && du < 0 ? "text-red-500" : "text-muted-foreground"}`}>
                             <span className="exec-long">{sub}</span>
                             {/* A phone's half card: just the day (red when overdue). */}
                             <span className="exec-short" aria-hidden="true">{du == null ? "" : du === 0 ? "Today" : fmtShortDate(dateFromDays(du))}</span>
@@ -1654,7 +1772,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   })}
                   {sortedPending.length > CARD_ROWS && (
                     <FooterLink onClick={() => setPopup("tasks")} testId="exec-tasks-more">
-                      {sortedPending.length - CARD_ROWS} more task{sortedPending.length - CARD_ROWS === 1 ? "" : "s"}
+                      View {sortedPending.length - CARD_ROWS} more task{sortedPending.length - CARD_ROWS === 1 ? "" : "s"}
                     </FooterLink>
                   )}
                 </div>
@@ -1665,21 +1783,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="schedule" icon={CalendarDays} title="Schedule"
               accent={CARD_ACCENTS.schedule} index={3} order={3}
+              subtitle={<>Today · {fmtWeekdayDate(new Date())}{nextUp ? <span className="exec-opt"> · Next up <span className="font-semibold" style={{ color: `hsl(${CARD_ACCENTS.schedule})` }}>{nextUp.title}</span></span> : null}</>}
               headerRight={<ViewLink label="View schedule" accent={CARD_ACCENTS.schedule} onClick={() => setPopup("events")} testId="exec-view-calendar" />}
             >
-              <div className="flex items-baseline gap-2 mb-1.5 min-w-0 text-[11px] text-muted-foreground">
-                <span className="shrink-0">
-                  <span className="metric-value text-base mr-1" style={{ color: `hsl(${CARD_ACCENTS.schedule})` }}>{eventsToday.length}</span>
-                  {eventsToday.length === 1 ? "event today" : "events today"}
-                </span>
-                {nextUp && (
-                  <span className="exec-opt flex-1 min-w-0 truncate text-right" title={nextUp.title}>
-                    Next up{" "}
-                    <span className="text-[12px] font-semibold" style={{ color: `hsl(${CARD_ACCENTS.schedule})` }}>{nextUp.title}</span>
-                    {nextUp.time && <> · {timeLabel12h(nextUp.time)}</>}
-                  </span>
-                )}
-              </div>
               {eventsToday.length === 0 ? (
                 // One empty state per card: when "Dates to remember" below is
                 // empty too, its message covers both.
@@ -1690,19 +1796,30 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 <div className={LIST}>
                   {eventsToday.slice(0, EVENT_ROWS).map((e: any, idx: number) => {
                     const past = !!e.time && String(e.time).slice(0, 5) < nowClock;
+                    const dot = DOT_ROTATION[idx % DOT_ROTATION.length];
+                    const start = e.allDay || !e.time ? "All day" : timeLabel12h(e.time);
+                    const end = e.allDay ? "" : clockLabel(e.endTime);
                     return (
                       <div key={e.id}
                         role="button" tabIndex={0}
                         onClick={() => setPopup("events")}
                         onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setPopup("events"); } }}
-                        className={`bubble-row flex items-center ${ROW} cursor-pointer ${past ? "opacity-60" : ""}`}
-                        style={{ ["--accent-hsl" as any]: CARD_ACCENTS.schedule }}
+                        className={`flex items-stretch gap-2 cursor-pointer ${past ? "opacity-60" : ""}`}
+                        data-testid={`exec-event-${e.id}`}
                       >
-                        <span className="h-2 w-2 rounded-full shrink-0" style={{ background: `hsl(${DOT_ROTATION[idx % DOT_ROTATION.length]})` }} aria-hidden="true" />
-                        <span className="exec-time text-[12px] font-semibold tabular-nums text-muted-foreground w-[64px] shrink-0">
-                          {e.allDay || !e.time ? "All day" : timeLabel12h(e.time)}
+                        {/* Start over end, beside the event — the reference's time column. */}
+                        <span className="exec-time w-[52px] shrink-0 flex flex-col justify-center text-[11px] tabular-nums leading-tight">
+                          <span className="font-semibold text-foreground/90">{start}</span>
+                          {end && <span className="text-muted-foreground">{end}</span>}
                         </span>
-                        <span className="text-[13px] font-semibold truncate flex-1">{e.title}</span>
+                        <span className="bubble-row flex-1 min-w-0 flex items-center gap-2 pl-0 pr-2 py-1.5 overflow-hidden"
+                          style={{ ["--accent-hsl" as any]: dot }}>
+                          <span className="self-stretch w-1 rounded-full shrink-0" style={{ background: `hsl(${dot})` }} aria-hidden="true" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-[13px] font-semibold leading-tight truncate">{e.title}</span>
+                            {e.location && <span className="block text-[11px] text-muted-foreground leading-tight truncate mt-0.5">{e.location}</span>}
+                          </span>
+                        </span>
                       </div>
                     );
                   })}
@@ -1762,30 +1879,24 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="habits" icon={Flame} title="Habits"
               accent={CARD_ACCENTS.habits} index={4} order={5} wide
+              subtitle={habitsDueToday.length > 0
+                ? `Today · ${habitsDoneCount} of ${habitsDueToday.length} done${habitsNotScheduled > 0 ? ` · ${habitsNotScheduled} not scheduled` : ""}`
+                : undefined}
               headerRight={<ViewLink label="View habits" accent={CARD_ACCENTS.habits} onClick={() => setPopup("habits")} testId="exec-view-habits" />}
             >
               {habitsDueToday.length === 0 ? (
                 <CardEmpty icon={Flame} accent={CARD_ACCENTS.habits}>No habits scheduled today.</CardEmpty>
               ) : (
-                <div className="flex items-start gap-2.5">
-                  <div className="shrink-0 flex flex-col items-center gap-1">
-                    <ProgressRing
-                      value={habitsDoneCount} total={habitsDueToday.length}
-                      accent={CARD_ACCENTS.habits} size={52} stroke={5}
-                      label={`${habitPct}%`}
-                    />
-                    <p className="text-[11px] text-muted-foreground text-center leading-tight">
-                      {habitsDoneCount} / {habitsDueToday.length} today
-                      {habitsNotScheduled > 0 && <><br /><span className="text-muted-foreground/70">{habitsNotScheduled} not scheduled</span></>}
-                    </p>
-                  </div>
-                  <div className={`flex-1 min-w-0 ${LIST}`}>
+                <>
+                  {/* One tile per habit (the reference's row of check circles):
+                      ticked when today is done, and how many of the last seven
+                      scheduled days were kept. Tapping checks today in. */}
+                  <div className="grid grid-cols-5 gap-1.5" data-testid="exec-habit-tiles">
                     {habitsDueToday.slice(0, HABIT_CARD_LIMIT).map((h: any) => {
                       const hp = habitDayProgress(h, todayStr);
                       const done = isHabitDoneOn(h, todayStr);
-                      const HIcon = habitIcon(String(h.name || ""));
                       const busy = busyKeys.has(`habit:${h.id}`);
-                      const pct = hp.required > 0 ? Math.min(100, (hp.completed / hp.required) * 100) : done ? 100 : 0;
+                      const wk = habitWeek(h);
                       return (
                         <button key={h.id}
                           onClick={() => {
@@ -1794,41 +1905,31 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                             checkinHabit.mutateAsync(h.id).catch(() => {}).finally(() => markBusy(`habit:${h.id}`, false));
                           }}
                           disabled={busy}
-                          className={`bubble-row w-full flex items-center ${ROW} text-left disabled:opacity-60`}
+                          className="bubble-row w-full min-w-0 flex flex-col items-center text-center gap-1 px-1 py-2 disabled:opacity-60"
                           style={{ ["--accent-hsl" as any]: CARD_ACCENTS.habits }}
                           data-testid={`exec-habit-checkin-${h.id}`}
                           aria-label={done ? `${h.name} — done today` : `Check in ${h.name}`}
+                          title={`${h.name} — ${wk.done} of ${wk.due} scheduled days this week`}
                         >
-                          <RowIcon icon={HIcon} hsl={CARD_ACCENTS.habits} />
-                          <span className="text-[13px] font-semibold leading-tight truncate flex-1">{h.name}</span>
-                          {hp.required > 1 ? (
-                            <>
-                              <span className="h-1.5 w-8 rounded-full bg-muted overflow-hidden shrink-0" aria-hidden="true">
-                                <span className="block h-full rounded-full" style={{ width: `${pct}%`, background: `hsl(${CARD_ACCENTS.habits})` }} />
-                              </span>
-                              <span className="text-[11px] tabular-nums text-muted-foreground shrink-0">{hp.completed}/{hp.required}</span>
-                            </>
-                          ) : done ? (
-                            // A finished habit keeps its count beside the tick:
-                            // an icon-only row read as "no count" next to the
-                            // "0/1" of its siblings (QA 2026-09-18 F-42).
-                            <span className="flex items-center gap-1 shrink-0">
-                              <span className="text-[11px] tabular-nums text-muted-foreground">{hp.completed}/{hp.required || 1}</span>
-                              <CheckCircle2 className="h-4 w-4" style={{ color: `hsl(${CARD_ACCENTS.habits})` }} aria-label="Done" />
-                            </span>
+                          {done ? (
+                            <CheckCircle2 className="h-6 w-6" style={{ color: "hsl(155 65% 45%)" }} aria-label="Done" />
                           ) : (
-                            <span className="text-[11px] tabular-nums text-muted-foreground shrink-0">0/1</span>
+                            <span className={`h-6 w-6 rounded-full border-2 ${busy ? "animate-pulse border-emerald-500" : "border-muted-foreground/50"}`} aria-hidden="true" />
                           )}
+                          <span className="w-full text-[12px] font-semibold leading-tight truncate">{h.name}</span>
+                          <span className="text-[11px] text-muted-foreground tabular-nums leading-tight">
+                            {hp.required > 1 && !done ? `${hp.completed}/${hp.required} today` : `${wk.done} / ${wk.due} days`}
+                          </span>
                         </button>
                       );
                     })}
-                    {habitsDueToday.length > HABIT_CARD_LIMIT && (
-                      <FooterLink onClick={() => setPopup("habits")} testId="exec-habits-more">
-                        {habitsDueToday.length - HABIT_CARD_LIMIT} more habit{habitsDueToday.length - HABIT_CARD_LIMIT === 1 ? "" : "s"} today
-                      </FooterLink>
-                    )}
                   </div>
-                </div>
+                  {habitsDueToday.length > HABIT_CARD_LIMIT && (
+                    <FooterLink onClick={() => setPopup("habits")} testId="exec-habits-more">
+                      {habitsDueToday.length - HABIT_CARD_LIMIT} more habit{habitsDueToday.length - HABIT_CARD_LIMIT === 1 ? "" : "s"} today
+                    </FooterLink>
+                  )}
+                </>
               )}
             </ExecCard>
 
@@ -1976,7 +2077,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               accent={CARD_ACCENTS.wellness} index={7} order={8}
               headerRight={<ViewLink label="View wellness" accent={CARD_ACCENTS.wellness} onClick={() => setPopup("wellness:score")} testId="exec-view-wellness" />}
             >
+              {dosesDue.length > 0 && (
+                <div className={`${LIST} mb-1.5`} data-testid="exec-wellness-doses">
+                  {dosesDue.slice(0, 2).map((i) => (
+                    <ItemRow key={i.key} item={i}
+                      busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
+                      onAction={onAction} onOpen={openItem} />
+                  ))}
+                </div>
+              )}
               {!hasWellness && latestVitals.length === 0 ? (
+                dosesDue.length > 0 ? null :
                 <CardEmpty icon={Heart} accent={CARD_ACCENTS.wellness}>{wellnessEmptyCopy}</CardEmpty>
               ) : (
                 <>
@@ -2031,6 +2142,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="upcoming" icon={Clock} title="Upcoming"
               accent={CARD_ACCENTS.upcoming} index={8} order={4}
+              subtitle="What's coming next"
               headerRight={<ViewLink label="View all upcoming" accent={CARD_ACCENTS.upcoming} onClick={() => setPopup("upcoming")} testId="exec-view-upcoming" />}
             >
               {upcomingPreview.length === 0 ? (
@@ -2041,9 +2153,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 </CardEmpty>
               ) : (
                 <div className={LIST}>
-                  <ExpandableRows id="upcoming" count={upcomingPreview.length} cap={CARD_ROWS + 1}>
+                  <ExpandableRows id="upcoming" count={upcomingPreview.length} cap={CARD_ROWS}>
                     {upcomingPreview.map((i) => (
-                      <ItemRow key={i.key} item={i}
+                      <ItemRow key={i.key} item={i} stacked pill={false}
+                        sub={i.daysUntil != null ? `${capitalize(inDaysLabel(i.daysUntil))} · ${fmtShortDate(dateFromDays(i.daysUntil))}` : i.reason}
                         busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
                         onAction={onAction} onOpen={openItem} />
                     ))}

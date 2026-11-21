@@ -8,6 +8,15 @@
 // expiring or expired documents, renewals, registrations, policy ends, filing
 // deadlines, a goal past its deadline, a dose not taken, a reading out of range.
 //
+// 2026-11-21 (owner, with a reference screenshot): "I want the needs attention
+// not to include tasks or stuff like that. I want it to be more on the
+// expiration dates and things that are important." The card is now
+// expirations and renewals ONLY (`isExpiryItem`): a document's date, a
+// registration, a policy end, a return window, a prescription running out, or
+// an alert raised about one. A dose not taken, a goal past due, a free-form
+// alert — those have their own homes (Wellness, Goals, the bell) and no
+// longer push an expiring passport off the card.
+//
 // Pure — ExecutiveBriefing renders it, tests/executive-attention.test.ts pins it.
 
 import type { AttentionItem, AttentionTier } from "./attention";
@@ -52,18 +61,18 @@ export function isExpiryItem(i: Pick<AttentionItem, "kind" | "sourceKey">): bool
 }
 
 /**
- * The card's rows: expirations and renewals first, then everything else
- * (health, goals, other alerts); each group most urgent first — past-due
- * before today before later, undated alerts at the top of their group (an
- * alert is happening now). `minTier` is the user's Urgency filter, and it
- * applies to documents too.
+ * The card's rows: expirations and renewals only, most urgent first — expired
+ * before today before later, undated alerts at the top (an alert is happening
+ * now). `minTier` is the user's Urgency filter.
  */
 export function selectAttentionRows(s: AttentionSections, minTier: AttentionTier = "upcoming"): AttentionItem[] {
-  const urgentHealth = s.health.filter((i) => (i.daysUntil ?? 0) <= 0);
   const seen = new Set<string>();
   const rows: AttentionItem[] = [];
-  for (const i of [...s.immediate, ...urgentHealth, ...s.documents]) {
+  // `health` stays in the signature (callers pass it) but contributes only an
+  // expiry it might carry — never a dose or a reading.
+  for (const i of [...s.immediate, ...s.health, ...s.documents]) {
     if (!belongsInAttention(i)) continue;
+    if (!isExpiryItem(i)) continue;
     if (TIER_RANK[i.tier] > TIER_RANK[minTier]) continue;
     if (seen.has(i.key)) continue;
     seen.add(i.key);

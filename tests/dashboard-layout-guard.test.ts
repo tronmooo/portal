@@ -64,7 +64,7 @@ describe("executive dashboard grid has no dead space", () => {
     // to the row's height rather than leaving the rest of the cell empty.
     // The padding is not the point (it shrank on 2026-11-21 for the
     // at-a-glance layout); h-full + flex column on the bubble is.
-    expect(execSrc).toMatch(/bubble bubble-enter [^`"]*h-full flex flex-col/);
+    expect(execSrc).toMatch(/bubble exec-card bubble-enter [^`"]*h-full flex flex-col/);
   });
 
   it("card content fills the cell WITHOUT becoming a scroll container", () => {
