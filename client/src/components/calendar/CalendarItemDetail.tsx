@@ -51,7 +51,7 @@ import {
   seriesHistory, completionStats, hasHistory, HISTORY_LABELS, type HistoryStatus,
 } from "@shared/occurrence-history";
 import { applyCalendarAction, applyCalendarMoneyAction, restoreOccurrence } from "@/lib/calendar-mutations";
-import { KIND_ICONS, KIND_HSL, fmtDate, fmtShort } from "./detail/kind-style";
+import { KIND_ICONS, KIND_HSL, fmtDate, fmtShort, fmtDay } from "./detail/kind-style";
 import { EditSeriesScreen } from "./detail/EditSeriesScreen";
 
 const fmtMoney = (n?: number) => (n == null ? null : formatMoney(n));
@@ -291,7 +291,7 @@ export function CalendarItemDetail({
           </span>
           <span className="block text-[12px] text-muted-foreground">
             {cap1(relativeDayLabel(o.effectiveDate, todayISO))}
-            {o.moved && ` · moved from ${fmtShort(o.date)}`}
+            {o.moved && ` · moved from ${fmtDay(o.date)}`}
           </span>
         </span>
         <Chip hsl={chip.hsl}>{chip.label}</Chip>
@@ -502,7 +502,14 @@ export function CalendarItemDetail({
 
                   {/* Facts */}
                   <div className="rounded-2xl border border-border divide-y divide-border/60 overflow-hidden">
-                    <InfoRow icon={Tag} label={isTask ? "Type" : `${payment ? "Payment" : "Event"} Type`} value={KIND_LABELS[series.kind]} />
+                    <InfoRow icon={Tag} label={isTask ? "Type" : `${payment ? "Payment" : "Event"} Type`}
+                      value={isTask ? (isRecurring ? "Recurring task" : "Task") : KIND_LABELS[series.kind]}
+                      onClick={inPlace ? () => openEdit("details") : undefined} testId="cal-detail-kind" />
+                    {/* Every row that can be changed opens the page that changes it. */}
+                    {inPlace && (
+                      <InfoRow icon={CalendarClock} label="Schedule" value={repeatsLabel}
+                        onClick={() => openEdit("repeat")} testId="cal-detail-schedule" />
+                    )}
                     <div className="flex items-center gap-3 px-3.5 py-3" data-testid="cal-detail-source">
                       <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <span className="flex-1 text-sm font-medium">Source</span>

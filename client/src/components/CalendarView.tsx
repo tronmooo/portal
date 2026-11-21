@@ -1,4 +1,5 @@
 import { changedFieldsOnly } from "@shared/field-patch";
+import { GridDetailHost } from "@/components/calendar/GridDetailHost";
 import { formatApiError } from "@/lib/formatError";
 import { setEventOccurrence } from "@/lib/event-occurrence";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -2259,12 +2260,21 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
       )}
 
       {/* Event Detail Dialog */}
+      {/* The grid opens the SAME detail screen as the Recurring list
+          (CalendarItemDetail); the dialog below is only the fallback for an
+          item the occurrence stream does not carry. */}
       {detailItem && (
-        <EventDetailDialog
-          open={!!detailItem}
-          onClose={() => setDetailItem(null)}
+        <GridDetailHost
           item={detailItem}
-          onEdit={handleEditFromDetail}
+          onClose={() => setDetailItem(null)}
+          fallback={
+            <EventDetailDialog
+              open={!!detailItem}
+              onClose={() => setDetailItem(null)}
+              item={detailItem}
+              onEdit={handleEditFromDetail}
+            />
+          }
         />
       )}
 

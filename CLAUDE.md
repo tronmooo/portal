@@ -464,6 +464,9 @@ Read them before touching `CalendarItemDetail` / `detail/EditSeriesScreen`
 task recurrence engine (`shared/recurrence.ts`) or the occurrence routes.
 *Guards:* `tests/recurring-occurrence-actions.test.ts` (rule, adapters, real
 routes), `tests/calendar-detail-redesign.dom.test.tsx` (the screens).
+*Live check (deployed app, smoke account):* `npx tsx tests/live-recurring-occurrence-check.ts`.
+The calendar grid opens the same screen (`GridDetailHost`); its old dialog is
+only the fallback for an item the occurrence stream does not carry.
 
 **O1. Skipping never deletes.** A skip is a mark on that one date (event:
 `rd:skip:`; task: `rskip:`); the series steps over it and every later date
