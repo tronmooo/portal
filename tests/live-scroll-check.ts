@@ -7,8 +7,15 @@
 // History: 2026-11-21, iPhone "scroll to the bottom and it won't scroll back
 // up" — see client/src/index.css (iOS scroll chaining) and
 // client/src/components/PullToRefresh.tsx.
-import { chromium, devices } from "playwright";
+import { createRequire } from "module";
 import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
+
+// Same loader as the other live UI checks: the project's playwright, else the
+// one preinstalled with the browser.
+const req = createRequire(import.meta.url);
+const { chromium, devices } = (() => {
+  try { return req("playwright"); } catch { return req("/opt/node-tools/node_modules/playwright"); }
+})();
 const ROUTES = ["/dashboard", "/trackers", "/dashboard/finance", "/wellness", "/linked?tab=assets", "/linked?tab=liabilities", "/dashboard/documents", "/calendar", "/artifacts", "/dashboard/tasks", "/chat", "/dashboard/habits", "/dashboard/journal", "/insights", "/settings"];
 const MODE = process.argv[2] || "mobile";
 const PRIMARY = `(() => {
