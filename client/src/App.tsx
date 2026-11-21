@@ -79,6 +79,7 @@ const _termsImport = () => import("@/pages/terms");
 const _editImport  = () => import("@/pages/editor");
 const _insightsImport = () => import("@/pages/insights");
 const _shareViewImport = () => import("@/pages/share-view");
+const _detailsImport = () => import("@/pages/details");
 
 const ChatPage         = lazyWithRetry(_chatImport);
 const DashboardPage    = lazyWithRetry(_dashImport);
@@ -105,6 +106,7 @@ const TermsPage        = lazyWithRetry(_termsImport);
 const EditorPage       = lazyWithRetry(_editImport);
 const InsightsPage     = lazyWithRetry(_insightsImport);
 const ShareViewPage    = lazyWithRetry(_shareViewImport);
+const DetailsPage      = lazyWithRetry(_detailsImport);
 
 // PERF-2 (2026-06-10): main-tab chunk preloads used to fire at module load,
 // before auth — logged-out users downloaded megabytes of route chunks they
@@ -778,6 +780,8 @@ function AppRouter() {
         <Route path="/editor/new/:type" component={EditorPage} />
         <Route path="/editor/:id" component={EditorPage} />
         <Route path="/insights" component={InsightsPage} />
+        {/* Record details: user-defined characteristics on any record — report, catalog, flags. */}
+        <Route path="/details" component={DetailsPage} />
         <Route path="/share/:token" component={ShareViewPage} />
         <Route path="/dashboard/finance" component={FinancePage} />
         <Route path="/dashboard/habits" component={HabitsPage} />

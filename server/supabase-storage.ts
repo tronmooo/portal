@@ -1,3 +1,4 @@
+import { DETAIL_DEFS_PREF, RECORD_DETAILS_PREFIX, parseDefinitions, parseRecordDetails, parseRecordDetailsKey, recordDetailsKey } from "@shared/record-details";
 import { expenseShownOnProfile } from "@shared/expense-on-profile";
 import {
   valuationKey, valuationHistoryKey, readValuationRecord, readValuationHistory,
@@ -8809,6 +8810,42 @@ export class SupabaseStorage implements IStorage {
     for (const row of data || []) {
       const rows = readValuationHistory(row.value);
       if (rows.length > 0) out[String(row.key).slice(prefix.length)] = rows;
+    }
+    return out;
+  }
+
+  // ---- Record details (shared/record-details) ----
+  // Rows in `preferences`, like valuations: `detail_definitions` holds the
+  // catalog, `details:<entityType>:<entityId>` one record's values. Callers
+  // serialize read-modify-write through acquireUserLock (server/record-details).
+  async getDetailDefinitions() {
+    return parseDefinitions(await this.getPreference(DETAIL_DEFS_PREF));
+  }
+  async saveDetailDefinitions(defs: import("@shared/record-details").DetailDefinition[]): Promise<void> {
+    await this.setPreference(DETAIL_DEFS_PREF, JSON.stringify(defs));
+  }
+  async getRecordDetails(entityType: string, entityId: string) {
+    return parseRecordDetails(await this.getPreference(recordDetailsKey(entityType, entityId)));
+  }
+  async saveRecordDetails(entityType: string, entityId: string, details: import("@shared/record-details").RecordDetails): Promise<void> {
+    const key = recordDetailsKey(entityType, entityId);
+    if (Object.keys(details.values).length === 0) {
+      const { error } = await this.supabase.from("preferences").delete().eq("user_id", this.userId).eq("key", key);
+      if (error) throw error;
+      return;
+    }
+    await this.setPreference(key, JSON.stringify(details));
+  }
+  async listRecordDetails() {
+    const { data, error } = await this.supabase.from("preferences").select("key,value")
+      .eq("user_id", this.userId).like("key", `${RECORD_DETAILS_PREFIX}%`);
+    if (error) throw error;
+    const out: Array<{ entityType: import("@shared/record-details").DetailEntityType; entityId: string; details: import("@shared/record-details").RecordDetails }> = [];
+    for (const row of data || []) {
+      const parsed = parseRecordDetailsKey(String(row.key));
+      if (!parsed) continue;
+      const details = parseRecordDetails(row.value);
+      if (Object.keys(details.values).length > 0) out.push({ ...parsed, details });
     }
     return out;
   }

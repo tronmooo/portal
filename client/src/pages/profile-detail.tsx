@@ -1,4 +1,5 @@
 import { NewNoteForm } from "@/components/notes/NewNoteForm";
+import { RecordDetailsPanel } from "@/components/details/RecordDetailsPanel";
 import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
@@ -13568,6 +13569,11 @@ export default function ProfileDetailPage() {
                       )}
                     </>
                   )}
+
+                  {/* User-defined characteristics on THIS record (shared/record-details):
+                      Condition = Good on a car, Roof condition on a house, a rating
+                      on a subscription — structured values, rules and flags. */}
+                  <RecordDetailsPanel entityType="profile" entityId={profile.id} className="mt-4" />
 
                   {/* All the way down the Info tab: what you do TO this record
                       — silence the alerts it raises, or remove it. Both were

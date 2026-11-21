@@ -149,6 +149,10 @@ export const STORAGE_NOUN_TARGETS: Record<string, StorageTarget> = {
   // mirrored into fields (that write journals as a Profile write on its own).
   AssetValuation: { domains: ["assets"], endpoint: null },
   Capture: { domains: ["journal"], endpoint: null },
+  // Record details (shared/record-details): user-defined characteristics and
+  // their values. Read by /api/details/* only — nothing else embeds them.
+  RecordDetails: { domains: ["details"], endpoint: null },
+  DetailDefinitions: { domains: ["details"], endpoint: null },
 
   // Habit ↔ tracker: one completion writes both sides (server/habit-completion),
   // so either side's write must refresh the other or the ring and the chart

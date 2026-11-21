@@ -38,6 +38,7 @@ const LABEL_OVERRIDES: Record<string, string> = {
   link_entities: "Link records",
   manage_document: "Update document",
   upload_document: "Upload document",
+  set_record_detail: "Detail saved",
 };
 
 /** "unlink_asset_from_liability" → "Unlink asset from liability". */
@@ -80,6 +81,10 @@ export function actionCardSubject(data: unknown): string {
     typeof d[a] === "string" && d[a] && typeof d[b] === "string" && d[b] ? `${clip(String(d[a]), 40)} → ${clip(String(d[b]), 40)}` : null;
   const two = pair("source_name", "target_name") || pair("fromAssetName", "toAssetName");
   if (two) return two;
+  // A detail reads as "Honda Civic · Condition" (set_record_detail).
+  const detail = typeof d.record === "string" && d.record.trim() && typeof d.characteristic === "string" && d.characteristic.trim()
+    ? `${clip(String(d.record), 40)} · ${clip(String(d.characteristic), 40)}` : null;
+  if (detail) return detail;
   for (const key of SUBJECT_KEYS) {
     const v = d[key];
     if (typeof v === "string" && v.trim()) return clip(v);
