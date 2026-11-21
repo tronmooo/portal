@@ -17,6 +17,7 @@ export default defineConfig({
       'tests/sync-rules-scope-empty-states.test.tsx',
       'tests/sync-tasks-scope-notice.dom.test.tsx',
       'tests/tasks-page-layout.dom.test.tsx',
+      'tests/task-groups.test.ts',
       'tests/date-precision.test.ts',
       'tests/ai-destructive-safety.test.ts',
       'tests/chat-liability-one-record.test.ts',

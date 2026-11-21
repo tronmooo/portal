@@ -44,9 +44,10 @@ console.log("summary after complete:", (await page.locator("[data-testid=tasks-s
 await goto(ctx, "/dashboard", "dashboard after complete"); console.log("KPI after complete:", await kpi());
 // DELETE
 await goto(ctx, "/tasks", "tasks for delete");
-await page.click("[data-testid=task-tab-filters] >> text=/Completed/").catch(() => {});
+// The task was completed above: completed tasks are folded inside their section.
+for (const k of ["mine", "asset", "liability"]) await page.click(`[data-testid=tasks-group-done-toggle-${k}]`, { timeout: 1500 }).catch(() => {});
 await page.waitForTimeout(200);
-ctx.mark(); await page.click(`[data-testid=button-delete-task-${id}]`); await untilVisible(`[data-testid=alert-delete-task-${id}]`);
+ctx.mark(); await page.click(`[data-testid=button-task-menu-${id}]`); await page.click(`[data-testid=button-delete-task-${id}]`); await untilVisible(`[data-testid=alert-delete-task-${id}]`);
 const t3 = T(); await page.click("[data-testid=button-confirm-delete-task]");
 const gone = await untilGone(`[data-testid=card-task-${id}]`); await settle(page);
 const del = ctx.calls.find(c => c.method === "DELETE" && c.url.includes(id));

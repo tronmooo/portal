@@ -14,7 +14,14 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday, addDays as tzAddDays, formatClockTime } from "@shared/timezone";
-import { taskSummaryTiles, openTaskBucket, type OpenTaskBucket } from "@shared/task-counts";
+import { taskSummaryTiles, openTaskBucket, countOpenDueWithin, type OpenTaskBucket } from "@shared/task-counts";
+import { taskGroupOf, taskGroupItemKind, type TaskGroupKind } from "@shared/task-groups";
+import { isAssetTabProfile, isLiabilityTabProfile } from "@shared/asset-value";
+import { hashNavigate } from "@/lib/hashNavigate";
+import { ToastAction } from "@/components/ui/toast";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { isRecurring, humanSummary, parseRecurrence, userTags } from "@shared/recurrence";
 import { isMigrationTag, isRetiredMigratedReminderTask } from "@shared/legacy-reminder-tasks";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -27,7 +34,6 @@ import { useRecordHighlight } from "@/hooks/useRecordHighlight";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { ActiveFilterNotice, FilteredEmptyState } from "@/components/ActiveFilterNotice";
 import { setFilterEveryone, scopeLabel } from "@/lib/profileFilter";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -45,7 +51,9 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -60,7 +68,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { showUndoToast } from "@/lib/undo-delete";
-import { ListTodo, Calendar, CalendarDays, AlertCircle, AlertTriangle, Flame, Plus, Trash2, CheckCircle2, Repeat, Inbox, type LucideIcon } from "lucide-react";
+import { ListTodo, Calendar, CalendarDays, AlertCircle, AlertTriangle, Flame, Plus, Trash2, CheckCircle2, Repeat, Inbox, User, Car, Layers, Home, Landmark, CreditCard, Package, ChevronDown, ChevronRight, MoreHorizontal, Pencil, ExternalLink, type LucideIcon } from "lucide-react";
 import { Link } from "wouter";
 import type { Task, Profile } from "@shared/schema";
 import { useState, useEffect, useRef, useMemo } from "react";
@@ -90,12 +98,20 @@ const TASK_TONES: Record<OpenTaskBucket | "done", TaskTone> = {
   undated:  { hs: "262 70%", hs2: "292 65%", icon: Inbox },
   done:     { hs: "155 60%", hs2: "178 62%", icon: CheckCircle2 },
 };
-const OPEN_SECTIONS: { bucket: OpenTaskBucket; label: string }[] = [
-  { bucket: "overdue", label: "Overdue" },
-  { bucket: "dueToday", label: "Today" },
-  { bucket: "upcoming", label: "Upcoming" },
-  { bucket: "undated", label: "No date" },
+// The page is organised by what a task is ABOUT (shared/task-groups): the
+// user, something they own, something they owe. Each section is a tracker-
+// style hero panel with its own two-stop colour.
+const GROUP_SECTIONS: { kind: TaskGroupKind; title: string; subtitle: string; tab: string; icon: LucideIcon; hs: string; hs2: string }[] = [
+  { kind: "mine", title: "My Tasks", subtitle: "Personal and general tasks", tab: "Mine", icon: User, hs: "173 70%", hs2: "199 80%" },
+  { kind: "asset", title: "Asset Tasks", subtitle: "Tasks tied to your assets", tab: "Assets", icon: Car, hs: "213 85%", hs2: "240 75%" },
+  { kind: "liability", title: "Liability Tasks", subtitle: "Tasks tied to your liabilities", tab: "Liabilities", icon: Layers, hs: "265 72%", hs2: "292 65%" },
 ];
+const ITEM_ICONS: Record<string, LucideIcon> = {
+  vehicle: Car, property: Home, account: Landmark, investment: Landmark, loan: Landmark,
+  liability: Landmark, subscription: CreditCard, asset: Package,
+};
+/** What a row needs to know about the asset or liability its task is tied to. */
+type LinkedItem = { id: string; name: string; kind: TaskGroupKind };
 const BUCKET_ORDER: Record<OpenTaskBucket, number> = { overdue: 0, dueToday: 1, upcoming: 2, undated: 3 };
 const PRIORITY_CYCLE = ["low", "medium", "high"];
 /** The priority a tap on the row's badge moves to: low → medium → high → low. */
@@ -320,14 +336,25 @@ function TaskDialog({
           </div>
           {!isEdit && (
             <div className="space-y-1">
-              <Label>Profile</Label>
+              {/* What the task is about. An asset or a liability can be
+                  chosen here, and the page lists the task under it. */}
+              <Label>Related to</Label>
               <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
-                <SelectTrigger data-testid="select-task-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
+                <SelectTrigger data-testid="select-task-profile"><SelectValue placeholder="Me" /></SelectTrigger>
                 <SelectContent>
-                  {profiles.filter(p => ["self", "person", "pet"].includes(p.type)).map(p => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.type === "self" ? "Me" : p.name}
-                    </SelectItem>
+                  {([
+                    ["People", profiles.filter(p => ["self", "person", "pet"].includes(p.type))],
+                    ["Assets", profiles.filter(p => isAssetTabProfile(p))],
+                    ["Liabilities", profiles.filter(p => isLiabilityTabProfile(p))],
+                  ] as const).filter(([, list]) => list.length > 0).map(([label, list]) => (
+                    <SelectGroup key={label}>
+                      <SelectLabel>{label}</SelectLabel>
+                      {list.map(p => (
+                        <SelectItem key={p.id} value={p.id} data-testid={`option-task-profile-${p.id}`}>
+                          {p.type === "self" ? "Me" : p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
                   ))}
                 </SelectContent>
               </Select>
@@ -345,22 +372,43 @@ function TaskDialog({
   );
 }
 
+/**
+ * The confirmation for a completed task. Checking off a bill's reminder closes
+ * the reminder, not the bill: the payment is a separate record (Auto Pay rule
+ * A1 — no screen records one on its own), so the toast offers the way to it.
+ */
+function showCompletedToast(toast: ReturnType<typeof useToast>["toast"], title: string, linked?: LinkedItem | null) {
+  if (linked?.kind !== "liability") { toast({ title }); return; }
+  toast({
+    title,
+    description: `If you paid ${linked.name}, record the payment so its history stays right.`,
+    action: (
+      <ToastAction altText={`Open ${linked.name}`} onClick={() => hashNavigate(`/profiles/${linked.id}`)} data-testid="toast-open-linked">
+        Open {linked.name}
+      </ToastAction>
+    ),
+  });
+}
+
 // ── Task Item ────────────────────────────────────────────────────────────────
 
 function TaskItem({
   task,
   onEdit,
   today,
+  linked,
 }: {
   task: Task;
   onEdit: (t: Task) => void;
   /** The user's calendar day: an open task due before it shows its date in red. */
   today: string;
+  /** The asset or liability this task is tied to, when it is. */
+  linked?: LinkedItem | null;
 }) {
   const bucket = task.status === "done" ? "done" : openTaskBucket(task, today);
   const isOverdue = bucket === "overdue";
   const tone = TASK_TONES[bucket];
-  const ToneIcon = tone.icon;
+  const completedToast = (title: string) => showCompletedToast(toast, title, linked);
   const { toast } = useToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [dateEditing, setDateEditing] = useState(false);
@@ -415,10 +463,11 @@ function TaskItem({
       // status, and carried in the context — by the time the server answers
       // the optimistic cache has already changed `task.status`.
       const doneTitle = task.status === "done" ? `"${task.title}" reopened` : `"${task.title}" completed`;
-      return { prevQueries, doneTitle };
+      return { prevQueries, doneTitle, completed: task.status !== "done" };
     },
     onSuccess: (_d, _v, ctx: any) => {
-      toast({ title: String(ctx?.doneTitle || `"${task.title}" updated`) });
+      const title = String(ctx?.doneTitle || `"${task.title}" updated`);
+      if (ctx?.completed) completedToast(title); else toast({ title });
       invalidateTaskQueries();
     },
     onError: (err: Error, _vars, context: any) => {
@@ -482,19 +531,18 @@ function TaskItem({
 
   return (
     <>
-      <Card
+      {/* A row inside its section's panel (the tracker popup's .bubble-row),
+          not a card of its own. The row keeps its due bucket's colour for
+          the checkbox ring and the date. */}
+      <div
         data-testid={`card-task-${task.id}`}
         data-record-id={task.id}
-        // The tracker card's surface: the bubble tinted by --accent-hsl, a
-        // soft glow in one corner and the kind's icon, oversized and faint,
-        // in the other.
-        className={`td-scope relative overflow-hidden transition-colors ${task.status === "done" ? "opacity-60" : ""}`}
-        style={accentScope(tone.hs, tone.hs2)}
         data-tone={bucket}
+        data-due={task.status !== "done" ? String(task.dueDate || "").slice(0, 10) : ""}
+        className={`td-scope bubble-row relative ${task.status === "done" ? "opacity-60" : ""}`}
+        style={accentScope(tone.hs, tone.hs2)}
       >
-        <ToneIcon aria-hidden className="pointer-events-none absolute -bottom-3 right-8 h-20 w-20 select-none" style={{ color: `hsl(var(--td-hs) var(--td-l))`, opacity: 0.07 }} strokeWidth={1.6} />
-        <span aria-hidden className="pointer-events-none absolute -top-12 -left-12 h-32 w-32 rounded-full" style={{ background: `radial-gradient(circle, hsl(var(--td-hs2) 55% / 0.18), transparent 70%)` }} />
-        <CardContent className="relative px-4 py-3 flex items-start gap-3">
+        <div className="px-3 py-2.5 flex items-start gap-3">
           <Checkbox
             checked={task.status === "done"}
             onCheckedChange={() => toggleMutation.mutate()}
@@ -543,25 +591,12 @@ function TaskItem({
             {task.description && (
               <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{task.description}</p>
             )}
-            <div className="flex items-center gap-x-2 gap-y-1.5 mt-1.5 flex-wrap min-w-0">
+            <div className="flex items-center gap-x-2 gap-y-1 mt-1 flex-wrap min-w-0">
               {/* Inline edits on the row itself (QA 2026-09-18 F-30): the
                   title already edits in place; priority cycles on a tap and
                   the date opens a picker. Both go through the same PATCH the
                   dialog uses, optimistic, with the row still clickable to
                   open the full editor for notes and tags. */}
-              <button
-                type="button"
-                onClick={stopProp(() => patchMutation.mutate({ priority: nextPriority(task.priority) }))}
-                disabled={patchMutation.isPending}
-                aria-label={`Priority ${task.priority} — change`}
-                title="Change priority"
-                data-testid={`btn-task-priority-${task.id}`}
-              >
-                <Badge variant="secondary" className={`text-xs ${PRIORITY_COLORS[task.priority]}`}>
-                  {task.priority === "high" && <AlertCircle className="h-3 w-3 mr-1" />}
-                  {task.priority}
-                </Badge>
-              </button>
               {dateEditing ? (
                 <input
                   type="date"
@@ -624,19 +659,56 @@ function TaskItem({
               ))}
             </div>
           </div>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-8 w-8 -mr-1.5 -mt-1 text-muted-foreground/70 hover:text-destructive shrink-0"
-            onClick={stopProp(() => setDeleteOpen(true))}
-            disabled={deleteMutation.isPending}
-            aria-label="Delete task"
-            data-testid={`button-delete-task-${task.id}`}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
-        </CardContent>
-      </Card>
+          <div className="shrink-0 flex items-center gap-0.5 -mr-1.5">
+              <button
+                type="button"
+                onClick={stopProp(() => patchMutation.mutate({ priority: nextPriority(task.priority) }))}
+                disabled={patchMutation.isPending}
+                aria-label={`Priority ${task.priority} — change`}
+                title="Change priority"
+                data-testid={`btn-task-priority-${task.id}`}
+              >
+                <Badge variant="secondary" className={`text-xs ${PRIORITY_COLORS[task.priority]}`}>
+                  {task.priority === "high" && <AlertCircle className="h-3 w-3 mr-1" />}
+                  {task.priority}
+                </Badge>
+              </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 text-muted-foreground"
+                  onClick={e => e.stopPropagation()}
+                  aria-label={`More actions for ${task.title}`}
+                  data-testid={`button-task-menu-${task.id}`}
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
+                <DropdownMenuItem onSelect={() => onEdit(task)} data-testid={`menu-edit-task-${task.id}`}>
+                  <Pencil className="h-3.5 w-3.5 mr-2" /> Edit
+                </DropdownMenuItem>
+                {linked && (
+                  <DropdownMenuItem onSelect={() => hashNavigate(`/profiles/${linked.id}`)} data-testid={`menu-open-linked-${task.id}`}>
+                    <ExternalLink className="h-3.5 w-3.5 mr-2" /> Open {linked.name}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  disabled={deleteMutation.isPending}
+                  onSelect={() => setDeleteOpen(true)}
+                  data-testid={`button-delete-task-${task.id}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+      </div>
 
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent data-testid={`alert-delete-task-${task.id}`}>
@@ -677,7 +749,7 @@ function SwipeableItem({ children, onSwipeLeft, onSwipeRight, leftLabel = '✓ D
   const threshold = 72;
 
   return (
-    <div className="relative overflow-hidden rounded-[1.5rem]">
+    <div className="relative overflow-hidden rounded-[1rem]">
       {/* Background actions */}
       <div className="absolute inset-0 flex items-center">
         <div className="flex-1 h-full flex items-center px-4" style={{ background: leftColor + '30' }}>
@@ -689,7 +761,7 @@ function SwipeableItem({ children, onSwipeLeft, onSwipeRight, leftLabel = '✓ D
       </div>
       {/* Swipeable content */}
       <div
-        style={{ transform: `translateX(${offsetX}px)`, transition: offsetX === 0 ? 'transform 0.2s ease' : 'none', background: 'hsl(var(--card))', borderRadius: '1.5rem', position: 'relative' }}
+        style={{ transform: `translateX(${offsetX}px)`, transition: offsetX === 0 ? 'transform 0.2s ease' : 'none', background: 'hsl(var(--card))', borderRadius: '1rem', position: 'relative' }}
         onTouchStart={e => { startX.current = e.touches[0].clientX; }}
         onTouchMove={e => {
           if (startX.current === null) return;
@@ -739,7 +811,11 @@ export default function TasksPage() {
   // scope is read reactively from the one source of truth (useProfileScope), so
   // it updates instantly when the user changes the filter here or anywhere else.
   const { mode: filterMode, selectedIds: filterIds, selectedNames: filterNames } = useProfileScope();
-  const [tabFilter, setTabFilter] = useState<"all" | "open" | "completed">("all");
+  const [tabFilter, setTabFilter] = useState<"all" | TaskGroupKind>("all");
+  // Section state is for this visit only: a collapsed section or an opened
+  // "completed" list is never remembered (Rule 4).
+  const [collapsed, setCollapsed] = useState<Partial<Record<TaskGroupKind, boolean>>>({});
+  const [showDone, setShowDone] = useState<Partial<Record<TaskGroupKind, boolean>>>({});
 
   // The page always reads the WHOLE task list and applies the scope below,
   // with the same shared rule the server uses (passesProfileFilter). Reading
@@ -810,14 +886,6 @@ export default function TasksPage() {
     || String(a.dueTime || "").localeCompare(String(b.dueTime || ""))
     || (a.title || '').localeCompare(b.title || '')), [activeTasks, todayStr]);
   const shownActive = useMemo(() => sortedActive.slice(0, visibleActive), [sortedActive, visibleActive]);
-  // A summary tile opens the rows it counts: make sure their tab is showing,
-  // then bring the heading to the top. Nothing is filtered away.
-  const jumpToSection = (key: string) => {
-    setTabFilter(tab => (key === "done" ? (tab === "open" ? "all" : tab) : (tab === "completed" ? "all" : tab)));
-    requestAnimationFrame(() => {
-      document.getElementById(`tasks-section-${key}`)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-    });
-  };
   const sortedCompleted = useMemo(() => completedTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')), [completedTasks]);
   // v2 summary band: overdue / today / upcoming / done.
   // The buckets are the shared rule (shared/task-counts) so this band, the
@@ -829,6 +897,82 @@ export default function TasksPage() {
   const taskSummary = useMemo(
     () => taskSummaryTiles(profileFilteredTasks, todayStr, BROWSER_TIMEZONE),
     [profileFilteredTasks, todayStr],
+  );
+
+  // What each task is about, from its own links (shared/task-groups).
+  const profilesById = useMemo(() => new Map(allProfiles.map(p => [p.id, p])), [allProfiles]);
+  const linkedOf = (task: Task): LinkedItem | null => {
+    const g = taskGroupOf(task, profilesById);
+    const p = g.profileId ? profilesById.get(g.profileId) : null;
+    return p ? { id: p.id, name: p.name, kind: g.kind } : null;
+  };
+  const sections = useMemo(() => GROUP_SECTIONS.map(def => {
+    const inKind = (t: Task) => taskGroupOf(t, profilesById).kind === def.kind;
+    // `open` is the rows on this page of the list; `openTotal` the whole group.
+    const open = shownActive.filter(inKind);
+    const items: { profile: Profile; rows: Task[] }[] = [];
+    if (def.kind !== "mine") {
+      for (const t of open) {
+        const id = taskGroupOf(t, profilesById).profileId!;
+        const item = items.find(i => i.profile.id === id);
+        if (item) item.rows.push(t); else items.push({ profile: profilesById.get(id)!, rows: [t] });
+      }
+    }
+    return { def, open, items, openTotal: sortedActive.filter(inKind).length, done: sortedCompleted.filter(inKind) };
+  }), [shownActive, sortedActive, sortedCompleted, profilesById]);
+  // Open tasks due today through the next six days.
+  const dueThisWeek = profileFilteredTasks ? countOpenDueWithin(profileFilteredTasks, todayStr, tzAddDays(todayStr, 6)) : null;
+  const weekEnd = tzAddDays(todayStr, 6);
+
+  // A summary tile opens the rows it counts: every section is shown and
+  // expanded, then the first such row is brought into view. Nothing is
+  // filtered away.
+  const jumpTo = (match: (row: HTMLElement) => boolean, done = false) => {
+    setTabFilter("all");
+    setCollapsed({});
+    if (done) setShowDone({ mine: true, asset: true, liability: true });
+    setTimeout(() => {
+      const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="page-tasks"] [data-record-id]'));
+      rows.find(match)?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    }, 60);
+  };
+
+  // The swipe gestures: the same optimistic PATCH for every row.
+  const swipePatch = async (task: Task, patch: Partial<Task>, okTitle: string, failTitle: string, completed = false) => {
+    await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+    const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
+    queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
+      (old || []).map(t => t.id === task.id ? { ...t, ...patch } : t)
+    );
+    if (completed) showCompletedToast(toast, okTitle, linkedOf(task)); else toast({ title: okTitle });
+    try {
+      await apiRequest("PATCH", `/api/tasks/${task.id}`, patch);
+      invalidateTaskQueries();
+    } catch (err: any) {
+      for (const [key, data] of prevQueries) queryClient.setQueryData(key, data);
+      toast({ title: failTitle, description: formatApiError(err), variant: "destructive" });
+    }
+  };
+  const openRow = (task: Task) => (
+    <SwipeableItem
+      key={task.id}
+      onSwipeLeft={() => swipePatch(task, { status: "done" }, `"${task.title}" completed`, `Failed to complete "${task.title}"`, true)}
+      // Tomorrow in the user's zone: the UTC slice was already a day ahead
+      // after ~5 PM Pacific, so "snooze to tomorrow" landed two days out.
+      onSwipeRight={() => swipePatch(task, { dueDate: tzAddDays(getUserToday(BROWSER_TIMEZONE), 1) }, `"${task.title}" snoozed to tomorrow`, `Failed to snooze "${task.title}"`)}
+    >
+      <TaskItem task={task} onEdit={setEditTask} today={todayStr} linked={linkedOf(task)} />
+    </SwipeableItem>
+  );
+  const doneRow = (task: Task) => (
+    <SwipeableItem
+      key={task.id}
+      leftLabel="↩ Reopen"
+      leftColor="#3b82f6"
+      onSwipeLeft={() => swipePatch(task, { status: "todo" }, `"${task.title}" reopened`, `Failed to reopen "${task.title}"`)}
+    >
+      <TaskItem task={task} onEdit={setEditTask} today={todayStr} linked={linkedOf(task)} />
+    </SwipeableItem>
   );
 
   if (isLoading) {
@@ -853,12 +997,11 @@ export default function TasksPage() {
   return (
     <PageContainer testId="page-tasks">
       {/* Title, counts and the one primary action — the header every hub
-          page has. The profile filter used to sit here too, and on a phone the
-          two controls squeezed the title down to "T."; it is a list control
-          and lives on the toolbar below. */}
+          page has. The profile filter is a list control and lives on the
+          toolbar below (beside the title it squeezed "Tasks" down to "T."). */}
       <PageHeader
         title="Tasks"
-        subtitle={`${activeTasks.length} active · ${completedTasks.length} completed`}
+        subtitle={`${activeTasks.length} open · ${completedTasks.length} completed`}
         icon={CheckCircle2}
         accent={TASKS_ACCENT}
         backHref="/dashboard"
@@ -869,46 +1012,54 @@ export default function TasksPage() {
         }
       />
 
-      {/* Summary band — the app's dense stat tile (four full-size tiles took
-          half a phone screen before the first task). A tile with something in
-          it jumps to the rows it counts. */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="tasks-summary">
-        {[
-          { key: "overdue", label: "Overdue", value: taskSummary.overdue, accent: accentTriple(TASK_TONES.overdue.hs), icon: AlertTriangle },
-          { key: "dueToday", label: "Today", value: taskSummary.dueToday, accent: accentTriple(TASK_TONES.dueToday.hs), icon: Flame },
-          { key: "upcoming", label: "Upcoming", value: taskSummary.upcoming, accent: accentTriple(TASK_TONES.upcoming.hs), icon: CalendarDays },
-          { key: "done", label: "Done today", value: taskSummary.doneToday, accent: accentTriple(TASK_TONES.done.hs), icon: CheckCircle2 },
-        ].map((s, i) => (
+      {/* Summary band — the tracker popup's stat tile. A tile with something
+          in it brings the first row it counts into view. */}
+      <div className="grid grid-cols-4 gap-2" data-testid="tasks-summary">
+        {([
+          { label: "Overdue", value: taskSummary.overdue, tone: TASK_TONES.overdue, jump: () => jumpTo(r => r.dataset.tone === "overdue") },
+          { label: "Today", value: taskSummary.dueToday, tone: TASK_TONES.dueToday, jump: () => jumpTo(r => r.dataset.tone === "dueToday") },
+          { label: "This week", value: dueThisWeek, tone: TASK_TONES.upcoming, jump: () => jumpTo(r => !!r.dataset.due && r.dataset.due >= todayStr && r.dataset.due <= weekEnd) },
+          { label: "Done today", value: taskSummary.doneToday, tone: TASK_TONES.done, jump: () => jumpTo(r => r.dataset.tone === "done", true) },
+        ]).map((s, i) => {
           // Rendered as a plain value, not a count-up: the animation started
           // every tile at "0" and sat there for seconds while the long list
           // below was still being laid out, reading as a real zero (F-25).
-          <MetricCard key={s.label} density="dense" label={s.label} value={s.value == null ? "—" : s.value} accent={s.accent}
-            icon={s.icon} testId={`tasks-summary-${s.label.toLowerCase()}`}
-            onClick={s.value ? () => jumpToSection(s.key) : undefined}
-            className="bubble-enter px-3 py-2.5" style={{ ["--i" as any]: i }} />
-        ))}
+          const live = !!s.value;
+          const Tile: any = live ? "button" : "div";
+          return (
+            <Tile key={s.label} type={live ? "button" : undefined} onClick={live ? s.jump : undefined}
+              className={`td-scope bubble td-rise px-2.5 py-2 min-w-0 text-left flex flex-col ${live ? "bubble-interactive pressable" : ""}`}
+              style={{ ["--i" as any]: i, ...accentScope(s.tone.hs, s.tone.hs2) }}
+              data-testid={`tasks-summary-${s.label.toLowerCase().replace(/ /g, "-")}`}>
+              <div className="flex items-center justify-between gap-1">
+                <span className="metric-value text-[22px] leading-none td-gradient-text">{s.value == null ? "—" : s.value}</span>
+                <s.tone.icon className="h-4 w-4 shrink-0" style={{ color: `hsl(var(--td-hs) var(--td-l))` }} aria-hidden="true" />
+              </div>
+              <p className="micro-label text-muted-foreground mt-1.5 leading-tight break-words" style={{ fontSize: "0.625rem", letterSpacing: "0.03em" }}>{s.label}</p>
+            </Tile>
+          );
+        })}
       </div>
 
-      {/* Tab filters, with the profile filter beside them */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
-        <div className="td-scope td-seg" style={accentScope("262 70%", "292 65%")} data-testid="task-tab-filters">
-          {(["all", "open", "completed"] as const).map(tab => (
+      {/* Tab filters: what the tasks are about. Counts are open tasks. */}
+      <div className="-mx-1 px-1 overflow-x-auto">
+        <div className="td-scope td-seg w-max" style={accentScope("183 70%", "200 70%")} data-testid="task-tab-filters">
+          {([{ key: "all" as const, label: "All", n: activeTasks.length }, ...sections.map(sec => ({ key: sec.def.kind, label: sec.def.tab, n: sec.openTotal }))]).map(tab => (
             <button
-              key={tab}
-              onClick={() => setTabFilter(tab)}
-              aria-pressed={tabFilter === tab}
+              key={tab.key}
+              type="button"
+              onClick={() => setTabFilter(tab.key)}
+              aria-pressed={tabFilter === tab.key}
               className="td-seg-item"
-              data-testid={`tab-${tab}`}
+              data-testid={`tab-${tab.key}`}
             >
-              {tab === "all" ? `All (${visibleTasks.length})`
-                : tab === "open" ? `Open (${activeTasks.length})`
-                : `Completed (${completedTasks.length})`}
+              {tab.label} ({tab.n})
             </button>
           ))}
         </div>
-        <div className="sm:ml-auto min-w-0">
-          <MultiProfileFilter onChange={() => {}} compact />
-        </div>
+      </div>
+      <div className="min-w-0">
+        <MultiProfileFilter onChange={() => {}} compact />
       </div>
 
       {hiddenByScope > 0 && visibleTasks.length > 0 && (
@@ -941,125 +1092,115 @@ export default function TasksPage() {
         />
       ) : (
         <>
-          {(tabFilter === "all" || tabFilter === "open") && (
-            <div className="space-y-4" data-testid="tasks-open">
-              {activeTasks.length === 0 ? (
-                <EmptyState scope="global" icon={ListTodo} label="No active tasks" hint="All tasks are completed or create a new one." />
-              ) : (
-                OPEN_SECTIONS.map(section => {
-                  // Only the rows on this page of the list; the count in the
-                  // heading is the whole bucket.
-                  const rows = shownActive.filter(t => openTaskBucket(t, todayStr) === section.bucket);
-                  if (rows.length === 0) return null;
-                  const SectionIcon = TASK_TONES[section.bucket].icon;
-                  const total = sortedActive.filter(t => openTaskBucket(t, todayStr) === section.bucket).length;
-                  return (
-                    <section key={section.bucket} id={`tasks-section-${section.bucket}`} className="td-scope space-y-2 scroll-mt-4" style={accentScope(TASK_TONES[section.bucket].hs, TASK_TONES[section.bucket].hs2)} data-testid={`tasks-section-${section.bucket}`}>
-                      <h2 className="micro-label flex items-center gap-1.5 px-1 text-muted-foreground">
-                        <SectionIcon className="h-3.5 w-3.5" style={{ color: `hsl(var(--td-hs) var(--td-l))` }} />
-                        <span className="td-gradient-text">{section.label}</span>
-                        <span>· {total}</span>
-                      </h2>
-                      {rows.map(task => (
-                        <SwipeableItem
-                    key={task.id}
-                    onSwipeLeft={async () => {
-                      // Optimistic update: mark task done immediately
-                      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
-                      const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
-                      queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
-                        (old || []).map(t => t.id === task.id ? { ...t, status: "done" as const } : t)
-                      );
-                      toast({ title: `"${task.title}" completed` });
-                      try {
-                        await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "done" });
-                        invalidateTaskQueries();
-                      } catch (err: any) {
-                        // Rollback
-                        for (const [key, data] of prevQueries) queryClient.setQueryData(key, data);
-                        toast({ title: `Failed to complete "${task.title}"`, description: formatApiError(err), variant: "destructive" });
-                      }
-                    }}
-                    onSwipeRight={async () => {
-                      // Tomorrow in the user's zone: the UTC slice was already a
-                      // day ahead after ~5 PM Pacific, so "snooze to tomorrow"
-                      // landed two days out.
-                      const dateStr = tzAddDays(getUserToday(BROWSER_TIMEZONE), 1);
-                      // Optimistic update: set dueDate immediately
-                      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
-                      const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
-                      queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
-                        (old || []).map(t => t.id === task.id ? { ...t, dueDate: dateStr } : t)
-                      );
-                      toast({ title: `"${task.title}" snoozed to tomorrow` });
-                      try {
-                        await apiRequest("PATCH", `/api/tasks/${task.id}`, { dueDate: dateStr });
-                        invalidateTaskQueries();
-                      } catch (err: any) {
-                        for (const [key, data] of prevQueries) queryClient.setQueryData(key, data);
-                        toast({ title: `Failed to snooze "${task.title}"`, description: formatApiError(err), variant: "destructive" });
-                      }
-                    }}
+          {sections.filter(sec => tabFilter === "all" || tabFilter === sec.def.kind).map(sec => {
+            const { def } = sec;
+            const empty = sec.openTotal === 0 && sec.done.length === 0;
+            if (empty && tabFilter === "all") return null;
+            if (empty) {
+              return (
+                <EmptyState key={def.kind} scope="global" icon={def.icon}
+                  label={def.kind === "mine" ? "No personal tasks" : `No ${def.kind} tasks`}
+                  hint={def.kind === "mine" ? "Create a task to see it here." : `Create a task and choose ${def.kind === "asset" ? "an asset" : "a liability"} under “Related to”.`} />
+              );
+            }
+            const isCollapsed = !!collapsed[def.kind];
+            const doneOpen = !!showDone[def.kind];
+            return (
+              <section key={def.kind} className="td-scope td-hero td-rise" style={accentScope(def.hs, def.hs2)} data-testid={`tasks-group-${def.kind}`}>
+                <div className="relative z-[1]">
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-3 px-3.5 py-3 text-left"
+                    onClick={() => setCollapsed(c => ({ ...c, [def.kind]: !c[def.kind] }))}
+                    aria-expanded={!isCollapsed}
+                    data-testid={`tasks-group-toggle-${def.kind}`}
                   >
-                    <TaskItem task={task} onEdit={setEditTask} today={todayStr} />
-                  </SwipeableItem>
-                      ))}
-                    </section>
-                  );
-                })
-              )}
-              {sortedActive.length > visibleActive && (
-                <div className="pt-2 flex justify-center">
-                  <Button variant="outline" size="sm" onClick={() => setVisibleActive((n) => n + TASK_PAGE)} data-testid="button-show-more-active-tasks">
-                    Show more ({sortedActive.length - visibleActive} remaining)
-                  </Button>
+                    <span className="medallion medallion-sm" aria-hidden="true"><def.icon className="h-4 w-4" strokeWidth={2.2} /></span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-base font-bold tracking-tight leading-tight">{def.title}</span>
+                      <span className="block text-[11px] text-muted-foreground truncate mt-0.5">{def.subtitle}</span>
+                    </span>
+                    <span
+                      className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold tabular-nums"
+                      style={{ color: `hsl(var(--td-hs) var(--td-l))`, boxShadow: `inset 0 0 0 1px hsl(var(--td-hs) var(--td-l) / 0.45)`, background: `hsl(var(--td-hs) var(--td-l) / 0.10)` }}
+                      data-testid={`tasks-group-open-${def.kind}`}
+                    >
+                      {sec.openTotal} open
+                    </span>
+                    <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${isCollapsed ? "" : "rotate-180"}`} aria-hidden="true" />
+                  </button>
+
+                  {!isCollapsed && (
+                    <div className="px-2 pb-2 space-y-1.5" data-testid={`tasks-group-rows-${def.kind}`}>
+                      {sec.openTotal === 0 && (
+                        <p className="px-2 py-1 text-xs text-muted-foreground">Nothing open here.</p>
+                      )}
+                      {def.kind === "mine"
+                        ? sec.open.map(openRow)
+                        : sec.items.map(({ profile, rows }) => {
+                          const ItemIcon = ITEM_ICONS[profile.type] || Package;
+                          const photo = /^(https?:|data:image\/)/.test(String(profile.avatar || "")) ? profile.avatar : null;
+                          return (
+                            // One asset or liability and the tasks tied to it.
+                            // The header opens that item's own page.
+                            <div key={profile.id} className="rounded-[1.15rem] p-1.5 space-y-1.5" style={{ boxShadow: `inset 0 0 0 1px hsl(var(--td-hs) var(--td-l) / 0.18)`, background: `hsl(var(--td-hs) var(--td-l) / 0.05)` }} data-testid={`tasks-item-${profile.id}`}>
+                              <button
+                                type="button"
+                                className="w-full flex items-center gap-2.5 px-1.5 py-1 text-left rounded-xl pressable"
+                                onClick={() => hashNavigate(`/profiles/${profile.id}`)}
+                                aria-label={`Open ${profile.name}`}
+                                data-testid={`tasks-item-link-${profile.id}`}
+                              >
+                                {photo
+                                  ? <img src={photo} alt="" className="h-8 w-8 rounded-xl object-cover shrink-0" />
+                                  : <span className="medallion medallion-sm" aria-hidden="true"><ItemIcon className="h-4 w-4" strokeWidth={2.1} /></span>}
+                                <span className="flex-1 min-w-0">
+                                  <span className="block text-sm font-semibold truncate leading-tight">{profile.name}</span>
+                                  <span className="block text-[11px] text-muted-foreground truncate mt-0.5">
+                                    {rows.length} {rows.length === 1 ? "task" : "tasks"} · {taskGroupItemKind(profile)}
+                                  </span>
+                                </span>
+                                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                              </button>
+                              {rows.map(openRow)}
+                            </div>
+                          );
+                        })}
+
+                      {/* Completed tasks stay with their section, folded away. */}
+                      {sec.done.length > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                            onClick={() => setShowDone(d => ({ ...d, [def.kind]: !d[def.kind] }))}
+                            aria-expanded={doneOpen}
+                            data-testid={`tasks-group-done-toggle-${def.kind}`}
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            {doneOpen ? "Hide" : "Show"} {sec.done.length} completed
+                          </button>
+                          {doneOpen && sec.done.slice(0, visibleCompleted).map(doneRow)}
+                          {doneOpen && sec.done.length > visibleCompleted && (
+                            <div className="pt-1 flex justify-center">
+                              <Button variant="outline" size="sm" onClick={() => setVisibleCompleted((n) => n + TASK_PAGE)} data-testid={`button-show-more-completed-tasks-${def.kind}`}>
+                                Show more ({sec.done.length - visibleCompleted} remaining)
+                              </Button>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          )}
-          {(tabFilter === "all" || tabFilter === "completed") && (
-            <div id="tasks-section-done" className="td-scope space-y-2 scroll-mt-4" style={accentScope(TASK_TONES.done.hs, TASK_TONES.done.hs2)} data-testid="tasks-section-done">
-              <h2 className="micro-label flex items-center gap-1.5 px-1 text-muted-foreground">
-                <CheckCircle2 className="h-3.5 w-3.5" style={{ color: `hsl(var(--td-hs) var(--td-l))` }} />
-                <span className="td-gradient-text">Completed</span>
-                <span>· {completedTasks.length}</span>
-              </h2>
-              {completedTasks.length === 0 ? (
-                <EmptyState scope="global" icon={CheckCircle2} label="No completed tasks" hint="Complete a task to see it here." />
-              ) : (
-                sortedCompleted.slice(0, visibleCompleted).map(task => (
-                  <SwipeableItem
-                    key={task.id}
-                    leftLabel="↩ Reopen"
-                    leftColor="#3b82f6"
-                    onSwipeLeft={async () => {
-                      // Optimistic: reopen immediately
-                      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
-                      const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
-                      queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
-                        (old || []).map(t => t.id === task.id ? { ...t, status: "todo" as const } : t)
-                      );
-                      toast({ title: `"${task.title}" reopened` });
-                      try {
-                        await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "todo" });
-                        invalidateTaskQueries();
-                      } catch (err: any) {
-                        for (const [key, data] of prevQueries) queryClient.setQueryData(key, data);
-                        toast({ title: `Failed to reopen "${task.title}"`, description: formatApiError(err), variant: "destructive" });
-                      }
-                    }}
-                  >
-                    <TaskItem task={task} onEdit={setEditTask} today={todayStr} />
-                  </SwipeableItem>
-                ))
-              )}
-              {sortedCompleted.length > visibleCompleted && (
-                <div className="pt-2 flex justify-center">
-                  <Button variant="outline" size="sm" onClick={() => setVisibleCompleted((n) => n + TASK_PAGE)} data-testid="button-show-more-completed-tasks">
-                    Show more ({sortedCompleted.length - visibleCompleted} remaining)
-                  </Button>
-                </div>
-              )}
+              </section>
+            );
+          })}
+          {sortedActive.length > visibleActive && (
+            <div className="pt-1 flex justify-center">
+              <Button variant="outline" size="sm" onClick={() => setVisibleActive((n) => n + TASK_PAGE)} data-testid="button-show-more-active-tasks">
+                Show more ({sortedActive.length - visibleActive} remaining)
+              </Button>
             </div>
           )}
         </>

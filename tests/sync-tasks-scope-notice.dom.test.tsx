@@ -65,6 +65,14 @@ function renderTasks() {
   );
 }
 
+/** Completed tasks are folded per section; the toggle names how many it holds. */
+function showCompleted() {
+  const toggle = screen.getByTestId("tasks-group-done-toggle-mine");
+  expect(toggle.textContent).toContain("Show 1 completed");
+  expect(screen.queryByText("Buy milk")).toBeNull();
+  fireEvent.click(toggle);
+}
+
 describe("Tasks page: a profile scope never looks like an empty list", () => {
   it("scope left on Max: says the user's tasks are hidden, not deleted, and offers to clear", async () => {
     setFilterSelected([MAX], ["Max"]);
@@ -81,6 +89,8 @@ describe("Tasks page: a profile scope never looks like an empty list", () => {
     await act(async () => { fireEvent.click(screen.getByTestId("tasks-scope-empty-clear")); });
     expect(getProfileFilter().mode).toBe("everyone");
     await waitFor(() => expect(screen.getByText("Call the dentist")).toBeTruthy());
+    // The completed one is folded inside its section, and the fold says so.
+    showCompleted();
     expect(screen.getByText("Buy milk")).toBeTruthy();
     expect(screen.queryByTestId("tasks-scope-empty")).toBeNull();
   });
@@ -105,6 +115,7 @@ describe("Tasks page: a profile scope never looks like an empty list", () => {
   it("Everyone: no notice, both tasks listed", async () => {
     renderTasks();
     await waitFor(() => expect(screen.getByText("Call the dentist")).toBeTruthy());
+    showCompleted();
     expect(screen.getByText("Buy milk")).toBeTruthy();
     expect(screen.queryByTestId("tasks-scope-notice")).toBeNull();
     expect(screen.queryByTestId("tasks-scope-empty")).toBeNull();

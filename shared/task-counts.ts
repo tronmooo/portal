@@ -99,3 +99,17 @@ export function openTaskBucket(t: CountableTask, todayISO: string): OpenTaskBuck
   if (d === todayISO) return "dueToday";
   return "upcoming";
 }
+
+/**
+ * Open tasks due from today through the next `days - 1` days ("This week" =
+ * 7). Overdue and undated tasks are not in it; a task due today is.
+ */
+export function countOpenDueWithin(tasks: readonly CountableTask[] | null | undefined, todayISO: string, lastDayISO: string): number {
+  let n = 0;
+  for (const t of tasks || []) {
+    if (isDoneTask(t)) continue;
+    const d = String(t.dueDate || "").slice(0, 10);
+    if (DAY_RE.test(d) && d >= todayISO && d <= lastDayISO) n++;
+  }
+  return n;
+}
