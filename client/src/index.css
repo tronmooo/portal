@@ -43,7 +43,10 @@
   }
 }
 
-/* LIGHT MODE — warm neutrals with teal accent */
+/* LIGHT MODE — cool, lightly tinted neutrals with a cyan-teal accent.
+   2026-11-21: hues moved from warm grey (36-50) to blue (222-226) to match
+   the dark theme; every LIGHTNESS is unchanged, so the contrast notes below
+   still hold. */
 :root {
   --mobile-nav-height: 60px;
   --button-outline: rgba(0,0,0, .10);
@@ -51,44 +54,44 @@
   --opaque-button-border-intensity: -8;
   --elevate-1: rgba(0,0,0, .03);
   --elevate-2: rgba(0,0,0, .08);
-  --background: 40 10% 96%;
-  --foreground: 44 23% 14%;
+  --background: 224 40% 96%;
+  --foreground: 226 32% 14%;
   /* QA 2026-09-18 BUG-32: light mode read washed out — card borders were
      near-invisible (L 85%/89% on a 96–97% surface) and the muted labels sat
      just above the AA line. Borders darkened to L 76% / 80% so a card edge is
      visible against the page without becoming a rule; muted text to L 36%
      (≈5.8:1 on --background, ≈5.3:1 on --muted). Dark mode untouched. */
-  --border: 36 8% 76%;
-  --card: 45 20% 97%;
-  --card-foreground: 44 23% 14%;
-  --card-border: 36 8% 80%;
-  --sidebar: 40 12% 94%;
-  --sidebar-foreground: 44 23% 14%;
-  --sidebar-border: 36 8% 87%;
-  --sidebar-primary: 183 98% 22%;
+  --border: 224 18% 76%;
+  --card: 222 50% 98%;
+  --card-foreground: 226 32% 14%;
+  --card-border: 224 22% 80%;
+  --sidebar: 224 36% 94%;
+  --sidebar-foreground: 226 32% 14%;
+  --sidebar-border: 224 20% 87%;
+  --sidebar-primary: 190 98% 24%;
   --sidebar-primary-foreground: 0 0% 98%;
-  --sidebar-accent: 36 8% 89%;
-  --sidebar-accent-foreground: 44 23% 14%;
-  --sidebar-ring: 183 98% 22%;
-  --popover: 45 20% 96%;
-  --popover-foreground: 44 23% 14%;
-  --popover-border: 36 8% 85%;
-  --primary: 183 98% 22%;
+  --sidebar-accent: 224 24% 89%;
+  --sidebar-accent-foreground: 226 32% 14%;
+  --sidebar-ring: 190 98% 24%;
+  --popover: 222 46% 97%;
+  --popover-foreground: 226 32% 14%;
+  --popover-border: 224 20% 85%;
+  --primary: 190 98% 24%;
   --primary-foreground: 0 0% 98%;
-  --secondary: 36 8% 90%;
-  --secondary-foreground: 44 23% 14%;
-  --muted: 36 6% 92%;
+  --secondary: 224 26% 90%;
+  --secondary-foreground: 226 32% 14%;
+  --muted: 224 24% 92%;
   /* A11y: was 50 3% 47% — only 3.60:1 on --muted and 3.94:1 on --background.
      L 47%→40% clears WCAG AA 4.5:1 for body text (4.69:1 / 5.13:1).
      BUG-32 (2026-09-18): 40%→36% so the header date line, KPI labels and
      the 11px micro-labels (which also carry opacity) clear AA comfortably. */
-  --muted-foreground: 50 3% 36%;
-  --accent: 36 10% 90%;
-  --accent-foreground: 44 23% 14%;
+  --muted-foreground: 224 12% 36%;
+  --accent: 224 28% 90%;
+  --accent-foreground: 226 32% 14%;
   --destructive: 0 84% 42%;
   --destructive-foreground: 0 0% 98%;
-  --input: 36 8% 75%;
-  --ring: 183 98% 22%;
+  --input: 224 18% 75%;
+  --ring: 190 98% 24%;
   --chart-1: 183 58% 40%;
   --chart-2: 20 53% 42%;
   --chart-3: 103 56% 31%;
@@ -118,57 +121,61 @@
   --destructive-border: hsl(var(--destructive));
 }
 
-/* DARK MODE — deep warm surfaces */
+/* DARK MODE — deep navy surfaces with a vivid cyan accent.
+   Owner, 2026-11-21: "too bland and colorless … bring color into my entire
+   app, the background and everything". The warm near-black greys (hue 40,
+   3-10% saturation) became a blue-violet navy; the primary went from a muted
+   teal (188 35% 47%) to a bright cyan. The page background itself carries
+   colour: see `.dark body` below. */
 .dark {
   --button-outline: rgba(255,255,255, .10);
   --badge-outline: rgba(255,255,255, .05);
   --opaque-button-border-intensity: 9;
   --elevate-1: rgba(255,255,255, .04);
   --elevate-2: rgba(255,255,255, .09);
-  --background: 40 10% 8%;
-  --foreground: 40 3% 80%;
-  --border: 40 3% 18%;
-  --card: 40 9% 10%;
-  --card-foreground: 40 3% 80%;
-  --card-border: 40 3% 15%;
-  --sidebar: 40 9% 9%;
-  --sidebar-foreground: 40 3% 80%;
-  --sidebar-border: 40 3% 16%;
-  --sidebar-primary: 188 35% 47%;
-  --sidebar-primary-foreground: 0 0% 98%;
-  --sidebar-accent: 40 3% 16%;
-  --sidebar-accent-foreground: 40 3% 80%;
-  --sidebar-ring: 188 35% 47%;
-  --popover: 40 9% 11%;
-  --popover-foreground: 40 3% 80%;
-  --popover-border: 40 3% 18%;
-  --primary: 188 35% 47%;
-  --primary-foreground: 0 0% 98%;
-  --secondary: 40 3% 16%;
-  --secondary-foreground: 40 3% 80%;
-  --muted: 40 3% 15%;
-  /* A11y: was 40 2% 47% — only 3.43:1 on --muted and 4.17:1 on --background.
-     L 47%→56% clears WCAG AA 4.5:1 for body text (4.69:1 / 5.72:1). */
-  --muted-foreground: 40 2% 56%;
-  --accent: 40 4% 16%;
-  --accent-foreground: 40 3% 80%;
-  --destructive: 0 70% 50%;
+  --background: 229 48% 6%;
+  --foreground: 220 30% 92%;
+  --border: 226 34% 21%;
+  --card: 228 42% 10%;
+  --card-foreground: 220 30% 92%;
+  --card-border: 226 38% 22%;
+  --sidebar: 229 46% 7%;
+  --sidebar-foreground: 220 30% 92%;
+  --sidebar-border: 226 34% 17%;
+  --sidebar-primary: 190 92% 44%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 227 36% 16%;
+  --sidebar-accent-foreground: 220 30% 92%;
+  --sidebar-ring: 190 92% 44%;
+  --popover: 228 44% 11%;
+  --popover-foreground: 220 30% 92%;
+  --popover-border: 226 36% 23%;
+  --primary: 190 92% 44%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 227 34% 17%;
+  --secondary-foreground: 220 30% 92%;
+  --muted: 227 32% 15%;
+  /* A11y: L 66% on the navy --muted / --background is ≈6.3:1 / ≈7.6:1. */
+  --muted-foreground: 222 18% 66%;
+  --accent: 227 38% 18%;
+  --accent-foreground: 220 30% 92%;
+  --destructive: 0 78% 56%;
   --destructive-foreground: 0 0% 98%;
-  --input: 40 3% 25%;
-  --ring: 188 35% 47%;
-  --chart-1: 188 35% 55%;
-  --chart-2: 20 53% 48%;
-  --chart-3: 97 43% 47%;
-  --chart-4: 43 74% 65%;
-  --chart-5: 320 47% 60%;
-  --shadow-2xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.15);
-  --shadow-xs: 0px 1px 3px 0px hsl(0 0% 0% / 0.20);
-  --shadow-sm: 0px 2px 4px -1px hsl(0 0% 0% / 0.20);
-  --shadow: 0px 4px 8px -2px hsl(0 0% 0% / 0.25);
-  --shadow-md: 0px 6px 12px -3px hsl(0 0% 0% / 0.25);
-  --shadow-lg: 0px 8px 20px -4px hsl(0 0% 0% / 0.30);
-  --shadow-xl: 0px 12px 28px -6px hsl(0 0% 0% / 0.35);
-  --shadow-2xl: 0px 16px 40px -8px hsl(0 0% 0% / 0.40);
+  --input: 226 32% 28%;
+  --ring: 190 92% 44%;
+  --chart-1: 190 85% 55%;
+  --chart-2: 25 90% 60%;
+  --chart-3: 152 65% 50%;
+  --chart-4: 43 90% 62%;
+  --chart-5: 280 75% 68%;
+  --shadow-2xs: 0px 1px 2px 0px hsl(230 60% 2% / 0.25);
+  --shadow-xs: 0px 1px 3px 0px hsl(230 60% 2% / 0.30);
+  --shadow-sm: 0px 2px 4px -1px hsl(230 60% 2% / 0.30);
+  --shadow: 0px 4px 8px -2px hsl(230 60% 2% / 0.35);
+  --shadow-md: 0px 6px 12px -3px hsl(230 60% 2% / 0.35);
+  --shadow-lg: 0px 8px 20px -4px hsl(230 60% 2% / 0.40);
+  --shadow-xl: 0px 12px 28px -6px hsl(230 60% 2% / 0.45);
+  --shadow-2xl: 0px 16px 40px -8px hsl(230 60% 2% / 0.50);
 
   --sidebar-primary-border: hsl(var(--sidebar-primary));
   --sidebar-accent-border: hsl(var(--sidebar-accent));
@@ -177,6 +184,27 @@
   --muted-border: hsl(var(--muted));
   --accent-border: hsl(var(--accent));
   --destructive-border: hsl(var(--destructive));
+}
+
+/* The page itself is coloured, in both themes: soft violet and cyan light
+   coming in from the top corners and a blue floor. It is painted on <body>,
+   which never scrolls (the shell is h-dvh), so it stays put behind every page
+   without `background-attachment: fixed` (janky in the iOS WKWebView) and
+   without a blur. The header and bottom bar are translucent so it shows
+   through them. */
+body {
+  background-image:
+    radial-gradient(70% 38% at 88% -4%, hsl(262 85% 62% / 0.13), transparent 70%),
+    radial-gradient(60% 34% at 6% -2%, hsl(190 95% 48% / 0.12), transparent 70%),
+    radial-gradient(90% 40% at 50% 104%, hsl(222 90% 60% / 0.10), transparent 70%);
+  background-repeat: no-repeat;
+}
+.dark body {
+  background-image:
+    radial-gradient(70% 38% at 88% -4%, hsl(262 85% 58% / 0.30), transparent 70%),
+    radial-gradient(60% 34% at 6% -2%, hsl(192 95% 50% / 0.22), transparent 70%),
+    radial-gradient(90% 42% at 50% 104%, hsl(228 85% 52% / 0.24), transparent 70%),
+    linear-gradient(180deg, hsl(232 52% 8%) 0%, hsl(229 48% 6%) 45%, hsl(231 55% 7%) 100%);
 }
 
 /* Premium typography */
@@ -436,16 +464,16 @@ h1, h2, h3, .text-xl, .text-2xl {
   --accent-alerts:     0 72% 52%;
 }
 .dark {
-  --accent-health:   173 55% 50%;
-  --accent-finance:   43 80% 58%;
-  --accent-tasks:    262 60% 68%;
-  --accent-habits:   155 55% 50%;
-  --accent-calendar: 215 65% 62%;
-  --accent-docs:      25 75% 58%;
-  --accent-journal:  310 45% 62%;
-  --accent-goals:    188 65% 52%;
-  --accent-bills:     43 70% 55%;
-  --accent-alerts:     0 68% 56%;
+  --accent-health:   173 75% 50%;
+  --accent-finance:   43 95% 58%;
+  --accent-tasks:    262 85% 70%;
+  --accent-habits:   155 72% 50%;
+  --accent-calendar: 215 92% 64%;
+  --accent-docs:      25 92% 60%;
+  --accent-journal:  310 70% 66%;
+  --accent-goals:    190 90% 52%;
+  --accent-bills:     38 95% 56%;
+  --accent-alerts:     0 84% 62%;
 }
 
 /* Card with subtle lift on hover — used on all interactive cards */
@@ -938,10 +966,14 @@ button, a, [role="button"], .card-lift {
   transition: transform 0.22s cubic-bezier(0.34, 1.4, 0.64, 1), box-shadow 0.22s ease;
 }
 .dark .bubble {
+  border-color: hsl(var(--accent-hsl, var(--card-border)) / 0.42);
+  background:
+    radial-gradient(120% 100% at 0% 0%, hsl(var(--accent-hsl, 226 80% 62%) / 0.16) 0%, transparent 62%),
+    linear-gradient(180deg, hsl(var(--card) / 0.92) 0%, hsl(var(--card) / 0.66) 100%);
   box-shadow:
-    0 1px 2px hsl(0 0% 0% / 0.4),
-    0 10px 30px -14px hsl(0 0% 0% / 0.7),
-    inset 0 1px 0 hsl(0 0% 100% / 0.03);
+    0 1px 2px hsl(230 60% 2% / 0.5),
+    0 12px 32px -14px hsl(230 70% 2% / 0.8),
+    inset 0 1px 0 hsl(220 100% 90% / 0.06);
 }
 /* Only lift on devices that can actually hover — a finger "hovering" a card
    mid-scroll leaves it stuck in the raised state. */
@@ -961,7 +993,7 @@ button, a, [role="button"], .card-lift {
   background: hsl(var(--muted) / 0.45);
   transition: background-color 0.16s ease, transform 0.16s ease;
 }
-.dark .bubble-row { background: hsl(var(--foreground) / 0.035); }
+.dark .bubble-row { background: hsl(222 80% 80% / 0.06); }
 @media (hover: hover) and (pointer: fine) {
   .bubble-row:hover { background: hsl(var(--muted) / 0.8); }
   .dark .bubble-row:hover { background: hsl(var(--foreground) / 0.07); }
@@ -1310,3 +1342,146 @@ button, a, [role="button"], .card-lift {
   border-radius: 0.5rem;
   transition: background-color 700ms ease, box-shadow 700ms ease;
 }
+
+/* ============================================================
+   CALENDAR — the owner's reference screen (2026-11-21)
+   ------------------------------------------------------------
+   "Change the calendar view to look exactly like the first photo."
+   Glowing cyan controls, three tinted summary tiles, a rounded month
+   grid, and a day panel of colour-coded rows. Every colour here is an
+   --accent-hsl (per tile / per item type) or the theme's --primary, so
+   light mode gets the same screen in its own palette.
+   ============================================================ */
+
+/* The solid cyan control: the active top tab and the "+ Add" button. */
+.cal-cta {
+  color: #fff;
+  background: linear-gradient(180deg, hsl(189 96% 52%) 0%, hsl(192 96% 42%) 100%);
+  box-shadow:
+    0 0 0 1px hsl(189 100% 70% / 0.35) inset,
+    0 6px 20px -6px hsl(190 100% 50% / 0.65);
+  text-shadow: 0 1px 1px hsl(195 100% 20% / 0.35);
+}
+
+/* A rounded strip of options (top tabs; Month/Week/Day/Agenda). */
+.cal-seg {
+  display: flex;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--card-border) / 0.9);
+  background: hsl(var(--card) / 0.7);
+  box-shadow: inset 0 1px 0 hsl(220 100% 90% / 0.05);
+}
+.cal-seg-item {
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+  transition: color 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
+}
+.cal-seg-item[aria-pressed="true"] {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+  border-color: hsl(var(--primary) / 0.85);
+  background: hsl(var(--primary) / 0.16);
+  box-shadow: 0 0 14px -4px hsl(var(--primary) / 0.7);
+}
+
+/* A round outlined button: month arrows, the options button. */
+.cal-round {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--card-border) / 0.9);
+  background: hsl(var(--card) / 0.7);
+  color: hsl(var(--foreground));
+}
+
+/* Filter pill. --accent-hsl is the type's colour. */
+.cal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  white-space: nowrap;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--card-border) / 0.9);
+  background: hsl(var(--card) / 0.7);
+  color: hsl(var(--foreground) / 0.92);
+  font-weight: 500;
+  transition: border-color 0.16s ease, background-color 0.16s ease;
+}
+.cal-pill svg { color: hsl(var(--accent-hsl)); }
+.cal-pill[aria-pressed="true"] {
+  font-weight: 700;
+  border-color: hsl(var(--accent-hsl) / 0.9);
+  background: hsl(var(--accent-hsl) / 0.18);
+  color: hsl(var(--accent-hsl));
+  box-shadow: 0 0 14px -4px hsl(var(--accent-hsl) / 0.7);
+}
+.dark .cal-pill[aria-pressed="true"] { color: hsl(var(--foreground)); }
+
+/* Summary tile: number and icon in the tile's colour, a wash of it behind. */
+.cal-stat {
+  border-radius: 1.25rem;
+  border: 1px solid hsl(var(--accent-hsl) / 0.38);
+  background:
+    radial-gradient(130% 120% at 0% 0%, hsl(var(--accent-hsl) / 0.24) 0%, transparent 65%),
+    linear-gradient(180deg, hsl(var(--card) / 0.9) 0%, hsl(var(--card) / 0.6) 100%);
+  box-shadow: inset 0 1px 0 hsl(220 100% 90% / 0.06), 0 10px 26px -16px hsl(var(--accent-hsl) / 0.55);
+}
+
+/* The month grid's container, and the day panel under it. */
+.cal-surface {
+  border-radius: 1.25rem;
+  border: 1px solid hsl(var(--card-border) / 0.9);
+  background: linear-gradient(180deg, hsl(var(--card) / 0.86) 0%, hsl(var(--card) / 0.6) 100%);
+  box-shadow: inset 0 1px 0 hsl(220 100% 90% / 0.05), 0 14px 34px -18px hsl(230 70% 2% / 0.7);
+}
+.cal-cell {
+  border-right: 1px solid hsl(var(--border) / 0.55);
+  border-bottom: 1px solid hsl(var(--border) / 0.55);
+}
+.cal-cell:nth-child(7n) { border-right-color: transparent; }
+/* The selected day: a glowing cyan frame, as in the reference. */
+.cal-cell[data-selected="true"] {
+  border-radius: 0.625rem;
+  border-color: transparent;
+  background: hsl(var(--primary) / 0.10);
+  box-shadow: 0 0 0 1.5px hsl(var(--primary)) inset, 0 0 18px -2px hsl(var(--primary) / 0.6);
+  position: relative;
+  z-index: 1;
+}
+.cal-cell[data-today="true"] .cal-daynum {
+  background: hsl(var(--primary) / 0.28);
+  color: hsl(var(--foreground));
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 0.125rem 0.5rem;
+  margin: -0.125rem -0.25rem;
+}
+
+/* A row in the day panel. --accent-hsl is the item's type colour. */
+.cal-item {
+  border-radius: 1rem;
+  border: 1px solid hsl(var(--accent-hsl) / 0.34);
+  background: linear-gradient(90deg, hsl(var(--accent-hsl) / 0.20) 0%, hsl(var(--accent-hsl) / 0.05) 38%, hsl(var(--card) / 0.35) 100%);
+  transition: transform 0.16s ease, border-color 0.16s ease;
+}
+.cal-item:active { transform: scale(0.99); }
+@media (hover: hover) and (pointer: fine) {
+  .cal-item:hover { border-color: hsl(var(--accent-hsl) / 0.65); }
+}
+.cal-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.875rem;
+  border: 1px solid hsl(var(--accent-hsl) / 0.55);
+  background: linear-gradient(160deg, hsl(var(--accent-hsl) / 0.42) 0%, hsl(var(--accent-hsl) / 0.14) 100%);
+  color: hsl(var(--accent-hsl));
+  box-shadow: 0 6px 16px -8px hsl(var(--accent-hsl) / 0.7);
+}
+.dark .cal-item-icon { color: hsl(var(--accent-hsl) / 1); filter: brightness(1.25); }

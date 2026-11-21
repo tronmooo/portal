@@ -735,7 +735,7 @@ function App() {
                     <AppSidebar />
                   </div>
                   <div className="flex flex-col flex-1 min-w-0">
-                    <header className="flex items-center justify-between px-3 py-2.5 border-b border-border/50 shrink-0" style={{ background: 'linear-gradient(180deg, hsl(var(--background)) 0%, hsl(var(--background) / 0.88) 100%)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
+                    <header className="flex items-center justify-between px-3 py-2.5 border-b border-border/50 shrink-0" style={{ background: 'linear-gradient(180deg, hsl(var(--background) / 0.55) 0%, hsl(var(--background) / 0.35) 100%)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
                       <div className="hidden md:block">
                         <SidebarTrigger data-testid="button-sidebar-toggle" />
                       </div>
