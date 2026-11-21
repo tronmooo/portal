@@ -35,6 +35,7 @@ import {
   CashFlowWaterfallPopup, SpendPopup, IncomePopup, BillsDuePopup,
   SavingsRatePopup, CashFlowOverviewPopup,
 } from "@/components/finance/MoneyPopups";
+import { readBillsTimeline } from "@/components/finance/BillsTimelineView";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -855,40 +856,9 @@ export default function FinancePage() {
     queryFn: () => apiRequest("GET", `/api/net-worth/history${profileParam}${profileParam ? "&" : "?"}lookbackDays=120`).then(r => r.json()),
   });
 
-  // Pay a bill straight from the Finance "Bills · next 14d" card — same
-  // endpoint + optimistic pattern as ObligationsManager.payMut.
-  // "Pay" recorded money leaving in one tap, with nothing to confirm it and no
-  // way back: it writes a payment row, an expense, an account debit and moves
-  // the due date on. It now asks first, and the confirmation toast carries the
-  // same Undo the rest of the app uses (DELETE .../last-payment is the full
-  // inverse — see unpayBillOccurrence).
-  const [billToPay, setBillToPay] = useState<{ id: string; name: string; amount: number; dueDate?: string } | null>(null);
-  const payBillMut = useMutation<void, Error, { id: string; amount: number; name?: string }>({
-    mutationFn: async ({ id }) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
-    onSuccess: (_data, vars) => {
-      const refresh = () => {
-        invalidateDomain("obligations");
-        invalidateDomains("expenses", "profiles");
-        // No bus domain maps the calendar timeline to obligations — keep explicit.
-        queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      };
-      refresh();
-      showUndoToast({
-        title: `${vars.name || "Bill"} paid — ${formatMoney(vars.amount)}`,
-        description: "Logged as an expense and taken off what's still due.",
-        onUndo: async () => {
-          try {
-            await apiRequest("DELETE", `/api/obligations/${vars.id}/last-payment`, {});
-            refresh();
-            toast({ title: "Payment undone" });
-          } catch (err: any) {
-            toast({ title: "Couldn't undo the payment", description: formatApiError(err), variant: "destructive" });
-          }
-        },
-      });
-    },
-    onError: (err) => toast({ title: "Failed to record payment", description: formatApiError(err), variant: "destructive" }),
-  });
+  // The Finance Bills card and popup have no Pay button (owner 2026-11-21):
+  // a recurring bill's elapsed due dates are assumed paid
+  // (shared/bills-timeline). A payment is still recorded from the bill's page.
 
   // ── Cashflow upsert mutation (POST /api/cashflow) ────────────────────────
   // RACE FIX: payload passed as variables — see addExpenseMutation comment.
@@ -1376,18 +1346,17 @@ export default function FinancePage() {
           }))
           .filter((b: { limit: number }) => b.limit > 0);
 
-        // ONE list for the Bills Due KPI, the Bills card and the BillsDuePopup it
-        // opens: the server's 30-day upcomingBills window, untrimmed. The KPI used
-        // to count a 14-day / 8-row slice while the popup listed the full window,
-        // so the tile said "3" and the popup showed 7 (ARCHITECTURE §10.1).
-        const upcomingBillsList = (Array.isArray(snap.upcomingBills) ? snap.upcomingBills : []) as any[];
+        // ONE timeline for the Bills Due KPI, the Bills card and the
+        // BillsDuePopup it opens: the server's billsTimeline, untrimmed
+        // (ARCHITECTURE §10.1). A recurring bill's elapsed due dates are
+        // assumed paid there (owner 2026-11-21), so nothing is "overdue".
+        const billsTimeline = readBillsTimeline(snap);
+        const upcomingBillsList = billsTimeline.upcoming;
 
         const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
 
         // Financial alerts & insights — derived, honest, each deep-links.
         const alerts: Array<{ id: string; text: string; tone: "pos" | "neg" | "warn"; onClick?: () => void }> = [];
-        const overdue = (Array.isArray(snap.upcomingBills) ? snap.upcomingBills : []).filter((b: any) => b.status === "overdue");
-        if (overdue.length > 0) alerts.push({ id: "overdue", tone: "neg", text: `You have ${overdue.length} overdue bill${overdue.length > 1 ? "s" : ""} totaling $${overdue.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
         const breached = budgetRows.filter(b => b.spent > b.limit);
         for (const b of breached.slice(0, 2)) alerts.push({ id: `budget-${b.category}`, tone: "warn", text: `${b.category[0].toUpperCase()}${b.category.slice(1)} spending is over budget (${Math.round((b.spent / b.limit) * 100)}%).`, onClick: () => setFinancePopup("budget") });
         if (savingsRate != null && savingsRate >= 15) alerts.push({ id: "savings", tone: "pos", text: `Great job — you're saving ${savingsRate}% of income this month.` });
@@ -1402,7 +1371,7 @@ export default function FinancePage() {
           onClick: () => setShowMore(true),
         });
         const soonBill = upcomingBillsList.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
-        if (soonBill.length > 0) alerts.push({ id: "soon", tone: "warn", text: `${soonBill.length} bill${soonBill.length > 1 ? "s" : ""} due in the next 7 days totaling $${soonBill.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
+        if (soonBill.length > 0) alerts.push({ id: "soon", tone: "warn", text: `${soonBill.length} bill${soonBill.length > 1 ? "s" : ""} due in the next 7 days totaling $${soonBill.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("bills") });
 
         // Multi-month cash-flow trend (last 6 months) — shared helper so the
         // Cash Flow Overview popup plots the exact same series.
@@ -1430,7 +1399,7 @@ export default function FinancePage() {
                 + (projectedIncome != null && projectedIncome > monthlyIncome + 0.5 ? ` · ${formatMoney(projectedIncome)} expected by month end` : "")
               : undefined}
             budgets={budgetRows}
-            bills={upcomingBillsList}
+            billsTimeline={billsTimeline}
             spendByCategory={spendByCat}
             cashTrend={cashTrend}
             spendSeries={spendSeries}
@@ -1440,8 +1409,6 @@ export default function FinancePage() {
             assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map((a: any) => ({ id: a.id, name: a.name, type: a.accountKind || a.type, value: Number(a.value ?? a.grossValue ?? 0) })) : []}
             liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map((l: any) => ({ id: l.id, name: l.name, type: l.type, value: Number(l.value ?? l.grossValue ?? 0) })) : []}
             monthLabel={monthLabel}
-            onPayBill={(bill) => setBillToPay({ id: bill.id, name: bill.name, amount: bill.amount, dueDate: bill.dueDate })}
-            payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null}
             onOpenNetWorth={() => setFinancePopup("networth")}
             onOpenCashFlow={() => setFinancePopup("cashflow")}
             onOpenBudget={() => setFinancePopup("budget")}
@@ -1471,7 +1438,6 @@ export default function FinancePage() {
         // monthly-equivalent of bills already paid (see the Money overview).
         const recurringOut = Number(snap.unpaidBillsThisMonth ?? snap.monthlyObligationTotal ?? 0) || 0;
         const spendByCat: Record<string, number> = snap.spendByCategory || {};
-        const upcomingBills = Array.isArray(snap.upcomingBills) ? snap.upcomingBills : [];
         const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
         const ymNow = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
         const todayNow = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
@@ -1498,9 +1464,7 @@ export default function FinancePage() {
               onDeleteIncome={(inc) => { setFinancePopup(null); setIncomeToDelete(inc); }}
               onDeletePaycheck={(pc) => { setFinancePopup(null); setPaycheckToDelete(pc); }} />
             <BillsDuePopup open={financePopup === "bills"} onOpenChange={closer}
-              bills={upcomingBills}
-              onPayBill={(bill) => setBillToPay({ id: bill.id, name: bill.name, amount: bill.amount, dueDate: bill.dueDate })}
-              payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null} />
+              timeline={readBillsTimeline(snap)} />
             <SavingsRatePopup open={financePopup === "savings"} onOpenChange={closer}
               incomeMtd={monthlyIncome} spendMtd={spendMtd} />
             <CashFlowOverviewPopup open={financePopup === "overview"} onOpenChange={closer}
@@ -1956,31 +1920,6 @@ export default function FinancePage() {
                 setDuplicateExpense(null);
               }}
             >Add anyway</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Pay confirmation — "Pay" moves real money and writes four records. */}
-      <AlertDialog open={!!billToPay} onOpenChange={(open) => { if (!open) setBillToPay(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Pay {billToPay?.name}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {billToPay ? `${formatMoney(billToPay.amount)}` : ""}
-              {billToPay?.dueDate ? ` due ${formatLocalDate(billToPay.dueDate, { month: "long", day: "numeric" })}` : ""}.
-              {" "}This records the payment, logs it as an expense for that billing period and
-              moves the bill on to its next cycle. You can undo it right after.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid="btn-cancel-pay-bill">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              data-testid="btn-confirm-pay-bill"
-              onClick={() => {
-                if (billToPay) payBillMut.mutate({ id: billToPay.id, amount: billToPay.amount, name: billToPay.name });
-                setBillToPay(null);
-              }}
-            >Pay {billToPay ? formatMoney(billToPay.amount) : ""}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

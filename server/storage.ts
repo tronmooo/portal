@@ -16,6 +16,7 @@ import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate,
 import { assertEventSpan } from "@shared/event-span";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { canonicalIncomeFrequency } from "@shared/obligation-windows";
+import { buildBillsTimeline } from "@shared/bills-timeline";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
@@ -2756,6 +2757,7 @@ export class MemStorage implements IStorage {
         spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : 0,
         spendByCategory,
         upcomingBills,
+        billsTimeline: buildBillsTimeline(obligations as any[], today),
         monthlyObligationTotal: Math.round(monthlyObligationTotal),
         // Mirrors SupabaseStorage: cash OUT is spend + the bill money still
         // owed this month, never the monthly-equivalent of every bill (which

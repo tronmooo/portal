@@ -9,6 +9,7 @@ import { MoneyOverview } from "../client/src/components/finance/MoneyOverview";
 
 vi.mock("wouter", () => ({
   Link: ({ children }: any) => <>{children}</>,
+  useLocation: () => ["/", () => {}],
 }));
 class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
 (globalThis as any).ResizeObserver = (globalThis as any).ResizeObserver || ResizeObserverStub;
@@ -19,13 +20,13 @@ const fourteenAssets = Array.from({ length: 14 }, (_, i) => ({ id: `a${i + 1}`, 
 
 const baseProps = {
   netWorth: 100, assets: 106.43, liabilities: 49829.1, momPct: null, nwSeries: [],
-  cashIn: 0, cashOut: 0, spendMtd: 0, budgets: [], bills: [],
+  cashIn: 0, cashOut: 0, spendMtd: 0, budgets: [],
   assetBreakdown: [
     { id: "c1", name: "MacBook Screen Cover", type: "asset", value: 39.75 },
     { id: "c2", name: "MacBook Mouse", type: "asset", value: 66.68 },
   ],
   liabilityBreakdown: [{ id: "l1", name: "Auto loan", type: "loan", value: 49829.1 }],
-  monthLabel: "SEP", onAddExpense: () => {}, onPayBill: () => {}, payingId: null,
+  monthLabel: "SEP", onAddExpense: () => {},
 };
 
 describe("F-18 Assets card shows all rows on request", () => {

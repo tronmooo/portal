@@ -137,6 +137,7 @@ export default defineConfig({
       'tests/money-overview.test.tsx',
       'tests/finance-visuals.test.ts',
       'tests/money-popups.test.tsx',
+      'tests/bills-timeline.dom.test.tsx',
       'tests/entity-classify.test.ts',
       'tests/recurring-dates.test.ts',
       'tests/series-detect.test.ts',

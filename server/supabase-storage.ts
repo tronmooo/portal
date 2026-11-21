@@ -138,6 +138,7 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { isTestEntity } from "../shared/test-data";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth, sumMonthIncomeToDate } from "../shared/obligation-windows";
+import { buildBillsTimeline } from "../shared/bills-timeline";
 import { isAutoPayOn, autoPayRemindersOn, withAutoPaySince } from "../shared/autopay";
 
 /** `YYYY-MM` → the first day of the following month (`YYYY-MM-01`). */
@@ -8451,6 +8452,9 @@ export class SupabaseStorage implements IStorage {
         totalMonthlySpend, lastMonthTotal,
         spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : (totalMonthlySpend > 0 ? 100 : 0),
         spendByCategory, upcomingBills,
+        // The Finance tab's Bills & Payments view (shared/bills-timeline): a
+        // recurring bill's elapsed due dates are assumed paid (owner 2026-11-21).
+        billsTimeline: buildBillsTimeline(allObligations as any[], today),
         monthlyObligationTotal,
         // See the block where these are computed. Cash flow on EVERY surface is
         //   IN  = monthlyIncome

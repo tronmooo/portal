@@ -107,22 +107,20 @@ describe("MoneyPopups", () => {
     expect(onDeleteIncome).toHaveBeenCalledWith(expect.objectContaining({ id: "i2" }));
   });
 
-  it("BillsDuePopup groups bills on the timeline and Pay fires the callback", () => {
-    const onPayBill = vi.fn();
-    render(<BillsDuePopup open onOpenChange={noop} onPayBill={onPayBill} payingId={null}
-      bills={[
-        { id: "b1", name: "Rent", amount: 2500, daysUntil: -2, status: "overdue", dueDate: "2026-07-18" },
-        { id: "b2", name: "Electric bill", amount: 140, daysUntil: 3, status: "upcoming", dueDate: "2026-07-23" },
-        { id: "b3", name: "Car Insurance", amount: 350, daysUntil: 12, status: "upcoming", dueDate: "2026-08-01" },
-      ] as any} />);
+  it("BillsDuePopup shows Upcoming and Past payments with no Pay button", () => {
+    const row = (id: string, name: string, amount: number, date: string, daysUntil: number, state: string) =>
+      ({ key: `${id}:${date}`, billId: id, name, amount, date, daysUntil, frequency: "monthly", category: "general", kind: "bill", autopay: false, linkedLiabilityId: id, state });
+    render(<BillsDuePopup open onOpenChange={noop} timeline={{
+      upcoming: [row("b2", "Electric bill", 140, "2026-07-23", 3, "upcoming"), row("b3", "Car Insurance", 350, "2026-08-01", 12, "upcoming")],
+      past: [row("b1", "Rent", 2500, "2026-07-18", -2, "assumed")],
+    } as any} />);
     const el = screen.getByTestId("popup-bills");
-    expect(el.textContent).toContain("Overdue");
-    expect(el.textContent).toContain("Next 7 days");
-    expect(el.textContent).toContain("Later this month");
+    expect(el.textContent).toContain("Upcoming Payments");
+    expect(el.textContent).toContain("Past Payments");
     expect(el.textContent).toContain("Rent");
-    expect(el.textContent).toContain("$2,990"); // header total
-    fireEvent.click(screen.getByTestId("bill-pay-b2"));
-    expect(onPayBill).toHaveBeenCalledWith(expect.objectContaining({ id: "b2" }));
+    expect(el.textContent).not.toMatch(/overdue/i);
+    expect(screen.getByTestId("bill-timeline-past-b1").textContent).toContain("Past");
+    expect(screen.queryAllByTestId(/^bill-pay-/)).toHaveLength(0);
   });
 
   it("SavingsRatePopup renders the gauge, equation and active band", () => {

@@ -191,9 +191,10 @@ describe("item 3: Bills Due tile and popup read the same list", () => {
     const src = read("client/src/pages/finance.tsx");
     expect(src).not.toMatch(/daysUntil\s*<=\s*14/);
     expect(src).not.toContain("bills14");
-    // Both the overview and the popup receive the untrimmed snapshot window.
-    expect(src).toContain("bills={upcomingBillsList}");
-    expect(src).toContain("bills={upcomingBills}");
+    // Both the overview and the popup receive the server's untrimmed bills
+    // timeline (shared/bills-timeline, 2026-11-21).
+    expect(src).toContain("billsTimeline={billsTimeline}");
+    expect(src).toContain("timeline={readBillsTimeline(snap)}");
   });
 });
 
