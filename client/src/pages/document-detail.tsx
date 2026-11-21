@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo, lazy, Suspense } from "react";
+import { RecordDetailsPanel } from "@/components/details/RecordDetailsPanel";
 import { DocumentLinkPicker } from "@/components/DocumentLinkPicker";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -605,6 +606,10 @@ function OverviewPanel({
           </ul>
         )}
       </section>
+
+      {/* User-defined characteristics (shared/record-details): Status, Signed,
+          Counterparty, Renewal date… as structured, reportable values. */}
+      <RecordDetailsPanel entityType="document" entityId={doc.id} />
     </div>
   );
 }

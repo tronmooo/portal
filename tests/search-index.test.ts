@@ -160,4 +160,9 @@ describe("matchNote — the reason a row is listed", () => {
     expect(matchNote(rankResults([{ title: "Car", _related: true }], "na")[0])).toBe("linked to a match");
     expect(matchNote(rankResults([{ title: "Dana's Birthday", _outOfScope: true }], "dana")[0])).toBe("outside current scope");
   });
+  it("a record found by a characteristic's value names it", () => {
+    const [row] = rankResults([{ name: "Maple St house", _matchedDetail: "Condition: Poor" }], "poor");
+    expect(row).toBeTruthy();
+    expect(matchNote(row)).toBe("Condition: Poor");
+  });
 });
