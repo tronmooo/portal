@@ -67,7 +67,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { showUndoToast } from "@/lib/undo-delete";
-import { ListTodo, Calendar, CalendarDays, AlertCircle, AlertTriangle, Flame, Plus, Trash2, CheckCircle2, Repeat, Inbox, User, Car, Layers, Home, Landmark, CreditCard, Package, ChevronDown, ChevronRight, MoreHorizontal, Pencil, ExternalLink, type LucideIcon } from "lucide-react";
+import { ListTodo, Calendar, CalendarDays, AlertCircle, AlertTriangle, Flame, Plus, Trash2, CheckCircle2, Repeat, Inbox, Flag, Hourglass, User, Car, Layers, Home, Landmark, CreditCard, Package, ChevronDown, MoreHorizontal, Pencil, ExternalLink, type LucideIcon } from "lucide-react";
 import { Link } from "wouter";
 import type { Task, Profile } from "@shared/schema";
 import { useState, useEffect, useRef, useMemo } from "react";
@@ -79,6 +79,8 @@ const PRIORITY_COLORS: Record<string, string> = {
   medium: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   high: "bg-red-500/10 text-red-600 dark:text-red-400",
 };
+
+const PRIORITY_ICONS: Record<string, LucideIcon> = { high: AlertCircle, medium: Flag, low: ChevronDown };
 
 const TASK_NOUN = { one: "task", many: "tasks" };
 
@@ -396,6 +398,7 @@ function TaskItem({
   onEdit,
   today,
   linked,
+  dense,
 }: {
   task: Task;
   onEdit: (t: Task) => void;
@@ -403,10 +406,14 @@ function TaskItem({
   today: string;
   /** The asset or liability this task is tied to, when it is. */
   linked?: LinkedItem | null;
+  /** Beside its item (the narrow column of an asset/liability group): on a
+   *  phone the priority shows as its icon alone so the title keeps the room. */
+  dense?: boolean;
 }) {
   const bucket = task.status === "done" ? "done" : openTaskBucket(task, today);
   const isOverdue = bucket === "overdue";
   const tone = TASK_TONES[bucket];
+  const PriorityIcon = PRIORITY_ICONS[task.priority] || Flag;
   const completedToast = (title: string) => showCompletedToast(toast, title, linked);
   const { toast } = useToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -539,14 +546,14 @@ function TaskItem({
         data-tone={bucket}
         data-due={task.status !== "done" ? String(task.dueDate || "").slice(0, 10) : ""}
         className={`td-scope bubble-row relative ${task.status === "done" ? "opacity-60" : ""}`}
-        style={accentScope(tone.hs, tone.hs2)}
+        style={{ ...accentScope(tone.hs, tone.hs2), borderRadius: "0.65rem", boxShadow: "inset 0 0 0 1px hsl(var(--border) / 0.55)" }}
       >
-        <div className="px-3 py-2 flex items-center gap-2.5">
+        <div className={`${dense ? "px-2" : "px-3"} py-1.5 flex items-center gap-2.5`}>
           <Checkbox
             checked={task.status === "done"}
             onCheckedChange={() => toggleMutation.mutate()}
             disabled={toggleMutation.isPending}
-            className={`h-5 w-5 rounded-full border-2 border-[hsl(var(--td-hs)_var(--td-l))] data-[state=checked]:bg-[hsl(var(--td-hs)_var(--td-l))] data-[state=checked]:text-background [&_svg]:h-3.5 [&_svg]:w-3.5 ${toggleMutation.isPending ? "opacity-50 animate-pulse" : ""}`}
+            className={`h-5 w-5 rounded-[5px] border-2 border-[hsl(var(--td-hs)_var(--td-l))] data-[state=checked]:bg-[hsl(var(--td-hs)_var(--td-l))] data-[state=checked]:text-background [&_svg]:h-3.5 [&_svg]:w-3.5 ${toggleMutation.isPending ? "opacity-50 animate-pulse" : ""}`}
             data-testid={`checkbox-task-${task.id}`}
           />
           <div
@@ -616,7 +623,9 @@ function TaskItem({
                   <Calendar className="h-3 w-3" />
                   {/* One formatter, shared with every other due-date surface:
                       never shifts a day, always shows a non-current year. */}
-                  {task.dueDate ? (formatStoredDate(task.dueDate) || task.dueDate) : "Add date"}
+                  {task.dueDate
+                    ? (String(task.dueDate).slice(0, 10) === today ? "Today" : (formatStoredDate(task.dueDate) || task.dueDate))
+                    : "Add date"}
                   {/* A timed task shows its time — "remind me Friday at
                       10am" stored 10:00 and the row used to drop it. */}
                   {task.dueDate && formatClockTime(task.dueTime) ? (
@@ -656,9 +665,9 @@ function TaskItem({
                 title="Change priority"
                 data-testid={`btn-task-priority-${task.id}`}
               >
-                <Badge variant="secondary" className={`text-xs ${PRIORITY_COLORS[task.priority]}`}>
-                  {task.priority === "high" && <AlertCircle className="h-3 w-3 mr-1" />}
-                  {task.priority}
+                <Badge variant="secondary" className={`text-xs capitalize gap-1 ${dense ? "px-1.5 min-[480px]:px-2.5" : ""} ${PRIORITY_COLORS[task.priority]}`}>
+                  <PriorityIcon className="h-3 w-3" />
+                  <span className={dense ? "hidden min-[480px]:inline" : ""}>{task.priority}</span>
                 </Badge>
               </button>
             <DropdownMenu>
@@ -737,7 +746,7 @@ function SwipeableItem({ children, onSwipeLeft, onSwipeRight, leftLabel = '✓ D
   const threshold = 72;
 
   return (
-    <div className="relative overflow-hidden rounded-[1rem]">
+    <div className="relative overflow-hidden rounded-[0.65rem]">
       {/* Background actions */}
       <div className="absolute inset-0 flex items-center">
         <div className="flex-1 h-full flex items-center px-4" style={{ background: leftColor + '30' }}>
@@ -749,7 +758,7 @@ function SwipeableItem({ children, onSwipeLeft, onSwipeRight, leftLabel = '✓ D
       </div>
       {/* Swipeable content */}
       <div
-        style={{ transform: `translateX(${offsetX}px)`, transition: offsetX === 0 ? 'transform 0.2s ease' : 'none', background: 'hsl(var(--card))', borderRadius: '1rem', position: 'relative' }}
+        style={{ transform: `translateX(${offsetX}px)`, transition: offsetX === 0 ? 'transform 0.2s ease' : 'none', background: 'hsl(var(--card))', borderRadius: '0.65rem', position: 'relative' }}
         onTouchStart={e => { startX.current = e.touches[0].clientX; }}
         onTouchMove={e => {
           if (startX.current === null) return;
@@ -941,7 +950,7 @@ export default function TasksPage() {
       toast({ title: failTitle, description: formatApiError(err), variant: "destructive" });
     }
   };
-  const openRow = (task: Task) => (
+  const openRow = (task: Task, dense = false) => (
     <SwipeableItem
       key={task.id}
       onSwipeLeft={() => swipePatch(task, { status: "done" }, `"${task.title}" completed`, `Failed to complete "${task.title}"`, true)}
@@ -949,7 +958,7 @@ export default function TasksPage() {
       // after ~5 PM Pacific, so "snooze to tomorrow" landed two days out.
       onSwipeRight={() => swipePatch(task, { dueDate: tzAddDays(getUserToday(BROWSER_TIMEZONE), 1) }, `"${task.title}" snoozed to tomorrow`, `Failed to snooze "${task.title}"`)}
     >
-      <TaskItem task={task} onEdit={setEditTask} today={todayStr} linked={linkedOf(task)} />
+      <TaskItem task={task} onEdit={setEditTask} today={todayStr} linked={linkedOf(task)} dense={dense} />
     </SwipeableItem>
   );
   const doneRow = (task: Task) => (
@@ -988,8 +997,8 @@ export default function TasksPage() {
           page has. The profile filter is a list control and lives on the
           toolbar below (beside the title it squeezed "Tasks" down to "T."). */}
       <PageHeader
-        title="Tasks"
-        subtitle={`${activeTasks.length} open · ${completedTasks.length} completed`}
+        title={<span className="text-2xl">Tasks</span>}
+        subtitle={<span className="text-xs">Task Command Center</span>}
         icon={CheckCircle2}
         accent={TASKS_ACCENT}
         backHref="/dashboard"
@@ -1002,12 +1011,12 @@ export default function TasksPage() {
 
       {/* Summary band — the tracker popup's stat tile. A tile with something
           in it brings the first row it counts into view. */}
-      <div className="grid grid-cols-4 gap-2" data-testid="tasks-summary">
+      <div className="grid grid-cols-4 gap-1.5" data-testid="tasks-summary">
         {([
-          { label: "Overdue", value: taskSummary.overdue, tone: TASK_TONES.overdue, jump: () => jumpTo(r => r.dataset.tone === "overdue") },
-          { label: "Today", value: taskSummary.dueToday, tone: TASK_TONES.dueToday, jump: () => jumpTo(r => r.dataset.tone === "dueToday") },
-          { label: "This week", value: dueThisWeek, tone: TASK_TONES.upcoming, jump: () => jumpTo(r => !!r.dataset.due && r.dataset.due >= todayStr && r.dataset.due <= weekEnd) },
-          { label: "Done today", value: taskSummary.doneToday, tone: TASK_TONES.done, jump: () => jumpTo(r => r.dataset.tone === "done", true) },
+          { label: "Today", value: taskSummary.dueToday, tone: TASK_TONES.dueToday, icon: CalendarDays, jump: () => jumpTo(r => r.dataset.tone === "dueToday") },
+          { label: "This week", value: dueThisWeek, tone: TASK_TONES.upcoming, icon: CalendarDays, jump: () => jumpTo(r => !!r.dataset.due && r.dataset.due >= todayStr && r.dataset.due <= weekEnd) },
+          { label: "Overdue", value: taskSummary.overdue, tone: TASK_TONES.overdue, icon: Hourglass, jump: () => jumpTo(r => r.dataset.tone === "overdue") },
+          { label: "Done today", value: taskSummary.doneToday, tone: TASK_TONES.done, icon: CheckCircle2, jump: () => jumpTo(r => r.dataset.tone === "done", true) },
         ]).map((s, i) => {
           // Rendered as a plain value, not a count-up: the animation started
           // every tile at "0" and sat there for seconds while the long list
@@ -1016,35 +1025,36 @@ export default function TasksPage() {
           const Tile: any = live ? "button" : "div";
           return (
             <Tile key={s.label} type={live ? "button" : undefined} onClick={live ? s.jump : undefined}
-              className={`td-scope bubble td-rise px-2.5 py-2 min-w-0 text-left flex flex-col ${live ? "bubble-interactive pressable" : ""}`}
-              style={{ ["--i" as any]: i, ...accentScope(s.tone.hs, s.tone.hs2) }}
+              className={`td-scope bubble td-rise px-2 py-2 min-w-0 text-left flex items-center gap-1.5 ${live ? "bubble-interactive pressable" : ""}`}
+              style={{ ["--i" as any]: i, borderRadius: "0.9rem", ...accentScope(s.tone.hs, s.tone.hs2) }}
               data-testid={`tasks-summary-${s.label.toLowerCase().replace(/ /g, "-")}`}>
-              <div className="flex items-center justify-between gap-1">
-                <span className="metric-value text-[22px] leading-none td-gradient-text">{s.value == null ? "—" : s.value}</span>
-                <s.tone.icon className="h-4 w-4 shrink-0" style={{ color: `hsl(var(--td-hs) var(--td-l))` }} aria-hidden="true" />
-              </div>
-              <p className="micro-label text-muted-foreground mt-1.5 leading-tight break-words" style={{ fontSize: "0.625rem", letterSpacing: "0.03em" }}>{s.label}</p>
+              <s.icon className="h-5 w-5 shrink-0" style={{ color: `hsl(var(--td-hs) var(--td-l))` }} strokeWidth={2} aria-hidden="true" />
+              <span className="min-w-0">
+                <span className="block text-[11px] font-medium text-muted-foreground leading-tight">{s.label}</span>
+                <span className="metric-value block text-lg leading-none mt-0.5">{s.value == null ? "—" : s.value}</span>
+              </span>
             </Tile>
           );
         })}
       </div>
 
       {/* Tab filters: what the tasks are about. Counts are open tasks. */}
-      <div className="-mx-1 px-1 overflow-x-auto">
-        <div className="td-scope td-seg w-max" style={accentScope("183 70%", "200 70%")} data-testid="task-tab-filters">
-          {([{ key: "all" as const, label: "All", n: activeTasks.length }, ...sections.map(sec => ({ key: sec.def.kind, label: sec.def.tab, n: sec.openTotal }))]).map(tab => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setTabFilter(tab.key)}
-              aria-pressed={tabFilter === tab.key}
-              className="td-seg-item"
-              data-testid={`tab-${tab.key}`}
-            >
-              {tab.label} ({tab.n})
-            </button>
-          ))}
-        </div>
+      <div className="flex items-stretch gap-0.5 rounded-full p-1 bg-muted/60 dark:bg-foreground/5 ring-1 ring-inset ring-border/50" data-testid="task-tab-filters">
+        {([{ key: "all" as const, label: "All", icon: null as LucideIcon | null, n: activeTasks.length }, ...sections.map(sec => ({ key: sec.def.kind, label: sec.def.tab, icon: sec.def.icon as LucideIcon | null, n: sec.openTotal }))]).map(tab => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setTabFilter(tab.key)}
+            aria-pressed={tabFilter === tab.key}
+            className={`flex-auto inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-2 py-1.5 text-xs font-semibold transition-colors ${
+              tabFilter === tab.key ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+            }`}
+            data-testid={`tab-${tab.key}`}
+          >
+            {tab.icon && <tab.icon className="hidden min-[480px]:block h-3.5 w-3.5" aria-hidden="true" />}
+            {tab.label} ({tab.n})
+          </button>
+        ))}
       </div>
       <div className="min-w-0">
         <MultiProfileFilter onChange={() => {}} compact />
@@ -1094,7 +1104,7 @@ export default function TasksPage() {
             const isCollapsed = !!collapsed[def.kind];
             const doneOpen = !!showDone[def.kind];
             return (
-              <section key={def.kind} className="td-scope td-hero td-rise" style={accentScope(def.hs, def.hs2)} data-testid={`tasks-group-${def.kind}`}>
+              <section key={def.kind} className="td-scope td-hero td-rise" style={{ ...accentScope(def.hs, def.hs2), borderRadius: "1rem", borderLeft: `3px solid hsl(${def.hs} var(--td-l))` }} data-testid={`tasks-group-${def.kind}`}>
                 <div className="relative z-[1]">
                   <button
                     type="button"
@@ -1105,8 +1115,8 @@ export default function TasksPage() {
                   >
                     <span className="medallion medallion-sm" aria-hidden="true"><def.icon className="h-4 w-4" strokeWidth={2.2} /></span>
                     <span className="flex-1 min-w-0">
-                      <span className="block text-base font-bold tracking-tight leading-tight">{def.title}</span>
-                      <span className="block text-[11px] text-muted-foreground truncate mt-0.5">{def.subtitle}</span>
+                      <span className="block text-lg font-bold tracking-tight leading-tight">{def.title}</span>
+                      <span className="block text-[11px] text-muted-foreground truncate mt-0.5">{def.subtitle} ({sec.openTotal})</span>
                     </span>
                     <span
                       className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold tabular-nums"
@@ -1124,33 +1134,45 @@ export default function TasksPage() {
                         <p className="px-2 py-1 text-xs text-muted-foreground">Nothing open here.</p>
                       )}
                       {def.kind === "mine"
-                        ? sec.open.map(openRow)
+                        ? sec.open.map(t => openRow(t))
                         : sec.items.map(({ profile, rows }) => {
                           const ItemIcon = ITEM_ICONS[profile.type] || Package;
                           const photo = /^(https?:|data:image\/)/.test(String(profile.avatar || "")) ? profile.avatar : null;
                           return (
                             // One asset or liability and the tasks tied to it.
                             // The header opens that item's own page.
-                            <div key={profile.id} className="rounded-[1.15rem] p-1 space-y-1" style={{ boxShadow: `inset 0 0 0 1px hsl(var(--td-hs) var(--td-l) / 0.18)`, background: `hsl(var(--td-hs) var(--td-l) / 0.05)` }} data-testid={`tasks-item-${profile.id}`}>
+                            <div key={profile.id} className="rounded-[0.8rem] flex items-stretch" style={{ boxShadow: `inset 0 0 0 1px hsl(var(--td-hs) var(--td-l) / 0.22)`, background: `hsl(var(--td-hs) var(--td-l) / 0.05)` }} data-testid={`tasks-item-${profile.id}`}>
                               <button
                                 type="button"
-                                className="w-full flex items-center gap-2.5 px-1.5 py-1 text-left rounded-xl pressable"
+                                className="w-[37%] shrink-0 flex items-center gap-2 p-2 text-left pressable rounded-l-[0.8rem]"
+                                style={{ boxShadow: `inset -1px 0 0 hsl(var(--td-hs) var(--td-l) / 0.18)` }}
                                 onClick={() => hashNavigate(`/profiles/${profile.id}`)}
                                 aria-label={`Open ${profile.name}`}
                                 data-testid={`tasks-item-link-${profile.id}`}
                               >
                                 {photo
-                                  ? <img src={photo} alt="" className="h-8 w-8 rounded-xl object-cover shrink-0" />
-                                  : <span className="medallion medallion-sm" aria-hidden="true"><ItemIcon className="h-4 w-4" strokeWidth={2.1} /></span>}
+                                  ? <img src={photo} alt="" className="h-9 w-9 rounded-lg object-cover shrink-0" />
+                                  : (
+                                    // No picture stored: an asset shows its kind's icon, a
+                                    // bill its initial, on a tile in the section's colour.
+                                    <span
+                                      className="h-9 w-9 shrink-0 rounded-lg inline-flex items-center justify-center text-sm font-bold text-white"
+                                      style={{ background: `linear-gradient(145deg, hsl(var(--td-hs) 52%), hsl(var(--td-hs2) 42%))`, boxShadow: `0 4px 12px -6px hsl(var(--td-hs) 50% / 0.8)` }}
+                                      aria-hidden="true"
+                                    >
+                                      {def.kind === "liability" ? (profile.name.trim().charAt(0).toUpperCase() || "?") : <ItemIcon className="h-4 w-4" strokeWidth={2.2} />}
+                                    </span>
+                                  )}
                                 <span className="flex-1 min-w-0">
-                                  <span className="block text-sm font-semibold truncate leading-tight">{profile.name}</span>
-                                  <span className="block text-[11px] text-muted-foreground truncate mt-0.5">
+                                  <span className="text-[13px] font-semibold leading-tight line-clamp-2" title={profile.name}>{profile.name}</span>
+                                  <span className="block text-[11px] text-muted-foreground leading-tight mt-0.5">
                                     {rows.length} {rows.length === 1 ? "task" : "tasks"} · {taskGroupItemKind(profile)}
                                   </span>
                                 </span>
-                                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                               </button>
-                              {rows.map(openRow)}
+                              <div className="flex-1 min-w-0 p-1 space-y-1 flex flex-col justify-center">
+                                {rows.map(t => openRow(t, true))}
+                              </div>
                             </div>
                           );
                         })}

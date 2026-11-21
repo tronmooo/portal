@@ -68,6 +68,7 @@ export default defineConfig({
       'tests/habits-visuals.dom.test.tsx',
       'tests/dialog-touch-scroll.dom.test.tsx',
       'tests/pull-to-refresh-scroll.dom.test.tsx',
+      'tests/ios-scroll-chain.test.ts',
       'tests/clipboard-copy.dom.test.tsx',
       'tests/tracker-hero-countup.dom.test.tsx',
       'tests/liability-calc.test.ts',

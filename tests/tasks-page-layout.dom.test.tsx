@@ -222,7 +222,8 @@ describe("Tasks page layout", () => {
       expect(p.className).toContain("td-scope");
     }
     expect(new Set(panels.map(p => p.style.getPropertyValue("--td-hs"))).size).toBe(3);
-    expect(tid(page, "task-tab-filters").className).toContain("td-seg");
+    // Each panel carries its colour on its leading edge too.
+    for (const p of panels) expect(p.style.borderLeft).toContain("3px solid");
   });
 
   it("checking off a bill's reminder completes the task and offers the bill, writing nothing else", async () => {
