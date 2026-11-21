@@ -445,14 +445,16 @@ defined, `update_profile` is unchanged.
 is the panel's error state with a retry (Rule 7); removing a value takes two
 taps (Rule 8); opening it writes nothing (Rule 3). Suggestions come from the
 fixed `DETAIL_TEMPLATES` library for the record's kind, never random.
-**D7. Adding a detail is Detail | Value | Add.** The panel's "Add detail"
-opens an inline row like a profile's "Add field" (`parseDetailPair`,
-`shared/record-details.ts`): a blank value saves a yes/no flag ("Cracked
-screen" → Yes); a value is typed by the characteristic it lands in ("Color" +
-"Blue", "Condition" + "good" → Good), and the Value box's placeholder lists an
-existing one's choices (`detailValueHint`). The type/options/scope dialog is
-behind "More options" — never make it the default again (owner requests
-2026-11-21).
+**D7. No separate Details box on record pages.** Owner, 2026-11-21: "delete
+this, make this simple". New facts go through each page's own Add field.
+Values already saved as characteristics show as plain cards
+(`DetailValueCells`): tap to change, X (two taps) to remove. The catalog and
+reports stay on `/details`. Never put the Details panel back on a record page.
+**D8. Everything on the Info page can be changed and removed.** Age has no
+field of its own: editing it moves the birth year (`birthdayForAge`,
+`client/src/lib/profile-fields.ts`) and removing it removes the birthday;
+Birthday has an X like every other field.
+*Guard:* `tests/info-tab-editable.dom.test.tsx`.
 
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.

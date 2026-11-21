@@ -7,7 +7,7 @@ import { changedFieldsOnly } from "@shared/field-patch";
  * documents OCR, calendar auto-events, and subtype-specific UI on top of this.
  */
 
-import { RecordDetailsPanel } from "@/components/details/RecordDetailsPanel";
+import { DetailValueCells } from "@/components/details/DetailValueCells";
 import { localTodayISO } from "@/lib/dates";
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { flattenProfile } from "@/lib/flattenProfile";
@@ -1295,7 +1295,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
             {/* User-defined characteristics (shared/record-details): priority,
                 refinance candidate, lender rating… structured and reportable. */}
-            <RecordDetailsPanel entityType="profile" entityId={profile.id} />
+            <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 sm:grid-cols-3 gap-2" />
 
             {/* Linked assets — surfaced near the top for parity with asset profiles */}
             <section data-testid="overview-linked-assets">

@@ -65,3 +65,24 @@ export function readField(fields: Record<string, any> | undefined, key: string):
   if (lc === "birthday") return fields.dateOfBirth ?? fields.dob;
   return undefined;
 }
+
+/**
+ * Editing Age moves the birth YEAR so the person is that age today; the month
+ * and day stay. Age is never stored on its own — it is always read from the
+ * birthday (one source per value). Returns null for an unusable age or a
+ * birthday that isn't a stored date ("YYYY", "YYYY-MM" or "YYYY-MM-DD").
+ */
+export function birthdayForAge(birthday: unknown, ageText: string, today: Date = new Date()): string | null {
+  const n = Number(String(ageText || "").replace(/[^\d.]/g, ""));
+  if (!Number.isInteger(n) || n < 0 || n > 130 || !String(ageText).trim()) return null;
+  const m = /^(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?(?:T.*)?$/.exec(String(birthday || "").trim());
+  if (!m) return null;
+  const month = m[2] ? Number(m[2]) : 1;
+  const day = m[3] ? Number(m[3]) : 1;
+  const tm = today.getMonth() + 1;
+  const hadBirthday = tm > month || (tm === month && today.getDate() >= day);
+  const year = today.getFullYear() - n - (hadBirthday ? 0 : 1);
+  const mm = String(month).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  return m[3] ? `${year}-${mm}-${dd}` : m[2] ? `${year}-${mm}` : String(year);
+}
