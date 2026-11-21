@@ -22,3 +22,8 @@ api/_bundle.mjs
 api/chunks/
 tests/perf/out/
 .scratch/
+
+# Tutorial evidence and credentials never enter source control.
+tutorial-output/
+*tutorial-credentials.json
+portol-tutorial-credentials.json
