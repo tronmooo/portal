@@ -16,7 +16,7 @@ import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate,
 import { assertEventSpan } from "@shared/event-span";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { canonicalIncomeFrequency } from "@shared/obligation-windows";
-import { buildBillsTimeline } from "@shared/bills-timeline";
+import { buildBillsTimeline, rollBillsForward } from "@shared/bills-timeline";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
@@ -2701,7 +2701,8 @@ export class MemStorage implements IStorage {
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
     const obligations = Array.from(this.obligations.values()).filter(o => matchesFilter((o as any).linkedProfiles));
-    const upcomingBills = obligations
+    const rolledObligations = rollBillsForward(obligations as any[], today) as typeof obligations;
+    const upcomingBills = rolledObligations
       .filter(o => isUpcomingBill(o, now))
       .sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime())
       .map(o => ({
@@ -2762,7 +2763,7 @@ export class MemStorage implements IStorage {
         // Mirrors SupabaseStorage: cash OUT is spend + the bill money still
         // owed this month, never the monthly-equivalent of every bill (which
         // double-counted every bill already paid and every expense it wrote).
-        unpaidBillsThisMonth: Math.round(sumBillsDueThroughMonth(obligations as any[], userYearMonth)),
+        unpaidBillsThisMonth: Math.round(sumBillsDueThroughMonth(rolledObligations as any[], userYearMonth)),
         monthlyIncome: Math.round(recurringIncome + receivedPaycheckIncome),
         recurringIncome: Math.round(recurringIncome),
         receivedPaycheckIncome: Math.round(receivedPaycheckIncome),

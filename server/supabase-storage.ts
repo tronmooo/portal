@@ -138,7 +138,7 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { isTestEntity } from "../shared/test-data";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth, sumMonthIncomeToDate } from "../shared/obligation-windows";
-import { buildBillsTimeline } from "../shared/bills-timeline";
+import { buildBillsTimeline, rollBillsForward } from "../shared/bills-timeline";
 import { isAutoPayOn, autoPayRemindersOn, withAutoPaySince } from "../shared/autopay";
 
 /** `YYYY-MM` → the first day of the following month (`YYYY-MM-01`). */
@@ -8264,7 +8264,12 @@ export class SupabaseStorage implements IStorage {
     const lastMonthExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === lastMonthYM);
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
-    const upcomingBills = allObligations.filter(o => isUpcomingBill(o, now)).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => {
+    // The next date of every bill: an elapsed due date is assumed paid (the
+    // Finance tab's rule, shared/bills-timeline), so this list — the dashboard
+    // Money card, its Bills panel, the KPI strip — names what is coming, not a
+    // months-old occurrence ("Spotify Premium · 115d overdue", 2026-11-22).
+    const rolledObligations = rollBillsForward(allObligations as any[], today) as typeof allObligations;
+    const upcomingBills = rolledObligations.filter(o => isUpcomingBill(o, now)).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => {
       // Whole calendar days between the user's today and the due DATE — no
       // instants. `new Date("YYYY-MM-DD")` is UTC midnight, so a bill due
       // today read as "overdue" from 5 pm Pacific onward.
@@ -8301,7 +8306,10 @@ export class SupabaseStorage implements IStorage {
     // owed on or before month end. Paying an occurrence advances its due date
     // out of the window, so the amount moves from this term into
     // totalMonthlySpend and the sum of the two does not move.
-    const unpaidBillsThisMonth = sumBillsDueThroughMonth(allObligations as any[], userYearMonth);
+    // Counted from each bill's NEXT date. Counted from a stale stored date,
+    // a subscription last recorded in July added five months of itself to
+    // November's outflow.
+    const unpaidBillsThisMonth = sumBillsDueThroughMonth(rolledObligations as any[], userYearMonth);
     // Principal paid on loans and cards this month. It is money that left the
     // account but it is NOT spending (it lowered a debt), so it is reported
     // beside the cash-flow figures instead of inside them — only a loan

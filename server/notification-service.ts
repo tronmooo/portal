@@ -15,6 +15,7 @@ import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
 import { rulesFromAll, daysBetweenISO, isAlertDateRule, isDocumentAttentionRule } from "@shared/date-rules";
 import { dateAlertId } from "@shared/alert-ids";
+import { rollBillsForward } from "@shared/bills-timeline";
 import { dateRuleNotice, overdueTaskSeverity, formatNoticeDate } from "@shared/notification-rules";
 import { isActiveObligation } from "@shared/obligation-windows";
 import { BILL_REMINDER_TASK_PREFIX } from "./liability-payments";
@@ -391,7 +392,10 @@ export async function buildNotifications(
   }
 
   // --- Bills/Obligations ---
-  for (const ob of obligations) {
+  // Each bill at its NEXT date: an elapsed due date is assumed paid
+  // (shared/bills-timeline), so the bell says what is coming. A payment the
+  // user marked missed keeps its own alert below (A3).
+  for (const ob of rollBillsForward(obligations as any[], todayStr) as typeof obligations) {
     if (!ob.nextDueDate) continue;
     // A paused or cancelled bill is not due (D222) — the bills list already
     // hides it; the bell kept warning about it.

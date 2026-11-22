@@ -141,3 +141,62 @@ export function buildBillsTimeline(
   past.sort((a, b) => b.date.localeCompare(a.date) || a.name.localeCompare(b.name));
   return { upcoming, past };
 }
+
+/**
+ * The next date a bill falls on, on or after `todayISO` — the same walk the
+ * timeline makes, for the surfaces that list bills without a Past section
+ * (the dashboard Money card, the bell, the month's still-to-pay total).
+ * Elapsed cycles are assumed paid. Null when nothing is coming: a one-time
+ * bill whose day has passed, or a series past its end.
+ */
+export function nextBillDate(
+  o: Pick<BillsTimelineObligation, "frequency" | "nextDueDate" | "recurrenceEnd"> | null | undefined,
+  todayISO: string,
+): string | null {
+  const today = String(todayISO || "").slice(0, 10);
+  const stored = String(o?.nextDueDate || "").slice(0, 10);
+  if (!DAY.test(today) || !DAY.test(stored)) return null;
+  const end = DAY.test(String(o?.recurrenceEnd || "").slice(0, 10)) ? String(o!.recurrenceEnd).slice(0, 10) : "";
+  if (stored >= today) return end && stored > end ? null : stored;
+  const frequency = String(o?.frequency || "monthly");
+  if (isOneTimeFrequency(frequency)) return null;
+  const rule = billRecurrenceRule(frequency);
+  if (!rule.unit) return null;
+  rule.anchorDay = Number(stored.slice(8, 10));
+  let cur = stored;
+  for (let guard = 0; guard < 600 && cur < today; guard++) {
+    const next = advance(cur, rule);
+    if (!DAY.test(next) || next <= cur) return null;
+    cur = next;
+  }
+  if (cur < today || (end && cur > end)) return null;
+  return cur;
+}
+
+/**
+ * Every ACTIVE bill with its due date rolled to its next date (owner rule
+ * 2026-11-21, applied to the dashboard 2026-11-22: "show the next scheduled
+ * payments, not an accumulating backlog of old bill occurrences"). A bill with
+ * nothing coming is left out. Paused, cancelled and ended bills pass through
+ * untouched — every reader already skips them by status.
+ *
+ * This is a READ rule. The stored date still moves only when an occurrence is
+ * paid, skipped or marked missed, and a payment marked missed keeps its own
+ * alert (Auto Pay rule A3).
+ */
+export function rollBillsForward<T extends { frequency?: string | null; nextDueDate?: any; status?: string | null; recurrenceEnd?: string | null }>(
+  obligations: readonly T[] | null | undefined,
+  todayISO: string,
+): T[] {
+  const out: T[] = [];
+  for (const o of obligations || []) {
+    if (!o) continue;
+    if (!isActiveObligation(o as any)) { out.push(o); continue; }
+    const stored = typeof o.nextDueDate === "string" ? o.nextDueDate.slice(0, 10) : "";
+    if (!DAY.test(stored)) { out.push(o); continue; }
+    const next = nextBillDate(o as any, todayISO);
+    if (!next) continue;
+    out.push(next === stored ? o : { ...o, nextDueDate: next });
+  }
+  return out;
+}

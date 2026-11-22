@@ -3004,7 +3004,8 @@ describe("D257 cron writes invalidate the user's caches", () => {
     // Every write path in the scan marks the user as written to.
     expect(scan.indexOf("userWrote = true")).toBeLessThan(scan.indexOf("closeBillReminderTasksWhere("));
     // Auto Pay on a loan, the duplicate collapse, the reminder close, Auto
-    // Pay on a bill, the reminder create.
+    // Pay on a bill, and retiring a generated "Bill due" task (2026-11-22:
+    // the scan no longer creates reminder tasks; it trashes the ones it made).
     expect((scan.match(/userWrote = true/g) || []).length).toBe(5);
   });
 });

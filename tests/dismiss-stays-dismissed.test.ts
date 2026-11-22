@@ -14,7 +14,7 @@ import { selectAttentionRows } from "../shared/executive-attention";
 import { alertIdOfDateRow, alertIdsOfDateRow, dateAlertId, isDateRowDismissed } from "../shared/alert-ids";
 import { groupDocumentDates } from "../shared/document-dates";
 import { rulesFromAll } from "../shared/date-rules";
-import { hasBillReminderFor } from "../shared/bill-reminders";
+import { isGeneratedBillReminderTask } from "../shared/bill-reminders";
 import { startHarness, type Harness } from "./helpers/route-harness";
 
 const TODAY = "2026-11-22";
@@ -181,23 +181,45 @@ describe("the dismissed list lives on the server and can be restored", () => {
   });
 });
 
-describe("a bill reminder ticked done is not raised again", () => {
-  const title = "Bill due: Spotify";
-  it("counts a completed reminder for the same occurrence", () => {
-    const tasks = [{ id: "t1", title, dueDate: "2026-11-30", status: "done" }];
-    expect(hasBillReminderFor(tasks, title, "2026-11-30")).toBe(true);
+describe("a bill is not a task: the due scan raises no reminder and retires the ones it made", () => {
+  const isBill = (id: string) => id === "bill-1";
+  const generated = {
+    id: "t1", title: "Bill due: Spotify", status: "todo", priority: "high",
+    dueDate: "2026-03-31", dueTime: "09:00", linkedProfiles: ["bill-1"], tags: [], source: "manual",
+  };
+
+  it("recognises exactly what the scan wrote", () => {
+    expect(isGeneratedBillReminderTask(generated, isBill)).toBe(true);
+    // The linked bill was deleted since: still the scan's task.
+    expect(isGeneratedBillReminderTask({ ...generated, linkedProfiles: ["gone"] }, (id) => id === "gone")).toBe(true);
   });
-  it("still raises one for a new occurrence, another bill, or no tasks", () => {
-    const tasks = [{ id: "t1", title, dueDate: "2026-11-30", status: "done" }];
-    expect(hasBillReminderFor(tasks, title, "2026-12-30")).toBe(false);
-    expect(hasBillReminderFor(tasks, "Bill due: Netflix", "2026-11-30")).toBe(false);
-    expect(hasBillReminderFor([], title, "2026-11-30")).toBe(false);
-    expect(hasBillReminderFor(tasks, title, null)).toBe(false);
+
+  it("leaves alone anything a person typed or changed", () => {
+    const no = (over: Record<string, unknown>) =>
+      expect(isGeneratedBillReminderTask({ ...generated, ...over }, isBill), JSON.stringify(over)).toBe(false);
+    no({ status: "done" });                                  // history stays
+    no({ title: "Pay insurance before Friday" });            // their own words
+    no({ title: "Bill due: " });                             // no name: not the scan's
+    no({ linkedProfiles: [] });                              // not tied to a bill
+    no({ linkedProfiles: ["bill-1", "person-1"] });          // they linked someone
+    no({ linkedProfiles: ["car-1"] });                       // linked to a non-bill
+    no({ priority: "medium" });                              // re-prioritised
+    no({ dueTime: "17:30" });                                // retimed
+    no({ dueDate: null });                                   // undated
+    no({ description: "Call them first" });                  // annotated
+    no({ tags: ["recur:monthly"] });                         // their recurring task
+    no({ source: "chat" });                                  // created elsewhere
   });
-  it("the due scan asks this rule, not an open-only check", async () => {
+
+  it("the scan creates no task and trashes generated ones", async () => {
     const { readFileSync } = await import("fs");
     const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
-    expect(src).toContain("hasBillReminderFor(existingTasks, title, due)");
-    expect(src).not.toMatch(/t\.title === title && String\(t\.dueDate \|\| ""\)\.slice\(0, 10\) === due && t\.status !== "done"/);
+    const from = src.indexOf("async function runLiabilityDueScan()");
+    const scan = src.slice(from, src.indexOf("const cronLiabilityDueScan", from));
+    expect(from).toBeGreaterThan(-1);
+    expect(scan.length).toBeGreaterThan(500);
+    expect(scan).not.toContain("createTask(");
+    expect(scan).toContain("isGeneratedBillReminderTask(t,");
+    expect(scan).toContain("scoped.deleteTask(String(t.id))");
   });
 });

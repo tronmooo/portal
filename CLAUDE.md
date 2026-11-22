@@ -106,10 +106,9 @@ green. After a push to `main`:
    document row and its "Expired: …" alert are dismissed together, into the
    server's `dismissed_notifications` list (`useDismissedAlerts`), and every
    dismissed alert can be restored (`DismissedAlertsList`). Never write a new
-   dismissal to localStorage (`lib/docSnooze.ts` is read-only legacy), and
-   never raise a bill reminder a second time for an occurrence whose reminder
-   was ticked done (`hasBillReminderFor`). (2026-11-22: a dismissed Home Depot
-   expiration came back as its alert twin.)
+   dismissal to localStorage (`lib/docSnooze.ts` is read-only legacy).
+   (2026-11-22: a dismissed Home Depot expiration came back as its alert
+   twin.)
    *Guards:* `tests/dismiss-stays-dismissed.test.ts`,
    `tests/dashboard-done-means-gone.dom.test.tsx`.
 9. **Ownership has one writer** (`server/ownership-writer.ts`). Profile
@@ -409,10 +408,24 @@ bank's amount in place and never becomes a second expense. A transaction id
 matched once answers the same payment again and writes nothing.
 
 **A6. Quiet unless something is wrong.** An upcoming Auto Pay bill is not in
-Needs Attention and raises no reminder task or due-soon alert
-(`isQuietAutoPayBill`, `wantsDueReminders`) unless the user turned "Remind me
-anyway" on. An overdue Auto Pay bill and a missed payment are the exceptions
-that show. Turning Auto Pay off stops future recording only.
+Needs Attention and raises no due-soon alert (`isQuietAutoPayBill`) unless
+the user turned "Remind me anyway" on. A payment marked missed is the
+exception that shows. Turning Auto Pay off stops future recording only.
+
+**A7. A bill is not a task, and a list names its next date.** No bill ever
+becomes a task: the due scan creates none and moves the "Bill due: <name>"
+tasks it used to generate to Trash (`isGeneratedBillReminderTask`,
+`shared/bill-reminders.ts` — the scan's exact fingerprint, never a task a
+person typed or edited). A recurring bill's elapsed due date is ASSUMED PAID
+(owner, 2026-11-21 for Finance, 2026-11-22 everywhere): every list, the bell
+and the month's still-to-pay total read the bill through `rollBillsForward` /
+`nextBillDate` (`shared/bills-timeline.ts`), so nothing shows "115d overdue"
+or counts five months of a subscription in one month's Expenses. It is a READ
+rule: the stored date still moves only on pay / skip / missed. The dashboard
+Money card has no Pay button; a row opens Bills & Payments (`BillsDuePopup`),
+the Finance tab's panel.
+*Guards:* `tests/bills-next-date.test.ts`, `tests/dismiss-stays-dismissed.test.ts`,
+`tests/executive-sections.test.tsx`.
 
 ## Record details rules (a characteristic is a typed, reportable value on any record)
 

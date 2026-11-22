@@ -60,7 +60,9 @@ import { BubbleSkeleton } from "@/components/ui/skeleton";
 //     Finance tab opens. Nothing here is a second version of an existing
 //     screen, and a label never opens a different category's panel.
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
-import { BillsPopup, EventsPopup, DocsPopup, dedupeBills } from "@/components/dashboard/BriefingPopups";
+import { EventsPopup, DocsPopup, dedupeBills } from "@/components/dashboard/BriefingPopups";
+import { BillsDuePopup } from "@/components/finance/MoneyPopups";
+import { readBillsTimeline } from "@/components/finance/BillsTimelineView";
 import { NetWorthPopup } from "@/components/dashboard/HeroKPIPopups";
 import { CashFlowView } from "@/components/finance/CashFlowView";
 import { WellnessPopup, type WellnessPopupKind, type WellnessPopupData } from "@/components/wellness/WellnessPopups";
@@ -995,7 +997,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
   const sections = useMemo(
     () => {
-      const built = buildExecutiveSections(sectionInput, prefs);
+      // A bill is information here, not a button (owner, 2026-11-22: "No
+      // payment checkboxes"). Its row opens Bills & Payments, and a payment is
+      // recorded on the bill's own page — the Finance tab's rule since
+      // 2026-11-21. So a routed bill row never carries Pay on this tab.
+      const built = buildExecutiveSections(sectionInput, prefs).map((sec) => ({
+        ...sec,
+        items: sec.items.map((i) => (i.kind === "bill" && i.action?.kind === "pay"
+          ? { ...i, action: { kind: "open" as const, label: "Open" } } : i)),
+      }));
       if (goneKeys.size === 0) return built;
       return built
         .map((sec) => ({ ...sec, items: sec.items.filter((i) => !goneKeys.has(i.key)) }))
@@ -1212,11 +1222,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // window — overdue first, in red, with the two-tap Pay — not just the
   // not-yet-due part.
   const billsDueSoon = selectUpcomingBills(allBills as any[])
-    .filter((b: any) => !goneKeys.has(`bill:${b.id}`))
+    // What is coming. The server sends each bill at its next date (an elapsed
+    // date is assumed paid); a payload from before that rule is held to it too.
+    .filter((b: any) => (b.daysUntil ?? 0) >= 0)
     .sort((a: any, b: any) => (a.daysUntil ?? 0) - (b.daysUntil ?? 0));
-  const overdueBillCount = billsDueSoon.filter((b: any) => (b.daysUntil ?? 0) < 0).length;
-  const billItemFor = (id: string): AttentionItem | undefined =>
-    [...secItems("immediate"), ...secItems("bills")].find((i) => i.kind === "bill" && i.sourceKey === `obligation:${id}`);
+  // Upcoming and past payments, from the server (shared/bills-timeline) — the
+  // panel a bill row opens, the same one the Finance tab shows.
+  const billsTimeline = readBillsTimeline(enhanced?.financeSnapshot);
 
   // Documents
   // Grouped to ONE CARD PER RECORD PER DAY so this card, its count and the
@@ -2025,7 +2037,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 ))}
               </div>
               <p className="micro-label text-muted-foreground mt-1.5 mb-1">
-                Bills{overdueBillCount > 0 && <span className="text-red-500"> · {overdueBillCount} overdue</span>}
+                Upcoming payments
               </p>
               {billsDueSoon.length === 0 ? (
                 <p className="text-[12px] text-muted-foreground">{UPCOMING_BILLS_EMPTY_COPY}.</p>
@@ -2033,11 +2045,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 <div className={LIST}>
                   {billsDueSoon.slice(0, CARD_ROWS).map((b: any) => {
                     const hsl = tonePalette(toneForDays(b.daysUntil));
-                    const overdue = (b.daysUntil ?? 0) < 0;
-                    // The routed row for this bill carries its Pay action (two
-                    // taps, autopay → none) — the same onAction path the
-                    // attention list used, so paying behaves identically.
-                    const item = billItemFor(b.id);
                     return (
                       <div
                         key={b.id}
@@ -2052,17 +2059,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                         <RowIcon icon={Receipt} hsl={hsl} />
                         <span className="flex-1 min-w-0 flex items-center gap-2">
                           <span className="text-[13px] font-semibold leading-tight truncate flex-1 min-w-0">{b.name}</span>
-                          <span className={`text-[11px] truncate shrink-0 max-w-[55%] ${overdue ? "text-red-500 font-semibold" : "text-muted-foreground"}`}>
-                            {overdue ? `${Math.abs(b.daysUntil)}d overdue`
-                              : b.daysUntil === 0 ? "Due today" : `Due ${fmtShortDate(dateFromDays(b.daysUntil))}`}
+                          <span className="text-[11px] truncate shrink-0 max-w-[55%] text-muted-foreground">
+                            {b.daysUntil === 0 ? "Due today" : `Due ${fmtShortDate(dateFromDays(b.daysUntil))}`}
                           </span>
                         </span>
-                        <span className="shrink-0 text-[13px] font-bold tabular-nums" style={overdue ? { color: `hsl(${hsl})` } : undefined}>
+                        <span className="shrink-0 text-[13px] font-bold tabular-nums">
                           {formatMoney(Number(b.amount || 0))}
                         </span>
-                        {item && item.action?.kind === "pay" && (
-                          <ActionButton item={item} busy={busyKeys.has(item.key)} armed={armedKey === item.key} onAction={onAction} />
-                        )}
                       </div>
                     );
                   })}
@@ -2277,7 +2280,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           initialTab={taskFocus?.tab ?? "today"} focusTaskId={taskFocus?.id ?? null} />
       )}
       {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
-      {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={allBills} />}
+      {popup === "bills" && <BillsDuePopup open onOpenChange={(o: boolean) => !o && setPopup(null)} timeline={billsTimeline} />}
       {popup === "events" && <EventsPopup open onClose={() => setPopup(null)} items={timeline} todayStr={todayStr} />}
       {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={visibleDocs} />}
       {popup === "networth" && <NetWorthPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode as "all" | "selected" | "everyone"} filterIds={ids} />}

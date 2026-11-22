@@ -279,6 +279,7 @@ export default defineConfig({
       'tests/document-open-perf.test.ts',
       'tests/attention.test.ts',
       'tests/dismiss-stays-dismissed.test.ts',
+      'tests/bills-next-date.test.ts',
       // Dynamic asset & liability Overview composition (2026-08-26).
       'tests/overview-compose.test.ts',
       'tests/overview-engine.test.ts',

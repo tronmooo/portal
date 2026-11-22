@@ -194,7 +194,7 @@ import { ProfileLinkFailure } from "./profile-link-failure";
 import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
-import { hasBillReminderFor } from "@shared/bill-reminders";
+import { isGeneratedBillReminderTask } from "@shared/bill-reminders";
 import { buildNotifications, mergeDismissedNotifications, restoreDismissedNotifications, listDismissedAlerts } from "./notification-service";
 import {
   createNote, updateNote, deleteNote, listNotes,
@@ -2656,7 +2656,7 @@ export async function registerRoutes(
       return { advanced, ended, remindersRetired, users: users.length };
   }
 
-  async function runLiabilityDueScan(): Promise<{ autopaid: number; reminded: number }> {
+  async function runLiabilityDueScan(): Promise<{ autopaid: number; reminded: number; retired: number }> {
       const { createClient } = await import("@supabase/supabase-js");
       const url = process.env.VITE_SUPABASE_URL;
       const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -2668,7 +2668,11 @@ export async function registerRoutes(
       const { createScopedStorage, requestStorageContext } = await import("./storage");
 
       let autopaid = 0;
-      let reminded = 0;
+      // Always 0 now: the scan raises no reminder tasks. Kept in the answer
+      // so the cron's callers and logs keep their shape.
+      const reminded = 0;
+      /** Generated "Bill due" tasks moved to Trash by this run. */
+      let retired = 0;
       for (const u of users) {
         try {
           const scoped = createScopedStorage(u.id);
@@ -2699,6 +2703,19 @@ export async function registerRoutes(
                 // Doubles left by earlier overlapping runs (D260) heal here,
                 // whether or not this run writes anything else for the user.
                 if (await collapseDuplicateBillReminders(scoped, log, existingTasks).catch(() => 0)) userWrote = true;
+                // The "Bill due: <name>" tasks earlier scans generated are
+                // retired (moved to Trash, so nothing is lost): bills are not
+                // tasks. Only the scan's own fingerprint matches — a task the
+                // user typed is left alone (shared/bill-reminders).
+                {
+                  // Paused and ended bills count: their reminders are just as stale.
+                  const billIds = new Set<string>(profiles.filter((p: any) => isRecurringBillProfile(p)).map((p: any) => String(p.id)));
+                  const knownIds = new Set<string>(profiles.map((p: any) => String(p.id)));
+                  for (const t of existingTasks) {
+                    if (!isGeneratedBillReminderTask(t, (id: string) => billIds.has(id) || !knownIds.has(id))) continue;
+                    try { if (await scoped.deleteTask(String(t.id))) { userWrote = true; retired++; } } catch { /* best effort */ }
+                  }
+                }
                 for (const bill of bills) {
                   const f: any = bill.fields || {};
                   // `dueKey` addresses the occurrence (its anchor day); `due`
@@ -2734,40 +2751,14 @@ export async function registerRoutes(
                       if (paid?.ok && !paid.deduped && paid.amount > 0) autopaid++;
                     } catch { /* per-bill best effort */ }
                   }
-                  // Auto Pay raises no reminder unless the user asked to keep
-                  // them — and never one for the occurrence it just recorded.
-                  if (paidNow || !wantsDueReminders(f)) {
-                    continue;
-                  } else {
-                    // Non-autopay: surface a timed TASK at the due date, deduped
-                    // on title + date. A task is checkable and lands on the
-                    // calendar at its hour; the reminder rows this used to write
-                    // were neither.
-                    const title = `Bill due: ${bill.name}`;
-                    // An occurrence already paid or skipped needs no reminder.
-                    // Creating one anyway made the next run close it (D92) and
-                    // the run after that create it again — a churn of reminder
-                    // tasks for a bill whose date sits on a settled day.
-                    if (isSettledOccurrence(f, dueKey)) continue;
-                    // A reminder the user ticked done counts too: it was their
-                    // answer for this occurrence. Looking only at open tasks
-                    // made the next run create the same reminder again — the
-                    // "I marked it done and it came back" report (2026-11-22).
-                    const dup = hasBillReminderFor(existingTasks, title, due);
-                    if (!dup) {
-                      try {
-                        await scoped.createTask({
-                          title,
-                          priority: "high",
-                          dueDate: due,
-                          dueTime: "09:00",
-                          linkedProfiles: [bill.id],
-                        } as any);
-                        reminded++;
-                        userWrote = true;
-                      } catch { /* best effort */ }
-                    }
-                  }
+                  // No reminder TASK is raised for a bill (owner, 2026-11-22:
+                  // "bills belong to Finance and the Calendar, not Tasks").
+                  // A bill coming due is said by the bell's due-soon alert and
+                  // listed under Money; Auto Pay stays quiet unless "Remind me
+                  // anyway" is on (A6). The scan used to create a "Bill due:
+                  // <name>" task here for every bill at or past its date,
+                  // however old, which is what filled the Tasks card.
+                  void paidNow;
                 }
                 if (userWrote) {
                   // An overlapping run may have created the same reminder
@@ -2781,7 +2772,7 @@ export async function registerRoutes(
           });
         } catch { /* skip user */ }
       }
-      return { autopaid, reminded };
+      return { autopaid, reminded, retired };
   }
   const cronLiabilityDueScan: any = asyncHandler(async (req: any, res: any) => {
     if (!cronAuthorized(req)) {

@@ -94,7 +94,16 @@ describe("WeeklySummarySection", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe("ExecutiveBriefing", () => {
   const enhancedWith = (over: any = {}) => ({
-    financeSnapshot: { upcomingBills: [{ id: "b1", name: "Phone", amount: 86.5, daysUntil: -2, status: "overdue" }] },
+    // 2026-11-22: the server sends each bill at its NEXT date (an elapsed date
+    // is assumed paid), and the timeline its panel renders.
+    financeSnapshot: {
+      upcomingBills: [{ id: "b1", name: "Phone", amount: 86.5, daysUntil: 2, status: "upcoming" }],
+      billsTimeline: {
+        upcoming: [{ key: "b1:next", billId: "b1", name: "Phone", amount: 86.5, date: "2099-01-03", daysUntil: 2,
+          frequency: "monthly", category: "utilities", kind: "bill", autopay: false, linkedLiabilityId: "b1", state: "upcoming" }],
+        past: [],
+      },
+    },
     expiringDocuments: [{ documentId: "d1", name: "Passport", documentName: "Passport", daysUntil: 12 }],
     ...over,
   });
@@ -140,7 +149,9 @@ describe("ExecutiveBriefing", () => {
     }
   });
 
-  it("keeps bills out of Needs Attention: an overdue bill leads the Money card instead", async () => {
+  // 2026-11-22 (owner): "Show the next scheduled payments, not an accumulating
+  // backlog of old bill occurrences." The Money card lists what is coming.
+  it("keeps bills out of Needs Attention: the Money card lists the next payment, with no overdue backlog", async () => {
     await mount(enhancedWith());
     const attn = screen.getByTestId("exec-card-attention");
     expect(attn.textContent).toContain("Expirations & renewals");
@@ -150,8 +161,23 @@ describe("ExecutiveBriefing", () => {
     const row = screen.getByTestId("exec-money-bill-b1");
     expect(money.contains(row)).toBe(true);
     expect(row.textContent).toContain("Phone");
-    expect(row.textContent).toContain("2d overdue");
-    expect(money.textContent).toContain("1 overdue");
+    expect(row.textContent).toMatch(/Due [A-Z][a-z]{2} \d{1,2}/);
+    expect(money.textContent).toContain("Upcoming payments");
+    expect(money.textContent).not.toMatch(/overdue/i);
+  });
+
+  it("never shows a months-old occurrence, even from a payload that still carries one", async () => {
+    await mount(enhancedWith({
+      financeSnapshot: { upcomingBills: [
+        { id: "old", name: "Spotify Premium", amount: 11, daysUntil: -115, status: "overdue" },
+        { id: "next", name: "Netflix", amount: 9.99, daysUntil: 9, status: "upcoming" },
+      ] },
+    }));
+    const money = screen.getByTestId("exec-card-money");
+    expect(screen.getByTestId("exec-money-bill-next").textContent).toContain("Netflix");
+    expect(screen.queryByTestId("exec-money-bill-old")).toBeNull();
+    expect(money.textContent).not.toMatch(/overdue/i);
+    expect(screen.getByTestId("exec-view-bills").textContent).toBe("View all bills");
   });
 
   it("lists an expiring document once — under Needs Attention — and the Documents card counts it", async () => {
@@ -324,33 +350,22 @@ describe("ExecutiveBriefing", () => {
     expect(screen.getByTestId("exec-card-upcoming").textContent).not.toContain("Internet");
   });
 
-  it("opens the Bills popup — stats, filters, expandable rows — from a bill row", async () => {
+  it("opens Bills & Payments — the Finance tab's panel — from a bill row", async () => {
     await mount(enhancedWith());
-    // Tapping a bill row anywhere on the tab opens the Bills drill-down.
     fireEvent.click(screen.getByTestId("exec-money-bill-b1"));
-    expect(await screen.findByTestId("bills-popup")).toBeTruthy();
-    // The mock's four headline stats.
-    for (const id of ["bills-stat-total", "bills-stat-soon", "bills-stat-overdue", "bills-stat-paid"]) {
-      expect(screen.getByTestId(id), id).toBeTruthy();
-    }
-    // Filter chips narrow the list; the overdue Phone bill stays visible under
-    // Overdue, and pressing its row reveals the detail card with real actions.
-    fireEvent.click(screen.getByTestId("bills-filter-overdue"));
-    fireEvent.click(screen.getByTestId("bill-row-b1"));
-    expect(screen.getByTestId("popup-pay-b1")).toBeTruthy();
-    expect(screen.getByTestId("popup-edit-b1")).toBeTruthy();
-    // The footer offers Add Bill and the full Bills page.
-    expect(screen.getByTestId("bills-add")).toBeTruthy();
-    expect(screen.getByTestId("bills-view-all")).toBeTruthy();
+    const panel = await screen.findByTestId("popup-bills");
+    // Upcoming and past payments, from the server's timeline.
+    expect(within(panel).getByTestId("bills-timeline").textContent).toContain("Phone");
+    // No Pay button anywhere in it: a row opens the bill.
+    expect(panel.querySelector('[data-testid^="popup-pay-"]')).toBeNull();
+    expect(panel.textContent).not.toMatch(/overdue/i);
   });
 
-  it("offers a one-tap action on a row, and arms a payment before taking it", async () => {
+  it("a bill row is information, not a button: no Pay on the Money card", async () => {
     await mount(enhancedWith());
-    const pay = screen.getByTestId("exec-action-bill:b1");
-    expect(pay.textContent).toContain("Pay");
-    // Money moves on the second tap, never the first.
-    fireEvent.click(pay);
-    expect(screen.getByTestId("exec-action-bill:b1").textContent).toContain("Confirm");
+    expect(screen.getByTestId("exec-money-bill-b1")).toBeTruthy();
+    expect(screen.queryByTestId("exec-action-bill:b1")).toBeNull();
+    expect(screen.getByTestId("exec-card-money").querySelector('[data-testid^="exec-action-bill:"]')).toBeNull();
   });
 
   it("shows a real all-clear when nothing needs attention", async () => {
@@ -362,11 +377,11 @@ describe("ExecutiveBriefing", () => {
   it("hides QA bills and collapses the duplicate-bill pair (2026-07-29 report)", async () => {
     await mount(enhancedWith({
       financeSnapshot: { upcomingBills: [
-        { id: "b1", name: "Verizon Phone Bill payment", amount: 86.5, daysUntil: -3, status: "overdue" },
-        { id: "b2", name: "Phone Bill payment", amount: 86.5, daysUntil: -3, status: "overdue" },
+        { id: "b1", name: "Verizon Phone Bill payment", amount: 86.5, daysUntil: 3, status: "upcoming" },
+        { id: "b2", name: "Phone Bill payment", amount: 86.5, daysUntil: 3, status: "upcoming" },
         { id: "b3", name: "QA Test Subscription", amount: 15.99, daysUntil: 5, status: "upcoming" },
-        { id: "b4", name: "rent the 1st", amount: 2500, daysUntil: -28, status: "overdue" },
-        { id: "b5", name: "rent", amount: 300, daysUntil: 3, status: "upcoming" },
+        { id: "b4", name: "rent the 1st", amount: 2500, daysUntil: 1, status: "upcoming" },
+        { id: "b5", name: "rent", amount: 300, daysUntil: 6, status: "upcoming" },
       ] },
       expiringDocuments: [],
     }));
@@ -379,7 +394,7 @@ describe("ExecutiveBriefing", () => {
     // Different amounts ($2,500 vs $300) are NOT collapsed — user must reconcile.
     expect(all).toContain("rent the 1st");
     expect(all).toContain("$300");
-    // Every bill — overdue first — sits in the Money card; none in Needs Attention.
+    // Every bill — soonest first — sits in the Money card; none in Needs Attention.
     const money = screen.getByTestId("exec-card-money").textContent || "";
     expect(money).toContain("rent the 1st");
     expect(money).toContain("$300");
@@ -673,7 +688,7 @@ describe("ExecutiveBriefing", () => {
     it("Bills — a bill row opens Bills, and Bills only", async () => {
       await mount(enhancedWith());
       fireEvent.click(screen.getByTestId("exec-money-bill-b1"));
-      expect(await screen.findByTestId("bills-popup")).toBeTruthy();
+      expect(await screen.findByTestId("popup-bills")).toBeTruthy();
       expect(screen.queryByTestId("upcoming-popup")).toBeNull();
     });
 
