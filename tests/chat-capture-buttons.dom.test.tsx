@@ -16,7 +16,7 @@ const PEOPLE = [
   { id: "bob-1", name: "Bob" },
 ];
 
-function Harness({ onSubmit }: { onSubmit: (text: string, capture: CaptureMode, profileId: string) => void }) {
+function Harness({ onSubmit, onFillEdit }: { onSubmit: (text: string, capture: CaptureMode, profileId: string) => void; onFillEdit?: () => void }) {
   const [capture, setCapture] = React.useState<CaptureMode>(null);
   const [profileId, setProfileId] = React.useState("");
   return (
@@ -33,6 +33,7 @@ function Harness({ onSubmit }: { onSubmit: (text: string, capture: CaptureMode, 
       captureProfileId={profileId}
       onCaptureProfileChange={setProfileId}
       captureProfiles={PEOPLE}
+      onFillEdit={onFillEdit}
     />
   );
 }
@@ -85,5 +86,43 @@ describe("Journal / Note buttons", () => {
     fireEvent.click(screen.getByTestId("button-capture-note"));
     expect(screen.getByTestId("button-capture-note").getAttribute("aria-pressed")).toBe("false");
     expect(screen.getByTestId("button-send").textContent).toMatch(/Send/);
+  });
+});
+
+// Owner request 2026-11-22: Document and Fill & Edit beside Journal.
+describe("Document and Fill & Edit buttons", () => {
+  it("Document on: the box says what will happen, there is no For menu, and the send is a document request", () => {
+    const sent = vi.fn();
+    render(<Harness onSubmit={sent} />);
+    fireEvent.click(screen.getByTestId("button-capture-document"));
+    expect(screen.getByTestId("button-capture-document").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("capture-hint").textContent).toMatch(/left as a marked blank, never guessed/);
+    expect(screen.getByTestId("capture-hint").textContent).not.toMatch(/start with a name/);
+    expect(screen.queryByTestId("select-capture-profile")).toBeNull();
+    expect(screen.getByTestId("button-send").textContent).toMatch(/Write document/);
+    fireEvent.change(screen.getByTestId("input-chat"), { target: { value: "a cover letter" } });
+    fireEvent.click(screen.getByTestId("button-send"));
+    expect(sent).toHaveBeenCalledWith("a cover letter", "document", "");
+  });
+
+  it("one mode at a time: Document turns Journal off", () => {
+    render(<Harness onSubmit={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("button-capture-journal"));
+    fireEvent.click(screen.getByTestId("button-capture-document"));
+    expect(screen.getByTestId("button-capture-journal").getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByTestId("button-capture-document").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("Fill & Edit opens the file picker and changes no mode", () => {
+    const pick = vi.fn();
+    render(<Harness onSubmit={vi.fn()} onFillEdit={pick} />);
+    fireEvent.click(screen.getByTestId("button-fill-edit"));
+    expect(pick).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("capture-hint")).toBeNull();
+  });
+
+  it("no Fill & Edit handler, no button", () => {
+    render(<Harness onSubmit={vi.fn()} />);
+    expect(screen.queryByTestId("button-fill-edit")).toBeNull();
   });
 });

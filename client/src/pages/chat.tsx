@@ -63,7 +63,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ChatComposer, type ChatComposerHandle } from "@/components/chat/ChatComposer";
+import { ChatComposer, type ChatComposerHandle, type CaptureMode } from "@/components/chat/ChatComposer";
 import { streamChat } from "@/components/chat/chat-stream";
 import { isDuplicateResend, type LastSend } from "@shared/chat-progress";
 import { ThinkingBubble } from "@/components/chat/ThinkingBubble";
@@ -2552,11 +2552,32 @@ export default function ChatPage() {
   // Journal / Note button. The mode stays on until tapped off, so several
   // entries can be written in a row; it is never persisted (a reload starts
   // in ordinary chat, so a question is never silently saved as a journal).
-  const [captureMode, setCaptureMode] = useState<"journal" | "note" | null>(null);
+  const [captureMode, setCaptureMode] = useState<CaptureMode>(null);
   const [captureProfileId, setCaptureProfileId] = useState<string>("");
 
   // Smart Fill PDF — staged PDF that will be passed to the dialog
   const [smartFillFile, setSmartFillFile] = useState<{ name: string; mimeType: string; base64: string } | null>(null);
+  const fillEditInputRef = useRef<HTMLInputElement>(null);
+  const handleFillEditSelect = (e: { target: HTMLInputElement }) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const isForm = file.type === "application/pdf" || file.type.startsWith("image/");
+    if (!isForm) {
+      toast({ title: "That file can't be filled in yet", description: "Fill & Edit reads PDF forms and photos of forms.", variant: "destructive" });
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast({ title: "File too large", description: "Fill & Edit takes files up to 10 MB.", variant: "destructive" });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => toast({ title: "Couldn't read that file", variant: "destructive" });
+    reader.onload = () => {
+      const data = String(reader.result || "");
+      setSmartFillFile({ name: file.name, mimeType: file.type, base64: data.includes(",") ? data.split(",").pop() || "" : data });
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Track batch processing progress
   const [batchProcessedCount, setBatchProcessedCount] = useState(0);
@@ -2727,7 +2748,7 @@ export default function ChatPage() {
   }, [profiles, selectedProfileId]);
 
   const chatMutation = useMutation({
-    mutationFn: async ({ message, userMsgId, capture }: { message: string; userMsgId: string; capture?: ChatMessage["capture"] }) => {
+    mutationFn: async ({ message, userMsgId, capture, workspace }: { message: string; userMsgId: string; capture?: ChatMessage["capture"]; workspace?: ChatMessage["workspace"] }) => {
       // Build conversation history for multi-step context.
       // Bug fix: setMessages is async, so the `messages` closure here still reflects state
       // BEFORE the user message was appended in handleSend. So we DON'T need slice(0,-1) —
@@ -2776,6 +2797,8 @@ export default function ChatPage() {
           sourceMessageId: userMsgId,
           // Journal / Note button: the server saves the message as that.
           ...(capture ? { capture } : {}),
+          // Document button: the server drafts a document from the request.
+          ...(workspace ? { workspace } : {}),
         },
         {
           onRound: () => { markFirstFrame(); liveResetPendingRef.current = true; },
@@ -2859,7 +2882,7 @@ export default function ChatPage() {
     if (sendingRef.current) return;
     setMessages((prev) => prev.map((m) => (m.id === msg.id ? ({ ...m, failed: false, pending: true } as ChatMessage) : m)));
     sendingRef.current = true;
-    chatMutation.mutate({ message: msg.content, userMsgId: msg.id, capture: msg.capture });
+    chatMutation.mutate({ message: msg.content, userMsgId: msg.id, capture: msg.capture, workspace: msg.workspace });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setMessages, chatMutation.mutate]);
 
@@ -3661,7 +3684,9 @@ export default function ChatPage() {
       // Rule 22: pending until the run settles. Survives navigation and reload
       // through the chat cache, so the page can restore the run on return.
       pending: true,
-      ...(captureMode ? { capture: { kind: captureMode, ...(captureProfileId ? { profileId: captureProfileId } : {}) } } : {}),
+      ...(captureMode === "document"
+        ? { workspace: { mode: "document" as const } }
+        : captureMode ? { capture: { kind: captureMode, ...(captureProfileId ? { profileId: captureProfileId } : {}) } } : {}),
     };
 
     // ✨ Smart Fill in-thread: if intent + recent PDF/image attached, surface chip.
@@ -3694,7 +3719,7 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, userMsg]);
     sendingRef.current = true; // lock BEFORE mutate so a rapid second send can't slip through
     lastSendRef.current = { text: msg, at: Date.now() };
-    chatMutation.mutate({ message: msg, userMsgId: userMsg.id, capture: userMsg.capture });
+    chatMutation.mutate({ message: msg, userMsgId: userMsg.id, capture: userMsg.capture, workspace: userMsg.workspace });
     return true;
   };
 
@@ -3787,6 +3812,17 @@ export default function ChatPage() {
         className="hidden"
         onChange={handleFileSelect}
         data-testid="input-file-add-more"
+      />
+      {/* Fill & Edit: a form (PDF or a photo of one) goes straight to Smart
+          Fill, which shows every field and where its value came from before
+          anything is saved. */}
+      <input
+        ref={fillEditInputRef}
+        type="file"
+        accept="application/pdf,image/*"
+        className="hidden"
+        onChange={handleFillEditSelect}
+        data-testid="input-fill-edit"
       />
       {/* Camera capture input (mobile) */}
       <input
@@ -4055,6 +4091,7 @@ export default function ChatPage() {
           captureProfileId={captureProfileId}
           onCaptureProfileChange={setCaptureProfileId}
           captureProfiles={captureProfiles}
+          onFillEdit={() => { preloadSmartFillDialog(); const el = fillEditInputRef.current; if (el) { el.value = ""; el.click(); } }}
         />
       )}
       </div>

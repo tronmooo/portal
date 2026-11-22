@@ -419,6 +419,21 @@ the buttons and the manual forms); else the first clause of the text
 not mid-sentence.
 *Guards:* `tests/journal-entries-routes.test.ts`, `tests/chat-capture-buttons.test.ts`.
 
+**J9. The Document button writes from what is on file, and never guesses.**
+With Document on, the chat box sends `workspace: { mode: "document" }` and the
+server drafts ONE document (`draftDocumentFromButton`,
+`server/workspace-document.ts`): one bounded model call, no tool loop, nothing
+else logged from the text. A personal fact that is not on file is written as
+`[Missing: …]`; the blanks the reply lists are read back from the saved text
+(`documentBlanks`, `shared/workspace-document.ts`), not from the model. The
+saved HTML is only what the editor holds (`sanitizeDocumentHtml`). A failed or
+empty draft saves nothing. The doc is an ordinary `doc` artifact: editing and
+PDF / Word export are the editor's (`/editor/:id`). **Fill & Edit** is an
+action, not a mode: it opens a file picker and hands a PDF or photo of a form
+to Smart Fill, whose review screen is the approval step. (Owner, 2026-11-22.
+Not built: a Computer mode, spreadsheet and Word form filling.)
+*Guards:* `tests/chat-document-button.test.ts`, `tests/chat-capture-buttons.dom.test.tsx`.
+
 *Live checks for J1–J8 (deployed app, smoke account):* `npx tsx tests/live-journal-check.ts` (server),
 `npx tsx tests/live-journal-ui-check.ts` (real browser: the buttons, the For menu, the Journal page).
 

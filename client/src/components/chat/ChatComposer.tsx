@@ -21,7 +21,7 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { BookOpen, Camera, Loader2, Mic, Paperclip, RotateCcw, Search, Send, StickyNote } from "lucide-react";
+import { BookOpen, Camera, FileInput, FileText, Loader2, Mic, Paperclip, RotateCcw, Search, Send, StickyNote } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 // Moved verbatim from pages/chat.tsx — the composer is the only consumer.
@@ -128,11 +128,22 @@ interface ChatComposerProps {
   onCaptureProfileChange?: (profileId: string) => void;
   /** The people the "For" menu offers (id + name; the writer is listed as "Me"). */
   captureProfiles?: Array<{ id: string; name: string; isSelf?: boolean }>;
+  /** Fill & Edit: pick a form (PDF or photo) to fill from saved information.
+   *  An action, not a mode: it opens the file picker. */
+  onFillEdit?: () => void;
 }
 
-export type CaptureMode = "journal" | "note" | null;
+/** journal / note: the message is SAVED as that. document: the message is a
+ *  request for a document, written from the saved information. */
+export type CaptureMode = "journal" | "note" | "document" | null;
 
-const CAPTURE_COPY: Record<"journal" | "note", { label: string; placeholder: string; send: string; hint: string }> = {
+const CAPTURE_COPY: Record<"journal" | "note" | "document", { label: string; placeholder: string; send: string; hint: string }> = {
+  document: {
+    label: "Document",
+    placeholder: "What should I write? A cover letter, a résumé, a letter to my landlord…",
+    send: "Write document",
+    hint: "Written from your saved information and saved as a document you can edit and export as PDF or Word. Anything I don't have on file is left as a marked blank, never guessed.",
+  },
   journal: {
     label: "Journal entry",
     placeholder: "Write your journal entry…",
@@ -164,6 +175,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     captureProfileId = "",
     onCaptureProfileChange,
     captureProfiles = [],
+    onFillEdit,
   },
   ref,
 ) {
@@ -262,13 +274,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           {onCaptureChange && ([
             ["journal", "Journal", BookOpen],
             ["note", "Note", StickyNote],
+            ["document", "Document", FileText],
           ] as const).map(([kind, label, Icon]) => (
             <button
               key={kind}
               type="button"
               aria-pressed={capture === kind}
               onClick={() => { onCaptureChange(capture === kind ? null : kind); textareaRef.current?.focus(); }}
-              title={capture === kind ? `${label} mode is on — tap to go back to chat` : `Save my next message as a ${kind === "journal" ? "journal entry" : "note"}`}
+              title={capture === kind ? `${label} mode is on — tap to go back to chat` : kind === "document" ? "Write a document from my next message" : `Save my next message as a ${kind === "journal" ? "journal entry" : "note"}`}
               className={`h-7 px-2.5 rounded-full border text-xs font-medium flex items-center gap-1 transition-colors ${
                 capture === kind
                   ? "bg-primary text-primary-foreground border-primary"
@@ -279,7 +292,19 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               <Icon className="h-3.5 w-3.5" /> {label}
             </button>
           ))}
-          {capture && captureProfiles.length > 1 && (
+          {onFillEdit && (
+            <button
+              type="button"
+              onClick={onFillEdit}
+              disabled={isPending}
+              title="Upload a form (PDF or a photo) and fill it in from my saved information. You review every field before anything is saved."
+              className="h-7 px-2.5 rounded-full border border-border text-xs font-medium flex items-center gap-1 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+              data-testid="button-fill-edit"
+            >
+              <FileInput className="h-3.5 w-3.5" /> Fill &amp; Edit
+            </button>
+          )}
+          {capture && capture !== "document" && captureProfiles.length > 1 && (
             <label className="flex items-center gap-1 text-xs text-muted-foreground">
               For
               <select
@@ -298,7 +323,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         </div>
         {capture && (
           <p className="px-1 pb-1.5 text-[11px] text-muted-foreground" data-testid="capture-hint">
-            {CAPTURE_COPY[capture].hint} You can also start with a name: “Bob’s {capture === "journal" ? "journal" : "note"}: …”.
+            {CAPTURE_COPY[capture].hint}{capture !== "document" && <> You can also start with a name: “Bob’s {capture === "journal" ? "journal" : "note"}: …”.</>}
           </p>
         )}
         {/* Large prominent input box */}
