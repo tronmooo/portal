@@ -460,60 +460,76 @@ describe("ExecutiveBriefing", () => {
       expect(stored.value).toBeNull();
     });
 
-    it("switching quiet mode off shows every card and saves the choice to the account", async () => {
+    // 2026-11-22 (owner): "at the bottom, the customization shouldn't be there.
+    // It should be at the top right" — the ⋮ menu's Customize opens the dialog
+    // (tests/exec-customize-dialog.dom.test.tsx). The tab only APPLIES the
+    // saved choice.
+    it("has no Customize control at the bottom of the tab", async () => {
       const stored = { value: null as string | null };
       stubRoutes({ "/api/preferences/exec_card_prefs": prefsRoute(stored), "/api/tasks": TASKS });
       await mount(enhancedWith());
-      fireEvent.click(await screen.findByTestId("exec-customize-toggle"));
-      expect(stored.value).toBeNull(); // opening the panel wrote nothing
-      const quiet = screen.getByTestId("exec-customize-quiet");
-      expect(quiet.getAttribute("aria-checked")).toBe("true");
-      fireEvent.click(quiet);
-      await waitFor(() => expect(screen.getByTestId("exec-card-documents")).toBeTruthy());
-      await waitFor(() => expect(stored.value).not.toBeNull());
-      expect(JSON.parse(stored.value!)).toEqual({ quiet: false, hidden: [], order: [] });
-      expect(screen.queryByTestId("exec-hidden-documents")).toBeNull();
-      expect(screen.getByTestId("exec-customize-summary").textContent).toContain("8 of 8 cards showing");
+      await waitFor(() => expect(screen.getByTestId("exec-card-tasks")).toBeTruthy());
+      expect(screen.queryByTestId("exec-customize-toggle")).toBeNull();
+      expect(screen.queryByTestId("exec-customize")).toBeNull();
+      expect(screen.getByTestId("executive-briefing").textContent).not.toMatch(/Customize/);
     });
 
-    it("hides one card, says so, and remembers it on the next visit", async () => {
-      const stored = { value: JSON.stringify({ quiet: false, hidden: [], order: [] }) as string | null };
+    it("applies a saved choice: a hidden card is off the tab and named under it", async () => {
+      const stored = { value: JSON.stringify({ quiet: false, hidden: ["money"], order: [] }) as string | null };
       stubRoutes({ "/api/preferences/exec_card_prefs": prefsRoute(stored), "/api/tasks": TASKS });
-      await mount(enhancedWith());
-      fireEvent.click(await screen.findByTestId("exec-customize-toggle"));
-      fireEvent.click(screen.getByTestId("exec-customize-show-money"));
-      await waitFor(() => expect(screen.queryByTestId("exec-card-money")).toBeNull());
-      expect(screen.getByTestId("exec-hidden-cards").textContent).toContain("Hidden by you:");
-      expect(screen.getByTestId("exec-hidden-money")).toBeTruthy();
-      await waitFor(() => expect(JSON.parse(stored.value!).hidden).toEqual(["money"]));
-      // A fresh mount reads the saved choice.
-      cleanup();
       await mount(enhancedWith());
       await waitFor(() => expect(screen.getByTestId("exec-card-tasks")).toBeTruthy());
       expect(screen.queryByTestId("exec-card-money")).toBeNull();
+      expect(screen.getByTestId("exec-hidden-cards").textContent).toContain("Hidden by you:");
       expect(screen.getByTestId("exec-hidden-money")).toBeTruthy();
     });
 
-    it("moves a card earlier and applies the order to the grid", async () => {
-      const stored = { value: JSON.stringify({ quiet: false, hidden: [], order: [] }) as string | null };
+    it("applies a saved order and sizes to the grid", async () => {
+      const stored = { value: JSON.stringify({ quiet: false, hidden: [], order: ["money", "attention"], sizes: { tasks: "large", money: "medium" } }) as string | null };
       stubRoutes({ "/api/preferences/exec_card_prefs": prefsRoute(stored), "/api/tasks": TASKS });
       await mount(enhancedWith());
-      // Built-in layout: no explicit order on a card.
-      expect((screen.getByTestId("exec-card-money") as HTMLElement).style.order).toBe("");
-      fireEvent.click(await screen.findByTestId("exec-customize-toggle"));
-      // Money is 4th (attention, tasks, timeline, money): three moves up puts it first.
-      for (const place of [3, 2, 1]) {
-        fireEvent.click(screen.getByTestId("exec-customize-up-money"));
-        await waitFor(() => expect((screen.getByTestId("exec-card-money") as HTMLElement).style.order).toBe(String(place)));
-      }
-      await waitFor(() => expect(JSON.parse(stored.value!).order[0]).toBe("money"));
-      expect((screen.getByTestId("exec-card-money") as HTMLElement).style.order).toBe("1");
-      expect((screen.getByTestId("exec-card-attention") as HTMLElement).style.order).toBe("2");
-      expect((screen.getByTestId("exec-customize-up-money") as HTMLButtonElement).disabled).toBe(true);
-      // Reset returns to the default: quiet mode, built-in order.
-      fireEvent.click(screen.getByTestId("exec-customize-reset"));
-      await waitFor(() => expect(JSON.parse(stored.value!)).toEqual({ quiet: true, hidden: [], order: [] }));
-      expect((screen.getByTestId("exec-card-money") as HTMLElement).style.order).toBe("");
+      await waitFor(() => expect(screen.getByTestId("exec-card-tasks")).toBeTruthy());
+      const card = (id: string) => screen.getByTestId(`exec-card-${id}`) as HTMLElement;
+      expect(card("money").style.order).toBe("1");
+      expect(card("attention").style.order).toBe("2");
+      expect(card("tasks").style.order).toBe("3");
+      // Large takes the full row at every width; Medium is one column.
+      expect(card("tasks").className).toMatch(/(^| )col-span-2( |$)/);
+      expect(card("tasks").className).not.toContain("md:col-span-1");
+      expect(card("money").className).toContain("exec-half");
+      // A card with no size picked keeps the built-in layout.
+      expect(card("attention").className).toContain("exec-half");
+    });
+
+    it("draws a card the user built, from their own records, and it shows in quiet mode too", async () => {
+      const stored = { value: JSON.stringify({ quiet: true, hidden: [], order: [], widgets: [
+        { id: "journal", title: "Recent Journal", icon: "book", source: "journal", limit: 3 },
+      ] }) as string | null };
+      stubRoutes({
+        "/api/preferences/exec_card_prefs": prefsRoute(stored), "/api/tasks": TASKS,
+        "/api/journal": [{ id: "j1", date: today(), title: "A good day at the lake", content: "…", mood: "good", tags: [], createdAt: new Date().toISOString() }],
+      });
+      await mount(enhancedWith());
+      const card = await screen.findByTestId("exec-card-w-journal");
+      await waitFor(() => expect(card.textContent).toContain("A good day at the lake"));
+      expect(card.textContent).toContain("Recent Journal");
+      // Quiet mode still trims the built-in cards.
+      expect(screen.queryByTestId("exec-card-documents")).toBeNull();
+    });
+
+    it("a custom card that cannot load says so, with a retry — never 'nothing here'", async () => {
+      const stored = { value: JSON.stringify({ quiet: true, hidden: [], order: [], widgets: [
+        { id: "journal", title: "Recent Journal", icon: "book", source: "journal", limit: 3 },
+      ] }) as string | null };
+      fetchStub.mockImplementation(async (url: any, opts?: any) => {
+        const u = String(url);
+        if (u.includes("/api/journal")) return new Response(JSON.stringify({ error: "down" }), { status: 500, headers: { "Content-Type": "application/json" } });
+        const body = u.includes("/api/preferences/exec_card_prefs") ? prefsRoute(stored)(u, opts) : [];
+        return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      });
+      await mount(enhancedWith());
+      await waitFor(() => expect(screen.getByTestId("exec-widget-error-journal")).toBeTruthy(), { timeout: 8000 });
+      expect(screen.queryByTestId("exec-widget-empty-journal")).toBeNull();
     });
   });
 

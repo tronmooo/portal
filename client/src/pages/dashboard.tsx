@@ -29,6 +29,7 @@ import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, refreshFilterNames, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { useDocSnoozeMap } from "@/lib/docSnooze";
+import { ExecCustomizeDialog } from "@/components/dashboard/ExecCustomize";
 import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
 import { alertIdsOfDateRow, isDateRowDismissed } from "@shared/alert-ids";
 import { useAlertSnoozes } from "@/hooks/useAlertSnoozes";
@@ -5997,8 +5998,11 @@ export default function DashboardPage() {
       <ChatGPTImportDialog open={chatgptImportOpen} onOpenChange={setChatgptImportOpen} />
 
       {/* Customize Dialog */}
-      <CustomizeDialog open={customizeOpen} onOpenChange={setCustomizeOpen}
-        sections={sections} onSave={(layout) => saveMutation.mutate(layout)} />
+{/* The Executive tab's Customize (owner's design, 2026-11-22): which cards
+          show, their size and order, quiet mode, and cards the user builds. It
+          opens from the ⋮ menu at the top right. The older section-level
+          dialog below it had one section left to arrange. */}
+      <ExecCustomizeDialog open={customizeOpen} onClose={() => setCustomizeOpen(false)} mode={filterMode} ids={filterIds} />
 
       {/* Render sections in order: full-width before grid, then 2-col grid, then full-width after grid.
           Swimlane group headers (💰 Money / 📅 Today / ❤️ Health) are emitted before the first
