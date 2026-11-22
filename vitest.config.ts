@@ -64,6 +64,7 @@ export default defineConfig({
       'tests/journal-composer.dom.test.tsx',
       'tests/journal-entries-routes.test.ts',
       'tests/chat-capture-buttons.test.ts',
+      'tests/chat-document-button.test.ts',
       'tests/chat-capture-buttons.dom.test.tsx',
       'tests/chat-journal-read.test.ts',
       'tests/tracker-card-calories.dom.test.tsx',

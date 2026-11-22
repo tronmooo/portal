@@ -2054,6 +2054,8 @@ export async function registerRoutes(
         ...(req.body?.capture && (req.body.capture.kind === "journal" || req.body.capture.kind === "note")
           ? { capture: { kind: req.body.capture.kind, ...(typeof req.body.capture.profileId === "string" && req.body.capture.profileId ? { profileId: req.body.capture.profileId } : {}) } }
           : {}),
+        // The composer's Document button: draft a document from this request.
+        ...(!req.body?.capture && req.body?.workspace?.mode === "document" ? { workspace: { mode: "document" } } : {}),
         // Forward engine progress frames (round / assistant_delta /
         // tool_start / tool_result) straight onto the SSE stream.
         ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),

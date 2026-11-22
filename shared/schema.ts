@@ -156,6 +156,9 @@ export interface ChatMessage {
   /** Sent with the composer's Journal / Note button on: saved as that, not
    *  interpreted. Kept on the message so a retry saves it the same way. */
   capture?: { kind: "journal" | "note"; profileId?: string };
+  /** Sent with the composer's Document button on: a request for a document.
+   *  Kept on the message so a retry asks for the same thing. */
+  workspace?: { mode: "document" };
   attachment?: {
     name: string;
     mimeType: string;
