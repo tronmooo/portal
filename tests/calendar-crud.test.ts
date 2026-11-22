@@ -166,12 +166,31 @@ describe("each action hits the right API", () => {
     });
   });
 
-  it("completes a task-backed date at its own endpoint", async () => {
-    // Tasks have no per-occurrence storage, so completion is disabled and the
-    // user is told to do it on the task.
-    expect(can(SERIES.task, "complete")).toBe(false);
+  it("completes, skips, moves and ends a recurring task at the task's own endpoints", async () => {
+    // A repeating task records skips and one-date moves on its own row
+    // (shared/recurrence), so the calendar can act on one occurrence.
+    expect(can(SERIES.task, "complete")).toBe(true);
+    await run(SERIES.task, "complete");
+    expect(requests).toEqual([{ method: "PATCH", url: "/api/tasks/t1", body: { status: "done" } }]);
+
+    requests.length = 0;
+    await run(SERIES.task, "skip");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ method: "POST", url: "/api/tasks/t1/occurrence", body: { action: "skip" } });
+
+    requests.length = 0;
+    await run(SERIES.task, "move", "2026-08-01");
+    expect(requests[0]).toMatchObject({
+      method: "POST", url: "/api/tasks/t1/occurrence", body: { action: "move", newDate: "2026-08-01" },
+    });
+
+    // Ending the series is applied to the stored row. It used to PATCH
+    // `tags: ["rpaused"]`, replacing the task's whole tag list — the repeat
+    // rule and the user's own tags went with it.
+    requests.length = 0;
     await run(SERIES.task, "deleteFuture");
-    expect(requests[0]).toMatchObject({ method: "PATCH", url: "/api/tasks/t1" });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ method: "POST", url: "/api/tasks/t1/occurrence", body: { action: "endBefore" } });
   });
 
   it("deletes a one-off timed task rather than pretending it has a series", async () => {

@@ -1,17 +1,25 @@
-// ── The standardized calendar detail panel ───────────────────────────────────
+// ── The calendar detail screen ───────────────────────────────────────────────
 //
-// ONE panel for every kind of date. A birthday, a mortgage payment, a Netflix
-// renewal, a recurring task and a plain event all open the exact same layout,
-// in the same order:
+// ONE screen for every kind of date — a birthday, a mortgage payment, a
+// recurring chore, a plain event — in four connected views:
 //
-//   Source profile · Title · Type · Recurrence · Next occurrence
-//   Full list of future occurrences (each individually actionable)
-//   Edit · Move · Skip · Delete one · Delete future · Delete series
+//   Overview      next date · repeats / ends · completion · upcoming dates
+//   Occurrences   every date with its state  ·  History  ·  Options
+//   This date     Complete · Skip · Change date · Edit future · Delete (one)
+//   Edit          Details · Repeat · Reminders · Advanced (EditSeriesScreen)
+//
+// What changed from the seven-button panel this replaces: an action that does
+// not apply is NOT ON THE SCREEN. A birthday used to show five greyed-out
+// buttons whose reasons lived in hover tooltips a phone never shows; now it
+// shows Edit and More. Each per-date action says how far it reaches ("Keep
+// future schedule", "Move just this occurrence"), and skipping never deletes:
+// the date is recorded as skipped and the series keeps running.
 //
 // Nothing here computes dates. Occurrences come from the one engine
-// (shared/calendar-occurrences); which actions are live comes from the one
-// capability matrix (shared/calendar-capabilities); performing them is routed
-// by client/src/lib/calendar-mutations. This component only renders.
+// (shared/calendar-occurrences); what is offered comes from the one capability
+// matrix (shared/calendar-capabilities `occurrenceMenuFor`); performing an
+// action is routed by client/src/lib/calendar-mutations; history is derived
+// from the series' own marks (shared/occurrence-history). This renders.
 
 import { ownerLabelForDatedItem } from "@shared/birthday-event";
 import { useMemo, useState } from "react";
@@ -19,106 +27,84 @@ import { useLocation } from "wouter";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Medallion } from "@/components/dashboard/visuals";
+import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/format";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
+import { useConfirmArm } from "@/hooks/useConfirmArm";
 import {
-  Cake, CalendarHeart, CreditCard, Receipt, Wallet, RefreshCw, Wrench,
-  Stethoscope, Bell, CheckSquare, FileText, CalendarDays, Repeat,
-  Check, SkipForward, Trash2, CalendarClock, Pencil, ExternalLink, ChevronRight,
+  ArrowLeft, Bell, CalendarClock, CalendarDays, Check, ChevronRight, ChevronsRight,
+  ExternalLink, History as HistoryIcon, Infinity as InfinityIcon, MoreHorizontal,
+  Pencil, Repeat, RotateCcw, Scissors, Tag, Trash2, X,
 } from "lucide-react";
 import {
-  KIND_LABELS, relativeDayLabel,
-  type CalendarOccurrence, type CalendarSeries, type OccurrenceKind,
+  KIND_LABELS, relativeDayLabel, isPaymentKind,
+  type CalendarOccurrence, type CalendarSeries,
 } from "@shared/calendar-occurrences";
 import {
-  capabilitiesFor, ACTION_LABELS, hasPerOccurrenceMoney,
+  can, actionLabelFor, hasPerOccurrenceMoney, occurrenceMenuFor, editsInPlace,
   MONEY_ACTIONS, MONEY_ACTION_LABELS,
-  type CalendarAction, type CalendarMoneyAction,
+  type CalendarAction, type CalendarMoneyAction, type OccurrenceMenuAction, type OccurrenceMenuItem,
 } from "@shared/calendar-capabilities";
-import { humanRecurrenceLabel } from "@shared/recurring-dates";
-import { applyCalendarAction, applyCalendarMoneyAction } from "@/lib/calendar-mutations";
+import { humanRecurrenceLabel, parseRecurringMeta } from "@shared/recurring-dates";
+import {
+  seriesHistory, completionStats, hasHistory, HISTORY_LABELS, type HistoryStatus,
+} from "@shared/occurrence-history";
+import { applyCalendarAction, applyCalendarMoneyAction, restoreOccurrence } from "@/lib/calendar-mutations";
+import { KIND_ICONS, KIND_HSL, fmtDate, fmtShort, fmtDay } from "./detail/kind-style";
+import { EditSeriesScreen } from "./detail/EditSeriesScreen";
 
-const KIND_ICONS: Record<OccurrenceKind, any> = {
-  birthday: Cake,
-  anniversary: CalendarHeart,
-  subscription: CreditCard,
-  liability: Wallet,
-  bill: Receipt,
-  renewal: RefreshCw,
-  maintenance: Wrench,
-  appointment: Stethoscope,
-  task: CheckSquare,
-  habit: Repeat,
-  document: FileText,
-  event: CalendarDays,
-  custom: CalendarDays,
-  expiration: FileText,
-  income: Wallet,
-};
-
-const KIND_HSL: Record<OccurrenceKind, string> = {
-  birthday: "262 75% 64%",
-  anniversary: "330 75% 60%",
-  subscription: "220 80% 62%",
-  liability: "270 70% 62%",
-  bill: "0 72% 58%",
-  renewal: "38 92% 52%",
-  maintenance: "199 85% 55%",
-  appointment: "155 62% 44%",
-  task: "210 80% 60%",
-  habit: "170 60% 45%",
-  document: "215 15% 60%",
-  event: "240 8% 60%",
-  custom: "240 8% 60%",
-  expiration: "22 80% 55%",
-  income: "150 60% 45%",
-};
-
-const STATUS_HSL: Record<CalendarOccurrence["status"], string> = {
-  done: "155 62% 44%",
-  skipped: "240 6% 55%",
-  overdue: "0 72% 58%",
-  past: "220 10% 55%",
-  today: "38 92% 52%",
-  upcoming: "220 10% 55%",
-};
-
-const ACTION_ICONS: Record<CalendarAction, any> = {
-  edit: Pencil,
-  move: CalendarClock,
-  complete: Check,
-  skip: SkipForward,
-  deleteOccurrence: Trash2,
-  deleteFuture: Trash2,
-  deleteSeries: Trash2,
-};
-
-const fmtDate = (iso: string) =>
-  new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", {
-    weekday: "short", month: "short", day: "numeric", year: "numeric",
-  });
-const fmtShort = (iso: string) =>
-  new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 const fmtMoney = (n?: number) => (n == null ? null : formatMoney(n));
 
-/** One labelled row in the summary block. */
-function Field({ label, children, testId }: { label: string; children: React.ReactNode; testId?: string }) {
+const MENU_ICONS: Record<OccurrenceMenuAction, any> = {
+  complete: Check,
+  skip: ChevronsRight,
+  move: CalendarClock,
+  restore: RotateCcw,
+  editFuture: Scissors,
+  deleteOccurrence: Trash2,
+};
+
+/** Chip colours, as HSL triplets. */
+const CHIP_HSL = {
+  open: "142 64% 45%",
+  scheduled: "220 10% 60%",
+  today: "38 92% 52%",
+  overdue: "0 72% 58%",
+  done: "155 62% 44%",
+  skipped: "240 6% 60%",
+  missed: "0 72% 58%",
+  moved: "199 85% 55%",
+} as const;
+
+const HISTORY_HSL: Record<HistoryStatus, string> = {
+  completed: CHIP_HSL.done,
+  skipped: CHIP_HSL.skipped,
+  missed: CHIP_HSL.missed,
+  rescheduled: CHIP_HSL.moved,
+};
+
+function Chip({ hsl, children }: { hsl: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-3 py-1.5" data-testid={testId}>
-      <span className="micro-label text-muted-foreground shrink-0 pt-px">{label}</span>
-      <span className="text-xs font-medium text-right min-w-0">{children}</span>
-    </div>
+    <span className="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold leading-none"
+      style={{ background: `hsl(${hsl} / 0.16)`, color: `hsl(${hsl})` }}>
+      {children}
+    </span>
   );
 }
+
+/** The state chip for one occurrence. `isOpen` = the series' next open date. */
+function statusChip(o: CalendarOccurrence, isOpen: boolean, payment: boolean): { label: string; hsl: string } {
+  if (o.status === "done") return { label: payment ? "Paid" : "Completed", hsl: CHIP_HSL.done };
+  if (o.status === "skipped") return { label: "Skipped", hsl: CHIP_HSL.skipped };
+  if (o.missed) return { label: "Missed", hsl: CHIP_HSL.missed };
+  if (o.status === "overdue") return { label: "Overdue", hsl: CHIP_HSL.overdue };
+  if (o.status === "today") return { label: "Today", hsl: CHIP_HSL.today };
+  if (o.status === "past") return { label: "Past", hsl: CHIP_HSL.scheduled };
+  return isOpen ? { label: "Upcoming", hsl: CHIP_HSL.open } : { label: "Scheduled", hsl: CHIP_HSL.scheduled };
+}
+
+const cap1 = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 export interface CalendarItemDetailProps {
   /** The occurrence the user tapped. Null closes the panel. */
@@ -135,25 +121,35 @@ export interface CalendarItemDetailProps {
   duplicateNote?: string;
 }
 
+type Screen =
+  | { name: "overview" }
+  | { name: "occurrences"; tab: "occurrences" | "history" | "options" }
+  | { name: "edit"; mode: "series" | "future"; fromDate?: string; tab?: "details" | "repeat" | "reminders" | "advanced" };
+
 export function CalendarItemDetail({
-  occurrence, seriesOccurrences, getEventRow, profileName, todayISO, onClose, duplicateNote,
+  occurrence: tapped, seriesOccurrences, getEventRow, profileName, todayISO, onClose, duplicateNote,
 }: CalendarItemDetailProps) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
+  const arm = useConfirmArm();
   const [busy, setBusy] = useState<string | null>(null);
-  const [moveTarget, setMoveTarget] = useState<CalendarOccurrence | null>(null);
-  const [moveDate, setMoveDate] = useState("");
-  const [confirm, setConfirm] = useState<
-    { action: CalendarAction; occ: CalendarOccurrence } | null
-  >(null);
+  const [screen, setScreen] = useState<Screen>({ name: "overview" });
+  /** The occurrence whose action list is open. */
+  const [menuOcc, setMenuOcc] = useState<CalendarOccurrence | null>(null);
+  const [moveDate, setMoveDate] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   const [moneyAction, setMoneyAction] = useState<CalendarMoneyAction>("addCharge");
   const [moneyAmount, setMoneyAmount] = useState("");
 
-  const series: CalendarSeries | null = occurrence?.series ?? null;
-  const capabilities = useMemo(() => (series ? capabilitiesFor(series) : []), [series]);
-  const capOf = (a: CalendarAction) => capabilities.find((c) => c.action === a);
-  const showMoney = !!series && hasPerOccurrenceMoney(series);
+  // The tapped occurrence is a snapshot taken when the sheet opened. After a
+  // write the stream regenerates, so read the LIVE occurrence and series from
+  // it: a date just skipped must read "Skipped" without reopening the sheet.
+  const occurrence = useMemo(
+    () => (tapped ? seriesOccurrences.find((o) => o.id === tapped.id) ?? tapped : null),
+    [tapped, seriesOccurrences],
+  );
+  const series: CalendarSeries | null = seriesOccurrences[0]?.series ?? occurrence?.series ?? null;
 
   const future = useMemo(
     () => seriesOccurrences.filter((o) => o.effectiveDate >= todayISO),
@@ -163,6 +159,11 @@ export function CalendarItemDetail({
     () => future.find((o) => o.status !== "done" && o.status !== "skipped") ?? null,
     [future],
   );
+  const history = useMemo(
+    () => (series ? seriesHistory(series, seriesOccurrences, todayISO) : []),
+    [series, seriesOccurrences, todayISO],
+  );
+  const stats = useMemo(() => completionStats(history), [history]);
 
   if (!occurrence || !series) return null;
 
@@ -173,26 +174,49 @@ export function CalendarItemDetail({
   // as whose date it is (shared/birthday-event).
   const ownerName = ownerLabelForDatedItem(series.title, ownerId ? profileName?.(ownerId) : undefined);
   const isRecurring = !!series.recurrence && series.recurrence !== "none";
+  const payment = isPaymentKind(series.kind);
+  const isTask = series.source.system === "task";
+  const showMoney = hasPerOccurrenceMoney(series);
+  const inPlace = editsInPlace(series);
+  const showHistory = hasHistory(series);
+
+  const menuItemsFor = (o: CalendarOccurrence) => occurrenceMenuFor(series, o, { isOpen: !!next && o.id === next.id });
+  const nextMenu = next ? menuItemsFor(next) : [];
+  const primaryComplete = nextMenu.find((m) => m.action === "complete");
+
+  const eventRow = series.source.system === "event" ? getEventRow?.(series.source.id) : undefined;
+  const reminders = eventRow ? (parseRecurringMeta(eventRow.tags).reminders ?? []) : null;
+
+  const closeMenus = () => { setMenuOcc(null); setMoveDate(null); setMoreOpen(false); arm.disarm(); };
 
   const run = async (action: CalendarAction, occ: CalendarOccurrence, newDate?: string) => {
     setBusy(`${action}:${occ.id}`);
     try {
-      await applyCalendarAction({
-        action, series, occurrence: occ, newDate, todayISO, getEventRow,
-      });
-      toast({ title: SUCCESS_MESSAGE[action](occ.date) });
+      await applyCalendarAction({ action, series, occurrence: occ, newDate, todayISO, getEventRow });
+      toast({ title: SUCCESS_MESSAGE[action](occ.date, newDate) });
       // Deleting the series (or the only occurrence) leaves nothing to show.
-      if (action === "deleteSeries" || (action === "deleteOccurrence" && !isRecurring)) onClose();
+      // Completing a task retires its open row; the next occurrence is a new
+      // row with its own series id, so this sheet has nothing left to follow.
+      if (action === "deleteSeries" || (action === "deleteOccurrence" && !isRecurring)
+        || (action === "complete" && isTask) || (action === "deleteFuture" && occ.date <= (next?.date ?? occ.date))) onClose();
     } catch (e: any) {
-      toast({
-        title: "Couldn't complete that",
-        description: e?.message || "Try again",
-        variant: "destructive",
-      });
+      toast({ title: "Couldn't complete that", description: e?.message || "Try again", variant: "destructive" });
     } finally {
       setBusy(null);
-      setConfirm(null);
-      setMoveTarget(null);
+      closeMenus();
+    }
+  };
+
+  const restore = async (occ: CalendarOccurrence) => {
+    setBusy(`restore:${occ.id}`);
+    try {
+      await restoreOccurrence(series, occ);
+      toast({ title: `${fmtShort(occ.date)} is back on the schedule` });
+    } catch (e: any) {
+      toast({ title: "Couldn't complete that", description: e?.message || "Try again", variant: "destructive" });
+    } finally {
+      setBusy(null);
+      closeMenus();
     }
   };
 
@@ -200,6 +224,26 @@ export function CalendarItemDetail({
     onClose();
     const href = String(series.source.href || "").replace(/^#/, "");
     if (href) navigate(href);
+  };
+
+  const openEdit = (tab?: "details" | "repeat" | "reminders" | "advanced") => {
+    closeMenus();
+    if (!inPlace) return goToSource();
+    setScreen({ name: "edit", mode: "series", tab });
+  };
+
+  const onMenuAction = (item: OccurrenceMenuItem, occ: CalendarOccurrence) => {
+    switch (item.action) {
+      case "complete": return void run("complete", occ);
+      case "skip": return void run("skip", occ);
+      case "move": return setMoveDate(occ.effectiveDate);
+      case "restore": return void restore(occ);
+      case "editFuture":
+        closeMenus();
+        return setScreen({ name: "edit", mode: "future", fromDate: occ.date, tab: "repeat" });
+      case "deleteOccurrence":
+        return arm.confirm(`del:${occ.id}`, () => void run("deleteOccurrence", occ));
+    }
   };
 
   const runMoney = async (occ: CalendarOccurrence) => {
@@ -222,319 +266,579 @@ export function CalendarItemDetail({
     }
   };
 
-  /** An action button that is either live or disabled with its reason. */
-  const ActionButton = ({ action, occ, variant = "outline" }: {
-    action: CalendarAction; occ: CalendarOccurrence; variant?: "outline" | "ghost";
-  }) => {
-    const cap = capOf(action);
-    const ActionIcon = ACTION_ICONS[action];
-    const destructive = action.startsWith("delete");
-    const btn = (
-      <Button
-        size="sm"
-        variant={variant}
-        disabled={!cap?.enabled || busy != null}
-        className={`h-8 text-[11px] justify-start ${destructive && cap?.enabled ? "text-red-500 hover:text-red-500" : ""}`}
-        onClick={() => {
-          if (action === "edit") return goToSource();
-          if (action === "move") { setMoveTarget(occ); setMoveDate(occ.effectiveDate); return; }
-          if (destructive) { setConfirm({ action, occ }); return; }
-          void run(action, occ);
-        }}
-        data-testid={`cal-action-${action}`}
-      >
-        <ActionIcon className="h-3.5 w-3.5 mr-1.5" />
-        {ACTION_LABELS[action]}
-      </Button>
+  const repeatsLabel = isRecurring ? humanRecurrenceLabel(series.recurrence, series.baseDate) : "Does not repeat";
+  const subtitle = ownerName
+    ? `${series.kind === "birthday" || series.kind === "anniversary" ? "Person" : "For"}: ${ownerName}`
+    : isTask ? (isRecurring ? "Recurring Task" : "Task")
+    : isRecurring ? "Recurring date" : "One-time date";
+  // Where the date lives. An owner's name when there is one; otherwise the
+  // place it is managed, never the type repeated ("Source: Birthday").
+  const sourceLabel = ownerName || series.source.label
+    || (series.source.system === "event" ? "Calendar" : isTask ? "Tasks" : KIND_LABELS[series.kind]);
+  const editLabel = inPlace ? "Edit" : actionLabelFor("edit", series.kind);
+
+  /** One row of the schedule list. */
+  const OccurrenceRow = ({ o, compact = false }: { o: CalendarOccurrence; compact?: boolean }) => {
+    const chip = statusChip(o, !!next && o.id === next.id, payment);
+    const items = menuItemsFor(o);
+    const settled = o.status === "done" || o.status === "skipped";
+    const body = (
+      <>
+        <CalendarDays className="h-4 w-4 shrink-0" style={{ color: `hsl(${chip.hsl})` }} />
+        <span className="flex-1 min-w-0 text-left">
+          <span className={`block text-sm font-semibold tabular-nums ${settled ? "text-muted-foreground" : ""}`}>
+            {fmtShort(o.effectiveDate)}
+          </span>
+          <span className="block text-[12px] text-muted-foreground">
+            {cap1(relativeDayLabel(o.effectiveDate, todayISO))}
+            {o.moved && ` · moved from ${fmtDay(o.date)}`}
+          </span>
+        </span>
+        <Chip hsl={chip.hsl}>{chip.label}</Chip>
+        {items.length > 0 && <MoreHorizontal className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />}
+      </>
     );
-    if (cap?.enabled) return btn;
-    return (
-      <Tooltip>
-        {/* A disabled button swallows pointer events, so the wrapper carries them. */}
-        <TooltipTrigger asChild><span className="inline-flex">{btn}</span></TooltipTrigger>
-        <TooltipContent side="top" className="max-w-[220px] text-[11px]">{cap?.reason}</TooltipContent>
-      </Tooltip>
+    const cls = `w-full flex items-center gap-3 px-3.5 ${compact ? "py-2.5" : "py-3"} ${o.id === occurrence.id && !compact ? "bg-[hsl(var(--accent-hsl)/0.10)]" : ""}`;
+    return items.length > 0 ? (
+      <button type="button" className={`${cls} hover:bg-muted/50`} disabled={busy != null}
+        onClick={() => { arm.disarm(); setMoveDate(null); setMenuOcc(o); }}
+        aria-label={`${fmtShort(o.effectiveDate)}, ${chip.label}. Manage this date`}
+        data-testid={`cal-occ-${o.date}`}>
+        {body}
+      </button>
+    ) : (
+      <div className={cls} data-testid={`cal-occ-${o.date}`}>{body}</div>
     );
   };
 
-  return (
-    <TooltipProvider delayDuration={200}>
-      <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
-        <SheetContent side="bottom" className="max-h-[92dvh] overflow-y-auto rounded-t-2xl p-0" data-testid="calendar-item-detail">
-          {/* ── Header ─────────────────────────────────────────────────── */}
-          <SheetHeader className="px-4 pt-4 pb-3 space-y-0 text-left">
-            <div className="flex items-start gap-3">
-              <Medallion icon={Icon} accent={hsl} />
-              <div className="min-w-0 flex-1">
-                <SheetTitle className="text-base font-bold tracking-tight leading-tight" data-testid="cal-detail-title">
-                  {series.title}
-                </SheetTitle>
-                <SheetDescription className="text-xs mt-0.5">
-                  {fmtDate(occurrence.effectiveDate)}
-                  {occurrence.moved && <span className="text-muted-foreground"> · moved from {fmtShort(occurrence.date)}</span>}
-                </SheetDescription>
-              </div>
-              <Badge variant="outline" className="text-[11px] border-0 shrink-0"
-                style={{ background: `hsl(${hsl} / 0.14)`, color: `hsl(${hsl})` }}
-                data-testid="cal-detail-type">
-                {KIND_LABELS[series.kind]}
-              </Badge>
-            </div>
-          </SheetHeader>
+  /** Series-level actions: the More menu and the Options tab share them. */
+  const SeriesOptions = ({ inMenu }: { inMenu: boolean }) => (
+    <div className="space-y-2">
+      <ActionRow icon={Pencil} label={editLabel}
+        hint={inPlace ? "Name, schedule and reminders" : "Opens the record this date comes from"}
+        onClick={() => openEdit()} testId={inMenu ? "cal-more-edit" : "cal-option-edit"} />
+      {inMenu && future.length > 0 && (
+        <ActionRow icon={CalendarDays} label="View all occurrences" hint="Every date, with history"
+          onClick={() => { closeMenus(); setScreen({ name: "occurrences", tab: "occurrences" }); }}
+          testId="cal-more-occurrences" />
+      )}
+      {next && can(series, "deleteFuture") && (
+        <ActionRow icon={Scissors} destructive
+          label={arm.isArmed("future") ? "Tap again to end the series" : "End series"}
+          hint={`Stops before ${fmtShort(next.date)}. Earlier dates keep their history.`}
+          onClick={() => arm.confirm("future", () => void run("deleteFuture", next))}
+          testId="cal-action-deleteFuture" />
+      )}
+      {can(series, "deleteSeries") && (
+        <ActionRow icon={Trash2} destructive
+          label={arm.isArmed("series") ? "Tap again to delete" : actionLabelFor("deleteSeries", series.kind)}
+          hint={DELETE_SERIES_HINT(series)}
+          onClick={() => arm.confirm("series", () => void run("deleteSeries", next ?? occurrence))}
+          testId="cal-action-deleteSeries" />
+      )}
+    </div>
+  );
 
-          {/* ── Summary: source · type · recurrence · next ───────────────── */}
-          <div className="px-4 pb-3 border-b border-border/60 divide-y divide-border/40">
-            <Field label="Source" testId="cal-detail-source">
-              <button type="button" onClick={goToSource}
-                className="inline-flex items-center gap-1 text-primary hover:underline"
-                data-testid="cal-detail-source-link">
-                {ownerName || series.source.label || KIND_LABELS[series.kind]}
-                <ExternalLink className="h-3 w-3" />
-              </button>
-            </Field>
-            <Field label="Type">{KIND_LABELS[series.kind]}</Field>
-            <Field label="Repeats" testId="cal-detail-recurrence">
-              {isRecurring ? humanRecurrenceLabel(series.recurrence, series.baseDate) : "Does not repeat"}
-              {series.recurrenceEnd && (
-                <span className="block text-[11px] text-muted-foreground font-normal">
-                  until {fmtShort(series.recurrenceEnd)}
-                </span>
-              )}
-            </Field>
-            <Field label="Next" testId="cal-detail-next">
-              {next ? (
-                <>
-                  {fmtDate(next.effectiveDate)}
-                  <span className="block text-[11px] text-muted-foreground font-normal">
-                    {relativeDayLabel(next.effectiveDate, todayISO)}
-                  </span>
-                </>
-              ) : (
-                <span className="text-muted-foreground font-normal">No upcoming occurrence</span>
-              )}
-            </Field>
-            {/* The amount shown is THIS occurrence's, not the series'. For a
-                variable bill those differ, and the one the user tapped is the
-                one they mean. */}
-            {occurrence.amount != null && (
-              <Field label={occurrence.amountIsEstimate ? (occurrence.amount !== series.amount ? "Current" : "Estimated") : "Amount"}>
-                {fmtMoney(occurrence.amount)}
-                {occurrence.amountIsEstimate && (
-                  <span className="block text-[11px] text-muted-foreground font-normal">
-                    estimate — updates as charges are added
+  return (
+    <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent side="bottom"
+        className="h-[94dvh] max-h-[94dvh] rounded-t-3xl p-0 flex flex-col overflow-hidden [&>button]:hidden sm:max-w-lg sm:mx-auto"
+        style={{ ["--accent-hsl" as any]: hsl }}
+        // Opening must not put a focus ring on Close (the first control).
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        data-testid="calendar-item-detail">
+        {screen.name === "edit" ? (
+          <>
+            <SheetHeader className="sr-only">
+              <SheetTitle>Edit {series.title}</SheetTitle>
+              <SheetDescription>Change the name, schedule and reminders.</SheetDescription>
+            </SheetHeader>
+            <EditSeriesScreen
+              series={series} mode={screen.mode} fromDate={screen.fromDate} initialTab={screen.tab}
+              accent={hsl} todayISO={todayISO} getEventRow={getEventRow}
+              onBack={() => setScreen({ name: "overview" })}
+              onSaved={({ split }) => { if (split) onClose(); else setScreen({ name: "overview" }); }}
+              onGone={onClose}
+            />
+          </>
+        ) : (
+          <>
+            {/* ── Header ───────────────────────────────────────────────── */}
+            <SheetHeader className="px-4 pt-4 pb-3 space-y-0 text-left">
+              <div className="flex items-center gap-3">
+                {screen.name === "occurrences" && (
+                  <button type="button" aria-label="Back" onClick={() => setScreen({ name: "overview" })}
+                    className="h-10 w-10 -ml-2 shrink-0 grid place-items-center rounded-full hover:bg-muted"
+                    data-testid="cal-back">
+                    <ArrowLeft className="h-5 w-5" />
+                  </button>
+                )}
+                {screen.name === "overview" && (
+                  <span className="h-14 w-14 shrink-0 grid place-items-center rounded-2xl border"
+                    style={{
+                      borderColor: `hsl(${hsl} / 0.45)`,
+                      background: `linear-gradient(145deg, hsl(${hsl} / 0.32), hsl(${hsl} / 0.10))`,
+                      color: `hsl(${hsl})`,
+                    }}>
+                    <Icon className="h-7 w-7" />
                   </span>
                 )}
-              </Field>
-            )}
-            {duplicateNote && (
-              <p className="pt-2 text-[11px] text-muted-foreground" data-testid="cal-detail-duplicate-note">
-                {duplicateNote}
-              </p>
-            )}
-          </div>
-
-          {/* ── Actions for THIS occurrence ──────────────────────────────── */}
-          <div className="px-4 py-3 border-b border-border/60">
-            <p className="micro-label text-muted-foreground mb-2">
-              This occurrence · {fmtShort(occurrence.effectiveDate)}
-            </p>
-            <div className="grid grid-cols-2 gap-1.5">
-              <ActionButton action="edit" occ={occurrence} />
-              <ActionButton action="move" occ={occurrence} />
-              <ActionButton action="complete" occ={occurrence} />
-              <ActionButton action="skip" occ={occurrence} />
-              <ActionButton action="deleteOccurrence" occ={occurrence} />
-              <ActionButton action="deleteFuture" occ={occurrence} />
-            </div>
-            <div className="mt-1.5">
-              <ActionButton action="deleteSeries" occ={occurrence} />
-            </div>
-          </div>
-
-          {/* ── What THIS period costs ───────────────────────────────────
-              Only rendered for a bill whose amount genuinely moves. Every
-              control here writes to this occurrence alone — adding August's
-              usage cannot touch July's total or next month's estimate. */}
-          {showMoney && (
-            <div className="px-4 py-3 border-b border-border/60" data-testid="cal-detail-money">
-              <p className="micro-label text-muted-foreground mb-2">
-                Amount for {fmtShort(occurrence.effectiveDate)}
-              </p>
-              <div className="flex items-baseline gap-2 mb-2">
-                <span className="text-xl font-bold tabular-nums">{fmtMoney(occurrence.amount ?? 0)}</span>
-                <span className="text-[11px] text-muted-foreground">
-                  {occurrence.amountIsEstimate ? "estimated so far" : "posted"}
-                </span>
+                <div className="min-w-0 flex-1">
+                  <SheetTitle className={`${screen.name === "overview" ? "text-xl" : "text-lg"} font-bold tracking-tight leading-tight`} data-testid="cal-detail-title">
+                    {series.title}
+                  </SheetTitle>
+                  <SheetDescription className="text-[13px] mt-0.5">{subtitle}</SheetDescription>
+                  {screen.name === "overview" && (
+                    <span className="mt-1.5 inline-block rounded-full px-2.5 py-0.5 text-[11px] font-semibold text-white"
+                      style={{ background: `hsl(${hsl})` }} data-testid="cal-detail-type">
+                      {KIND_LABELS[series.kind]}
+                    </span>
+                  )}
+                </div>
+                <button type="button" aria-label="Close" onClick={onClose}
+                  className="h-10 w-10 -mr-1 shrink-0 self-start grid place-items-center rounded-full hover:bg-muted"
+                  data-testid="cal-close">
+                  <X className="h-5 w-5" />
+                </button>
               </div>
-              <div className="flex items-center gap-1.5">
-                <Input
-                  type="number" step="0.01" inputMode="decimal"
-                  value={moneyAmount}
-                  onChange={(e) => setMoneyAmount(e.target.value)}
-                  placeholder="0.00"
-                  className="h-8 text-xs"
-                  data-testid="cal-money-input"
-                />
-                <select
-                  value={moneyAction}
-                  onChange={(e) => setMoneyAction(e.target.value as CalendarMoneyAction)}
-                  className="h-8 rounded-md border border-input bg-background px-2 text-[11px]"
-                  data-testid="cal-money-action"
-                >
-                  {MONEY_ACTIONS.map((a) => (
-                    <option key={a} value={a}>{MONEY_ACTION_LABELS[a]}</option>
-                  ))}
-                </select>
-                <Button
-                  size="sm" className="h-8 text-[11px]"
-                  disabled={busy != null || !moneyAmount}
-                  onClick={() => void runMoney(occurrence)}
-                  data-testid="cal-money-apply"
-                >
-                  Apply
-                </Button>
-              </div>
-              {occurrence.amountIsEstimate && (
-                <p className="text-[11px] text-muted-foreground mt-1.5">
-                  Recording the actual amount freezes this month — later edits to the bill won't change it.
-                </p>
-              )}
-            </div>
-          )}
+            </SheetHeader>
 
-          {/* ── Every future occurrence, individually actionable ─────────── */}
-          <div className="px-4 py-3">
-            <div className="flex items-baseline justify-between mb-2">
-              <p className="micro-label text-muted-foreground">
-                Upcoming occurrences
-              </p>
-              <span className="text-[11px] text-muted-foreground tabular-nums">{future.length}</span>
-            </div>
-            {future.length === 0 ? (
-              <p className="text-xs text-muted-foreground py-3 text-center">
-                Nothing scheduled ahead.
-              </p>
-            ) : (
-              <div className="rounded-xl border border-border divide-y divide-border/40 overflow-hidden"
-                data-testid="cal-detail-occurrences">
-                {future.map((o) => {
-                  const done = o.status === "done" || o.status === "skipped";
-                  const canCheck = capOf("complete")?.enabled;
-                  const canSkip = capOf("skip")?.enabled;
-                  const canMove = capOf("move")?.enabled;
-                  return (
-                    <div key={o.id}
-                      className={`flex items-center gap-2 px-2.5 py-2 ${o.id === occurrence.id ? "bg-muted/40" : ""}`}
-                      data-testid={`cal-occ-${o.date}`}>
-                      <span className="h-1.5 w-1.5 rounded-full shrink-0"
-                        style={{ background: `hsl(${STATUS_HSL[o.status]})` }} />
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-xs tabular-nums ${done ? "line-through text-muted-foreground" : ""}`}>
-                          {fmtShort(o.effectiveDate)}
-                          {o.moved && <span className="text-[11px] text-muted-foreground"> (moved)</span>}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
-                          {relativeDayLabel(o.effectiveDate, todayISO)}
-                          {o.status === "done" ? " · done" : o.status === "skipped" ? " · skipped" : o.missed ? " · missed" : ""}
-                        </p>
-                      </div>
-                      {canCheck && (
-                        <Button size="sm" variant="ghost"
-                          className={`h-6 w-6 p-0 ${done ? "text-muted-foreground" : "text-emerald-500"}`}
-                          disabled={busy != null}
-                          title={done ? "Undo" : "Check off"}
-                          onClick={() => void run("complete", o)}
-                          data-testid={`cal-occ-done-${o.date}`}>
-                          <Check className="h-3.5 w-3.5" />
-                        </Button>
+            {/* ═════════════════════════ OVERVIEW ═════════════════════════ */}
+            {screen.name === "overview" && (
+              <>
+                <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-3">
+                  {/* Next occurrence — the one thing this screen is for. */}
+                  <button type="button"
+                    disabled={!next || nextMenu.length === 0 || busy != null}
+                    onClick={() => next && setMenuOcc(next)}
+                    className="w-full flex items-center gap-3.5 rounded-2xl border p-4 text-left disabled:cursor-default"
+                    style={{
+                      borderColor: `hsl(${hsl} / 0.55)`,
+                      background: `linear-gradient(120deg, hsl(${hsl} / 0.30), hsl(${hsl} / 0.08))`,
+                      boxShadow: `0 0 28px -10px hsl(${hsl} / 0.7)`,
+                    }}
+                    data-testid="cal-detail-next">
+                    <span className="h-12 w-12 shrink-0 grid place-items-center rounded-full"
+                      style={{ background: `hsl(${hsl} / 0.25)`, color: `hsl(${hsl})` }}>
+                      <CalendarDays className="h-6 w-6" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13px] text-muted-foreground">
+                        {payment ? "Next Payment" : isTask ? "Next Due" : "Next Occurrence"}
+                      </span>
+                      {next ? (
+                        <>
+                          <span className="block text-xl font-bold tracking-tight tabular-nums">{fmtDate(next.effectiveDate)}</span>
+                          <span className="block text-[13px] text-muted-foreground">
+                            {cap1(relativeDayLabel(next.effectiveDate, todayISO))}
+                            {next.moved && ` · moved from ${fmtShort(next.date)}`}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="block text-base font-semibold text-muted-foreground">No upcoming occurrence</span>
                       )}
-                      {canMove && (
-                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-muted-foreground"
-                          disabled={busy != null} title="Move this date"
-                          onClick={() => { setMoveTarget(o); setMoveDate(o.effectiveDate); }}
-                          data-testid={`cal-occ-move-${o.date}`}>
-                          <CalendarClock className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                      {canSkip && (
-                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-muted-foreground"
-                          disabled={busy != null} title="Skip this occurrence"
-                          onClick={() => void run("skip", o)}
-                          data-testid={`cal-occ-skip-${o.date}`}>
-                          <SkipForward className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                      <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-muted-foreground/60"
-                        onClick={goToSource} title="Open source">
-                        <ChevronRight className="h-3.5 w-3.5" />
-                      </Button>
+                    </span>
+                    {next && nextMenu.length > 0 && <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />}
+                  </button>
+
+                  {/* The date the user tapped, when it is not the next one. */}
+                  {(!next || occurrence.id !== next.id) && (
+                    <button type="button"
+                      disabled={menuItemsFor(occurrence).length === 0 || busy != null}
+                      onClick={() => setMenuOcc(occurrence)}
+                      className="w-full flex items-center gap-3 rounded-2xl border border-border px-3.5 py-3 text-left disabled:cursor-default"
+                      data-testid="cal-detail-selected">
+                      <CalendarClock className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[12px] text-muted-foreground">Selected date</span>
+                        <span className="block text-sm font-semibold tabular-nums">
+                          {fmtDate(occurrence.effectiveDate)}
+                          {occurrence.moved && <span className="font-normal text-muted-foreground"> · moved from {fmtShort(occurrence.date)}</span>}
+                        </span>
+                      </span>
+                      {(() => { const c = statusChip(occurrence, false, payment); return <Chip hsl={c.hsl}>{c.label}</Chip>; })()}
+                      {menuItemsFor(occurrence).length > 0 && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+                    </button>
+                  )}
+
+                  {/* Repeats · Ends */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-2xl border border-border p-3.5 flex gap-3" data-testid="cal-detail-recurrence">
+                      <Repeat className="h-5 w-5 shrink-0 mt-0.5" style={{ color: `hsl(${hsl})` }} />
+                      <span className="min-w-0">
+                        <span className="block text-[12px] text-muted-foreground">Repeats</span>
+                        <span className="block text-sm font-bold leading-snug">{repeatsLabel}</span>
+                      </span>
                     </div>
-                  );
-                })}
+                    <div className="rounded-2xl border border-border p-3.5 flex gap-3" data-testid="cal-detail-ends">
+                      <InfinityIcon className="h-5 w-5 shrink-0 mt-0.5" style={{ color: `hsl(${hsl})` }} />
+                      <span className="min-w-0">
+                        <span className="block text-[12px] text-muted-foreground">Ends</span>
+                        <span className="block text-sm font-bold leading-snug">
+                          {!isRecurring ? "One time" : series.recurrenceEnd ? fmtShort(series.recurrenceEnd) : "Never"}
+                        </span>
+                        {isRecurring && !series.recurrenceEnd && (
+                          <span className="block text-[12px] text-muted-foreground">(Ongoing)</span>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Completion — only where "done" means something and something happened. */}
+                  {showHistory && stats.total > 0 && (
+                    <button type="button" onClick={() => setScreen({ name: "occurrences", tab: "history" })}
+                      className="w-full flex items-center gap-3.5 rounded-2xl border border-border p-3.5 text-left hover:bg-muted/40"
+                      data-testid="cal-detail-completion">
+                      <CompletionRing pct={stats.pct} hsl={hsl} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-bold">{payment ? "Paid on record" : "Completion"}</span>
+                        <span className="block text-[13px] text-muted-foreground">
+                          {stats.completed} of {stats.total} occurrence{stats.total === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    </button>
+                  )}
+
+                  {/* Facts */}
+                  <div className="rounded-2xl border border-border divide-y divide-border/60 overflow-hidden">
+                    <InfoRow icon={Tag} label={isTask ? "Type" : `${payment ? "Payment" : "Event"} Type`}
+                      value={isTask ? (isRecurring ? "Recurring task" : "Task") : KIND_LABELS[series.kind]}
+                      onClick={inPlace ? () => openEdit("details") : undefined} testId="cal-detail-kind" />
+                    {/* Every row that can be changed opens the page that changes it. */}
+                    {inPlace && (
+                      <InfoRow icon={CalendarClock} label="Schedule" value={repeatsLabel}
+                        onClick={() => openEdit("repeat")} testId="cal-detail-schedule" />
+                    )}
+                    <div className="flex items-center gap-3 px-3.5 py-3" data-testid="cal-detail-source">
+                      <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="flex-1 text-sm font-medium">Source</span>
+                      <button type="button" onClick={goToSource}
+                        className="inline-flex items-center gap-1 text-sm font-medium hover:underline text-[hsl(var(--accent-hsl))]"
+                        data-testid="cal-detail-source-link">
+                        {sourceLabel}
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                    {reminders && inPlace && (
+                      <InfoRow icon={Bell} label="Reminders"
+                        value={reminders.length ? `${reminders.length} active` : "None"}
+                        onClick={() => openEdit("reminders")} testId="cal-detail-reminders" />
+                    )}
+                    {showHistory && (
+                      <InfoRow icon={HistoryIcon} label="History"
+                        value={history.length ? `${history.length} occurrence${history.length === 1 ? "" : "s"}` : "Nothing yet"}
+                        onClick={() => setScreen({ name: "occurrences", tab: "history" })} testId="cal-detail-history" />
+                    )}
+                    {/* The amount shown is the NEXT occurrence's, not the
+                        series'. For a variable bill those differ. */}
+                    {(next ?? occurrence).amount != null && (
+                      <InfoRow icon={Tag}
+                        label={(next ?? occurrence).amountIsEstimate ? "Estimated" : "Amount"}
+                        value={fmtMoney((next ?? occurrence).amount) || ""} />
+                    )}
+                  </div>
+
+                  {duplicateNote && (
+                    <p className="text-[12px] text-muted-foreground px-1" data-testid="cal-detail-duplicate-note">
+                      {duplicateNote}
+                    </p>
+                  )}
+
+                  {/* ── What THIS period costs ─────────────────────────────
+                      Only rendered for a bill whose amount genuinely moves.
+                      Every control here writes to this occurrence alone. */}
+                  {showMoney && (
+                    <div className="rounded-2xl border border-border p-3.5" data-testid="cal-detail-money">
+                      <p className="text-[12px] text-muted-foreground mb-1">Amount for {fmtShort(occurrence.effectiveDate)}</p>
+                      <div className="flex items-baseline gap-2 mb-2.5">
+                        <span className="text-2xl font-bold tabular-nums">{fmtMoney(occurrence.amount ?? 0)}</span>
+                        <span className="text-[12px] text-muted-foreground">
+                          {occurrence.amountIsEstimate ? "estimated so far" : "posted"}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Input type="number" step="0.01" inputMode="decimal" value={moneyAmount}
+                          onChange={(e) => setMoneyAmount(e.target.value)} placeholder="0.00"
+                          className="h-10 text-sm" data-testid="cal-money-input" />
+                        <select value={moneyAction}
+                          onChange={(e) => setMoneyAction(e.target.value as CalendarMoneyAction)}
+                          className="h-10 rounded-md border border-input bg-background px-2 text-[12px]"
+                          data-testid="cal-money-action">
+                          {MONEY_ACTIONS.map((a) => <option key={a} value={a}>{MONEY_ACTION_LABELS[a]}</option>)}
+                        </select>
+                        <Button size="sm" className="h-10 text-[12px]" disabled={busy != null || !moneyAmount}
+                          onClick={() => void runMoney(occurrence)} data-testid="cal-money-apply">
+                          Apply
+                        </Button>
+                      </div>
+                      {occurrence.amountIsEstimate && (
+                        <p className="text-[12px] text-muted-foreground mt-2">
+                          Recording the actual amount freezes this month — later edits to the bill won't change it.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Upcoming */}
+                  <div>
+                    <div className="flex items-center justify-between px-1 mb-2">
+                      <h3 className="text-base font-bold">Upcoming Occurrences</h3>
+                      {future.length > 0 && (
+                        <button type="button" onClick={() => setScreen({ name: "occurrences", tab: "occurrences" })}
+                          className="inline-flex items-center gap-0.5 text-sm font-semibold text-[hsl(var(--accent-hsl))]"
+                          data-testid="cal-view-all">
+                          View All <ChevronRight className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                    {future.length === 0 ? (
+                      <p className="rounded-2xl border border-border py-5 text-center text-sm text-muted-foreground">
+                        Nothing scheduled ahead.
+                      </p>
+                    ) : (
+                      <div className="rounded-2xl border border-border divide-y divide-border/60 overflow-hidden" data-testid="cal-detail-upcoming">
+                        {future.slice(0, 3).map((o) => <OccurrenceRow key={o.id} o={o} compact />)}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* ── Bottom bar: the one thing you do, and everything else ── */}
+                <div className="shrink-0 flex gap-3 border-t border-border/60 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                  {primaryComplete && next ? (
+                    <button type="button" disabled={busy != null} onClick={() => void run("complete", next)}
+                      className="flex-1 h-12 rounded-2xl text-[15px] font-semibold text-white inline-flex items-center justify-center gap-2 disabled:opacity-50"
+                      style={{ background: `hsl(${hsl})`, boxShadow: `0 8px 22px -10px hsl(${hsl} / 0.9)` }}
+                      data-testid="cal-action-complete">
+                      <Check className="h-5 w-5" /> {primaryComplete.label}
+                    </button>
+                  ) : (
+                    <button type="button" disabled={busy != null} onClick={() => openEdit()}
+                      className="flex-1 h-12 rounded-2xl text-[15px] font-semibold text-white inline-flex items-center justify-center gap-2 disabled:opacity-50"
+                      style={{ background: `hsl(${hsl})`, boxShadow: `0 8px 22px -10px hsl(${hsl} / 0.9)` }}
+                      data-testid="cal-action-edit">
+                      <Pencil className="h-5 w-5" /> {editLabel}
+                    </button>
+                  )}
+                  <button type="button" onClick={() => { arm.disarm(); setMoreOpen(true); }}
+                    className="h-12 px-5 rounded-2xl border border-border text-[15px] font-semibold inline-flex items-center justify-center gap-2 hover:bg-muted/50"
+                    data-testid="cal-action-more">
+                    <MoreHorizontal className="h-5 w-5" /> More
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* ═══════════════════════ OCCURRENCES ════════════════════════ */}
+            {screen.name === "occurrences" && (
+              <>
+                <div className="mx-4 mb-3 grid gap-1 rounded-2xl border border-border bg-muted/40 p-1"
+                  style={{ gridTemplateColumns: `repeat(${showHistory ? 3 : 2}, minmax(0, 1fr))` }} role="tablist">
+                  {(["occurrences", ...(showHistory ? ["history"] : []), "options"] as const).map((t) => (
+                    <button key={t} type="button" role="tab" aria-selected={screen.tab === t}
+                      onClick={() => { arm.disarm(); setScreen({ name: "occurrences", tab: t as any }); }}
+                      className={`h-9 rounded-xl text-[13px] font-medium capitalize transition-colors ${screen.tab === t ? "text-white bg-[hsl(var(--accent-hsl))]" : "text-muted-foreground hover:text-foreground"}`}
+                      data-testid={`cal-tab-${t}`}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-6">
+                  {screen.tab === "occurrences" && (
+                    future.length === 0 ? (
+                      <p className="rounded-2xl border border-border py-6 text-center text-sm text-muted-foreground">
+                        Nothing scheduled ahead.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="rounded-2xl border border-border divide-y divide-border/60 overflow-hidden"
+                          data-testid="cal-detail-occurrences">
+                          {future.map((o) => <OccurrenceRow key={o.id} o={o} />)}
+                        </div>
+                        <p className="px-1 pt-2 text-[12px] text-muted-foreground">
+                          {isRecurring && !series.recurrenceEnd
+                            ? "The series continues past this list — more dates appear as these pass."
+                            : `${future.length} date${future.length === 1 ? "" : "s"} ahead.`}
+                        </p>
+                      </>
+                    )
+                  )}
+
+                  {screen.tab === "history" && showHistory && (
+                    history.length === 0 ? (
+                      <p className="rounded-2xl border border-border px-4 py-6 text-center text-sm text-muted-foreground" data-testid="cal-history-empty">
+                        Nothing recorded yet. Completed, skipped, missed and rescheduled dates will be listed here.
+                      </p>
+                    ) : (
+                      <div className="rounded-2xl border border-border divide-y divide-border/60 overflow-hidden" data-testid="cal-detail-history-list">
+                        {history.map((h) => (
+                          <div key={`${h.date}-${h.status}`} className="flex items-center gap-3 px-3.5 py-3" data-testid={`cal-history-${h.date}`}>
+                            <CalendarDays className="h-4 w-4 shrink-0" style={{ color: `hsl(${HISTORY_HSL[h.status]})` }} />
+                            <span className="flex-1 min-w-0">
+                              <span className="block text-sm font-semibold tabular-nums">{fmtShort(h.date)}</span>
+                              <span className="block text-[12px] text-muted-foreground">
+                                {h.status === "rescheduled" && h.movedTo
+                                  ? `Moved to ${fmtShort(h.movedTo)}`
+                                  : cap1(relativeDayLabel(h.date, todayISO))}
+                              </span>
+                            </span>
+                            <Chip hsl={HISTORY_HSL[h.status]}>
+                              {h.status === "completed" && payment ? "Paid" : HISTORY_LABELS[h.status]}
+                            </Chip>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+
+                  {screen.tab === "options" && <SeriesOptions inMenu={false} />}
+                </div>
+              </>
+            )}
+
+            {/* ═══════════ Action list: one date, or the More menu ═══════════ */}
+            {(menuOcc || moreOpen) && (
+              <div className="absolute inset-0 z-10 flex flex-col justify-end" data-testid="cal-action-sheet">
+                <button type="button" aria-label="Close" className="flex-1 bg-black/50" onClick={closeMenus} />
+                <div className="rounded-t-3xl border-t border-border bg-background px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] max-h-[80%] overflow-y-auto">
+                  <div className="flex items-center gap-3 mb-3">
+                    <CalendarDays className="h-5 w-5 shrink-0 text-[hsl(var(--accent-hsl))]" />
+                    <p className="flex-1 text-base font-bold tabular-nums" data-testid="cal-action-sheet-title">
+                      {menuOcc ? fmtShort(menuOcc.effectiveDate) : series.title}
+                    </p>
+                    <button type="button" aria-label="Close" onClick={closeMenus}
+                      className="h-9 w-9 grid place-items-center rounded-full hover:bg-muted" data-testid="cal-action-sheet-close">
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
+
+                  {menuOcc && moveDate != null ? (
+                    <div className="space-y-3">
+                      <p className="text-[13px] text-muted-foreground">
+                        {isRecurring
+                          ? `Only this occurrence moves. Scheduled for ${fmtDate(menuOcc.date)} — the rest of the series keeps its dates.`
+                          : `Currently ${fmtDate(menuOcc.effectiveDate)}.`}
+                      </p>
+                      <Input type="date" value={moveDate} onChange={(e) => setMoveDate(e.target.value)}
+                        className="h-11" data-testid="cal-move-date" />
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => setMoveDate(null)}
+                          className="flex-1 h-11 rounded-xl border border-border text-sm font-semibold">Back</button>
+                        <button type="button"
+                          disabled={!moveDate || moveDate === menuOcc.effectiveDate || busy != null}
+                          onClick={() => void run("move", menuOcc, moveDate)}
+                          className="flex-1 h-11 rounded-xl text-sm font-semibold text-white disabled:opacity-40 bg-[hsl(var(--accent-hsl))]"
+                          data-testid="cal-move-confirm">
+                          Change date
+                        </button>
+                      </div>
+                    </div>
+                  ) : menuOcc ? (
+                    <div className="space-y-2">
+                      {menuItemsFor(menuOcc).map((item) => {
+                        const armed = item.action === "deleteOccurrence" && arm.isArmed(`del:${menuOcc.id}`);
+                        return (
+                          <ActionRow key={item.action} icon={MENU_ICONS[item.action]}
+                            label={armed ? "Tap again to delete" : item.label} hint={item.hint}
+                            destructive={item.destructive} accent={item.action === "complete"}
+                            disabled={busy != null}
+                            onClick={() => onMenuAction(item, menuOcc)}
+                            testId={`cal-menu-${item.action}`} />
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <SeriesOptions inMenu />
+                  )}
+                </div>
               </div>
             )}
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      {/* ── Move dialog ────────────────────────────────────────────────── */}
-      <AlertDialog open={!!moveTarget} onOpenChange={(o) => { if (!o) setMoveTarget(null); }}>
-        <AlertDialogContent className="max-w-xs">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-sm">Move this occurrence</AlertDialogTitle>
-            <AlertDialogDescription className="text-xs">
-              {moveTarget && `Currently ${fmtDate(moveTarget.effectiveDate)}. Only this date moves — the rest of the series keeps its schedule.`}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <Input type="date" value={moveDate} onChange={(e) => setMoveDate(e.target.value)}
-            data-testid="cal-move-date" />
-          <AlertDialogFooter>
-            <AlertDialogCancel className="h-8 text-xs">Cancel</AlertDialogCancel>
-            <AlertDialogAction className="h-8 text-xs" disabled={!moveDate || busy != null}
-              onClick={(e) => {
-                e.preventDefault();
-                if (moveTarget && moveDate) void run("move", moveTarget, moveDate);
-              }}
-              data-testid="cal-move-confirm">
-              Move
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* ── Destructive confirmation ───────────────────────────────────── */}
-      <AlertDialog open={!!confirm} onOpenChange={(o) => { if (!o) setConfirm(null); }}>
-        <AlertDialogContent className="max-w-sm">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-sm">
-              {confirm ? CONFIRM_TITLE[confirm.action](series.title) : ""}
-            </AlertDialogTitle>
-            <AlertDialogDescription className="text-xs">
-              {confirm ? CONFIRM_BODY[confirm.action](confirm.occ.date, series) : ""}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="h-8 text-xs">Cancel</AlertDialogCancel>
-            <AlertDialogAction className="h-8 text-xs bg-red-600 hover:bg-red-700"
-              onClick={(e) => { e.preventDefault(); if (confirm) void run(confirm.action, confirm.occ); }}
-              data-testid="cal-confirm-delete">
-              {confirm ? ACTION_LABELS[confirm.action] : ""}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </TooltipProvider>
+          </>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
 
-const SUCCESS_MESSAGE: Record<CalendarAction, (date: string) => string> = {
+/** One labelled action in an action list: what it does, and how far it reaches. */
+function ActionRow({ icon: Icon, label, hint, onClick, destructive, accent, disabled, testId }: {
+  icon: any; label: string; hint: string; onClick: () => void;
+  destructive?: boolean; accent?: boolean; disabled?: boolean; testId: string;
+}) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled}
+      className={`w-full flex items-center gap-3.5 rounded-2xl border px-3.5 py-3 text-left disabled:opacity-50 ${destructive
+        ? "border-red-500/40 text-red-500 hover:bg-red-500/10" : "border-border hover:bg-muted/50"}`}
+      data-testid={testId}>
+      {accent ? (
+        <span className="h-8 w-8 shrink-0 grid place-items-center rounded-full text-white bg-[hsl(var(--accent-hsl))]">
+          <Icon className="h-4 w-4" />
+        </span>
+      ) : (
+        <span className="h-8 w-8 shrink-0 grid place-items-center"><Icon className="h-5 w-5" /></span>
+      )}
+      <span className="min-w-0">
+        <span className="block text-[15px] font-semibold">{label}</span>
+        <span className={`block text-[12px] ${destructive ? "opacity-80" : "text-muted-foreground"}`}>{hint}</span>
+      </span>
+    </button>
+  );
+}
+
+/** One fact row on the overview; a button when it leads somewhere. */
+function InfoRow({ icon: Icon, label, value, onClick, testId }: {
+  icon: any; label: string; value: string; onClick?: () => void; testId?: string;
+}) {
+  const body = (
+    <>
+      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <span className="flex-1 text-sm font-medium text-left">{label}</span>
+      <span className="text-sm text-muted-foreground">{value}</span>
+      {onClick && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+    </>
+  );
+  return onClick ? (
+    <button type="button" onClick={onClick} className="w-full flex items-center gap-3 px-3.5 py-3 hover:bg-muted/40" data-testid={testId}>
+      {body}
+    </button>
+  ) : (
+    <div className="flex items-center gap-3 px-3.5 py-3" data-testid={testId}>{body}</div>
+  );
+}
+
+function CompletionRing({ pct, hsl }: { pct: number; hsl: string }) {
+  const r = 18;
+  const c = 2 * Math.PI * r;
+  return (
+    <span className="relative h-12 w-12 shrink-0 grid place-items-center" role="img" aria-label={`${pct}% complete`}>
+      <svg viewBox="0 0 44 44" className="absolute inset-0 -rotate-90">
+        <circle cx="22" cy="22" r={r} fill="none" stroke="hsl(var(--muted))" strokeWidth="4" />
+        <circle cx="22" cy="22" r={r} fill="none" stroke={`hsl(${hsl})`} strokeWidth="4" strokeLinecap="round"
+          strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} />
+      </svg>
+      <span className="text-[12px] font-bold tabular-nums">{pct}%</span>
+    </span>
+  );
+}
+
+const DELETE_SERIES_HINT = (s: CalendarSeries): string =>
+  s.source.system === "profile"
+    ? "Clears the date from the profile. The profile itself is kept."
+    : s.source.system === "liability"
+      ? "Stops the payment schedule. The liability record is kept."
+      : s.recurrence && s.recurrence !== "none"
+        ? "Removes every date and its history. To remove one date, skip it instead."
+        : "Removes this date.";
+
+const SUCCESS_MESSAGE: Record<CalendarAction, (date: string, newDate?: string) => string> = {
   edit: () => "Opening source",
-  move: (d) => `Moved the ${fmtShort(d)} occurrence`,
+  move: (d, n) => (n ? `Moved ${fmtShort(d)} to ${fmtShort(n)} — the rest of the series is unchanged` : `Moved the ${fmtShort(d)} occurrence`),
   complete: (d) => `Checked off ${fmtShort(d)} — the series stays on schedule`,
-  skip: (d) => `Skipped ${fmtShort(d)}`,
+  skip: (d) => `Skipped ${fmtShort(d)} — future dates stay scheduled`,
   deleteOccurrence: (d) => `Removed ${fmtShort(d)}`,
   deleteFuture: (d) => `Series ends before ${fmtShort(d)}`,
-  deleteSeries: () => "Series deleted",
+  deleteSeries: () => "Deleted",
 };
 
 // Every message names the MONTH the change landed on, because the one thing a
@@ -543,33 +847,6 @@ const MONEY_SUCCESS: Record<CalendarMoneyAction, (date: string) => string> = {
   addCharge: (d) => `Charge added to the ${fmtShort(d)} bill`,
   setEstimate: (d) => `Estimate updated for ${fmtShort(d)}`,
   setActual: (d) => `${fmtShort(d)} recorded as the actual amount`,
-};
-
-const CONFIRM_TITLE: Record<CalendarAction, (title: string) => string> = {
-  edit: () => "",
-  move: () => "",
-  complete: () => "",
-  skip: () => "",
-  deleteOccurrence: (t) => `Remove this occurrence of "${t}"?`,
-  deleteFuture: (t) => `End "${t}" from this date?`,
-  deleteSeries: (t) => `Delete "${t}" entirely?`,
-};
-
-const CONFIRM_BODY: Record<CalendarAction, (date: string, series: CalendarSeries) => string> = {
-  edit: () => "",
-  move: () => "",
-  complete: () => "",
-  skip: () => "",
-  deleteOccurrence: (d) =>
-    `Only ${fmtShort(d)} is removed. Every other occurrence stays, and the series keeps running.`,
-  deleteFuture: (d) =>
-    `${fmtShort(d)} and everything after it are removed. Past occurrences keep their history.`,
-  deleteSeries: (_d, s) =>
-    s.source.system === "profile"
-      ? `The date is cleared from the profile. The profile itself is not deleted.`
-      : s.source.system === "liability"
-        ? `The payment schedule stops. The liability record itself is kept.`
-        : `The whole series and its history disappear from the calendar, dashboard, and notifications. To remove one date, skip that occurrence instead.`,
 };
 
 export default CalendarItemDetail;

@@ -75,6 +75,8 @@ export interface ParsedAction {
     // through to "retrieve" so every write surfaces as a typed action)
     | "update_entity" | "delete_entity" | "link_entities" | "set_budget"
     | "revalue_asset" | "manage_domain" | "manage_document"
+    // A typed characteristic on any record (shared/record-details)
+    | "set_record_detail"
     // Reads
     | "retrieve" | "unknown";
   category: string;

@@ -14,6 +14,11 @@
 //   rdone:<n>             occurrences completed so far (drives rcount)
 //   rpaused               series paused — its next occurrence is hidden
 //   ranchor:<n>           day-of-month the series is anchored to (1–31)
+//   rskip:<YYYY-MM-DD>    that ONE scheduled occurrence is skipped; the series
+//                         keeps its schedule and steps over it
+//   rmove:<from>><to>     that ONE scheduled occurrence happens on another day
+//   rfrom:<YYYY-MM-DD>    THIS row was moved: its scheduled date is this one,
+//                         and the series steps from it, not from `dueDate`
 //
 // ANCHOR DAY. A monthly series stores only its NEXT due date, so advancing it
 // one cycle at a time would drift whenever a month is too short: naive
@@ -34,6 +39,12 @@ export interface RecurrenceRule {
   paused: boolean;
   /** Day-of-month the monthly/yearly series is pinned to (1–31). */
   anchorDay?: number;
+  /** Scheduled dates skipped one at a time (`rskip:`). The series steps over them. */
+  skipped?: string[];
+  /** Scheduled date → the day that ONE occurrence was moved to (`rmove:`). */
+  moved?: Record<string, string>;
+  /** The scheduled date of the stored row when it was moved off it (`rfrom:`). */
+  movedFrom?: string;
 }
 
 export const RECUR_PRESETS: { value: string; label: string }[] = [
@@ -46,7 +57,10 @@ export const RECUR_PRESETS: { value: string; label: string }[] = [
   { value: "yearly", label: "Yearly" },
 ];
 
-const RECUR_TAG_RE = /^(recur:|runtil:|rcount:|rdone:|ranchor:|rpaused$)/;
+const RECUR_TAG_RE = /^(recur:|runtil:|rcount:|rdone:|ranchor:|rskip:|rmove:|rfrom:|rpaused$)/;
+const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Per-occurrence marks kept on a series, newest last — bounds the tag list. */
+const MAX_OCCURRENCE_MARKS = 120;
 
 /** Is this tag part of the recurrence grammar (never a user-facing label)? */
 export function isRecurrenceTag(tag: unknown): boolean {
@@ -87,7 +101,27 @@ export function parseRecurrence(tags: string[] = []): RecurrenceRule {
   const anchorTag = get("ranchor:");
   const anchorRaw = anchorTag ? parseInt(anchorTag.slice(8), 10) : NaN;
   const anchorDay = Number.isFinite(anchorRaw) && anchorRaw >= 1 && anchorRaw <= 31 ? anchorRaw : undefined;
-  return { freq, interval, unit, until, count, done, paused, anchorDay };
+  const skipped: string[] = [];
+  const moved: Record<string, string> = {};
+  let movedFrom: string | undefined;
+  for (const t of tags) {
+    if (t.startsWith("rskip:")) {
+      const d = t.slice(6);
+      if (ISO_DAY_RE.test(d) && !skipped.includes(d)) skipped.push(d);
+    } else if (t.startsWith("rmove:")) {
+      const [from, to] = t.slice(6).split(">");
+      if (ISO_DAY_RE.test(from || "") && ISO_DAY_RE.test(to || "")) moved[from] = to;
+    } else if (t.startsWith("rfrom:")) {
+      const d = t.slice(6);
+      if (ISO_DAY_RE.test(d)) movedFrom = d;
+    }
+  }
+  return {
+    freq, interval, unit, until, count, done, paused, anchorDay,
+    ...(skipped.length ? { skipped: skipped.sort() } : {}),
+    ...(Object.keys(moved).length ? { moved } : {}),
+    ...(movedFrom ? { movedFrom } : {}),
+  };
 }
 
 // Build the recurrence-related tags, preserving any non-recurrence tags passed in.
@@ -102,7 +136,46 @@ export function recurrenceToTags(rule: RecurrenceRule, existing: string[] = []):
     base.push(`ranchor:${rule.anchorDay}`);
   }
   if (rule.paused) base.push("rpaused");
+  for (const d of [...(rule.skipped || [])].sort().slice(-MAX_OCCURRENCE_MARKS)) base.push(`rskip:${d}`);
+  for (const from of Object.keys(rule.moved || {}).sort().slice(-MAX_OCCURRENCE_MARKS)) {
+    base.push(`rmove:${from}>${rule.moved![from]}`);
+  }
+  if (rule.movedFrom) base.push(`rfrom:${rule.movedFrom}`);
   return base;
+}
+
+/**
+ * The SCHEDULED date of the stored row.
+ *
+ * A row moved for one occurrence ("mow on the 18th this month") still belongs
+ * to the 15th: the series steps from the scheduled date, so January is the
+ * 15th again and the move never re-anchors the schedule.
+ */
+export function scheduledDateOf(dueDate: string | null | undefined, rule: RecurrenceRule): string {
+  return rule.movedFrom || String(dueDate || "").slice(0, 10);
+}
+
+/** Where a scheduled date actually falls, after a one-occurrence move. */
+function placed(date: string, rule: RecurrenceRule): { dueDate: string; movedFrom?: string } {
+  const to = rule.moved?.[date];
+  return to && to !== date ? { dueDate: to, movedFrom: date } : { dueDate: date };
+}
+
+/**
+ * The first scheduled date at or after `from` that is not skipped, or null
+ * when the series ends first. Bounded so a fully-skipped series cannot spin.
+ */
+function firstUnskipped(from: string, rule: RecurrenceRule): string | null {
+  const skipped = new Set(rule.skipped || []);
+  let cur = from;
+  for (let guard = 0; guard < 2000; guard++) {
+    if (rule.until && cur > rule.until) return null;
+    if (!skipped.has(cur)) return cur;
+    const next = advance(cur, rule);
+    if (next <= cur) return null;
+    cur = next;
+  }
+  return null;
 }
 
 /**
@@ -267,9 +340,12 @@ export function nextRecurringTaskSpawn(
   todayISO?: string,
 ): { dueDate: string; tags: string[] } | null {
   const tags = Array.isArray(prev.tags) ? prev.tags.map(String) : [];
-  const rule = withAnchorDay(parseRecurrence(tags), prev.dueDate || undefined);
+  const parsedRule = parseRecurrence(tags);
+  const rule = withAnchorDay(parsedRule, scheduledDateOf(prev.dueDate, parsedRule) || undefined);
   if (!rule.freq || !rule.unit) return null;
-  const base = String(prev.dueDate || todayISO || "").slice(0, 10);
+  // Step from the SCHEDULED date: a row moved for one occurrence must not
+  // re-anchor the series onto the day it was moved to.
+  const base = String(scheduledDateOf(prev.dueDate, rule) || todayISO || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return null;
   let next = advance(base, rule);
   // A chore finished late steps forward on its own anchor until it lands on
@@ -282,7 +358,15 @@ export function nextRecurringTaskSpawn(
     for (let guard = 0; next < today && guard < 1000; guard++) next = advance(next, rule);
   }
   if (seriesEnded(rule, next)) return null;
-  return { dueDate: next, tags: recurrenceToTags({ ...rule, done: rule.done + 1 }, tags) };
+  // A skipped occurrence is stepped over, never landed on; a moved one lands
+  // on the day it was moved to and remembers where it belongs.
+  const open = firstUnskipped(next, rule);
+  if (!open) return null;
+  const spot = placed(open, rule);
+  return {
+    dueDate: spot.dueDate,
+    tags: recurrenceToTags({ ...rule, done: rule.done + 1, movedFrom: spot.movedFrom }, tags),
+  };
 }
 
 /**
@@ -314,14 +398,16 @@ export function rollForwardRecurringTask(
   const tags = Array.isArray(task?.tags) ? task.tags.map(String) : [];
   const base = String(task?.dueDate || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(base) || base >= today) return null;
-  const rule = withAnchorDay(parseRecurrence(tags), base);
+  const parsed = parseRecurrence(tags);
+  const scheduled = scheduledDateOf(base, parsed);
+  const rule = withAnchorDay(parsed, scheduled);
   if (!rule.freq || !rule.unit || rule.paused) return null;
   // The series ended before today and this occurrence was its last.
   if (rule.until && rule.until < today) return { ended: true };
   // An `rcount:` series on its final occurrence has nowhere to step to; a
   // missed occurrence is not a completed one, so it stays where it is.
   if (rule.count && rule.done + 1 >= rule.count) return null;
-  let cur = base;
+  let cur = scheduled;
   // Bounded: 5,000 daily steps is thirteen years; a series older than that
   // still moves forward and finishes on a later call.
   for (let guard = 0; guard < 5000; guard++) {
@@ -330,6 +416,154 @@ export function rollForwardRecurringTask(
     if (rule.until && next > rule.until) break;
     cur = next;
   }
-  if (cur === base) return null;
-  return { dueDate: cur, tags: recurrenceToTags(rule, tags) };
+  if (cur === scheduled) return null;
+  // Never roll ONTO an occurrence the user skipped: carry on to the next open
+  // one, even when that is still ahead of today.
+  const open = firstUnskipped(cur, rule);
+  if (!open) return { ended: true };
+  const spot = placed(open, rule);
+  return { dueDate: spot.dueDate, tags: recurrenceToTags({ ...rule, movedFrom: spot.movedFrom }, tags) };
+}
+
+// ─── One occurrence at a time ────────────────────────────────────────────────
+
+export type TaskOccurrenceAction = "skip" | "unskip" | "move" | "unmove" | "endBefore";
+
+export type TaskOccurrenceResult =
+  | { ok: true; dueDate: string; tags: string[]; ended?: boolean }
+  | { ok: false; error: string };
+
+/**
+ * Skip, move or restore ONE scheduled occurrence of a recurring task, or end
+ * the series before one. Pure: the server applies the result to the stored row
+ * (Rule 6 — no client read-modify-write of the tag list).
+ *
+ * `date` is always the SCHEDULED date of the occurrence acted on.
+ *
+ *   skip       the date is recorded as skipped. When it is the open row's own
+ *              date, the row steps to the next occurrence that is not skipped.
+ *              The schedule itself is untouched — January stays January.
+ *   unskip     the mark is removed. If the date is today or ahead and earlier
+ *              than the open row, it becomes the open row again.
+ *   move       that ONE occurrence happens on `newDate`. Later occurrences
+ *              keep their scheduled dates.
+ *   unmove     the occurrence returns to its scheduled date.
+ *   endBefore  the series ends the day before `date` (history is kept).
+ */
+export function applyTaskOccurrenceAction(
+  task: { dueDate?: string | null; tags?: string[] | null; status?: string | null },
+  input: { action: TaskOccurrenceAction; date: string; newDate?: string },
+  todayISO: string,
+): TaskOccurrenceResult {
+  const tags = Array.isArray(task?.tags) ? task.tags.map(String) : [];
+  const due = String(task?.dueDate || "").slice(0, 10);
+  const date = String(input.date || "").slice(0, 10);
+  if (!ISO_DAY_RE.test(due)) return { ok: false, error: "This task has no due date." };
+  if (!ISO_DAY_RE.test(date)) return { ok: false, error: "date (YYYY-MM-DD) required" };
+  if (String(task?.status || "") === "done") return { ok: false, error: "This occurrence is already completed." };
+  const parsed = parseRecurrence(tags);
+  const scheduled = scheduledDateOf(due, parsed);
+  const rule = withAnchorDay(parsed, scheduled);
+  if (!rule.freq || !rule.unit) return { ok: false, error: "This task does not repeat." };
+  if (date < scheduled && input.action !== "unskip") {
+    return { ok: false, error: "That occurrence is already behind this series." };
+  }
+
+  const skipped = new Set(rule.skipped || []);
+  const moved: Record<string, string> = { ...(rule.moved || {}) };
+  const finish = (next: RecurrenceRule, dueDate: string): TaskOccurrenceResult =>
+    ({ ok: true, dueDate, tags: recurrenceToTags(next, tags) });
+
+  switch (input.action) {
+    case "skip": {
+      skipped.add(date);
+      delete moved[date];
+      const next: RecurrenceRule = { ...rule, skipped: [...skipped], moved };
+      if (date !== scheduled) return finish(next, due);
+      // Skipping the open occurrence: step to the next one that is not skipped.
+      const after = advance(scheduled, rule);
+      const open = after > scheduled ? firstUnskipped(after, next) : null;
+      if (!open || (rule.count && rule.done + 1 >= rule.count)) {
+        // Nothing left to step to: the series has run out. The row stays where
+        // it is, marked skipped, so the caller can retire it.
+        return { ok: true, dueDate: due, tags: recurrenceToTags(next, tags), ended: true };
+      }
+      const spot = placed(open, next);
+      return finish({ ...next, movedFrom: spot.movedFrom }, spot.dueDate);
+    }
+    case "unskip": {
+      if (!skipped.has(date)) return finish(rule, due);
+      skipped.delete(date);
+      const next: RecurrenceRule = { ...rule, skipped: [...skipped], moved };
+      // Restoring an occurrence the series already stepped past: while it is
+      // still today or ahead, it is the open occurrence again. One that is
+      // already behind today stays behind — it reads as missed, not as a
+      // brand-new overdue chore.
+      if (date < scheduled && date >= String(todayISO || "").slice(0, 10)) {
+        const spot = placed(date, next);
+        return finish({ ...next, movedFrom: spot.movedFrom }, spot.dueDate);
+      }
+      return finish(next, due);
+    }
+    case "move": {
+      const to = String(input.newDate || "").slice(0, 10);
+      if (!ISO_DAY_RE.test(to)) return { ok: false, error: "newDate (YYYY-MM-DD) required" };
+      skipped.delete(date);
+      if (to === date) delete moved[date]; else moved[date] = to;
+      const next: RecurrenceRule = { ...rule, skipped: [...skipped], moved };
+      if (date !== scheduled) return finish(next, due);
+      return finish({ ...next, movedFrom: to === date ? undefined : date }, to);
+    }
+    case "unmove": {
+      delete moved[date];
+      const next: RecurrenceRule = { ...rule, moved };
+      if (date !== scheduled) return finish(next, due);
+      return finish({ ...next, movedFrom: undefined }, date);
+    }
+    case "endBefore": {
+      const d = new Date(date + "T00:00:00");
+      d.setDate(d.getDate() - 1);
+      const until = toLocalISO(d);
+      return { ok: true, dueDate: due, tags: recurrenceToTags({ ...rule, until }, tags), ...(date <= scheduled ? { ended: true } : {}) };
+    }
+    default:
+      return { ok: false, error: "Unknown action" };
+  }
+}
+
+
+/**
+ * Change a task's repeat rule on the tags AS STORED.
+ *
+ * The series' progress (`rdone:`) and its per-occurrence marks (skips, moves)
+ * are kept; the day-of-month anchor is re-pinned from the row's scheduled date
+ * because a new cadence means a new anchor. `freq: ""` stops the repetition
+ * and leaves a one-time task on its current date.
+ */
+export function applyTaskSchedule(
+  task: { dueDate?: string | null; tags?: string[] | null },
+  patch: { freq?: string; until?: string | null; count?: number | null; paused?: boolean },
+): string[] {
+  const tags = Array.isArray(task?.tags) ? task.tags.map(String) : [];
+  const cur = parseRecurrence(tags);
+  const freq = patch.freq !== undefined ? String(patch.freq || "") : cur.freq;
+  if (!freq) return recurrenceToTags({ freq: "", interval: 1, unit: "", done: 0, paused: false }, tags);
+  const { unit, interval } = freqToUnit(freq);
+  if (!unit) return tags; // an unknown cadence changes nothing
+  const until = patch.until !== undefined ? (patch.until && ISO_DAY_RE.test(patch.until) ? patch.until : undefined) : cur.until;
+  const count = patch.count !== undefined
+    ? (patch.count && patch.count > 0 ? Math.floor(patch.count) : undefined)
+    : cur.count;
+  const next: RecurrenceRule = withAnchorDay({
+    freq, unit, interval,
+    // One end condition at a time: choosing a date clears a count and back.
+    until: patch.count ? undefined : until,
+    count: patch.until ? undefined : count,
+    done: cur.done,
+    paused: patch.paused !== undefined ? !!patch.paused : cur.paused,
+    skipped: cur.skipped,
+    moved: cur.moved,
+    movedFrom: cur.movedFrom,
+  }, scheduledDateOf(task?.dueDate, cur) || undefined);
+  return recurrenceToTags(next, tags);
 }

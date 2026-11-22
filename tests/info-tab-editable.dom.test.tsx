@@ -43,6 +43,7 @@ const PROFILE = {
   notes: "Free-text scratchpad.",
   fields: {
     phone: "555-0100",
+    birthday: "2000-02-11",
     // A nested group — what a scanned document writes.
     identity: { licenseNumber: "D1234567" },
   },
@@ -57,6 +58,14 @@ const PROFILE = {
 let selfMode = false;
 let notePatchFailure = false;
 let noteDeleteFailure = false;
+
+// A value saved as a characteristic (chat, or the old Details box).
+const BLOOD = { id: "blood-type", label: "Blood type", kind: "select", options: ["A+", "A-", "B+", "O+"], appliesTo: ["person"], createdAt: "", updatedAt: "" };
+const DETAILS = {
+  entityType: "profile", entityId: "bob-1", name: "Bob QA", scopeTokens: ["profile", "person"], defaultScope: "person",
+  rows: [{ definition: BLOOD, value: "A-", updatedAt: "", history: [], flags: [], stale: false }],
+  available: [], suggestions: [], flags: [],
+};
 
 const JANE = { id: "jane-1", type: "person", name: "Jane Doe", fields: {}, tags: [] };
 
@@ -126,6 +135,7 @@ beforeEach(() => {
       return json({ detail: PROFILE, profiles: [PROFILE, JANE] });
     }
     if (method === "GET" && url.startsWith("/api/notes")) return json(NOTES);
+    if (method === "GET" && url === "/api/details/profile/bob-1") return json(DETAILS);
     if (method === "GET" && url.startsWith("/api/memories")) return json([]);
     if (method === "GET" && url.startsWith("/api/profiles/")) return json(PROFILE);
     if (method === "PATCH" && url === "/api/notes/n1" && notePatchFailure) throw new Error("Network request failed");
@@ -231,6 +241,49 @@ describe("fields", () => {
     fireEvent.click(screen.getByTestId("info-remove-Phone"));
     await waitFor(() => expect(wrote("PATCH", "/api/profiles/bob-1")).toBeTruthy());
     expect(wrote("PATCH", "/api/profiles/bob-1")!.body).toEqual({ fieldsToDelete: ["phone"] });
+  });
+
+  it("Age can be changed — it moves the birth year, keeping the day", async () => {
+    renderPage();
+    await ready();
+    fireEvent.click(screen.getByTestId("info-cell-Age"));
+    const input = screen.getByTestId("info-edit-Age") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "30" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(wrote("PATCH", "/api/profiles/bob-1")).toBeTruthy());
+    const now = new Date();
+    const had = now.getMonth() + 1 > 2 || (now.getMonth() + 1 === 2 && now.getDate() >= 11);
+    expect(wrote("PATCH", "/api/profiles/bob-1")!.body).toEqual({ fields: { birthday: `${now.getFullYear() - 30 - (had ? 0 : 1)}-02-11` } });
+  });
+
+  it("Age and Birthday can both be removed (removing Age removes the birthday it comes from)", async () => {
+    renderPage();
+    await ready();
+    fireEvent.click(screen.getByTestId("info-remove-Age"));
+    await waitFor(() => expect(wrote("PATCH", "/api/profiles/bob-1")).toBeTruthy());
+    expect(wrote("PATCH", "/api/profiles/bob-1")!.body).toEqual({ fieldsToDelete: ["birthday"] });
+    expect(screen.getByTestId("info-remove-Birthday")).toBeTruthy();
+  });
+
+  it("there is no separate Details box; a saved characteristic is a plain card you can change and remove", async () => {
+    renderPage();
+    await ready();
+    expect(screen.queryByTestId("record-details-panel")).toBeNull();
+    const cell = await screen.findByTestId("detail-cell-blood-type");
+    expect(cell.textContent).toMatch(/Blood type/);
+    expect(cell.textContent).toMatch(/A-/);
+    fireEvent.click(cell);
+    const input = screen.getByTestId("detail-cell-edit-blood-type") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "O+" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(wrote("PUT", "/api/details/profile/bob-1/blood-type")).toBeTruthy());
+    expect(wrote("PUT", "/api/details/profile/bob-1/blood-type")!.body).toEqual({ value: "O+" });
+
+    const remove = await screen.findByTestId("detail-cell-remove-blood-type");
+    fireEvent.click(remove);
+    expect(wrote("DELETE", "/api/details/profile/bob-1/blood-type")).toBeUndefined(); // two taps (Rule 8)
+    fireEvent.click(screen.getByTestId("detail-cell-remove-blood-type"));
+    await waitFor(() => expect(wrote("DELETE", "/api/details/profile/bob-1/blood-type")).toBeTruthy());
   });
 
   it("adds a field", async () => {

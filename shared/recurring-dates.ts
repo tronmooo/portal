@@ -70,8 +70,14 @@ export interface RecurringMeta {
   /** true when the event was created/adopted by the Recurring Dates manager. */
   isRecurringDate: boolean;
   kind: RecurringKind | null;
-  /** days before an occurrence to remind; null = no reminder configured. */
+  /**
+   * Days before an occurrence the FIRST reminder shows; null = no reminder
+   * configured. With several reminders this is the longest lead, which is the
+   * day the bell starts showing the date.
+   */
   remindDays: number | null;
+  /** Every configured reminder lead, longest first ("1 week before", "1 day before"). */
+  reminders?: number[];
   requireComplete: boolean;
   paused: boolean;
   archived: boolean;
@@ -98,7 +104,10 @@ export function parseRecurringMeta(tags: string[] | null | undefined): Recurring
       if (RECURRING_KINDS.some(d => d.kind === k)) meta.kind = k as RecurringKind;
     } else if (tag.startsWith("rd:remind:")) {
       const n = parseInt(tag.slice(10), 10);
-      if (Number.isFinite(n) && n >= 0) meta.remindDays = n;
+      if (Number.isFinite(n) && n >= 0) {
+        const list = meta.reminders ?? (meta.reminders = []);
+        if (!list.includes(n)) list.push(n);
+      }
     } else if (tag.startsWith("rd:done:")) {
       const d = tag.slice(8);
       if (DATE_RE.test(d)) meta.completedDates.push(d);
@@ -106,6 +115,10 @@ export function parseRecurringMeta(tags: string[] | null | undefined): Recurring
       const d = tag.slice(8);
       if (DATE_RE.test(d)) meta.skippedDates.push(d);
     }
+  }
+  if (meta.reminders?.length) {
+    meta.reminders.sort((a, b) => b - a);
+    meta.remindDays = meta.reminders[0];
   }
   return meta;
 }
@@ -117,7 +130,12 @@ export function metaToTags(meta: RecurringMeta, existingTags: string[] | null | 
   const out = [...base];
   if (meta.isRecurringDate) out.push(RD_TAG);
   if (meta.kind) out.push(`rd:kind:${meta.kind}`);
-  if (meta.remindDays != null && meta.remindDays >= 0) out.push(`rd:remind:${meta.remindDays}`);
+  // `remindDays` is what older callers set; `reminders` is the full list. A
+  // caller that changed only `remindDays` (the single-reminder form) wins.
+  const leads = meta.reminders?.length && meta.reminders[0] === meta.remindDays
+    ? meta.reminders
+    : (meta.remindDays != null && meta.remindDays >= 0 ? [meta.remindDays] : []);
+  for (const n of Array.from(new Set(leads)).sort((a, b) => b - a)) out.push(`rd:remind:${n}`);
   if (meta.requireComplete) out.push("rd:require");
   if (meta.paused) out.push("rd:paused");
   if (meta.archived) out.push("rd:archived");
@@ -139,6 +157,59 @@ export function markOccurrence(
   if (action === "done") meta.completedDates.push(dateISO);
   if (action === "skip") meta.skippedDates.push(dateISO);
   return metaToTags(meta, tags);
+}
+
+export interface SeriesSettingsPatch {
+  kind?: RecurringKind;
+  /** Reminder leads in days before the date (0 = on the day). [] clears them. */
+  reminders?: number[];
+  requireComplete?: boolean;
+}
+
+/**
+ * Change a series' type, reminders or check-off rule on the tags AS STORED.
+ * Per-occurrence marks (done / skipped) and every non-rd tag are untouched.
+ */
+export function applySeriesSettings(
+  tags: string[] | null | undefined,
+  patch: SeriesSettingsPatch,
+): string[] {
+  const meta = parseRecurringMeta(tags);
+  meta.isRecurringDate = true;
+  if (patch.kind && RECURRING_KINDS.some(d => d.kind === patch.kind)) meta.kind = patch.kind;
+  if (patch.reminders) {
+    const leads = Array.from(new Set(
+      patch.reminders.map(n => Math.floor(Number(n))).filter(n => Number.isFinite(n) && n >= 0 && n <= 366),
+    )).sort((a, b) => b - a).slice(0, 6);
+    meta.reminders = leads;
+    meta.remindDays = leads.length ? leads[0] : null;
+  }
+  if (typeof patch.requireComplete === "boolean") meta.requireComplete = patch.requireComplete;
+  return metaToTags(meta, tags);
+}
+
+/** "1 week before", "On the day", "5 days before". */
+export function reminderLabel(days: number): string {
+  const preset = REMINDER_PRESETS.find(r => r.value === days);
+  if (preset) return preset.label;
+  return `${days} days before`;
+}
+
+/**
+ * The date of the Nth occurrence of a pattern (1 = the first date itself), or
+ * null when it cannot be reached. "Ends after 12 occurrences" is stored as the
+ * date of the twelfth — an event carries an end DATE, not a count.
+ */
+export function nthOccurrenceDate(baseDate: string, recurrence: string, n: number): string | null {
+  const base = String(baseDate || "").slice(0, 10);
+  if (!DATE_RE.test(base) || !Number.isFinite(n) || n < 1) return null;
+  if (n === 1) return base;
+  const dates = expandRecurrenceDates(base, recurrence, {
+    windowStart: base,
+    windowEnd: addDaysISO(base, 366 * 60),
+    cap: Math.min(5000, Math.floor(n) + 2),
+  });
+  return dates[Math.floor(n) - 1] ?? null;
 }
 
 export function setSeriesFlag(

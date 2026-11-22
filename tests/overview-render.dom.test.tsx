@@ -143,6 +143,17 @@ describe("the composed Overview reaches the screen", () => {
     });
   });
 
+  it("every field can be removed from the overview — two taps, explicit delete signal", async () => {
+    renderOverview();
+    fireEvent.click(await screen.findByTestId("overview-field-address"));
+    const remove = screen.getByTestId("overview-field-remove-address");
+    fireEvent.click(remove);
+    expect(calls.find(c => c.method === "PATCH")).toBeUndefined();
+    fireEvent.click(screen.getByTestId("overview-field-remove-address"));
+    await waitFor(() => expect(calls.find(c => c.method === "PATCH")).toBeTruthy());
+    expect(calls.find(c => c.method === "PATCH")!).toMatchObject({ url: "/api/profiles/house", body: { fieldsToDelete: ["address"] } });
+  });
+
   it("falls back rather than blanking the page when composition is unavailable", async () => {
     failOverview = true;
     renderOverview(<div data-testid="legacy-overview">legacy</div>);

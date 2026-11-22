@@ -43,6 +43,7 @@ export type Domain =
   | "memories"
   | "notifications"
   | "preferences"
+  | "details"     // record details: user-defined characteristics (shared/record-details)
   | "dashboard"   // KPI tiles + dashboard-enhanced + stats
   | "everything"; // nuclear — for writes whose shape we can't name
 
@@ -183,6 +184,7 @@ export const ACTION_TYPE_DOMAINS: Record<string, Domain[]> = {
   save_memory: ["memories"],
   set_budget: ["budgets"],
   manage_document: ["documents"],
+  set_record_detail: ["details"],
 };
 
 /** Action types that only READ — they must never trigger an invalidation. */

@@ -19,7 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import {
   AlertTriangle, Calendar, ChevronDown, ChevronRight, FileText,
-  Link2, Plus, Search, Sparkles, TrendingDown, TrendingUp, Users, Wrench,
+  Link2, Plus, Search, Sparkles, TrendingDown, TrendingUp, Users, Wrench, X,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -100,9 +100,13 @@ function toneClass(tone?: OverviewValue["tone"]): string {
 
 function useFieldWrite(profileId: string) {
   const { toast } = useToast();
-  return async (fieldKey: string, value: string) => {
+  return async (fieldKey: string, value: string | null) => {
     try {
-      await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: { [fieldKey]: value } });
+      // A null value removes the field (the explicit delete signal: storage
+      // merges `fields`, so omitting or blanking a key removes nothing).
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, value === null
+        ? { fieldsToDelete: [fieldKey] }
+        : { fields: { [fieldKey]: value } });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "overview"] });
       invalidateDomains("profiles");
@@ -118,6 +122,7 @@ function ValueRow({ value, profileId }: { value: OverviewValue; profileId: strin
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value.value == null ? "" : String(value.value));
   const [saving, setSaving] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const write = useFieldWrite(profileId);
   const editable = value.editable;
 
@@ -152,6 +157,24 @@ function ValueRow({ value, profileId }: { value: OverviewValue; profileId: strin
           }}
         >
           {saving ? "…" : "Save"}
+        </Button>
+        {/* Every field can be removed — two taps (Rule 8). */}
+        <Button
+          size="sm"
+          variant={confirmRemove ? "destructive" : "ghost"}
+          className="h-8 text-xs px-2"
+          disabled={saving}
+          aria-label={confirmRemove ? `Tap again to remove ${value.label}` : `Remove ${value.label}`}
+          data-testid={`overview-field-remove-${value.semanticKey}`}
+          onClick={async () => {
+            if (!confirmRemove) { setConfirmRemove(true); return; }
+            setSaving(true);
+            const ok = await write(editable.fieldKey, null);
+            setSaving(false);
+            if (ok) { setEditing(false); setConfirmRemove(false); }
+          }}
+        >
+          {confirmRemove ? "Remove?" : <X className="h-3.5 w-3.5" />}
         </Button>
       </div>
     );

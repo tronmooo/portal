@@ -11,6 +11,7 @@
 import React from "react";
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const navigate = vi.fn();
 vi.mock("wouter", () => ({
@@ -21,6 +22,12 @@ vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 vi.mock("@/lib/calendar-mutations", () => ({
   applyCalendarAction: vi.fn().mockResolvedValue(undefined),
   refreshCalendarSurfaces: vi.fn().mockResolvedValue(undefined),
+  restoreOccurrence: vi.fn().mockResolvedValue(undefined),
+}));
+// The detail sheet's Edit screen reads the record it edits; no network here.
+vi.mock("@/lib/queryClient", () => ({
+  apiRequest: vi.fn().mockResolvedValue({ json: async () => ({}) }),
+  queryClient: { invalidateQueries: vi.fn() },
 }));
 
 import { seriesFromAll } from "../shared/calendar-adapters";
@@ -102,7 +109,11 @@ afterEach(cleanup);
 beforeEach(() => navigate.mockClear());
 
 const mount = () =>
-  render(<RecurringDatesPage filterIds={[]} filterMode="everyone" />);
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, queryFn: async () => [] } } })}>
+      <RecurringDatesPage filterIds={[]} filterMode="everyone" />
+    </QueryClientProvider>,
+  );
 
 describe("category chips count unique rules, not occurrences", () => {
   // A chip reading "Liabilities 0" is a dead filter: tapping it can only ever
@@ -256,6 +267,7 @@ describe("opening an item", () => {
   it("shows five years of birthdays in the detail schedule", () => {
     mount();
     fireEvent.click(screen.getByTestId(`rule-open-${JOE_BIRTHDAY}`));
+    fireEvent.click(screen.getByTestId("cal-view-all"));
     const occ = screen.getByTestId("cal-detail-occurrences");
     for (const y of ["2027", "2028", "2029", "2030", "2031"]) {
       expect(occ.textContent, y).toContain(y);
@@ -265,6 +277,7 @@ describe("opening an item", () => {
   it("shows twelve months of dates for a subscription", () => {
     mount();
     fireEvent.click(screen.getByTestId("rule-open-obligation:ob-chatgpt"));
+    fireEvent.click(screen.getByTestId("cal-view-all"));
     const rows = within(screen.getByTestId("cal-detail-occurrences"))
       .getAllByTestId(/^cal-occ-/);
     expect(rows.length).toBeGreaterThanOrEqual(12);

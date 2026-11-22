@@ -12,6 +12,7 @@
 import React from "react";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const navigate = vi.fn();
 vi.mock("wouter", () => ({
@@ -24,6 +25,12 @@ const applyCalendarAction = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/lib/calendar-mutations", () => ({
   applyCalendarAction: (...a: any[]) => applyCalendarAction(...a),
   refreshCalendarSurfaces: vi.fn().mockResolvedValue(undefined),
+  restoreOccurrence: vi.fn().mockResolvedValue(undefined),
+}));
+// The detail sheet's Edit screen reads the record it edits; no network here.
+vi.mock("@/lib/queryClient", () => ({
+  apiRequest: vi.fn().mockResolvedValue({ json: async () => ({}) }),
+  queryClient: { invalidateQueries: vi.fn() },
 }));
 
 import { seriesFromAll } from "../shared/calendar-adapters";
@@ -101,12 +108,19 @@ import { RecurringDatesPage } from "../client/src/components/recurring/Recurring
 afterEach(cleanup);
 beforeEach(() => { navigate.mockClear(); toast.mockClear(); applyCalendarAction.mockClear(); });
 
-const mount = () => render(<RecurringDatesPage filterIds={[]} filterMode="everyone" />);
+const mount = () => render(
+  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, queryFn: async () => [] } } })}>
+    <RecurringDatesPage filterIds={[]} filterMode="everyone" />
+  </QueryClientProvider>,
+);
+/** The overview lists the next three dates; the whole schedule is one tap away. */
+const openAllOccurrences = () => fireEvent.click(screen.getByTestId("cal-view-all"));
 
 describe("the reported bug: a future birthday is never 'done'", () => {
   it("does not cross out Feb 11 2027 or 2028", () => {
     mount();
     fireEvent.click(screen.getByTestId("rule-open-event:evt-joe"));
+    openAllOccurrences();
     const list = screen.getByTestId("cal-detail-occurrences");
     for (const date of ["2027-02-11", "2028-02-11"]) {
       const row = within(list).getByTestId(`cal-occ-${date}`);
@@ -127,11 +141,31 @@ describe("the reported bug: a future birthday is never 'done'", () => {
     expect(screen.getByTestId("rule-next-event:evt-joe").textContent).toContain("February 11, 2027");
   });
 
-  it("offers no check-off control on a birthday occurrence row", () => {
+  it("offers no check-off or skip on a birthday — and does offer them on a weekly event", () => {
     mount();
     fireEvent.click(screen.getByTestId("rule-open-event:evt-joe"));
-    expect(screen.queryByTestId("cal-occ-done-2027-02-11")).toBeNull();
-    expect(screen.queryByTestId("cal-occ-skip-2027-02-11")).toBeNull();
+    // A birthday's primary button is Edit; there is nothing to complete.
+    expect(screen.getByTestId("cal-action-edit")).toBeTruthy();
+    expect(screen.queryByTestId("cal-action-complete")).toBeNull();
+    openAllOccurrences();
+    // Its rows open no action list at all: they are not buttons.
+    const row = screen.getByTestId("cal-occ-2027-02-11");
+    expect(row.tagName).toBe("DIV");
+    fireEvent.click(row);
+    expect(screen.queryByTestId("cal-action-sheet")).toBeNull();
+
+    // The same screen for a weekly event DOES offer them — so the absence
+    // above is the birthday rule, not a missing control.
+    cleanup();
+    mount();
+    fireEvent.click(screen.getByTestId("rule-open-event:evt-trash"));
+    expect(screen.getByTestId("cal-action-complete")).toBeTruthy();
+    openAllOccurrences();
+    const first = within(screen.getByTestId("cal-detail-occurrences")).getAllByTestId(/^cal-occ-/)[0];
+    expect(first.tagName).toBe("BUTTON");
+    fireEvent.click(first);
+    expect(screen.getByTestId("cal-menu-skip").textContent).toContain("Keep future schedule");
+    expect(screen.getByTestId("cal-menu-move").textContent).toContain("Move just this occurrence");
   });
 
   it("still honours done marks where they DO mean something", () => {
@@ -200,12 +234,14 @@ describe("opening every rule works", () => {
   it("lists the required horizon per kind", () => {
     mount();
     fireEvent.click(screen.getByTestId("rule-open-event:evt-joe"));
+    openAllOccurrences();
     // Birthdays: at least five years.
     expect(within(screen.getByTestId("cal-detail-occurrences")).getAllByTestId(/^cal-occ-/).length)
       .toBeGreaterThanOrEqual(5);
     cleanup();
     mount();
     fireEvent.click(screen.getByTestId("rule-open-obligation:ob-lubi"));
+    openAllOccurrences();
     // Subscriptions: at least twelve months.
     expect(within(screen.getByTestId("cal-detail-occurrences")).getAllByTestId(/^cal-occ-/).length)
       .toBeGreaterThanOrEqual(12);

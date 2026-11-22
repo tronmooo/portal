@@ -400,6 +400,102 @@ Needs Attention and raises no reminder task or due-soon alert
 anyway" on. An overdue Auto Pay bill and a missed payment are the exceptions
 that show. Turning Auto Pay off stops future recording only.
 
+## Record details rules (a characteristic is a typed, reportable value on any record)
+
+Owner request 2026-11-21: "Condition = Good on my car" had nowhere to go but
+free text. The detail layer lets the user define a characteristic once and
+record it on any record. The rules are in `shared/record-details.ts`, the
+operations in `server/record-details.ts`, the routes at `/api/details/*`
+(`server/record-details-routes.ts`). The UI is `RecordDetailsPanel`
+(`client/src/components/details/`) on the profile Info tab, the person Info
+page, the liability Overview and the document Overview, plus the `/details`
+page (report, catalog, flags).
+*Guards:* `tests/record-details.test.ts`, `tests/record-details-routes.test.ts`,
+`tests/chat-record-details.test.ts`, `tests/record-details-panel.dom.test.tsx`.
+
+**D1. One definition per name, reused everywhere.** "Condition" on the car,
+the house and the guitar is ONE definition (`findDefinitionByLabel`). Naming
+an existing one reuses it and widens its scope to the new record's kind;
+naming it with a different type is a 409, never a second "Condition".
+**D2. Values are typed and validated, never a text fallback.** Every write goes
+through `normalizeDetailValue` ("good" → "Good" on a condition scale; a
+rating is a whole number on its scale; min/max are enforced). A value the
+type can't hold is a 400 with the reason. The chat infers a new
+characteristic's type from the library and the value (`inferDetailDefinition`),
+never defaulting to text for something that is plainly a condition, number,
+date or yes/no.
+**D3. Storage is preferences rows, written under a lock.** `detail_definitions`
+holds the catalog, `details:<entityType>:<entityId>` one record's values
+(no table, no migration — the valuation precedent). Every read-modify-write
+runs inside `withLock` and re-reads the row inside it (Rule 6). The generic
+`PUT /api/preferences/:key` refuses these keys. Writes journal under the
+`details` cache domain.
+**D4. Flags are derived from the current value (Rule 5).** Rules
+(`evaluateDetailRules`) and report filters share ONE comparison
+(`matchesDetail`), so "flagged Fair or worse" and "show me Fair or worse" can't
+disagree. No stored resolved state. `required` flags a record the
+characteristic applies to that lacks it.
+**D5. One source per value with profile fields.** Chat's `update_profile`
+writes a field named like a DEFINED characteristic to that characteristic
+(`divertDefinedDetails`) — unless the record already carries that key as a
+field (moving one of two copies would leave them disagreeing), or the value
+doesn't fit (then nothing is lost: it stays a field). With no characteristics
+defined, `update_profile` is unchanged.
+**D6. The panel never takes down its page.** An unexpected or failed response
+is the panel's error state with a retry (Rule 7); removing a value takes two
+taps (Rule 8); opening it writes nothing (Rule 3). Suggestions come from the
+fixed `DETAIL_TEMPLATES` library for the record's kind, never random.
+**D7. No separate Details box on record pages.** Owner, 2026-11-21: "delete
+this, make this simple". New facts go through each page's own Add field.
+Values already saved as characteristics show as plain cards
+(`DetailValueCells`): tap to change, X (two taps) to remove. The catalog and
+reports stay on `/details`. Never put the Details panel back on a record page.
+**D8. Everything on the Info page can be changed and removed.** Age has no
+field of its own: editing it moves the birth year (`birthdayForAge`,
+`client/src/lib/profile-fields.ts`) and removing it removes the birthday;
+Birthday has an X like every other field.
+Asset and liability profiles have the same Add field (`AddFieldPanel`,
+`client/src/components/AddFieldPanel.tsx`): on an asset what is added shows
+in the Overview, where every field can be changed or removed (two taps); on a
+liability the free-form fields are listed under it. Money, rate, date, switch
+and schedule fields are never listed there as text (L2/L3).
+*Guards:* `tests/info-tab-editable.dom.test.tsx`, `tests/add-field-panel.dom.test.tsx`,
+`tests/overview-render.dom.test.tsx`.
+
+## Recurring occurrence rules (one date at a time; the series keeps its schedule)
+
+Owner request 2026-11-21 ("Mow the Lawn": skip December 15, January 15 stays).
+Read them before touching `CalendarItemDetail` / `detail/EditSeriesScreen`
+(`client/src/components/calendar/`), `shared/calendar-capabilities.ts`, the
+task recurrence engine (`shared/recurrence.ts`) or the occurrence routes.
+*Guards:* `tests/recurring-occurrence-actions.test.ts` (rule, adapters, real
+routes), `tests/calendar-detail-redesign.dom.test.tsx` (the screens).
+*Live check (deployed app, smoke account):* `npx tsx tests/live-recurring-occurrence-check.ts`.
+The calendar grid opens the same screen (`GridDetailHost`); its old dialog is
+only the fallback for an item the occurrence stream does not carry.
+
+**O1. Skipping never deletes.** A skip is a mark on that one date (event:
+`rd:skip:`; task: `rskip:`); the series steps over it and every later date
+stays. Only "End series" / "Delete" (two taps, Rule 8) stop a series.
+**O2. A moved occurrence does not re-anchor the series.** A task moved for
+one date carries `rfrom:<scheduled date>`; the next occurrence steps from the
+SCHEDULED date (`scheduledDateOf`). Never move one occurrence by PATCHing a
+recurring task's `dueDate`.
+**O3. Occurrence state is written on the stored row** (Rule 6):
+`POST /api/tasks/:id/occurrence`, `POST /api/tasks/:id/schedule`,
+`POST /api/events/:id/occurrence`, `POST /api/events/:id/series-settings`.
+Never PATCH a rebuilt `tags` array from the client.
+**O4. An action that does not apply is not on the screen.** What one date
+offers is `occurrenceMenuFor` (a birthday: nothing; a task: only its open
+occurrence can be completed). Never render a disabled button whose reason is
+a tooltip. Each action says how far it reaches (`hint`).
+**O5. History is derived** (`shared/occurrence-history.ts`) from the marks
+and rows the series already has (Rule 5). No stored outcome table.
+**O6. Edit happens where the schedule lives** (`editsInPlace`): an event and
+a task are edited in the sheet; a bill, a profile's birthday and a document
+date open their source. The edit form has a Save button (owner's design); it
+writes nothing on open (Rule 3) and sends only what changed.
+
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
 

@@ -20,7 +20,7 @@
 // cannot exhaust the iteration cap before it reaches the window (the bug that
 // once made long-running daily events vanish from the calendar entirely).
 
-import { parseRecurrence, type RecurrenceRule } from "./recurrence";
+import { parseRecurrence, scheduledDateOf, type RecurrenceRule } from "./recurrence";
 import { addMonthsClamped, addYearsClamped } from "./date-math";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -100,7 +100,19 @@ export function taskOccurrenceDates(
     : windowEnd;
   if (end < base) return out;
 
-  const baseDate = parseLocal(base);
+  // Projection steps from the row's SCHEDULED date (a row moved for one
+  // occurrence keeps its place in the series), drops the occurrences skipped
+  // one at a time and shows a moved one on the day it was moved to.
+  const scheduled = scheduledDateOf(base, rule);
+  const baseDate = parseLocal(DATE_RE.test(scheduled) ? scheduled : base);
+  const skipped = new Set(rule.skipped || []);
+  const moves = rule.moved || {};
+  const push = (iso: string) => {
+    if (skipped.has(iso)) return;
+    const shown = moves[iso] || iso;
+    if (shown === base || !visible(shown) || shown < windowStart || shown > windowEnd) return;
+    if (!out.includes(shown)) out.push(shown);
+  };
 
   if (rule.unit === "weekday") {
     // Mon–Fri: 5 occurrences per calendar week, so skip whole weeks up to just
@@ -120,9 +132,9 @@ export function taskOccurrenceDates(
       if (n >= budget) break;
       const iso = toISO(cur);
       if (iso > end) break;
-      if (iso >= windowStart && visible(iso)) out.push(iso);
+      push(iso);
     }
-    return out;
+    return out.sort();
   }
 
   // Indexed cadences: jump straight to the first index at or before the window
@@ -146,9 +158,9 @@ export function taskOccurrenceDates(
     if (!d) break;
     const iso = toISO(d);
     if (iso > end) break;
-    if (iso >= windowStart && iso !== base && visible(iso)) out.push(iso);
+    push(iso);
   }
-  return out;
+  return out.sort();
 }
 
 /**

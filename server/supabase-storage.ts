@@ -1,3 +1,4 @@
+import { DETAIL_DEFS_PREF, RECORD_DETAILS_PREFIX, parseDefinitions, parseRecordDetails, parseRecordDetailsKey, recordDetailsKey } from "@shared/record-details";
 import { expenseShownOnProfile } from "@shared/expense-on-profile";
 import {
   valuationKey, valuationHistoryKey, readValuationRecord, readValuationHistory,
@@ -137,6 +138,7 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { isTestEntity } from "../shared/test-data";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth, sumMonthIncomeToDate } from "../shared/obligation-windows";
+import { buildBillsTimeline } from "../shared/bills-timeline";
 import { isAutoPayOn, autoPayRemindersOn, withAutoPaySince } from "../shared/autopay";
 
 /** `YYYY-MM` → the first day of the following month (`YYYY-MM-01`). */
@@ -8450,6 +8452,9 @@ export class SupabaseStorage implements IStorage {
         totalMonthlySpend, lastMonthTotal,
         spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : (totalMonthlySpend > 0 ? 100 : 0),
         spendByCategory, upcomingBills,
+        // The Finance tab's Bills & Payments view (shared/bills-timeline): a
+        // recurring bill's elapsed due dates are assumed paid (owner 2026-11-21).
+        billsTimeline: buildBillsTimeline(allObligations as any[], today),
         monthlyObligationTotal,
         // See the block where these are computed. Cash flow on EVERY surface is
         //   IN  = monthlyIncome
@@ -8809,6 +8814,42 @@ export class SupabaseStorage implements IStorage {
     for (const row of data || []) {
       const rows = readValuationHistory(row.value);
       if (rows.length > 0) out[String(row.key).slice(prefix.length)] = rows;
+    }
+    return out;
+  }
+
+  // ---- Record details (shared/record-details) ----
+  // Rows in `preferences`, like valuations: `detail_definitions` holds the
+  // catalog, `details:<entityType>:<entityId>` one record's values. Callers
+  // serialize read-modify-write through acquireUserLock (server/record-details).
+  async getDetailDefinitions() {
+    return parseDefinitions(await this.getPreference(DETAIL_DEFS_PREF));
+  }
+  async saveDetailDefinitions(defs: import("@shared/record-details").DetailDefinition[]): Promise<void> {
+    await this.setPreference(DETAIL_DEFS_PREF, JSON.stringify(defs));
+  }
+  async getRecordDetails(entityType: string, entityId: string) {
+    return parseRecordDetails(await this.getPreference(recordDetailsKey(entityType, entityId)));
+  }
+  async saveRecordDetails(entityType: string, entityId: string, details: import("@shared/record-details").RecordDetails): Promise<void> {
+    const key = recordDetailsKey(entityType, entityId);
+    if (Object.keys(details.values).length === 0) {
+      const { error } = await this.supabase.from("preferences").delete().eq("user_id", this.userId).eq("key", key);
+      if (error) throw error;
+      return;
+    }
+    await this.setPreference(key, JSON.stringify(details));
+  }
+  async listRecordDetails() {
+    const { data, error } = await this.supabase.from("preferences").select("key,value")
+      .eq("user_id", this.userId).like("key", `${RECORD_DETAILS_PREFIX}%`);
+    if (error) throw error;
+    const out: Array<{ entityType: import("@shared/record-details").DetailEntityType; entityId: string; details: import("@shared/record-details").RecordDetails }> = [];
+    for (const row of data || []) {
+      const parsed = parseRecordDetailsKey(String(row.key));
+      if (!parsed) continue;
+      const details = parseRecordDetails(row.value);
+      if (Object.keys(details.values).length > 0) out.push({ ...parsed, details });
     }
     return out;
   }

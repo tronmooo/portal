@@ -1,4 +1,6 @@
 import { NewNoteForm } from "@/components/notes/NewNoteForm";
+import { DetailValueCells } from "@/components/details/DetailValueCells";
+import { AddFieldPanel } from "@/components/AddFieldPanel";
 import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
@@ -3213,6 +3215,10 @@ function InfoTab({ profile, onEdit }: { profile: ProfileDetail; onEdit: () => vo
   if (!dynamic) return legacy;
   return (
     <>
+      {/* Add field — the same Field | Value | Add as a person's Info page.
+          What is added shows in the overview below, where it can be changed
+          or removed. */}
+      <div className="mb-3"><AddFieldPanel profileId={profile.id} /></div>
       {/* Universal current-value estimate: shown for every owned thing, from
           the stored record that rode in with the bootstrap. Never waits on a
           provider or a model — those run in the background after this paints. */}
@@ -13568,6 +13574,10 @@ export default function ProfileDetailPage() {
                       )}
                     </>
                   )}
+
+                  {/* Values saved as characteristics (chat, the earlier Details box)
+                      show as plain editable/removable cards; new facts use Add field. */}
+                  <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-4" />
 
                   {/* All the way down the Info tab: what you do TO this record
                       — silence the alerts it raises, or remove it. Both were

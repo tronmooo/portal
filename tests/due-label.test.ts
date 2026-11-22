@@ -58,7 +58,8 @@ describe("the screens that had their own copy now share one", () => {
   const FILES = [
     "client/src/components/dashboard/ExecutiveBriefing.tsx",
     "client/src/pages/dashboard.tsx",
-    "client/src/components/finance/MoneyOverview.tsx",
+    // MoneyOverview's Bills card left this list on 2026-11-21: it renders
+    // BillsTimelineView (Upcoming / Past), which prints no overdue countdown.
   ];
 
   it.each(FILES)("%s imports the shared formatter", (f) => {

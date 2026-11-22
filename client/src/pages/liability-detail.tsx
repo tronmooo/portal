@@ -7,6 +7,8 @@ import { changedFieldsOnly } from "@shared/field-patch";
  * documents OCR, calendar auto-events, and subtype-specific UI on top of this.
  */
 
+import { DetailValueCells } from "@/components/details/DetailValueCells";
+import { AddFieldPanel } from "@/components/AddFieldPanel";
 import { localTodayISO } from "@/lib/dates";
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { flattenProfile } from "@/lib/flattenProfile";
@@ -1292,6 +1294,13 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
             {/* AI insights card */}
             <AISummaryCard profileId={profile.id} valueFingerprint={profileValueFingerprint(profile)} />
+
+            {/* User-defined characteristics (shared/record-details): priority,
+                refinance candidate, lender rating… structured and reportable. */}
+            {/* Add field — the same Field | Value | Add as a person's Info page,
+                for anything the loan/bill screens don't have a box for. */}
+            <AddFieldPanel profileId={profile.id} fields={profile.fields} showFields title="Details" />
+            <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 sm:grid-cols-3 gap-2" />
 
             {/* Linked assets — surfaced near the top for parity with asset profiles */}
             <section data-testid="overview-linked-assets">

@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { DETAIL_DEFS_PREF, RECORD_DETAILS_PREFIX, parseDefinitions, parseRecordDetails, parseRecordDetailsKey, recordDetailsKey } from "@shared/record-details";
 import { dedupeActivityRows } from "@shared/activity-description";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
@@ -15,6 +16,7 @@ import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate,
 import { assertEventSpan } from "@shared/event-span";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { canonicalIncomeFrequency } from "@shared/obligation-windows";
+import { buildBillsTimeline } from "@shared/bills-timeline";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
@@ -325,6 +327,17 @@ export interface IStorage {
    */
   acquireUserLock(name: string, ttlMs: number): Promise<boolean>;
   releaseUserLock(name: string): Promise<void>;
+
+  // Record details (shared/record-details): the user's catalog of
+  // characteristics and each record's values. Preferences-backed, like
+  // valuations — no table, no migration. Journaled under the "details" domain.
+  getDetailDefinitions(): Promise<import("@shared/record-details").DetailDefinition[]>;
+  saveDetailDefinitions(defs: import("@shared/record-details").DetailDefinition[]): Promise<void>;
+  getRecordDetails(entityType: string, entityId: string): Promise<import("@shared/record-details").RecordDetails>;
+  /** An empty record (no values) removes the row. */
+  saveRecordDetails(entityType: string, entityId: string, details: import("@shared/record-details").RecordDetails): Promise<void>;
+  /** Every record with at least one value, for reports and flags. */
+  listRecordDetails(): Promise<Array<{ entityType: import("@shared/record-details").DetailEntityType; entityId: string; details: import("@shared/record-details").RecordDetails }>>;
 
   // Income
   getIncomes(profileIds?: string[]): Promise<Income[]>;
@@ -2744,6 +2757,7 @@ export class MemStorage implements IStorage {
         spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : 0,
         spendByCategory,
         upcomingBills,
+        billsTimeline: buildBillsTimeline(obligations as any[], today),
         monthlyObligationTotal: Math.round(monthlyObligationTotal),
         // Mirrors SupabaseStorage: cash OUT is spend + the bill money still
         // owed this month, never the monthly-equivalent of every bill (which
@@ -2883,6 +2897,32 @@ export class MemStorage implements IStorage {
   async releaseUserLock(name: string): Promise<void> { this.userLocks.delete(name); }
   async setPreference(key: string, value: string): Promise<void> {
     this.preferences.set(key, value);
+  }
+
+  // ---- Record details (preferences-backed, same keys as SupabaseStorage) ----
+  async getDetailDefinitions() {
+    return parseDefinitions(await this.getPreference(DETAIL_DEFS_PREF));
+  }
+  async saveDetailDefinitions(defs: import("@shared/record-details").DetailDefinition[]): Promise<void> {
+    await this.setPreference(DETAIL_DEFS_PREF, JSON.stringify(defs));
+  }
+  async getRecordDetails(entityType: string, entityId: string) {
+    return parseRecordDetails(await this.getPreference(recordDetailsKey(entityType, entityId)));
+  }
+  async saveRecordDetails(entityType: string, entityId: string, details: import("@shared/record-details").RecordDetails): Promise<void> {
+    const key = recordDetailsKey(entityType, entityId);
+    if (Object.keys(details.values).length === 0) { this.preferences.delete(key); return; }
+    await this.setPreference(key, JSON.stringify(details));
+  }
+  async listRecordDetails() {
+    const out: Array<{ entityType: import("@shared/record-details").DetailEntityType; entityId: string; details: import("@shared/record-details").RecordDetails }> = [];
+    for (const [key, value] of this.preferences) {
+      const parsed = parseRecordDetailsKey(key);
+      if (!parsed) continue;
+      const details = parseRecordDetails(value);
+      if (Object.keys(details.values).length > 0) out.push({ ...parsed, details });
+    }
+    return out;
   }
 
   // ---- Asset valuations (preferences-backed, same keys as SupabaseStorage) ----

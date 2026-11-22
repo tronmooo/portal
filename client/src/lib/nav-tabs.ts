@@ -8,8 +8,8 @@ export interface NavTab { label: string; href: string; icon: LucideIcon; accent:
 // Hub consolidation (2026-07): Linked merged into the Dashboard hub; its old
 // routes still light up Dashboard via isHubLocationForNav.
 export const NAV_TABS: NavTab[] = [
-  { label: "Chat",      href: "/chat",      icon: MessageSquare,   accent: "188 55% 50%" },
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, accent: "262 65% 62%" },
-  { label: "Calendar",  href: "/calendar",  icon: Calendar,        accent: "215 70% 58%" },
-  { label: "Artifacts", href: "/artifacts", icon: Archive,         accent: "310 45% 58%" },
+  { label: "Chat",      href: "/chat",      icon: MessageSquare,   accent: "190 90% 52%" },
+  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, accent: "262 85% 68%" },
+  { label: "Calendar",  href: "/calendar",  icon: Calendar,        accent: "200 95% 56%" },
+  { label: "Artifacts", href: "/artifacts", icon: Archive,         accent: "310 70% 64%" },
 ];

@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo, lazy, Suspense } from "react";
+import { DetailValueCells } from "@/components/details/DetailValueCells";
 import { DocumentLinkPicker } from "@/components/DocumentLinkPicker";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -646,6 +647,10 @@ function OverviewPanel({
           </ul>
         )}
       </section>
+
+      {/* User-defined characteristics (shared/record-details): Status, Signed,
+          Counterparty, Renewal date… as structured, reportable values. */}
+      <DetailValueCells entityType="document" entityId={doc.id} className="grid grid-cols-2 sm:grid-cols-3 gap-2" />
     </div>
   );
 }

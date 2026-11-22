@@ -3,7 +3,7 @@
 // Render test for the Finance-tab Money overview. The dev server has no
 // backend, so this jsdom mount is where we actually prove MoneyOverview draws
 // the mockup cards from real props: net worth + MoM, cash flow, spend + worst
-// budget, budget chips, a payable bill, balance sheet, and asset/liability
+// budget, budget chips, the Bills & Payments timeline, balance sheet, and asset/liability
 // breakdowns.
 import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
@@ -14,6 +14,7 @@ import { MoneyOverview } from "../client/src/components/finance/MoneyOverview";
 // component renders in isolation.
 vi.mock("wouter", () => ({
   Link: ({ children }: any) => <>{children}</>,
+  useLocation: () => ["/", () => {}],
 }));
 
 // recharts' ResponsiveContainer needs ResizeObserver, absent in jsdom.
@@ -36,16 +37,14 @@ const baseProps = {
     { category: "shopping", limit: 300, spent: 312 },
     { category: "groceries", limit: 600, spent: 408 },
   ],
-  bills: [
-    { id: "b1", name: "Rent — Maple St", amount: 2400, daysUntil: 3, status: "upcoming" },
-    { id: "b2", name: "Internet — Fiber One", amount: 79, daysUntil: 5, status: "upcoming" },
-  ],
+  billsTimeline: { upcoming: [
+    { key: "b1", billId: "b1", name: "Rent — Maple St", amount: 2400, date: "2026-07-23", daysUntil: 3, frequency: "monthly", category: "housing", kind: "bill", autopay: false, linkedLiabilityId: "b1", state: "upcoming" },
+    { key: "b2", billId: "b2", name: "Internet — Fiber One", amount: 79, date: "2026-07-25", daysUntil: 5, frequency: "monthly", category: "utilities", kind: "bill", autopay: false, linkedLiabilityId: "b2", state: "upcoming" },
+  ], past: [] } as any,
   assetBreakdown: [{ id: "a1", name: "Brokerage — Vanguard", type: "investment", value: 52600 }],
   liabilityBreakdown: [{ id: "l1", name: "Visa — Chase", type: "credit", value: 6800 }],
   monthLabel: "JUL",
   onAddExpense: () => {},
-  onPayBill: () => {},
-  payingId: null,
 };
 
 describe("MoneyOverview", () => {
@@ -107,12 +106,10 @@ describe("MoneyOverview", () => {
     expect(screen.getByTestId("money-budget-groceries").textContent).toContain("68%");
   });
 
-  it("renders bills with a working Pay button", () => {
-    const onPayBill = vi.fn();
-    render(<MoneyOverview {...baseProps} onPayBill={onPayBill} />);
-    expect(screen.getByTestId("money-bill-b1").textContent).toContain("Rent — Maple St");
-    fireEvent.click(screen.getByTestId("money-pay-b1"));
-    expect(onPayBill).toHaveBeenCalledWith(expect.objectContaining({ id: "b1" }));
+  it("renders the bills timeline with no Pay button (owner 2026-11-21)", () => {
+    render(<MoneyOverview {...baseProps} />);
+    expect(screen.getByTestId("bill-timeline-upcoming-b1").textContent).toContain("Rent — Maple St");
+    expect(screen.getByTestId("money-bills").querySelectorAll("[data-testid^='money-pay-']")).toHaveLength(0);
   });
 
   it("renders the balance sheet and breakdowns", () => {

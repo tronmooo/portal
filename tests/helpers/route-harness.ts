@@ -20,6 +20,7 @@ import { requestStorageContext } from "../../server/storage";
 import { registerRoutes } from "../../server/routes";
 import { deleteProfileFields } from "../../shared/profile-field-identity";
 import { pushdownSelection } from "../../shared/profile-filter";
+import { DETAIL_DEFS_PREF, parseDefinitions, parseRecordDetails, parseRecordDetailsKey, recordDetailsKey } from "../../shared/record-details";
 
 /** Every row the fake keeps, so assertions can read what the route wrote. */
 export interface FakeDb {
@@ -43,6 +44,8 @@ export interface FakeDb {
   bumpDataVersionCalls: number;
   domainVersions: Record<string, number>;
   lastBumpedDomains: string[];
+  /** The preferences table (key → value), which record details live in. */
+  preferences?: Record<string, string>;
 }
 
 let seq = 0;
@@ -100,6 +103,26 @@ export function makeFakeStorage(db: FakeDb) {
     acquireUserLock: async (name: string, ttlMs: number) => { const held = locks.get(name); if (held !== undefined && held > Date.now() - ttlMs) return false; locks.set(name, Date.now()); return true; },
     releaseUserLock: async (name: string) => { locks.delete(name); },
     getDataVersion: async () => 0,
+
+    // Preferences, and the record-detail methods built on them — the same
+    // keys SupabaseStorage uses, so a test can read the stored rows.
+    getPreference: async (key: string) => (db.preferences ||= {})[key] ?? null,
+    setPreference: async (key: string, value: string) => { (db.preferences ||= {})[key] = value; },
+    getDetailDefinitions: async () => parseDefinitions((db.preferences ||= {})[DETAIL_DEFS_PREF] ?? null),
+    saveDetailDefinitions: async (defs: any[]) => { (db.preferences ||= {})[DETAIL_DEFS_PREF] = JSON.stringify(defs); },
+    getRecordDetails: async (t: string, rid: string) => parseRecordDetails((db.preferences ||= {})[recordDetailsKey(t, rid)] ?? null),
+    saveRecordDetails: async (t: string, rid: string, rec: any) => {
+      const prefs = (db.preferences ||= {});
+      const key = recordDetailsKey(t, rid);
+      if (Object.keys(rec.values || {}).length === 0) delete prefs[key];
+      else prefs[key] = JSON.stringify(rec);
+    },
+    listRecordDetails: async () => Object.entries(db.preferences || {}).flatMap(([key, value]) => {
+      const parsed = parseRecordDetailsKey(key);
+      if (!parsed) return [];
+      const details = parseRecordDetails(value);
+      return Object.keys(details.values).length > 0 ? [{ ...parsed, details }] : [];
+    }),
 
     bumpDataVersion: async () => {
       db.bumpDataVersionCalls++;

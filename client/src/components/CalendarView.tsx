@@ -1,9 +1,10 @@
 import { changedFieldsOnly } from "@shared/field-patch";
+import { GridDetailHost } from "@/components/calendar/GridDetailHost";
 import { formatApiError } from "@/lib/formatError";
 import { setEventOccurrence } from "@/lib/event-occurrence";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, type CSSProperties } from "react";
 import { revealAgendaPanel } from "@/components/calendar/reveal-agenda";
 import { groupProfilesForLinking, ownerCandidates } from "@shared/profile-link-groups";
 import { useActiveCreateProfileId } from "@/hooks/useProfileScope";
@@ -53,7 +54,14 @@ import {
   ListTodo, Flame, CreditCard, Users, FileText,
   CheckSquare, ChevronDown, RefreshCw, CheckCircle2, Settings2,
   Banknote, Cake, Heart, Stethoscope, Wrench,
+  SlidersHorizontal, Check, Circle, CalendarCheck,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import CalendarManagerPanel from "@/components/CalendarManagerPanel";
 import { WeekdayPicker, isCustomDaySet, seedDaySet, CUSTOM_DAYS_VALUE } from "@/components/recurring/WeekdayPicker";
 import type {
@@ -105,7 +113,9 @@ function getMonthDays(year: number, month: number) {
   }
 
   // Pad from next month
-  const remaining = 42 - days.length; // 6 weeks
+  // Only as many weeks as the month touches (5 for most months, 4 or 6 for a
+  // few): a sixth row of next month's days was a row of nothing.
+  const remaining = (7 - (days.length % 7)) % 7;
   for (let d = 1; d <= remaining; d++) {
     const dt = new Date(year, month + 1, d);
     days.push({
@@ -185,6 +195,67 @@ const itemIcon = (item: { type: string; sourceType?: string | null; meta?: Recor
   SOURCE_ICONS[calendarSourceKind(item)] || TYPE_ICONS[item.type] || CalendarIcon;
 const itemLabel = (item: { type: string; sourceType?: string | null; meta?: Record<string, any> }) =>
   calendarItemLabel(item) || TYPE_LABELS[item.type] || "Event";
+// The colour an item is drawn in on the day panel: its row, its icon tile.
+// One colour per KIND of thing (the legend's four, plus the source kinds that
+// have their own icon), as HSL channels for the .cal-item --accent-hsl.
+const TYPE_ACCENTS: Record<string, string> = {
+  event: "215 92% 62%",
+  task: "262 88% 68%",
+  obligation: "36 95% 55%",
+  habit: "152 72% 48%",
+};
+const SOURCE_ACCENTS: Record<string, string> = {
+  birthday: "270 88% 70%",
+  anniversary: "330 85% 66%",
+  income: "152 72% 48%",
+  appointment: "190 90% 52%",
+  maintenance: "25 92% 58%",
+  document: "12 88% 62%",
+  expiration: "12 88% 62%",
+  renewal: "12 88% 62%",
+  bill: "36 95% 55%",
+  liability: "36 95% 55%",
+  subscription: "36 95% 55%",
+  payment: "36 95% 55%",
+};
+const itemAccent = (item: { type: string; sourceType?: string | null; meta?: Record<string, any> }) =>
+  SOURCE_ACCENTS[calendarSourceKind(item)] || TYPE_ACCENTS[item.type] || TYPE_ACCENTS.event;
+/** The four filterable types, in the legend's colours. */
+const TYPE_FILTERS = [
+  { key: "event", label: "Events", icon: CalendarIcon, accent: TYPE_ACCENTS.event },
+  { key: "task", label: "Tasks", icon: Check, accent: TYPE_ACCENTS.task },
+  { key: "obligation", label: "Bills", icon: CreditCard, accent: TYPE_ACCENTS.obligation },
+  { key: "habit", label: "Habits", icon: Heart, accent: TYPE_ACCENTS.habit },
+] as const;
+const RECURRENCE_LABELS: Record<string, string> = {
+  daily: "Daily", weekdays: "Weekdays", weekends: "Weekends", weekly: "Weekly",
+  biweekly: "Every 2 weeks", monthly: "Monthly", quarterly: "Quarterly", yearly: "Yearly", annual: "Yearly",
+};
+/** "Bill · $2,400", "Birthday · Yearly", "Task · Weekly": what the thing is, then its one fact. */
+function itemSubtitle(item: CalendarTimelineItem): string {
+  const parts = [itemLabel(item)];
+  const amount = Number(item.meta?.amount);
+  if (Number.isFinite(amount) && amount > 0) {
+    parts.push(amount.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: amount % 1 === 0 ? 0 : 2 }));
+  }
+  const rec = RECURRENCE_LABELS[String(item.meta?.recurrence ?? item.meta?.frequency ?? "")];
+  if (rec) parts.push(rec);
+  if (item.location) parts.push(item.location);
+  return parts.join(" · ");
+}
+const isRecurring = (item: CalendarTimelineItem) => {
+  const r = String(item.meta?.recurrence ?? "");
+  return !!r && r !== "none" && r !== "once";
+};
+/** Things that get done (and so show a done / not-done mark). */
+const isCompletable = (item: CalendarTimelineItem) =>
+  item.type === "task" || item.type === "obligation" || item.type === "habit";
+function fmtDateShort(dateStr: string) {
+  return new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", {
+    weekday: "short", month: "short", day: "numeric", year: "numeric",
+  });
+}
+
 const kindLabel = (kind: unknown) => (KIND_LABELS as Record<string, string>)[String(kind)] ?? String(kind);
 
 const CATEGORY_LABELS: Record<EventCategory, string> = {
@@ -1150,54 +1221,49 @@ function DayAgenda({
   }
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       {dayItems.map(item => {
         const Icon = itemIcon(item);
+        const timeText = item.time ? fmt12(item.time) : "";
         return (
           <button
             key={item.id}
-            className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-muted/50 transition-colors text-left group"
+            className={`cal-item w-full flex items-center gap-3 px-3 py-2.5 text-left ${item.completed ? "opacity-70" : ""}`}
+            style={{ "--accent-hsl": itemAccent(item) } as CSSProperties}
             onClick={() => onItemClick(item)}
             data-testid={`agenda-item-${item.id}`}
             data-record-id={item.sourceId}
           >
-            <div
-              className="w-1 h-8 rounded-full shrink-0"
-              style={{ backgroundColor: item.color }}
-            />
-            <div
-              className="p-1 rounded shrink-0"
-              style={{ backgroundColor: `${item.color}15` }}
-            >
-              <Icon className="h-3 w-3" style={{ color: item.color }} />
-            </div>
+            <span className="cal-item-icon" aria-hidden="true">
+              <Icon className="h-5 w-5" />
+            </span>
             <div className="flex-1 min-w-0">
-              <p className={`text-xs font-medium truncate ${item.completed ? "line-through text-muted-foreground" : ""}`}>
+              <p className={`text-[15px] font-semibold leading-snug truncate ${item.completed ? "line-through text-muted-foreground" : "text-foreground"}`}>
                 {item.title}
               </p>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                {item.time && (
-                  <span className="text-xs text-muted-foreground">
-                    {fmt12(item.time)}{item.endTime ? ` – ${fmt12(item.endTime)}` : ""}
-                  </span>
-                )}
-                {item.allDay && !item.time && (
-                  <span className="text-xs text-muted-foreground">All day</span>
-                )}
-                {item.location && (
-                  <span className="text-xs text-muted-foreground flex items-center gap-0.5">
-                    <MapPin className="h-2 w-2" />{item.location}
-                  </span>
-                )}
-              </div>
+              <p className="text-xs text-muted-foreground truncate mt-0.5">
+                {itemSubtitle(item)}
+              </p>
             </div>
-            <Badge
-              variant="outline"
-              className="text-2xs h-4 px-1 shrink-0 opacity-60 group-hover:opacity-100"
-              style={{ borderColor: item.color, color: item.color }}
-            >
-              {itemLabel(item)}
-            </Badge>
+            {timeText ? (
+              <span className="text-xs text-foreground/85 tabular-nums shrink-0">
+                {timeText}{item.endTime ? ` – ${fmt12(item.endTime)}` : ""}
+              </span>
+            ) : isRecurring(item) ? (
+              <span className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium shrink-0"
+                style={{ background: "hsl(var(--accent-hsl) / 0.18)", color: "hsl(var(--accent-hsl))" }}>
+                <Repeat className="h-3 w-3" aria-hidden="true" /> Recurring
+              </span>
+            ) : item.allDay ? (
+              <span className="text-xs text-muted-foreground shrink-0">All day</span>
+            ) : null}
+            {/* Done / not done. A mark, not a control: the row opens the item,
+                where Done, Skip and Pay live (a payment is never one stray tap). */}
+            {isCompletable(item) && (
+              item.completed
+                ? <CheckCircle2 className="h-5 w-5 shrink-0" style={{ color: "hsl(var(--accent-hsl))" }} aria-label="Done" />
+                : <Circle className="h-5 w-5 shrink-0 text-muted-foreground/70" aria-label="Not done" />
+            )}
           </button>
         );
       })}
@@ -1224,10 +1290,11 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
   const [, setLocation] = useLocation();
   const today = new Date();
   const todayStr = toLocalDateStr(today);
-  // A phone gets the Agenda view first: month cells there hold only dots,
-  // and readable titles matter more than a 6-week grid. Desktop keeps Month.
-  const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">(() =>
-    typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 640px)").matches ? "agenda" : "month");
+  // The calendar opens on the MONTH, on a phone too (owner's reference screen,
+  // 2026-11-21: the month grid with the selected day's items listed under it).
+  // It used to open on Agenda on a phone because month cells there hold only
+  // dots; the day panel under the grid now carries the readable titles.
+  const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">("month");
   const [managerOpen, setManagerOpen] = useState(false);
   const [viewMonth, setViewMonth] = useState(today.getMonth());
   const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -1496,132 +1563,153 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
   // (liabilities/bills, tasks, reminders, events, recurring items). In month
   // mode this sits to the RIGHT of the grid; in week/agenda modes it stacks
   // below. Defined once so both placements stay in sync.
+  const completedCount = filteredAgenda.filter(i => i.completed).length;
   const agendaPanel = (
-    <div className="bubble lg:min-h-[320px]" data-testid="section-day-agenda">
-      <div className="px-3 pt-2.5 pb-1.5 flex items-center justify-between border-b border-border/40">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-xs font-semibold truncate">{fmtDateFull(selectedDate)}</span>
-          <span className="text-[11px] text-muted-foreground shrink-0">
-            {filteredAgenda.length} item{filteredAgenda.length !== 1 ? "s" : ""}
+    <div className="cal-surface lg:min-h-[320px] px-3 pb-3 pt-2" data-testid="section-day-agenda">
+      <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-muted-foreground/40" aria-hidden="true" />
+      <div className="flex items-center justify-between gap-2 px-1 pb-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="cal-round h-10 w-10 !rounded-xl shrink-0" aria-hidden="true">
+            <CalendarIcon className="h-5 w-5" />
           </span>
+          <div className="min-w-0">
+            <p className="text-lg font-bold leading-tight truncate">{fmtDateShort(selectedDate)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {filteredAgenda.length} item{filteredAgenda.length !== 1 ? "s" : ""} · {completedCount} completed
+            </p>
+          </div>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 text-xs gap-1 px-2 shrink-0"
+        <button
+          type="button"
+          className="cal-cta inline-flex items-center gap-1.5 rounded-full h-10 px-4 text-sm font-bold shrink-0"
           onClick={() => { setQuickAddDate(selectedDate); setAddOpen(true); }}
           data-testid="btn-agenda-add"
         >
-          <Plus className="h-2.5 w-2.5" /> Add
-        </Button>
+          <Plus className="h-4 w-4" /> Add
+        </button>
       </div>
       {filteredAgenda.length === 0 ? (
-        <div className="p-6 text-center" data-testid="section-day-agenda-empty">
-          <CalendarIcon className="h-6 w-6 text-muted-foreground/30 mx-auto mb-1.5" />
-          <p className="text-xs text-muted-foreground">Nothing scheduled</p>
-          <p className="text-[11px] text-muted-foreground/70 mt-0.5">
+        <div className="px-4 py-6 text-center" data-testid="section-day-agenda-empty">
+          <CalendarCheck className="h-8 w-8 text-primary/60 mx-auto mb-2" />
+          <p className="text-sm font-medium">Nothing scheduled</p>
+          <p className="text-xs text-muted-foreground mt-1">
             Liabilities, tasks, reminders, events &amp; recurring items for this day show up here.
           </p>
         </div>
       ) : (
-        <div className="px-2 py-2">
-          <DayAgenda date={selectedDate} items={filteredAgenda} onItemClick={setDetailItem} />
-        </div>
+        <DayAgenda date={selectedDate} items={filteredAgenda} onItemClick={setDetailItem} />
       )}
     </div>
   );
 
+  const selectedShort = new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
   return (
-    <div className="space-y-2" data-testid="calendar-view">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-1">
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" onClick={prevMonth} className="h-7 w-7" data-testid="btn-prev-month" aria-label="Previous month">
-            <ChevronLeft className="h-3.5 w-3.5" />
-          </Button>
-          <h2 className="text-xs font-semibold min-w-[100px] text-center" data-testid="text-month-year">
-            {viewMode === "day"
-              ? viewDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-              : viewMode === "week"
-                ? `Week of ${(() => { const s = new Date(viewDate); s.setDate(s.getDate() - s.getDay()); return s.toLocaleDateString("en-US", { month: "short", day: "numeric" }); })()}`
-                : fmtMonthYear(viewYear, viewMonth)}
-          </h2>
-          <Button variant="ghost" size="icon" onClick={nextMonth} className="h-7 w-7" data-testid="btn-next-month" aria-label="Next month">
-            <ChevronRight className="h-3.5 w-3.5" />
-          </Button>
-          <Button variant="outline" size="sm" onClick={goToday} className="h-6 text-xs px-2" data-testid="btn-today">
-            Today
-          </Button>
-          {/* View mode toggle */}
-          <div className="flex items-center bg-muted/50 rounded-md p-0.5">
-            {(["month", "week", "day", "agenda"] as const).map(mode => (
-              <button key={mode} onClick={() => setViewMode(mode)}
-                className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${viewMode === mode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-                {mode.charAt(0).toUpperCase() + mode.slice(1)}
-              </button>
-            ))}
-          </div>
-          {/* Calendar Manager — sits directly next to Agenda */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setManagerOpen(true)}
-            className="h-6 text-xs px-2 gap-1"
-            data-testid="btn-calendar-manager"
-            title="Open Calendar Manager — create and manage recurring events, bills, tasks, and reminders"
-          >
-            <Settings2 className="h-3 w-3" />
-            <span className="hidden sm:inline">Manager</span>
-          </Button>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-7 w-7 sm:w-auto sm:px-2 sm:gap-1.5"
-            onClick={handleGcalSync}
-            disabled={syncing}
-            title="Sync Google Calendar"
-            aria-label="Sync Google Calendar"
-            data-testid="btn-gcal-sync"
-          >
-            <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline text-xs">{syncing ? "Syncing..." : "Sync"}</span>
-          </Button>
-          <Button
-            size="icon"
-            onClick={() => setAddOpen(true)}
-            className="h-7 w-7 sm:w-auto sm:h-7 sm:px-2 sm:gap-1"
-            data-testid="btn-add-event-cal"
-          >
-          <Plus className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline text-xs">Event</span>
+    <div className="space-y-3" data-testid="calendar-view">
+      {/* Header: month arrows + title on the left, the view switch on the right. */}
+      <div className="flex items-center gap-1 min-[420px]:gap-1.5 flex-wrap">
+        <button type="button" onClick={prevMonth} className="cal-round h-7 w-7 min-[420px]:h-8 min-[420px]:w-8 shrink-0" data-testid="btn-prev-month" aria-label="Previous month">
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <h2 className="text-sm min-[380px]:text-[15px] min-[420px]:text-base sm:text-lg font-bold text-center whitespace-nowrap" data-testid="text-month-year">
+          {viewMode === "day"
+            ? viewDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+            : viewMode === "week"
+              ? `Week of ${(() => { const s = new Date(viewDate); s.setDate(s.getDate() - s.getDay()); return s.toLocaleDateString("en-US", { month: "short", day: "numeric" }); })()}`
+              : fmtMonthYear(viewYear, viewMonth)}
+        </h2>
+        <button type="button" onClick={nextMonth} className="cal-round h-7 w-7 min-[420px]:h-8 min-[420px]:w-8 shrink-0" data-testid="btn-next-month" aria-label="Next month">
+          <ChevronRight className="h-4 w-4" />
+        </button>
+        {/* Wide screens have room for the direct buttons; a phone gets them in
+            the options menu beside the filters. */}
+        <Button variant="outline" size="sm" onClick={goToday} className="hidden sm:inline-flex h-8 rounded-full text-xs px-3" data-testid="btn-today">
+          Today
         </Button>
+        {/* View mode toggle */}
+        <div className="cal-seg p-0.5 ml-auto" role="group" aria-label="Calendar view">
+          {(["month", "week", "day", "agenda"] as const).map(mode => (
+            <button key={mode} type="button" onClick={() => setViewMode(mode)}
+              aria-pressed={viewMode === mode}
+              data-testid={`btn-view-${mode}`}
+              className="cal-seg-item px-1.5 min-[420px]:px-2.5 sm:px-3 h-7 text-[11px] min-[420px]:text-xs">
+              {mode.charAt(0).toUpperCase() + mode.slice(1)}
+            </button>
+          ))}
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="hidden sm:inline-flex h-8 rounded-full text-xs px-3 gap-1.5"
+          onClick={handleGcalSync}
+          disabled={syncing}
+          title="Sync Google Calendar"
+          data-testid="btn-gcal-sync"
+        >
+          <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
+          {syncing ? "Syncing..." : "Sync"}
+        </Button>
+        <button
+          type="button"
+          onClick={() => setAddOpen(true)}
+          className="cal-cta hidden sm:inline-flex items-center gap-1 h-8 rounded-full px-3 text-xs font-bold"
+          data-testid="btn-add-event-cal"
+        >
+          <Plus className="h-3.5 w-3.5" /> Event
+        </button>
       </div>
 
-      {/* Type filter pills */}
-      <div className="flex gap-1 flex-wrap">
-        {[
-          { key: "all", label: "All", activeClass: "bg-primary/20 text-primary border-primary/40" },
-          // "Bills" pill removed — obligations no longer render on the calendar
-          // (user decision 2026-07-01); manage them in the obligations tab.
-          { key: "event", label: "Events", activeClass: "bg-blue-500/20 text-blue-400 border-blue-500/40" },
-          { key: "task", label: "Tasks", activeClass: "bg-purple-500/20 text-purple-400 border-purple-500/40" },
-        ].map(f => (
+      {/* Type filter pills + the options button. The pills scroll sideways on
+          a narrow phone rather than wrapping under the options button. */}
+      <div className="flex items-center gap-2">
+        <div className="flex flex-1 min-w-0 gap-1.5 overflow-x-auto no-scrollbar py-1 px-0.5 -mx-0.5">
           <button
-            key={f.key}
-            className={`px-2 py-0.5 rounded-full text-xs font-medium border transition-all ${
-              filterType === f.key
-                ? f.activeClass
-                : "border-border/50 text-muted-foreground hover:bg-muted"
-            }`}
-            onClick={() => setFilterType(f.key)}
-            data-testid={`btn-filter-${f.key}`}
+            type="button"
+            aria-pressed={filterType === "all"}
+            className="cal-pill h-8 px-4 text-xs shrink-0"
+            style={{ "--accent-hsl": "var(--primary)" } as CSSProperties}
+            onClick={() => setFilterType("all")}
+            data-testid="btn-filter-all"
           >
-            {f.label}
+            All
           </button>
-        ))}
+          {TYPE_FILTERS.map(f => (
+            <button
+              key={f.key}
+              type="button"
+              aria-pressed={filterType === f.key}
+              className="cal-pill h-8 px-3 text-xs shrink-0"
+              style={{ "--accent-hsl": f.accent } as CSSProperties}
+              onClick={() => setFilterType(f.key)}
+              data-testid={`btn-filter-${f.key}`}
+            >
+              <f.icon className="h-3.5 w-3.5" aria-hidden="true" />
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" className="cal-round h-9 w-9 shrink-0" aria-label="Calendar options" title="Calendar options" data-testid="btn-calendar-options">
+              <SlidersHorizontal className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[13rem]">
+            <DropdownMenuItem onSelect={goToday} data-testid="menu-today">
+              <CalendarCheck className="h-4 w-4 mr-2" /> Go to today
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setAddOpen(true)} data-testid="menu-add-event">
+              <Plus className="h-4 w-4 mr-2" /> Add event
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => { void handleGcalSync(); }} disabled={syncing} data-testid="menu-gcal-sync">
+              <RefreshCw className={`h-4 w-4 mr-2 ${syncing ? "animate-spin" : ""}`} /> {syncing ? "Syncing…" : "Sync Google Calendar"}
+            </DropdownMenuItem>
+            {/* Calendar Manager: create and manage recurring events, bills, tasks and reminders. */}
+            <DropdownMenuItem onSelect={() => setManagerOpen(true)} data-testid="btn-calendar-manager">
+              <Settings2 className="h-4 w-4 mr-2" /> Calendar Manager
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Calendar Grid — conditional on viewMode */}
@@ -1630,7 +1718,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
           but never re-fired the timeline fetch the user was staring at. */}
       {timelineLoading && timelineItems.length === 0 && (
         <StuckLoadingGuard active onRetry={() => { void refetchTimeline(); }}>
-        <div className="rounded-lg border border-border/40 overflow-hidden" data-testid="calendar-loading">
+        <div className="cal-surface overflow-hidden" data-testid="calendar-loading">
           {/* Weekday header skeleton */}
           <div className="grid grid-cols-7 border-b border-border">
             {WEEKDAYS.map(d => (
@@ -1655,13 +1743,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
       <div className="lg:grid lg:grid-cols-3 lg:gap-3 lg:items-start" data-testid="calendar-month-layout">
       {/* Left column: the month grid */}
       <div className="lg:col-span-2 min-w-0 space-y-2">
-      {!(timelineLoading && timelineItems.length === 0) && <div className="rounded-lg border border-border/40 overflow-hidden">
+      {!(timelineLoading && timelineItems.length === 0) && <div className="cal-surface overflow-hidden">
           {/* Weekday header */}
-          <div className="grid grid-cols-7 border-b border-border">
+          <div className="grid grid-cols-7 border-b border-border/70">
             {WEEKDAYS.map(d => (
               <div
                 key={d}
-                className="micro-label text-center text-muted-foreground py-1"
+                className="micro-label text-center text-muted-foreground py-2.5"
               >
                 {d}
               </div>
@@ -1682,11 +1770,12 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
               return (
                 <button
                   key={idx}
-                  className={`relative min-h-[44px] md:min-h-[100px] p-0.5 md:p-1 border-b border-r border-border/40 transition-all text-left flex flex-col ${
+                  className={`cal-cell relative min-h-[60px] md:min-h-[100px] px-2 py-2 md:p-1.5 transition-colors text-left flex flex-col items-start ${
                     day.isCurrentMonth ? "" : "opacity-40"
-                  } ${isSelected && !isToday ? "bg-primary/5 ring-1 ring-inset ring-primary/30" : !isSelected && !isToday ? "hover:bg-muted/30" : ""} ${
-                    isToday ? "bg-primary/15 ring-2 ring-inset ring-primary/30" : ""
-                  }`}
+                  } ${isSelected ? "" : "hover:bg-muted/30"}`}
+                  data-selected={isSelected ? "true" : undefined}
+                  data-today={isToday ? "true" : undefined}
+                  aria-pressed={isSelected}
                   onClick={() => {
                     // If already selected, drill into day view; otherwise just select
                     if (selectedDate === day.date) {
@@ -1699,19 +1788,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
                   onDoubleClick={() => { setQuickAddDate(day.date); setAddOpen(true); }}
                   data-testid={`day-cell-${day.date}`}
                 >
-                  <span
-                    className={`text-xs md:text-xs leading-none ${
-                      isToday
-                        ? "font-bold text-primary bg-primary/20 rounded-full w-4 h-4 md:w-5 md:h-5 flex items-center justify-center text-xs-tight md:text-xs"
-                        : "font-medium"
-                    }`}
-                  >
+                  <span className="cal-daynum text-sm leading-none font-medium tabular-nums">
                     {day.dayNum}
                   </span>
 
                   {/* Event indicators */}
                   {hasItems && (
-                    <div className="flex-1 flex flex-col gap-0.5 mt-1 overflow-hidden">
+                    <div className="flex-1 w-full flex flex-col gap-0.5 mt-1.5 overflow-hidden">
                       {/* Show up to 2 items as mini labels on desktop */}
                       <div className="hidden sm:flex flex-col gap-0.5">
                         {dayItems.slice(0, 2).map(item => (
@@ -1744,11 +1827,11 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
                       </div>
 
                       {/* Mobile: just dots */}
-                      <div className="sm:hidden flex gap-0.5 mt-auto">
+                      <div className="sm:hidden flex gap-[3px]">
                         {dotColors.map((color, i) => (
                           <div
                             key={i}
-                            className="w-1.5 h-1.5 rounded-full"
+                            className="w-2 h-2 rounded-full"
                             style={{ backgroundColor: color }}
                           />
                         ))}
@@ -1784,7 +1867,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
           {/* Legend — the month grid encodes item type by dot color only, which
               fails colorblind users and anyone who hasn't memorized the mapping.
               Spell it out. Mirrors the categoryDotColors used per day cell. */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-2 mt-1 text-[11px] text-muted-foreground border-t border-border/40">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2.5 text-xs text-muted-foreground">
             {[
               { label: "Event", color: "#3b82f6" },
               { label: "Task", color: "#8b5cf6" },
@@ -1792,10 +1875,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
               { label: "Habit", color: "#10b981" },
             ].map((l) => (
               <span key={l.label} className="inline-flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full" style={{ background: l.color }} />
+                <span className="w-2.5 h-2.5 rounded-full" style={{ background: l.color }} />
                 {l.label}
               </span>
             ))}
+            <span className="ml-auto tabular-nums" data-testid="calendar-selected-count">
+              {selectedDateItems.length} item{selectedDateItems.length !== 1 ? "s" : ""} on {selectedShort}
+            </span>
           </div>
       </div>}
       {!timelineLoading && Object.values(itemsByDate).every(arr => arr.length === 0) && (
@@ -1819,7 +1905,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
       )}
       </div>{/* /left column */}
       {/* Right column: agenda for the selected day */}
-      <aside ref={agendaRef} tabIndex={-1} className="mt-2 lg:mt-0 lg:col-span-1 lg:sticky lg:top-2 outline-none" data-testid="calendar-agenda-panel">
+      <aside ref={agendaRef} tabIndex={-1} className="mt-3 lg:mt-0 lg:col-span-1 lg:sticky lg:top-2 outline-none" data-testid="calendar-agenda-panel">
         {agendaPanel}
       </aside>
       </div>
@@ -1844,7 +1930,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
         const hasAnyAllDay = Object.values(allDayByDate).some(arr => arr.length > 0);
 
         return (
-          <div className="rounded-lg border border-border/40 overflow-hidden">
+          <div className="cal-surface overflow-hidden">
             {/* Day headers */}
             <div className="grid border-b border-border" style={{ gridTemplateColumns: '40px repeat(7, 1fr)' }}>
               <div className="border-r border-border/40" />
@@ -1945,7 +2031,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
         const timedItems = dayItems.filter(i => i.time);
         const allDayItems = dayItems.filter(i => !i.time);
         return (
-          <div className="rounded-lg border border-border/40 overflow-hidden">
+          <div className="cal-surface overflow-hidden">
             <div className="p-3 border-b border-border bg-muted/30">
               <h3 className="text-sm font-semibold">
                 {viewDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
@@ -2024,15 +2110,16 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
           <div className="space-y-4 pb-8">
             {Object.entries(grouped).map(([dateStr, events]) => (
               <div key={dateStr}>
-                <div className="sticky top-0 bg-background/95 backdrop-blur-sm py-1.5 px-1 z-10">
-                  <span className="micro-label text-primary/70">{dateStr}</span>
+                <div className="sticky top-0 bg-background/80 backdrop-blur-sm rounded-lg py-1.5 px-2 z-10">
+                  <span className="micro-label text-primary">{dateStr}</span>
                 </div>
-                <div className="space-y-1">
+                <div className="space-y-1.5 mt-1">
                   {events.map((ev: any, i: number) => {
                     const typeColor = ev.type === 'task' ? '#8b5cf6' : ev.type === 'obligation' ? '#f59e0b' : ev.type === 'habit' ? '#10b981' : '#3b82f6';
                     return (
                       <div key={`${ev.id}-${i}`}
-                        className={`flex items-start gap-3 p-3 rounded-xl bg-card border border-border/40 cursor-pointer pressable hover:bg-muted/40 transition-all ${ev.completed ? "opacity-60" : ""}`}
+                        className={`cal-item flex items-start gap-3 p-3 cursor-pointer pressable ${ev.completed ? "opacity-60" : ""}`}
+                        style={{ "--accent-hsl": itemAccent(ev) } as CSSProperties}
                         onClick={() => { setSelectedDate(ev.date); setDetailItem(ev); }}>
                         <div className="w-1 self-stretch rounded-full shrink-0 mt-0.5" style={{ background: ev.color || typeColor }} />
                         <div className="flex-1 min-w-0">
@@ -2173,12 +2260,21 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
       )}
 
       {/* Event Detail Dialog */}
+      {/* The grid opens the SAME detail screen as the Recurring list
+          (CalendarItemDetail); the dialog below is only the fallback for an
+          item the occurrence stream does not carry. */}
       {detailItem && (
-        <EventDetailDialog
-          open={!!detailItem}
-          onClose={() => setDetailItem(null)}
+        <GridDetailHost
           item={detailItem}
-          onEdit={handleEditFromDetail}
+          onClose={() => setDetailItem(null)}
+          fallback={
+            <EventDetailDialog
+              open={!!detailItem}
+              onClose={() => setDetailItem(null)}
+              item={detailItem}
+              onEdit={handleEditFromDetail}
+            />
+          }
         />
       )}
 

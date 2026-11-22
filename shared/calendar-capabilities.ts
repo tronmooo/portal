@@ -89,10 +89,24 @@ export interface ActionCapability {
  *   obligation — real occurrence rows (/api/obligation-occurrences)
  *   liability  — an occurrences map on the liability profile
  *
- * A profile's birthday field, a task and a document expiry have
- * no per-occurrence storage, so those actions are disabled rather than faked.
+ * A profile's birthday field and a document expiry have no per-occurrence
+ * storage, so those actions are disabled rather than faked. A task has its
+ * own (see `taskHasOccurrenceState`).
  */
 const PER_OCCURRENCE_SYSTEMS = new Set<SourceSystem>(["event", "obligation", "liability"]);
+
+/**
+ * A task row that carries its own occurrence state.
+ *
+ * A repeating task records skips and one-occurrence moves in its tags
+ * (shared/recurrence: rskip:/rmove:/rfrom:), and a one-time task simply IS its
+ * one occurrence. The exception is a series INFERRED from several plain rows
+ * (shared/series-detect): there is no rule to write a mark on, so those are
+ * still managed on the task itself.
+ */
+function taskHasOccurrenceState(series: CalendarSeries): boolean {
+  return series.source.system === "task" && !series.materializedFrom;
+}
 
 /** Where to manage a date whose system doesn't support an action. */
 const MANAGE_AT: Record<SourceSystem, string> = {
@@ -122,7 +136,7 @@ const MANAGE_AT: Record<SourceSystem, string> = {
 export function capabilitiesFor(series: CalendarSeries): ActionCapability[] {
   const system = series.source.system;
   const recurring = !!series.recurrence && series.recurrence !== "none";
-  const perOccurrence = PER_OCCURRENCE_SYSTEMS.has(system);
+  const perOccurrence = PER_OCCURRENCE_SYSTEMS.has(system) || taskHasOccurrenceState(series);
   const where = MANAGE_AT[system] || "its source";
   const isSingleton = series.kind === "birthday" || series.kind === "anniversary";
 
@@ -278,4 +292,109 @@ export function canEditMoney(series: CalendarSeries, action: CalendarMoneyAction
 /** True when this series shows a per-period money block at all. */
 export function hasPerOccurrenceMoney(series: CalendarSeries): boolean {
   return canEditMoney(series, "addCharge");
+}
+
+
+// ─── What ONE occurrence offers ──────────────────────────────────────────────
+//
+// The detail screen no longer prints all seven actions and greys out the ones
+// that do not apply (a birthday showed five dead buttons whose reasons lived
+// in a hover tooltip a phone never shows). It asks this instead: for THIS
+// occurrence, in the state it is in, what can be done — and what does each
+// choice touch. Anything not returned is simply not on the screen.
+
+export type OccurrenceMenuAction =
+  | "complete" | "skip" | "move" | "restore" | "editFuture" | "deleteOccurrence";
+
+export interface OccurrenceMenuItem {
+  action: OccurrenceMenuAction;
+  label: string;
+  /** One line saying how far the action reaches. Always present. */
+  hint: string;
+  destructive?: boolean;
+}
+
+/**
+ * The actions for one occurrence, in the order they are shown.
+ *
+ * `isOpen` is true for the series' next occurrence that is neither done nor
+ * skipped. It matters for a task: a repeating task stores ONE open row, so
+ * only that occurrence can be completed — a later one can still be skipped or
+ * moved ahead of time.
+ */
+export function occurrenceMenuFor(
+  series: CalendarSeries,
+  occurrence: { status: string; date: string; moved?: boolean },
+  opts: { isOpen: boolean },
+): OccurrenceMenuItem[] {
+  const out: OccurrenceMenuItem[] = [];
+  const recurring = !!series.recurrence && series.recurrence !== "none";
+  const system = series.source.system;
+  const settled = occurrence.status === "done" || occurrence.status === "skipped";
+
+  if (settled) {
+    // Only systems that can take a mark back offer it: an event clears its
+    // tag, a task drops its skip. A paid bill is reversed on the bill itself.
+    const canRestore =
+      (system === "event" && can(series, "skip")) ||
+      (system === "task" && occurrence.status === "skipped" && can(series, "skip"));
+    if (canRestore) {
+      out.push({
+        action: "restore",
+        label: occurrence.status === "done" ? "Mark not done" : "Bring back",
+        hint: occurrence.status === "done" ? "Reopen just this date" : "Put this date back on the schedule",
+      });
+    }
+    return out;
+  }
+
+  if (can(series, "complete") && (system !== "task" || opts.isOpen)) {
+    out.push({
+      action: "complete",
+      label: system === "task" || series.kind === "habit" ? "Mark complete"
+        : isPaymentKind(series.kind) ? "Mark paid" : "Check off",
+      hint: recurring ? "Just this date — the next one stays scheduled" : "Mark this as done",
+    });
+  }
+  if (can(series, "skip")) {
+    out.push({ action: "skip", label: "Skip this occurrence", hint: "Keep future schedule" });
+  }
+  if (can(series, "move")) {
+    out.push({
+      action: "move",
+      label: "Change date",
+      hint: recurring ? "Move just this occurrence" : "Move to another day",
+    });
+  }
+  if (recurring && (system === "event" || system === "task") && can(series, "deleteFuture")
+    && series.kind !== "birthday" && series.kind !== "anniversary" && !series.materializedFrom) {
+    out.push({
+      action: "editFuture",
+      label: "Edit future occurrences",
+      hint: "Update the schedule from this date forward",
+    });
+  }
+  if (can(series, "deleteOccurrence")) {
+    out.push({
+      action: "deleteOccurrence",
+      label: recurring ? "Delete this occurrence" : "Delete",
+      hint: recurring ? "Remove only this date" : "Remove this date",
+      destructive: true,
+    });
+  }
+  return out;
+}
+
+/**
+ * Can this series be edited IN PLACE (name, schedule, reminders), or does
+ * Edit open the record it comes from?
+ *
+ * A calendar event and a task own their schedule, so they are edited here. A
+ * bill's schedule is the liability's, a birthday from a profile is the
+ * profile's date of birth, a document expiry is the document's: those open
+ * their source (Rule 1 — one source per value).
+ */
+export function editsInPlace(series: CalendarSeries): boolean {
+  if (series.materializedFrom) return false;
+  return series.source.system === "event" || series.source.system === "task";
 }

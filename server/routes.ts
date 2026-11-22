@@ -47,6 +47,8 @@ import { getValuationSnapshot, refreshValuation, isValuableProfile, getValuation
 import { isAutoValuationEnabled } from "@shared/valuation/context";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
+import { registerRecordDetailRoutes } from "./record-details-routes";
+import { appendDetailSearchHits } from "./record-details";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import {
@@ -65,7 +67,8 @@ import { checkProfileDelete } from "@shared/profile-delete";
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { cascadeHabitRename } from "./habit-rename-cascade";
 import { normalizeEntityDateFields, impossibleCalendarDays, isRealCalendarDay, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, markSupersededDocumentRules, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, documentExpirationDate, DOC_UPCOMING_WINDOW_DAYS, type DateRule } from "@shared/date-rules";
-import { markOccurrence as markRecurringOccurrence, pruneOccurrenceTags as pruneRecurringOccurrenceTags, setSeriesFlag as setRecurringSeriesFlag } from "@shared/recurring-dates";
+import { applyTaskOccurrenceAction, applyTaskSchedule, freqToUnit } from "@shared/recurrence";
+import { markOccurrence as markRecurringOccurrence, pruneOccurrenceTags as pruneRecurringOccurrenceTags, setSeriesFlag as setRecurringSeriesFlag, applySeriesSettings, RECURRING_KINDS, type SeriesSettingsPatch } from "@shared/recurring-dates";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
 import { itemsClaimedByActions, documentDateOptOuts, type ProposedAction } from "@shared/extraction-actions";
 import { classifyFinancialDocKind, decideExpenseCreation, detectExpenseInstruction, inferFinancialStatus, isFinancialStatus } from "@shared/financial-status";
@@ -7194,6 +7197,70 @@ Rules:
     const rules_t2 = await syncDateRulesForEntity(storage, uid_t2, "task", updated.id).catch(() => null);
     res.json({ ...updated, ...(rules_t2 ? { dateRules: rules_t2.rules } : {}) });
   }));
+  // Skip / move / restore ONE occurrence of a recurring task, or end the
+  // series before one. The change is applied to the row AS STORED (Rule 6:
+  // no client read-modify-write of the tag list), by the one rule in
+  // shared/recurrence. Skipping never deletes: the date is recorded as
+  // skipped and the series keeps its schedule.
+  app.post("/api/tasks/:id/occurrence", asyncHandler(async (req, res) => {
+    const action = req.body?.action;
+    const date = typeof req.body?.date === "string" ? req.body.date.slice(0, 10) : "";
+    const newDate = typeof req.body?.newDate === "string" ? req.body.newDate.slice(0, 10) : undefined;
+    if (!["skip", "unskip", "move", "unmove", "endBefore"].includes(action)) {
+      return res.status(400).json({ error: "action must be skip, unskip, move, unmove or endBefore" });
+    }
+    if (!isCalendarDay(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) required" });
+    if (action === "move" && !isCalendarDay(String(newDate || ""))) {
+      return res.status(400).json({ error: "newDate (YYYY-MM-DD) required" });
+    }
+    const existing = await storage.getTask(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    const result = applyTaskOccurrenceAction(
+      { dueDate: existing.dueDate, tags: existing.tags, status: existing.status },
+      { action, date, newDate },
+      getUserToday(getTimezone(req)),
+    );
+    if (!result.ok) return res.status(409).json({ error: result.error });
+    const updated = await storage.updateTask(req.params.id, { dueDate: result.dueDate, tags: result.tags } as any);
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_to = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`tasks:${uid_to}`); bustCache(`stats:${uid_to}`); bustCache(`calendar:${uid_to}`); bustCache(`notifications:${uid_to}`);
+    await syncDateRulesForEntity(storage, uid_to, "task", updated.id).catch(() => null);
+    res.json({ ...updated, ...(result.ended ? { seriesEnded: true } : {}) });
+  }));
+  // Change a task's repeat rule (cadence, end, pause) on the stored tags.
+  app.post("/api/tasks/:id/schedule", asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const patch: { freq?: string; until?: string | null; count?: number | null; paused?: boolean } = {};
+    if (b.freq !== undefined) {
+      if (typeof b.freq !== "string" || (b.freq !== "" && !freqToUnit(b.freq).unit)) {
+        return res.status(400).json({ error: "freq must be daily, weekdays, weekly, monthly, yearly, every-N-days or every-N-weeks" });
+      }
+      patch.freq = b.freq;
+    }
+    if (b.until !== undefined) {
+      if (b.until !== null && b.until !== "" && !isCalendarDay(String(b.until))) return res.status(400).json({ error: "until must be YYYY-MM-DD" });
+      patch.until = b.until ? String(b.until).slice(0, 10) : null;
+    }
+    if (b.count !== undefined) {
+      const n = b.count === null || b.count === "" ? null : Number(b.count);
+      if (n !== null && (!Number.isInteger(n) || n < 1 || n > 1000)) return res.status(400).json({ error: "count must be a whole number from 1 to 1000" });
+      patch.count = n;
+    }
+    if (b.paused !== undefined) {
+      if (typeof b.paused !== "boolean") return res.status(400).json({ error: "paused must be true or false" });
+      patch.paused = b.paused;
+    }
+    const existing = await storage.getTask(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    const tags = applyTaskSchedule({ dueDate: existing.dueDate, tags: existing.tags }, patch);
+    const updated = await storage.updateTask(req.params.id, { tags } as any);
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_ts = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`tasks:${uid_ts}`); bustCache(`stats:${uid_ts}`); bustCache(`calendar:${uid_ts}`); bustCache(`notifications:${uid_ts}`);
+    await syncDateRulesForEntity(storage, uid_ts, "task", updated.id).catch(() => null);
+    res.json(updated);
+  }));
   app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
     // The storage reports whether a live row of this user's was retired; a
     // task that is not yours, or is already gone, is a 404 — not a success.
@@ -7952,6 +8019,33 @@ Rules:
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_evf = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`events:${uid_evf}`); bustCache(`stats:${uid_evf}`); bustCache(`calendar:${uid_evf}`); bustCache(`notifications:${uid_evf}`);
+    res.json(updated);
+  }));
+  // Change a series' type, reminders or check-off rule — applied to the
+  // stored tags for the same reason as the two routes above.
+  app.post("/api/events/:id/series-settings", asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const patch: SeriesSettingsPatch = {};
+    if (b.kind !== undefined) {
+      if (!RECURRING_KINDS.some((k) => k.kind === b.kind)) return res.status(400).json({ error: "Unknown kind" });
+      patch.kind = b.kind;
+    }
+    if (b.reminders !== undefined) {
+      if (!Array.isArray(b.reminders) || b.reminders.some((n: unknown) => !Number.isInteger(n) || (n as number) < 0 || (n as number) > 366)) {
+        return res.status(400).json({ error: "reminders must be a list of whole days from 0 to 366" });
+      }
+      patch.reminders = b.reminders;
+    }
+    if (b.requireComplete !== undefined) {
+      if (typeof b.requireComplete !== "boolean") return res.status(400).json({ error: "requireComplete must be true or false" });
+      patch.requireComplete = b.requireComplete;
+    }
+    const existing = await storage.getEvent(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    const updated = await storage.updateEvent(req.params.id, { tags: applySeriesSettings((existing as any).tags ?? [], patch) } as any);
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_evs = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`events:${uid_evs}`); bustCache(`stats:${uid_evs}`); bustCache(`calendar:${uid_evs}`); bustCache(`notifications:${uid_evs}`);
     res.json(updated);
   }));
   app.delete("/api/events/:id", asyncHandler(async (req, res) => {
@@ -9801,7 +9895,9 @@ Rules:
   app.get("/api/search", asyncHandler(async (req, res) => {
     const q = (req.query.q as string) || "";
     try {
-      let results = await storage.search(q);
+      // Records whose characteristic values match ("poor", "signed") join the
+      // results BEFORE the scope filter below, so they are scoped like the rest.
+      let results = await appendDetailSearchHits(await storage.search(q), q);
       // Honor the active profile filter so global search reflects what the
       // user is currently focused on. Profiles themselves are filtered by id;
       // other entities are filtered by linkedProfiles.
@@ -11645,7 +11741,9 @@ No emojis. No prose outside the JSON.`,
       // Block writes to sensitive / system-managed preference keys to prevent
       // clients from overwriting OAuth tokens or onboarding state.
       const key = req.params.key;
-      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_"];
+      // `details:` rows and the detail catalog are written only through
+      // /api/details/*, which validates each value against its definition.
+      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_", "details:", "detail_definitions"];
       const PREF_KEY_DENYLIST = new Set([
         "gcal_refresh_token", "gcal_access_token",
         "onboarding_completed", "ai_digest", "admin_override",
@@ -12850,6 +12948,7 @@ No emojis. No prose outside the JSON.`,
   // middleware, CORS and no-store cache headers. The webhook route inside is
   // exempted from bearer auth in server/auth.ts and authenticates by signature.
   registerFinanceRoutes(app);
+  registerRecordDetailRoutes(app);
 
   // Unknown API paths are 404 JSON, never the SPA shell. Without this the
   // static fallback answered `POST /api/profiles/:id/restore` (no such

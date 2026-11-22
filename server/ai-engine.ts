@@ -1,4 +1,12 @@
 import { logger } from "./logger";
+import {
+  DetailError, clearRecordDetail, defineAndSetRecordDetail, detailReport, divertDefinedDetails,
+  getRecordDetailsPayload, inferDefinitionForRecord, loadDetailRecord, type DetailRecordRef,
+} from "./record-details";
+import {
+  findDefinition as findDetailDefinition, formatDetailValue, isDetailEntityType as isDetailEntityTypeShared,
+  type DetailEntityType,
+} from "@shared/record-details";
 import { keepStatedBirthPrecision } from "@shared/date-precision";
 import { getAnthropicClient } from "./anthropic-client";
 import { fieldPatchBetween } from "../shared/field-patch";
@@ -3882,6 +3890,49 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       required: ["name", "changes"],
     },
   },
+  // --- Record details: user-defined characteristics on any record ---
+  {
+    name: "set_record_detail",
+    description: "Record a CHARACTERISTIC of any record as a structured value: a car's condition, a house's roof condition, a subscription's 1-5 rating, whether a contract is signed, a loan's priority, a pet's breed — or anything the user defines on the spot (\"track tire tread on my truck\"). Works on people, pets, vehicles, property, assets, accounts, loans, cards, subscriptions, documents/contracts, bills, tasks, events, trackers, habits and goals. Reuses an existing characteristic with the same name (one 'Condition' across every record); creates it when new, inferring its type (condition scale, rating, yes/no, number, money, date, dropdown, text) unless you pass `type`. Values are validated: a condition is one of its scale (Excellent/Good/Fair/Poor by default), a rating a whole number on its scale. Use THIS — not update_profile — for condition, rating, status, priority, yes/no flags and any characteristic the user has defined. Pass value null to clear it.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        record: { type: "string", description: "Name of the record (\"Honda Civic\", \"Maple St house\", \"Office lease\", \"Me\")." },
+        recordType: { type: "string", enum: ["profile", "document", "obligation", "task", "event", "tracker", "habit", "goal"], description: "What kind of record it is. Default: profile (people, pets, vehicles, property, assets, accounts, loans, subscriptions); then documents are searched." },
+        characteristic: { type: "string", description: "The characteristic's name, as the user said it: \"Condition\", \"Roof condition\", \"Signed\", \"Tire tread\"." },
+        value: { description: "The value: \"Good\", 4, true, \"2026-03-01\", \"$1,200\", [\"Commute\",\"Towing\"] for multiple choice. null clears it." },
+        type: { type: "string", enum: ["text", "longtext", "number", "currency", "percent", "date", "boolean", "select", "multiselect", "condition", "rating", "url"], description: "Only for a NEW characteristic, when the user said what kind it is. Omit to infer." },
+        options: { type: "array", items: { type: "string" }, description: "Only for a NEW dropdown / multiple-choice / condition scale: its options (condition: best to worst)." },
+        appliesToAll: { type: "boolean", description: "Only for a NEW characteristic the user wants on every kind of record. Default: just this kind (e.g. vehicles)." },
+      },
+      required: ["record", "characteristic", "value"],
+    },
+  },
+  {
+    name: "get_record_details",
+    description: "Read every characteristic recorded on one record (condition, ratings, statuses, user-defined details) and any flags its rules raise. Use for \"what condition is my car in\", \"what details do I have on the lease\".",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        record: { type: "string", description: "Name of the record." },
+        recordType: { type: "string", enum: ["profile", "document", "obligation", "task", "event", "tracker", "habit", "goal"], description: "Default: profile, then documents." },
+      },
+      required: ["record"],
+    },
+  },
+  {
+    name: "find_records_by_detail",
+    description: "Report across ALL records by one characteristic: \"which of my things are in poor condition\", \"what's rated 2 stars or less\", \"which contracts aren't signed\", \"which cars have no condition recorded\". Returns matching records with their values, plus how many records have each value.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        characteristic: { type: "string", description: "The characteristic's name (\"Condition\")." },
+        comparison: { type: "string", enum: ["is", "is_not", "any_of", "contains", "lt", "lte", "gt", "gte", "worse_than", "at_or_worse", "better_than", "past", "within_days", "empty", "not_empty"], description: "Optional filter. Condition scales: worse_than / at_or_worse / better_than. Dates: past / within_days. empty = not recorded yet." },
+        value: { description: "The filter's operand (\"Fair\", 3, 30 days for within_days, a list for any_of)." },
+      },
+      required: ["characteristic"],
+    },
+  },
   {
     name: "delete_profile",
     description: "Delete a profile by name.",
@@ -6345,6 +6396,11 @@ record already owns the information. Route it there — NEVER into a note:
   a recurring bill or subscription        -> create_obligation
   a debt, loan, or balance owed           -> create_liability
   something owned, and its value          -> create_profile (asset) / revalue_asset
+  a CHARACTERISTIC of any record — its
+  condition, a rating, a status, priority,
+  signed yes/no, or anything the user
+  defines ("track tire tread")           -> set_record_detail (typed, reportable)
+  "which things are in poor condition"    -> find_records_by_detail
   a pet's breed, microchip, vet           -> update_profile on the pet
   a measured health value                 -> log_tracker_entry
   a dated thing that HAPPENS               -> create_event
@@ -7565,6 +7621,49 @@ export function tagsTheUserAskedFor(tags: unknown, userMessage: unknown): string
   return /\btag(s|ged|ging)?\b|\blabel(s|ed|led)?\b|(^|\s)#[a-z]\w*/i.test(userMessage) ? list : [];
 }
 
+/**
+ * The record a chat detail tool names. Profiles first (people, pets, assets,
+ * loans…), then documents, unless the model said which kind. An ambiguous name
+ * asks instead of guessing (the same resolver update_profile uses).
+ */
+async function resolveDetailTarget(rawName: unknown, rawType: unknown): Promise<{ ref: DetailRecordRef } | { error: string }> {
+  const nameIn = String(rawName ?? "").trim();
+  if (!nameIn) return { error: "Which record? Tell me its name." };
+  const type = typeof rawType === "string" && rawType ? rawType : "";
+  const kinds: DetailEntityType[] = type && isDetailEntityTypeShared(type) ? [type] : ["profile", "document"];
+  for (const kind of kinds) {
+    const candidates = await detailCandidates(kind);
+    if (candidates.length === 0) continue;
+    const exact = candidates.find((c) => c.name.toLowerCase() === nameIn.toLowerCase());
+    const res = exact ? { kind: "found" as const, profile: exact } : resolveProfileByName(candidates, nameIn);
+    if (res.kind === "ambiguous") {
+      return { error: `"${nameIn}" matches more than one record: ${res.matches.slice(0, 5).map((m) => `"${m.name}"`).join(", ")}. Which one?` };
+    }
+    if (res.kind === "found") {
+      const ref = await loadDetailRecord(kind, res.profile.id);
+      if (ref) return { ref };
+    }
+  }
+  return { error: `I couldn't find a record called "${nameIn}".` };
+}
+
+async function detailCandidates(kind: DetailEntityType): Promise<Array<{ id: string; name: string }>> {
+  const named = (rows: any[], field: string) => (rows || [])
+    .filter((r) => r && !r.deletedAt && typeof r[field] === "string" && r[field].trim())
+    .map((r) => ({ id: String(r.id), name: String(r[field]) }));
+  switch (kind) {
+    case "profile": return named(await storage.getProfiles(), "name");
+    case "document": return named(await storage.getDocuments(), "name");
+    case "obligation": return named(await storage.getObligations(), "name");
+    case "task": return named(await storage.getTasks(), "title");
+    case "event": return named(await storage.getEvents(), "title");
+    case "tracker": return named(await storage.getTrackers(), "name");
+    case "habit": return named(await storage.getHabits(), "name");
+    case "goal": return named(await storage.getGoals(), "title");
+    default: return [];
+  }
+}
+
 export async function executeTool(name: string, input: any, userId?: string): Promise<any> {
   try {
     return await executeToolInner(name, input, userId);
@@ -8194,6 +8293,93 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       return newProfile;
     }
 
+    case "set_record_detail":
+    case "get_record_details": {
+      const target = await resolveDetailTarget(input.record, input.recordType);
+      if ("error" in target) return { error: target.error };
+      const todayISO = getUserToday(aiUserTimezone());
+      if (name === "get_record_details") {
+        const view = await getRecordDetailsPayload(target.ref.entityType, target.ref.entityId, todayISO);
+        return {
+          record: target.ref.name,
+          details: view.rows.filter((r) => r.value !== null).map((r) => ({ characteristic: r.definition.label, value: r.display, updated: r.updatedAt })),
+          missing: view.rows.filter((r) => r.value === null).map((r) => r.definition.label),
+          flags: view.flags.map((f) => `${f.severity}: ${f.message}`),
+          ...(view.rows.length === 0 ? { message: `No details recorded on ${target.ref.name} yet.` } : {}),
+        };
+      }
+      const characteristic = String(input.characteristic || "").trim();
+      if (!characteristic) return { error: "Which characteristic? (e.g. Condition)" };
+      try {
+        const defs = await storage.getDetailDefinitions();
+        const existing = findDetailDefinition(defs, characteristic);
+        const clearing = input.value === null;
+        let result;
+        if (existing) {
+          result = clearing
+            ? await clearRecordDetail({ entityType: target.ref.entityType, entityId: target.ref.entityId, definition: existing.id, todayISO })
+            : await defineAndSetRecordDetail({ entityType: target.ref.entityType, entityId: target.ref.entityId, definition: { label: existing.label }, value: input.value, todayISO });
+        } else {
+          if (clearing) return { error: `${target.ref.name} has no "${characteristic}" to clear.` };
+          const inferred = input.type
+            ? { label: characteristic, kind: input.type, ...(Array.isArray(input.options) ? { options: input.options } : {}) }
+            : inferDefinitionForRecord(target.ref, characteristic, input.value);
+          if (Array.isArray(input.options) && input.options.length > 0) (inferred as any).options = input.options;
+          if (input.appliesToAll === true) (inferred as any).appliesTo = ["*"];
+          result = await defineAndSetRecordDetail({ entityType: target.ref.entityType, entityId: target.ref.entityId, definition: inferred, value: input.value, todayISO });
+        }
+        // The confirmation is built from the server's read-back of the record,
+        // never from the model's sentence (owner rule, 2026-11-12).
+        const row = result.payload.rows.find((r) => r.definition.id === result.definition.id);
+        const saved = row ? row.display : "—";
+        const prev = result.previous === null ? null : formatDetailValue(result.definition, result.previous);
+        const flags = (row?.flags || []).map((f) => f.message);
+        return {
+          success: true,
+          record: target.ref.name,
+          characteristic: result.definition.label,
+          value: clearing ? null : saved,
+          previous: prev,
+          createdCharacteristic: result.createdDefinition,
+          type: result.definition.kind,
+          flags,
+          message: clearing
+            ? `Cleared ${result.definition.label} on ${target.ref.name}.`
+            : `${result.definition.label} on ${target.ref.name}: ${saved}${prev && prev !== saved ? ` (was ${prev})` : ""}.`
+              + (result.createdDefinition ? ` New characteristic "${result.definition.label}" (${result.definition.kind}).` : "")
+              + (flags.length ? ` Flag: ${flags.join("; ")}.` : ""),
+        };
+      } catch (err) {
+        if (err instanceof DetailError) return { error: err.message };
+        throw err;
+      }
+    }
+
+    case "find_records_by_detail": {
+      try {
+        const report = await detailReport({
+          definition: input.characteristic,
+          op: input.comparison,
+          value: Array.isArray(input.value) ? input.value.join(",") : input.value,
+          todayISO: getUserToday(aiUserTimezone()),
+        });
+        return {
+          characteristic: report.definition.label,
+          filter: report.filter ? `${report.definition.label} ${report.filter.label}${report.filter.value !== undefined ? ` ${Array.isArray(report.filter.value) ? report.filter.value.join(" or ") : String(report.filter.value)}` : ""}` : null,
+          matched: report.rows.length,
+          totalRecords: report.total,
+          records: report.rows.slice(0, 50).map((r) => ({ name: r.name, value: r.value === null ? "not set" : r.display, flags: r.flags.map((f) => f.message) })),
+          distribution: report.distribution.map((d) => `${d.value === "—" ? "not set" : d.value}: ${d.count}`),
+        };
+      } catch (err) {
+        if (err instanceof DetailError) {
+          const defs = await storage.getDetailDefinitions().catch(() => []);
+          return { error: err.message, knownCharacteristics: defs.map((d) => d.label) };
+        }
+        throw err;
+      }
+    }
+
     case "update_profile": {
       const profiles = await storage.getProfiles();
       const searchName = (input.name || "").toLowerCase().trim();
@@ -8246,6 +8432,22 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const updateFlatFields = updateCanon?.fields;
       // "Max was born in March 2020" names a month, not March 1.
       if (updateFlatFields) keepStatedBirthPrecision(updateFlatFields, String((input as any).__userMessage || ""));
+      // One source per value: a field named like a characteristic the user
+      // DEFINED (record details) is written to that characteristic, typed —
+      // not into a loose field beside it (server/record-details).
+      const detailsSaved = updateFlatFields
+        ? await divertDefinedDetails("profile", profile.id, updateFlatFields, profile.fields, getUserToday(aiUserTimezone()))
+        : [];
+      if (detailsSaved.length > 0 && updateFlatFields && Object.keys(updateFlatFields).length === 0
+        && Object.keys(input.changes || {}).every((k) => k === "fields")
+        && !(Array.isArray(input.removeFields) && input.removeFields.length) && !input.parentProfileName) {
+        return {
+          success: true,
+          record: profile.name,
+          detailsSaved,
+          message: detailsSaved.map((d) => `${d.label} on ${profile.name}: ${d.display}${d.previous && d.previous !== d.display ? ` (was ${d.previous})` : ""}.`).join(" "),
+        };
+      }
       const previousFields: Record<string, any> = {};
       if (updateFlatFields && profile.fields) {
         for (const key of Object.keys(updateFlatFields)) {
@@ -8423,6 +8625,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         ...(readBack ? { fields: readBack.fields, name: readBack.name } : {}),
         fieldReceipt,
         receiptText: formatFieldReceiptText(fieldReceipt),
+        ...(detailsSaved.length > 0 ? { detailsSaved } : {}),
         // A rename changes what EVERY list, badge and header calls this record,
         // so the card names the new name and the client refreshes everything
         // rather than the profile queries alone (see buildChatMutation).
@@ -18349,7 +18552,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const execMs = Date.now() - tExecStart;
 
           // Invalidate context cache after any write operation
-          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "search_notes", "read_journal", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
+          const readOnlyToolNames = ["search", "get_record_details", "find_records_by_detail", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "search_notes", "read_journal", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
             invalidateContextCache(userId);
           }
@@ -18548,7 +18751,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
           // Log the action to in-memory history
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
-          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "search_notes", "read_journal", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
+          const readOnlyTools = ["search", "get_record_details", "find_records_by_detail", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "search_notes", "read_journal", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);
           }
@@ -19366,6 +19569,8 @@ export const READ_ONLY_TOOLS = new Set<string>([
   // writes nothing — Date Rules are derived from the canonical record, so
   // "syncing" is a read that reports what the record now projects.
   "search_notes", "read_journal", "sync_date_rules_for_entity",
+  // Record details (server/record-details): reads of user-defined characteristics.
+  "get_record_details", "find_records_by_detail",
   // Connected bank data (Stripe Financial Connections). These four are pure
   // reads over the authenticated user's own financial_* rows.
   // `refresh_financial_data` is deliberately NOT here — it is an action that
@@ -19443,6 +19648,8 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   create_profile: "create_profile",
   update_profile: "update_profile",
   delete_profile: "delete_entity",
+  // Record details: a typed characteristic on any record (server/record-details).
+  set_record_detail: "set_record_detail",
   revalue_asset: "revalue_asset",
   convert_expense_to_asset: "revalue_asset",
   // Tasks

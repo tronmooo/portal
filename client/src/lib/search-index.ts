@@ -163,6 +163,9 @@ export function matchNote(item: any): string {
   const parts: string[] = [];
   const field = item._matchField as string | null | undefined;
   if (field === "_related") parts.push("linked to a match");
+  // A record found by a characteristic's value (server/record-details) says
+  // which one: "Condition: Poor".
+  else if (field === "_matchedDetail" && typeof item._matchedDetail === "string") parts.push(item._matchedDetail);
   else if (field && !(TITLE_FIELDS as readonly string[]).includes(field)) parts.push(`matched on ${fieldLabel(field)}`);
   if (item._outOfScope) parts.push("outside current scope");
   return parts.join(" · ");

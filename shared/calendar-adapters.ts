@@ -31,6 +31,7 @@ import { rulesFromAll, seriesFromDateRules } from "./date-rules";
 import { normalizeDateString } from "./extraction-normalize";
 import { resolveLiabilityDueDate, resolveLiabilityEndDate } from "./liability-schedule";
 import { readMonthlyPayment } from "./liability-fields";
+import { parseRecurrence, scheduledDateOf } from "./recurrence";
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
 const clip = (v: unknown): string => String(v ?? "").slice(0, 10);
@@ -603,6 +604,20 @@ function liabilityOccurrenceState(p: any, definitionAmount: number): Partial<Cal
  * Rows belonging to a detected group are emitted once, as the group; every
  * other task keeps its existing per-row behaviour exactly.
  */
+/**
+ * A task's `recur:` cadence in the calendar engine's vocabulary.
+ *
+ * `frequencyToRecurrence` is the BILLS mapping and answers "monthly" for
+ * anything it does not know — so an every-weekday chore was drawn on the
+ * calendar once a month. Weekday sets pass through; anything the engine
+ * cannot expand falls back to the bills mapping as before.
+ */
+function taskFreqToRecurrence(freq: string): string {
+  const f = String(freq || "").toLowerCase();
+  if (f === "weekdays" || f === "weekends" || /^weekly:[0-6](,[0-6])*$/.test(f)) return f;
+  return frequencyToRecurrence(f);
+}
+
 export function seriesFromTasks(tasks: readonly any[]): CalendarSeries[] {
   const out: CalendarSeries[] = [];
 
@@ -678,14 +693,39 @@ export function seriesFromTasks(tasks: readonly any[]): CalendarSeries[] {
     });
   }
 
+  // A completed occurrence of a repeating task is its own row (completing it
+  // spawned the next one). Those rows are the series' HISTORY: collect their
+  // dates per series so the open row can say what was done before it.
+  const seriesKeyOf = (t: any) =>
+    `${String(t?.title ?? "").trim().toLowerCase()}|${uniq(Array.isArray(t?.linkedProfiles) ? t.linkedProfiles : []).sort().join(",")}`;
+  const doneBySeries = new Map<string, string[]>();
+  for (const t of tasks || []) {
+    if (!t?.id || t.status !== "done" || !isISO(t.dueDate)) continue;
+    const tags: string[] = Array.isArray(t.tags) ? t.tags.map(String) : [];
+    if (!tags.some((x) => x.startsWith("recur:"))) continue;
+    const rule = parseRecurrence(tags);
+    const key = seriesKeyOf(t);
+    const list = doneBySeries.get(key) ?? [];
+    list.push(scheduledDateOf(clip(t.dueDate), rule));
+    doneBySeries.set(key, list);
+  }
+
   for (const t of tasks || []) {
     if (!t?.id || !isISO(t.dueDate)) continue;
     if (t.status === "done") continue;
     if (claimed.has(String(t.id))) continue;
-    const tags: string[] = Array.isArray(t.tags) ? t.tags : [];
+    const tags: string[] = Array.isArray(t.tags) ? t.tags.map(String) : [];
     const recurTag = tags.find((x) => typeof x === "string" && x.startsWith("recur:"));
     const freq = recurTag ? recurTag.slice(6) : "";
     const profileId = Array.isArray(t.linkedProfiles) ? t.linkedProfiles[0] : undefined;
+    // Per-occurrence state of a repeating task (shared/recurrence): the dates
+    // skipped one at a time, the ones moved, and — for a row moved off its
+    // scheduled day — the day the series still steps from.
+    const rule = freq ? parseRecurrence(tags) : null;
+    const scheduled = rule ? scheduledDateOf(clip(t.dueDate), rule) : clip(t.dueDate);
+    const movedDates: Record<string, string> = { ...(rule?.moved || {}) };
+    if (rule?.movedFrom && rule.movedFrom !== clip(t.dueDate)) movedDates[rule.movedFrom] = clip(t.dueDate);
+    const completedDates = rule ? (doneBySeries.get(seriesKeyOf(t)) || []).slice().sort() : [];
     out.push({
       id: `task:${t.id}`,
       kind: "task",
@@ -698,8 +738,12 @@ export function seriesFromTasks(tasks: readonly any[]): CalendarSeries[] {
         ownerIds: uniq(Array.isArray(t.linkedProfiles) ? t.linkedProfiles : []),
         href: sourceHref("task", t.id, profileId),
       },
-      baseDate: clip(t.dueDate),
-      recurrence: freq ? frequencyToRecurrence(freq) : "none",
+      baseDate: scheduled,
+      recurrence: freq ? taskFreqToRecurrence(freq) : "none",
+      ...(rule?.until && isISO(rule.until) ? { recurrenceEnd: rule.until } : {}),
+      ...(rule?.skipped?.length ? { skippedDates: rule.skipped } : {}),
+      ...(Object.keys(movedDates).length ? { movedDates } : {}),
+      ...(completedDates.length ? { completedDates } : {}),
       paused: tags.includes("rpaused"),
     });
   }

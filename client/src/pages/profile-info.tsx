@@ -15,6 +15,7 @@
 // detail page uses (["/api/profiles", id, "detail"]), so it's instant when
 // you've already visited the profile and edits here reflect there too.
 import { NewNoteForm } from "@/components/notes/NewNoteForm";
+import { DetailValueCells } from "@/components/details/DetailValueCells";
 import { formatStoredDate } from "@/lib/dates";
 import { isBirthDateField, formatYearMonth } from "@shared/date-precision";
 import { useState, useRef, useEffect } from "react";
@@ -26,7 +27,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useProfileDocuments } from "@/hooks/useProfileDocuments";
-import { infoFieldsForType, readField, computeAge } from "@/lib/profile-fields";
+import { infoFieldsForType, readField, computeAge, birthdayForAge } from "@/lib/profile-fields";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
@@ -309,6 +310,18 @@ function SingleProfileInfo({ id }: { id: string }) {
 
   const saveField = (key: string, value: string) =>
     patch.mutate({ fields: { [key]: value } });
+  // Age has no field of its own: typing a new age moves the birth year
+  // (birthdayForAge), so Age and Birthday can never disagree.
+  const saveAge = (value: string) => {
+    const birthday = readField(profile?.fields || {}, "birthday");
+    if (computeAge(birthday) === value.trim()) return;
+    const next = birthdayForAge(birthday, value);
+    if (!next) {
+      toast({ title: "Couldn't change the age", description: "Type a whole number of years, like 27 — or change the birthday instead.", variant: "destructive" });
+      return;
+    }
+    saveField("birthday", next);
+  };
   // Profile field delete must use the explicit `fieldsToDelete` signal.
   // The storage layer (mergeAndApplyDeletes) MERGES incoming `fields` on top
   // of the existing JSONB, so sending `{ fields: rest }` with the key omitted
@@ -637,15 +650,19 @@ function SingleProfileInfo({ id }: { id: string }) {
             key={r.key}
             label={r.label}
             value={r.value}
-            editable={r.key !== "__age"}
-            onSave={r.key !== "__age" ? (v) => saveField(r.key, v) : undefined}
-            onRemove={r.key !== "__age" && !["birthday"].includes(r.key) ? () => removeField(r.key) : undefined}
+            editable
+            onSave={r.key === "__age" ? (v) => saveAge(v) : (v) => saveField(r.key, v)}
+            // Age is read from the birthday, so removing Age removes the birthday.
+            onRemove={() => removeField(r.key === "__age" ? "birthday" : r.key)}
           />
         ))}
         {rows.length === 0 && (
           <p className="col-span-full text-xs text-muted-foreground py-4 text-center">No details yet — tap “Add field”.</p>
         )}
       </div>
+      {/* Values saved as characteristics (chat, the earlier Details box) —
+          same cards: tap to change, X to remove. */}
+      <DetailValueCells entityType="profile" entityId={profile.id} />
 
       {/* Developer Mode only: internal metadata, read-only (Rule 25). */}
       {systemRows.length > 0 && (
@@ -701,6 +718,7 @@ function SingleProfileInfo({ id }: { id: string }) {
           </div>
         </Card>
       ))}
+
 
       {/* Notes + Tags */}
       <NotesTags

@@ -43,40 +43,42 @@ class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
 beforeAll(() => { process.env.TZ = "America/Los_Angeles"; });
 afterEach(cleanup);
 
+const tlRow = (id: string, name: string, amount: number, date: string, daysUntil: number, state: string) =>
+  ({ key: `${id}:${date}`, billId: id, name, amount, date, daysUntil, frequency: "monthly", category: "general", kind: "bill", autopay: false, linkedLiabilityId: id, state });
 // ── Item 3: the Bills Due tile counts the rows the popup shows ──────────────
 describe("item 3: Bills Due KPI / card / popup are one list", () => {
-  const bills = [
-    { id: "b1", name: "Rent", amount: 2400, daysUntil: 3, status: "upcoming", dueDate: "2026-09-05" },
-    { id: "b2", name: "Internet", amount: 79, daysUntil: 20, status: "upcoming", dueDate: "2026-09-22" },
-    { id: "b3", name: "Water", amount: 40, daysUntil: 28, status: "upcoming", dueDate: "2026-09-30" },
-  ];
+  const timeline: any = { upcoming: [
+    tlRow("b1", "Rent", 2400, "2026-09-05", 3, "upcoming"),
+    tlRow("b2", "Internet", 79, "2026-09-22", 20, "upcoming"),
+    tlRow("b3", "Water", 40, "2026-09-30", 28, "upcoming"),
+  ], past: [] };
   const props: any = {
     netWorth: 1, assets: 1, liabilities: 0, momPct: null, nwSeries: [], cashIn: 0, cashOut: 0, spendMtd: 0,
-    budgets: [], bills, assetBreakdown: [], liabilityBreakdown: [], monthLabel: "SEP", onPayBill: () => {}, payingId: null,
+    budgets: [], billsTimeline: timeline, assetBreakdown: [], liabilityBreakdown: [], monthLabel: "SEP",
   };
 
   it("counts every bill in the 30-day window on the KPI and the card, and names the window", () => {
     render(<MoneyOverview {...props} />);
     expect(screen.getByTestId("money-bills-kpi").textContent).toContain("3");
     const card = screen.getByTestId("money-bills");
-    expect(card.querySelectorAll("[data-testid^='money-bill-']")).toHaveLength(3);
-    expect(card.textContent).toContain("next 30d");
+    expect(card.querySelectorAll("[data-testid^='bill-timeline-upcoming-']")).toHaveLength(3);
+    expect(card.textContent).toContain("Next 30 Days");
     expect(card.textContent).not.toContain("14d");
   });
 
   it("the popup opened from that tile lists the same rows", () => {
-    render(<BillsDuePopup open onOpenChange={() => {}} bills={bills as any} onPayBill={() => {}} />);
-    expect(screen.getAllByTestId(/^bill-row-/)).toHaveLength(3);
+    render(<BillsDuePopup open onOpenChange={() => {}} timeline={timeline} />);
+    expect(screen.getAllByTestId(/^bill-timeline-upcoming-/)).toHaveLength(3);
   });
 });
 
 // ── Item 2: DueChip shows the stored day, not the UTC-rolled-back one ───────
 describe("item 2: DueChip renders the due day the row carries", () => {
   it("a bill due on the 23rd shows 23 / Jul in a US zone", () => {
-    render(<BillsDuePopup open onOpenChange={() => {}} onPayBill={() => {}}
-      bills={[{ id: "b1", name: "Electric", amount: 140, daysUntil: 3, status: "upcoming", dueDate: "2026-07-23" }] as any} />);
-    const row = screen.getByTestId("bill-row-b1");
-    expect(row.textContent).toContain("Jul");
+    render(<BillsDuePopup open onOpenChange={() => {}}
+      timeline={{ upcoming: [tlRow("b1", "Electric", 140, "2026-07-23", 3, "upcoming")], past: [] } as any} />);
+    const row = screen.getByTestId("bill-timeline-upcoming-b1");
+    expect(row.textContent).toContain("JUL");
     expect(row.textContent).toContain("23");
     expect(row.textContent).not.toContain("22");
   });

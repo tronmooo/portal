@@ -1,5 +1,4 @@
 import { parseLocalDate } from "@/lib/format";
-import { parseDate } from "@/lib/dates";
 // ── MoneyPopups — one bespoke drill-down per Money KPI card (2026-07) ─────────
 // Before this file, five different cards (Cash Flow, Spend, Income, Bills Due,
 // Savings Rate + the Cash Flow Overview "View") all opened the SAME CashFlowPopup,
@@ -9,7 +8,7 @@ import { parseDate } from "@/lib/dates";
 //   CashFlowWaterfallPopup — sky · waterfall chart (In → Recurring → One-time → Net)
 //   SpendPopup             — amber · daily heat calendar + category bars + receipts
 //   IncomePopup            — emerald · stacked source ribbon + per-source shares
-//   BillsDuePopup          — rose · due-date timeline with calendar chips + Pay
+//   BillsDuePopup          — rose · Bills & Payments: Upcoming / Past (no Pay)
 //   SavingsRatePopup       — violet · semicircle gauge + income−spend equation
 //   CashFlowOverviewPopup  — indigo · glowing donut + 6-month trend + month table
 //
@@ -23,7 +22,6 @@ import { parseDate } from "@/lib/dates";
 // Pure presentation: every number arrives as a prop from finance.tsx, which
 // already owns the queries — no fetching here, so these stay jsdom-testable.
 import { useMemo, useState } from "react";
-import { useLocation } from "wouter";
 import { BubbleModal, PopupHero } from "@/components/ui/bubble-modal";
 import { StatTile } from "@/components/tracker-detail";
 import { formatMoneyRound } from "@/lib/format";
@@ -38,8 +36,8 @@ import {
 } from "lucide-react";
 import { toMonthlyAmount, canonicalIncomeFrequency, isReceivedPaycheck, paycheckReceivedDay, paycheckAmount } from "@shared/obligation-windows";
 import { formatLocalDate } from "@/lib/dates";
-import { dayLabel } from "@shared/now-rank";
-import type { MoneyBill } from "@/components/finance/MoneyOverview";
+import type { BillsTimeline } from "@shared/bills-timeline";
+import { BillsTimelineView } from "@/components/finance/BillsTimelineView";
 
 const fmt = (n: number) => Math.round(Math.abs(n)).toLocaleString("en-US");
 const signed = (n: number) => `${n < 0 ? "-" : "+"}$${fmt(n)}`;
@@ -520,110 +518,21 @@ export function IncomePopup({
 // 4 · BILLS DUE — rose timeline
 // ═════════════════════════════════════════════════════════════════════════════
 
-function DueChip({ dueDate }: { dueDate?: string }) {
-  // parseDate pins a bare "YYYY-MM-DD" to local noon; `new Date(dueDate)` read
-  // it as UTC midnight and the chip showed the day BEFORE the due date for
-  // every negative-offset user.
-  const d = parseDate(dueDate);
-  const ok = !!d;
-  return (
-    <div className="w-10 shrink-0 rounded-lg border border-border overflow-hidden text-center">
-      <div className="micro-label bg-red-500/80 text-white py-0.5">
-        {ok ? d!.toLocaleDateString("en-US", { month: "short" }) : "—"}
-      </div>
-      <div className="py-0.5 text-sm font-bold tabular-nums bg-card">{ok ? d!.getDate() : "?"}</div>
-    </div>
-  );
-}
-
+// Owner design 2026-11-21: "Bills & Payments" — Upcoming (next 30 days) and
+// Past (last 90 days), from the server's billsTimeline (shared/bills-timeline).
+// A recurring bill's elapsed due dates are assumed paid: no overdue group, no
+// Pay button. A row opens the bill, where a payment can still be recorded.
 export function BillsDuePopup({
-  open, onOpenChange, bills, onPayBill, payingId,
+  open, onOpenChange, timeline,
 }: {
   open: boolean; onOpenChange: (o: boolean) => void;
-  bills: MoneyBill[]; onPayBill?: (b: MoneyBill) => void; payingId?: string | null;
+  timeline: BillsTimeline;
 }) {
-  const rose = "hsl(350 80% 58%)";
-  const [, navigate] = useLocation();
-  // Close before navigating (same body pointer-events fix as HeroKPIPopups).
-  const goBill = (b: any) => {
-    if (!b.linkedLiabilityId) return;
-    onOpenChange(false);
-    setTimeout(() => navigate(`/profiles/${b.linkedLiabilityId}`), 0);
-  };
-  const total = bills.reduce((s, b) => s + (Number(b.amount) || 0), 0);
-  const groups = useMemo(() => {
-    const g: Array<{ key: string; label: string; items: MoneyBill[] }> = [
-      { key: "overdue", label: "Overdue", items: [] },
-      { key: "today", label: "Due today", items: [] },
-      { key: "week", label: "Next 7 days", items: [] },
-      { key: "later", label: "Later this month", items: [] },
-    ];
-    for (const b of bills) {
-      const d = Number(b.daysUntil);
-      if (d < 0) g[0].items.push(b);
-      else if (d === 0) g[1].items.push(b);
-      else if (d <= 7) g[2].items.push(b);
-      else g[3].items.push(b);
-    }
-    return g.filter((x) => x.items.length > 0);
-  }, [bills]);
-  const overdueCount = bills.filter((b) => Number(b.daysUntil) < 0).length;
-
   return (
     <BubbleModal open={open} onClose={() => onOpenChange(false)} testId="popup-bills"
-      title="Bills due · next 30 days" icon={CalendarDays} accent={ROSE} count={bills.length}>
-      <PopupHero accent={ROSE}
-        value={<>{bills.length}<span className="text-sm font-semibold text-muted-foreground ml-2">bills · ${fmt(total)}</span></>}
-        caption={overdueCount > 0
-          ? <span className="font-semibold text-red-500">{overdueCount} overdue — needs attention</span>
-          : <span className="text-muted-foreground">nothing overdue 🎉</span>} />
-
-      <div>
-        {bills.length === 0 ? (
-          <p className="text-xs text-muted-foreground text-center py-8">No bills due in the next 30 days.</p>
-        ) : (
-          <div className="relative pl-3">
-            {/* timeline rail */}
-            <div className="absolute left-[3px] top-1 bottom-1 w-px bg-border" />
-            <div className="space-y-4">
-              {groups.map((g) => (
-                <div key={g.key}>
-                  <div className="relative mb-1.5">
-                    <span className="absolute -left-[13.5px] top-1 h-2.5 w-2.5 rounded-full border-2 border-background"
-                      style={{ background: g.key === "overdue" ? "hsl(0 72% 58%)" : g.key === "today" ? "hsl(38 96% 54%)" : rose }} />
-                    <p className="micro-label"
-                      style={{ color: g.key === "overdue" ? "hsl(0 72% 58%)" : g.key === "today" ? "hsl(38 96% 54%)" : "hsl(var(--muted-foreground))" }}>
-                      {g.label} · {g.items.length}
-                    </p>
-                  </div>
-                  <div className="space-y-1.5">
-                    {g.items.map((b: any) => (
-                      <div key={b.id} className="flex items-center gap-2.5 bubble px-2.5 py-2" data-testid={`bill-row-${b.id}`}>
-                        <DueChip dueDate={b.dueDate} />
-                        <button type="button" onClick={() => goBill(b)} disabled={!b.linkedLiabilityId}
-                          className={`flex-1 min-w-0 text-left ${b.linkedLiabilityId ? "cursor-pointer" : "cursor-default"}`}>
-                          <p className="text-xs font-semibold truncate">{b.name}</p>
-                          <p className="text-[11px] text-muted-foreground capitalize truncate">
-                            {[b.category, (b as any).autopay ? "autopay" : null, dayLabel(Number(b.daysUntil))].filter(Boolean).join(" · ")}
-                          </p>
-                        </button>
-                        <span className="text-sm font-bold tabular-nums shrink-0">${fmt(Number(b.amount) || 0)}</span>
-                        {onPayBill && (
-                          <Button size="sm" variant={Number(b.daysUntil) < 0 ? "destructive" : "outline"}
-                            className="h-7 text-xs shrink-0" disabled={payingId === b.id}
-                            onClick={() => onPayBill(b)} data-testid={`bill-pay-${b.id}`}>
-                            {payingId === b.id ? "…" : "Pay"}
-                          </Button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      title="Bills & Payments" icon={CalendarDays} accent={ROSE}>
+      <p className="text-xs text-muted-foreground -mt-1 mb-3">Upcoming and past payments</p>
+      <BillsTimelineView timeline={timeline} onNavigate={() => onOpenChange(false)} />
     </BubbleModal>
   );
 }

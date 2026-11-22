@@ -5344,7 +5344,8 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
   );
 }
 
-function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton, ready = true }: {
+function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton, ready = true, overviewEnd }: {
+  overviewEnd?: React.ReactNode;
   enhanced: any;
   stats: any;
   allProfiles: any[];
@@ -5360,7 +5361,7 @@ function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton, ready 
           row opens its module's popup, exactly like the personal view.
           Household-only extras (combined net-worth hero + per-person cards)
           follow below the briefing. */}
-      <ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} ready={ready} />
+      <ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} ready={ready} overviewEnd={overviewEnd} />
       <HouseholdGroupHeader icon={Users} label="Household" />
       <HouseholdHero allProfiles={allProfiles} />
       <ProfileSummaryGrid allProfiles={allProfiles} />
@@ -5823,7 +5824,7 @@ export default function DashboardPage() {
         content = <QuickActionsSection filterMode={filterMode} filterIds={filterIds} allProfiles={allProfiles} />;
         break;
       case "exec-briefing":
-        content = <ExecutiveBriefing filterMode={filterMode} filterIds={filterIds} stats={stats} enhanced={enhanced} ready={bootstrapSettled} enhancedError={enhancedError} enhancedFetching={enhancedFetching} />;
+        content = <ExecutiveBriefing filterMode={filterMode} filterIds={filterIds} stats={stats} enhanced={enhanced} ready={bootstrapSettled} enhancedError={enhancedError} enhancedFetching={enhancedFetching} overviewEnd={menuInBriefing ? dashboardMenu : undefined} />;
         break;
       case "notifications":
         content = <NotificationsSection filterMode={filterMode} filterIds={filterIds} />;
@@ -5836,6 +5837,53 @@ export default function DashboardPage() {
     }
     return content ? <SectionErrorBoundary name={id}>{content}</SectionErrorBoundary> : null;
   }
+
+  // Under the hub shell this page's header is only the "⋮" menu, and a row
+  // of its own for one button pushed every card down a line (2026-11-21:
+  // "make everything fit so I don't have to scroll"). When the briefing leads
+  // the page the menu sits at the end of its top bar instead.
+  const briefingLeads = filterMode === "everyone"
+    ? !(showDashSkeleton && !stats)
+    : sections.find((s) => s.visible)?.id === "exec-briefing";
+  const menuInBriefing = hubEmbedded && briefingLeads;
+  const dashboardMenu = (
+    <div className="flex items-center gap-1.5 shrink-0">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="icon" className="h-8 w-8 hover:bg-accent" data-testid="btn-dashboard-menu" aria-label="Dashboard menu">
+            <MoreVertical className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
+            <Settings className="h-4 w-4 mr-2" /> Customize
+          </DropdownMenuItem>
+          {/* Export / Import stay: data portability is a user feature. */}
+          <DropdownMenuItem onClick={handleExport} data-testid="btn-export">
+            <Download className="h-4 w-4 mr-2" /> Export Data
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setImportOpen(true)} data-testid="btn-import">
+            <UploadCloud className="h-4 w-4 mr-2" /> Import Backup
+          </DropdownMenuItem>
+          {/* Dev/QA only (QA 2026-07-29 UX-002). "Show test data" mixes
+              synthetic suite rows into real money and health numbers with
+              no visual distinction, and the ChatGPT re-import is a one-off
+              migration tool — neither belongs in a normal user's menu.
+              See lib/dev-affordances.ts for how to enable them. */}
+          {devTools && (
+            <>
+              <DropdownMenuItem onClick={() => setChatgptImportOpen(true)} data-testid="btn-refresh-from-chatgpt">
+                <Sparkles className="h-4 w-4 mr-2" /> Refresh from ChatGPT
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => toggleShowTestData()} data-testid="btn-toggle-test-data">
+                <FlaskConical className="h-4 w-4 mr-2" /> {showTestData ? "Hide test data" : "Show test data"}
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
 
   const fullWidthSections = useMemo(() => sections.filter(s => s.visible && s.column === "full"), [sections]);
   const leftSections = useMemo(() => sections.filter(s => s.visible && s.column === "left"), [sections]);
@@ -5850,6 +5898,7 @@ export default function DashboardPage() {
       {/* Header — hub-embedded: date + profile filter live in the hub shell
           (HubShell/HubProfileSwitcher write the same profileFilter store this
           page subscribes to), so only the kebab menu remains. */}
+      {!(menuInBriefing && hubEmbedded) && (
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           {!hubEmbedded && (
@@ -5868,43 +5917,9 @@ export default function DashboardPage() {
           </div>
           )}
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon" className="h-8 w-8 hover:bg-accent" data-testid="btn-dashboard-menu" aria-label="Dashboard menu">
-                <MoreVertical className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
-                <Settings className="h-4 w-4 mr-2" /> Customize
-              </DropdownMenuItem>
-              {/* Export / Import stay: data portability is a user feature. */}
-              <DropdownMenuItem onClick={handleExport} data-testid="btn-export">
-                <Download className="h-4 w-4 mr-2" /> Export Data
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setImportOpen(true)} data-testid="btn-import">
-                <UploadCloud className="h-4 w-4 mr-2" /> Import Backup
-              </DropdownMenuItem>
-              {/* Dev/QA only (QA 2026-07-29 UX-002). "Show test data" mixes
-                  synthetic suite rows into real money and health numbers with
-                  no visual distinction, and the ChatGPT re-import is a one-off
-                  migration tool — neither belongs in a normal user's menu.
-                  See lib/dev-affordances.ts for how to enable them. */}
-              {devTools && (
-                <>
-                  <DropdownMenuItem onClick={() => setChatgptImportOpen(true)} data-testid="btn-refresh-from-chatgpt">
-                    <Sparkles className="h-4 w-4 mr-2" /> Refresh from ChatGPT
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => toggleShowTestData()} data-testid="btn-toggle-test-data">
-                    <FlaskConical className="h-4 w-4 mr-2" /> {showTestData ? "Hide test data" : "Show test data"}
-                  </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        {!menuInBriefing && dashboardMenu}
       </div>
+      )}
 
       {/* Focus mode switcher (Phase 5) — reweights which sections show + order.
           Hidden in Everyone/Household scope, where the layout is fixed and the
@@ -5994,6 +6009,7 @@ export default function DashboardPage() {
           allProfiles={allProfiles}
           showSkeleton={showDashSkeleton && !stats}
           ready={bootstrapSettled}
+          overviewEnd={menuInBriefing ? dashboardMenu : undefined}
         />
         )
       ) : (() => {
