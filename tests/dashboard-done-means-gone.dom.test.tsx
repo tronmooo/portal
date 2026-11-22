@@ -33,7 +33,9 @@ function stubRoutes(routes: Record<string, Route | any>) {
     // Longest key first, so "/api/notifications/dismissed" is not answered by
     // the "/api/notifications/dismiss" stub.
     const hit = Object.keys(routes).sort((a, b) => b.length - a.length).find((k) => u.includes(k));
-    const raw = hit ? (typeof routes[hit] === "function" ? routes[hit](u, opts) : routes[hit]) : [];
+    const raw = hit ? (typeof routes[hit] === "function" ? routes[hit](u, opts) : routes[hit])
+      // Every card on screen (quiet mode, the default, hides half of them).
+      : u.includes("/api/preferences/exec_card_prefs") ? { value: JSON.stringify({ quiet: false, hidden: [], order: [] }) } : [];
     const shaped = raw && typeof raw === "object" && "body" in raw && ("status" in raw || "delayMs" in raw)
       ? raw : { status: 200, body: raw };
     if (shaped.delayMs) await new Promise((r) => setTimeout(r, shaped.delayMs));

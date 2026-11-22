@@ -37,6 +37,8 @@ import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
 import { DismissedAlertsList } from "@/components/dashboard/DismissedAlertsList";
 import { isDateRowDismissed } from "@shared/alert-ids";
 import { pickNextImportant } from "@shared/next-important";
+import { ExecCustomize, useExecCardPrefs } from "@/components/dashboard/ExecCustomize";
+import { EXEC_CARD_TITLES, execCardPosition, hiddenExecCards, isExecCardVisible, type ExecCardId } from "@shared/exec-card-prefs";
 import { isMedicationTracker } from "@shared/medication-doses";
 import {
   TriangleAlert, CalendarDays, DollarSign, FolderOpen, Flame, Sparkles,
@@ -198,8 +200,11 @@ function ViewLink({ label, onClick, accent, testId }: {
   );
 }
 
-function ExecCard({ id, icon: Icon, title, accent, headerRight, children, className = "", index = 0, wide = false, order, shortTitle, subtitle, count }: {
+function ExecCard({ id, icon: Icon, title, accent, headerRight, children, className = "", index = 0, wide = false, order, shortTitle, subtitle, count, pos }: {
   id: string; icon: LucideIcon; title: string; accent: string;
+  /** The user's own place for this card (Customize). Null = the built-in
+   *  layout: source order from 768px, `order` on a phone. */
+  pos?: number | null;
   headerRight?: ReactNode; children: ReactNode; className?: string; index?: number;
   /** One grey line under the title ("Today · Sat, Nov 21"). */
   subtitle?: ReactNode;
@@ -231,7 +236,7 @@ function ExecCard({ id, icon: Icon, title, accent, headerRight, children, classN
     // in a tinted square, and an optional grey subtitle under it.
     <section
       className={`bubble exec-card bubble-enter p-2.5 sm:p-3.5 h-full flex flex-col min-w-0 ${phone} ${className}`}
-      style={{ ["--accent-hsl" as any]: accent, ["--i" as any]: index }}
+      style={{ ["--accent-hsl" as any]: accent, ["--i" as any]: index, ...(pos != null ? { order: pos } : {}) }}
       data-testid={`exec-card-${id}`}
       aria-label={title}
     >
@@ -1552,15 +1557,26 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     { id: "activity", title: "Recent Activity", icon: History, accent: CARD_ACCENTS.activity, note: "nothing recent",
       empty: activityItems.length === 0 },
   ];
-  const quietCards = QUIET_CARDS.filter((c) => c.empty && !openedCards.has(c.id));
-  const showCard = (id: string) => !quietCards.some((c) => c.id === id);
+  // The user's own choice of cards and order (Customize; shared/exec-card-prefs).
+  const { prefs: cardPrefs, setPrefs: setCardPrefs, loaded: cardPrefsLoaded } = useExecCardPrefs(ready);
+  const [customizeOpen, setCustomizeOpen] = useState(false);
+  const cardOn = (id: string) => isExecCardVisible(cardPrefs, id as ExecCardId) || openedCards.has(id);
+  const cardPos = (id: string) => execCardPosition(cardPrefs, id as ExecCardId);
+  // Cards the preferences keep off screen. Named under the grid, each one tap
+  // from showing, so a hidden card never reads as a missing one (Rule 4).
+  const hiddenCards = hiddenExecCards(cardPrefs).filter((id) => !openedCards.has(id));
+  const quietCards = QUIET_CARDS.filter((c) => cardOn(c.id) && c.empty && !openedCards.has(c.id));
+  const showCard = (id: string) => cardOn(id) && !quietCards.some((c) => c.id === id);
 
   // Hold the skeleton grid until the enhanced snapshot has landed too: with
   // tasks in and the snapshot still in flight the grid rendered a run of
   // cards with nothing in them, which read as blank space for the 4–7s the
   // snapshot takes (QA 2026-09-18, F-63). The stuck banner above still takes
   // over at 12s, so this can never be the permanent state.
-  const feedLoading = anyBriefPending && (sections.length === 0 || (enhanced === undefined && !briefStuck));
+  const feedLoading = (anyBriefPending && (sections.length === 0 || (enhanced === undefined && !briefStuck)))
+    // …and until the user's own card choice is known, so a saved layout is
+    // never preceded by a flash of the default one.
+    || (!cardPrefsLoaded && !briefStuck);
   const loadingDots = "…";
 
   // Overview bar strings
@@ -1684,8 +1700,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           <div className="exec-grid grid grid-cols-2 xl:grid-cols-3 min-[1800px]:grid-cols-4 gap-2">
 
             {/* ── Needs Attention ──────────────────────────────────────────── */}
-            <ExecCard
-              id="attention" icon={TriangleAlert} title="Needs Attention"
+            {showCard("attention") && <ExecCard
+              id="attention" pos={cardPos("attention")} icon={TriangleAlert} title="Needs Attention"
               accent={CARD_ACCENTS.attention} index={1} order={1} shortTitle="Attention"
               // Its phone-row partner is Tasks: when Tasks is folded away this
               // card takes the row instead of leaving half of it empty.
@@ -1823,11 +1839,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   </ExpandableRows>
                 </div>
               )}
-            </ExecCard>
+            </ExecCard>}
 
             {/* ── Tasks ────────────────────────────────────────────────────── */}
             {showCard("tasks") && <ExecCard
-              id="tasks" icon={CheckSquare} title="Tasks"
+              id="tasks" pos={cardPos("tasks")} icon={CheckSquare} title="Tasks"
               accent={CARD_ACCENTS.tasks} index={2} order={2}
               headerRight={<ViewLink label="View all tasks" accent={CARD_ACCENTS.tasks} onClick={() => go("/dashboard/tasks")} testId="exec-view-tasks" />}
             >
@@ -1890,7 +1906,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
             {/* ── Schedule ─────────────────────────────────────────────────── */}
             {showCard("schedule") && <ExecCard
-              id="schedule" icon={CalendarDays} title="Timeline"
+              id="schedule" pos={cardPos("schedule")} icon={CalendarDays} title="Timeline"
               accent={CARD_ACCENTS.schedule} index={3} order={3} wide
               subtitle={<>Today · {fmtWeekdayDate(new Date())}{nextUp ? <span className="exec-opt"> · Next up <span className="font-semibold" style={{ color: `hsl(${CARD_ACCENTS.schedule})` }}>{nextUp.title}</span></span> : null}</>}
               headerRight={<ViewLink label="View schedule" accent={CARD_ACCENTS.schedule} onClick={() => setPopup("events")} testId="exec-view-calendar" />}
@@ -1976,7 +1992,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
             {/* ── Habits ───────────────────────────────────────────────────── */}
             {showCard("habits") && <ExecCard
-              id="habits" icon={Flame} title="Habits"
+              id="habits" pos={cardPos("habits")} icon={Flame} title="Habits"
               accent={CARD_ACCENTS.habits} index={5} order={5} wide
               subtitle={habitsDueToday.length > 0
                 ? `Today · ${habitsDoneCount} of ${habitsDueToday.length} done${habitsNotScheduled > 0 ? ` · ${habitsNotScheduled} not scheduled` : ""}`
@@ -2033,8 +2049,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             </ExecCard>}
 
             {/* ── Money ────────────────────────────────────────────────────── */}
-            <ExecCard
-              id="money" icon={DollarSign} title="Money"
+            {showCard("money") && <ExecCard
+              id="money" pos={cardPos("money")} icon={DollarSign} title="Money"
               accent={CARD_ACCENTS.money} index={4} order={4} wide
               // Explicit navigation, and labelled as such: Finance is a tab,
               // not an expansion of this card.
@@ -2121,11 +2137,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               {/* A different place than the header's "Open finances": the
                   Bills panel, over this tab. */}
               <FooterLink onClick={() => setPopup("bills")} testId="exec-view-bills">{billsDueSoon.length > CARD_ROWS ? `View all bills (${billsDueSoon.length})` : "View all bills"}</FooterLink>
-            </ExecCard>
+            </ExecCard>}
 
             {/* ── Documents ────────────────────────────────────────────────── */}
-            <ExecCard
-              id="documents" icon={FolderOpen} title="Documents"
+            {showCard("documents") && <ExecCard
+              id="documents" pos={cardPos("documents")} icon={FolderOpen} title="Documents"
               accent={CARD_ACCENTS.documents} index={6} order={6}
               wide={!showCard("wellness")}
               headerRight={<ViewLink label="View documents" accent={CARD_ACCENTS.documents} onClick={() => setPopup("docs")} testId="exec-view-documents" />}
@@ -2182,11 +2198,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   ))}
                 </div>
               )}
-            </ExecCard>
+            </ExecCard>}
 
             {/* ── Wellness ─────────────────────────────────────────────────── */}
             {showCard("wellness") && <ExecCard
-              id="wellness" icon={Heart} title="Wellness"
+              id="wellness" pos={cardPos("wellness")} icon={Heart} title="Wellness"
               accent={CARD_ACCENTS.wellness} index={7} order={7}
               headerRight={<ViewLink label="View wellness" accent={CARD_ACCENTS.wellness} onClick={() => setPopup("wellness:score")} testId="exec-view-wellness" />}
             >
@@ -2254,7 +2270,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           {/* ── Recent Activity — the last card of the grid (index.css gives a
               trailing card whatever is left of its row) ─────────────────── */}
           {showCard("activity") && <ExecCard
-            id="activity" icon={History} title="Recent Activity"
+            id="activity" pos={cardPos("activity")} icon={History} title="Recent Activity"
             accent={CARD_ACCENTS.activity} index={8} order={8} wide
           >
             {activityItems.length === 0 ? (
@@ -2287,6 +2303,37 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
           </div>
         </>
+      )}
+
+      {!feedLoading && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 px-1" data-testid="exec-hidden-cards">
+          {hiddenCards.length > 0 && (
+            <>
+              <span className="text-[11px] text-muted-foreground mr-1">
+                {cardPrefs.quiet ? "Quiet mode is on. Also available:" : "Hidden by you:"}
+              </span>
+              {hiddenCards.map((id) => (
+                <button key={id} type="button"
+                  onClick={() => setOpenedCards((prev) => new Set(prev).add(id))}
+                  className="inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                  title={`Show ${EXEC_CARD_TITLES[id]} for now`}
+                  data-testid={`exec-hidden-${id}`}>
+                  {EXEC_CARD_TITLES[id]}
+                </button>
+              ))}
+            </>
+          )}
+          <button type="button" onClick={() => setCustomizeOpen((o) => !o)}
+            aria-expanded={customizeOpen}
+            className="ml-auto inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-muted hover:text-foreground"
+            data-testid="exec-customize-toggle">
+            <SlidersHorizontal className="h-3 w-3" aria-hidden="true" />
+            Customize
+          </button>
+        </div>
+      )}
+      {!feedLoading && customizeOpen && (
+        <ExecCustomize prefs={cardPrefs} onChange={setCardPrefs} onClose={() => setCustomizeOpen(false)} />
       )}
 
       {!feedLoading && quietCards.length > 0 && (

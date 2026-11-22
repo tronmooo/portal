@@ -33,8 +33,14 @@ function wrap(ui: React.ReactNode) {
 // under load. Answer every request with an empty list so the mounts are
 // hermetic and nothing outlives the test.
 let fetchStub: ReturnType<typeof vi.fn>;
+const ALL_CARDS = JSON.stringify({ value: JSON.stringify({ quiet: false, hidden: [], order: [] }) });
 beforeEach(() => {
-  fetchStub = vi.fn(async () => new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }));
+  // Quiet mode is the default (2026-11-22) and hides half the cards. These
+  // suites describe every card, so they run with it switched off unless a
+  // test answers the preference itself.
+  fetchStub = vi.fn(async (url: any) => new Response(
+    String(url).includes("/api/preferences/exec_card_prefs") ? ALL_CARDS : "[]",
+    { status: 200, headers: { "Content-Type": "application/json" } }));
   vi.stubGlobal("fetch", fetchStub);
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -426,6 +432,91 @@ describe("ExecutiveBriefing", () => {
     expect(screen.queryByTestId("exec-quiet-scope")).toBeNull();
   });
 
+  // ── Customize (2026-11-22, owner: "Give people control over how much they
+  // see … My default would be Quiet Mode enabled") ──────────────────────────
+  describe("Customize: quiet mode, hidden cards and order", () => {
+    const prefsRoute = (stored: { value: string | null }) => (_u: string, opts: any) => {
+      if (opts?.method === "PUT") { stored.value = JSON.parse(opts.body).value; return { success: true }; }
+      return { value: stored.value };
+    };
+    const TASKS = [{ id: "t1", title: "Call mechanic", status: "todo", dueDate: today() }];
+    const cardIds = () => Array.from(document.querySelectorAll('[data-testid^="exec-card-"]'))
+      .map((n) => n.getAttribute("data-testid")!).filter((id) => /^exec-card-[a-z]+$/.test(id)).map((id) => id.replace("exec-card-", ""));
+
+    it("quiet mode is the default: attention, tasks, timeline and money — the rest named, one tap away", async () => {
+      const stored = { value: null as string | null };
+      stubRoutes({ "/api/preferences/exec_card_prefs": prefsRoute(stored), "/api/tasks": TASKS });
+      await mount(enhancedWith());
+      await waitFor(() => expect(screen.getByTestId("exec-card-tasks")).toBeTruthy());
+      expect(cardIds().sort()).toEqual(["attention", "money", "tasks"]); // Timeline has nothing → folded
+      expect(screen.getByTestId("exec-quiet-schedule")).toBeTruthy();
+      // Hidden is not gone: each hidden card is named and opens on a tap.
+      const hidden = screen.getByTestId("exec-hidden-cards");
+      expect(hidden.textContent).toContain("Quiet mode is on");
+      for (const id of ["habits", "documents", "wellness", "activity"]) expect(within(hidden).getByTestId(`exec-hidden-${id}`)).toBeTruthy();
+      fireEvent.click(screen.getByTestId("exec-hidden-documents"));
+      expect(screen.getByTestId("exec-card-documents")).toBeTruthy();
+      // Looking wrote nothing (Rule 3).
+      expect(stored.value).toBeNull();
+    });
+
+    it("switching quiet mode off shows every card and saves the choice to the account", async () => {
+      const stored = { value: null as string | null };
+      stubRoutes({ "/api/preferences/exec_card_prefs": prefsRoute(stored), "/api/tasks": TASKS });
+      await mount(enhancedWith());
+      fireEvent.click(await screen.findByTestId("exec-customize-toggle"));
+      expect(stored.value).toBeNull(); // opening the panel wrote nothing
+      const quiet = screen.getByTestId("exec-customize-quiet");
+      expect(quiet.getAttribute("aria-checked")).toBe("true");
+      fireEvent.click(quiet);
+      await waitFor(() => expect(screen.getByTestId("exec-card-documents")).toBeTruthy());
+      await waitFor(() => expect(stored.value).not.toBeNull());
+      expect(JSON.parse(stored.value!)).toEqual({ quiet: false, hidden: [], order: [] });
+      expect(screen.queryByTestId("exec-hidden-documents")).toBeNull();
+      expect(screen.getByTestId("exec-customize-summary").textContent).toContain("8 of 8 cards showing");
+    });
+
+    it("hides one card, says so, and remembers it on the next visit", async () => {
+      const stored = { value: JSON.stringify({ quiet: false, hidden: [], order: [] }) as string | null };
+      stubRoutes({ "/api/preferences/exec_card_prefs": prefsRoute(stored), "/api/tasks": TASKS });
+      await mount(enhancedWith());
+      fireEvent.click(await screen.findByTestId("exec-customize-toggle"));
+      fireEvent.click(screen.getByTestId("exec-customize-show-money"));
+      await waitFor(() => expect(screen.queryByTestId("exec-card-money")).toBeNull());
+      expect(screen.getByTestId("exec-hidden-cards").textContent).toContain("Hidden by you:");
+      expect(screen.getByTestId("exec-hidden-money")).toBeTruthy();
+      await waitFor(() => expect(JSON.parse(stored.value!).hidden).toEqual(["money"]));
+      // A fresh mount reads the saved choice.
+      cleanup();
+      await mount(enhancedWith());
+      await waitFor(() => expect(screen.getByTestId("exec-card-tasks")).toBeTruthy());
+      expect(screen.queryByTestId("exec-card-money")).toBeNull();
+      expect(screen.getByTestId("exec-hidden-money")).toBeTruthy();
+    });
+
+    it("moves a card earlier and applies the order to the grid", async () => {
+      const stored = { value: JSON.stringify({ quiet: false, hidden: [], order: [] }) as string | null };
+      stubRoutes({ "/api/preferences/exec_card_prefs": prefsRoute(stored), "/api/tasks": TASKS });
+      await mount(enhancedWith());
+      // Built-in layout: no explicit order on a card.
+      expect((screen.getByTestId("exec-card-money") as HTMLElement).style.order).toBe("");
+      fireEvent.click(await screen.findByTestId("exec-customize-toggle"));
+      // Money is 4th (attention, tasks, timeline, money): three moves up puts it first.
+      for (const place of [3, 2, 1]) {
+        fireEvent.click(screen.getByTestId("exec-customize-up-money"));
+        await waitFor(() => expect((screen.getByTestId("exec-card-money") as HTMLElement).style.order).toBe(String(place)));
+      }
+      await waitFor(() => expect(JSON.parse(stored.value!).order[0]).toBe("money"));
+      expect((screen.getByTestId("exec-card-money") as HTMLElement).style.order).toBe("1");
+      expect((screen.getByTestId("exec-card-attention") as HTMLElement).style.order).toBe("2");
+      expect((screen.getByTestId("exec-customize-up-money") as HTMLButtonElement).disabled).toBe(true);
+      // Reset returns to the default: quiet mode, built-in order.
+      fireEvent.click(screen.getByTestId("exec-customize-reset"));
+      await waitFor(() => expect(JSON.parse(stored.value!)).toEqual({ quiet: true, hidden: [], order: [] }));
+      expect((screen.getByTestId("exec-card-money") as HTMLElement).style.order).toBe("");
+    });
+  });
+
   it("shows a real all-clear when nothing needs attention", async () => {
     await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
     // Encouraging, not blank — the empty state is a designed surface.
@@ -467,7 +558,8 @@ describe("ExecutiveBriefing", () => {
     fetchStub.mockImplementation(async (url: any, opts?: any) => {
       const u = String(url);
       const hit = Object.keys(routes).find(k => u.includes(k));
-      const body = hit ? (typeof routes[hit] === "function" ? routes[hit](u, opts) : routes[hit]) : [];
+      const body = hit ? (typeof routes[hit] === "function" ? routes[hit](u, opts) : routes[hit])
+        : u.includes("/api/preferences/exec_card_prefs") ? JSON.parse(ALL_CARDS) : [];
       return new Response(JSON.stringify(body), {
         status: 200, headers: { "Content-Type": "application/json" },
       });
@@ -707,9 +799,11 @@ describe("ExecutiveBriefing", () => {
 
     it("View all upcoming — expands the same list the card previews", async () => {
       await mount(enhancedWith());
+      // Nothing is scheduled here, so the Timeline is folded: open it first.
+      fireEvent.click(await screen.findByTestId("exec-quiet-schedule"));
       fireEvent.click(screen.getByTestId("exec-view-upcoming"));
       const dlg = await screen.findByTestId("upcoming-popup");
-      // Passport (12d out) is on the card and in the expansion — same dataset.
+      // Passport (12d out) is in the complete list, beside whatever the card previews.
       expect(dlg.textContent).toContain("Passport");
       expect(screen.getByTestId("executive-briefing")).toBeTruthy();
     });

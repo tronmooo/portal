@@ -133,7 +133,12 @@ green. After a push to `main`:
    Documents always render. Money leads with Assets / Debt / Net worth from
    the snapshot (Rule 1). The Documents card never repeats what Needs
    Attention lists. (Owner, 2026-11-22.)
-   *Guard:* `tests/executive-sections.test.tsx`.
+   Which cards show and their order is the user's (`shared/exec-card-prefs.ts`,
+   preference `exec_card_prefs`, panel `ExecCustomize`): quiet mode is the
+   DEFAULT (Needs Attention, Tasks, Timeline, Money), and every card the
+   preferences hide is named under the grid and opens on a tap
+   (`exec-hidden-cards`) — hidden never reads as missing.
+   *Guards:* `tests/executive-sections.test.tsx`, `tests/exec-card-prefs.test.ts`.
 9. **Ownership has one writer** (`server/ownership-writer.ts`). Profile
    scoping goes through `shared/profile-filter.ts`. Deleting a profile is
    fail-safe: if any cascade step fails, the profile is kept, so no record
