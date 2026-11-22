@@ -166,7 +166,8 @@ async function main() {
     await shot("loan-terms-form");
     await page.keyboard.press("Escape");
 
-    await page.locator('[data-testid="tab-overview"]').click();
+    // The payment quick actions live with the payments (Overview is the summary).
+    await page.locator('[data-testid="tab-payments"]').click();
     await page.locator('[data-testid="action-extra"]').first().click({ timeout: 15000 });
     await page.locator('[data-testid="payment-dialog"]').waitFor({ timeout: 10000 });
     const amt = await page.locator('[data-testid="payment-amount-input"]').inputValue();

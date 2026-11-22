@@ -45,7 +45,31 @@ import {
   Edit,
   User,
   Camera,
+  MoreVertical,
+  Landmark,
+  Layers,
+  Flag,
+  Car,
+  Home,
+  GraduationCap,
+  Building2,
+  Receipt,
+  Bell,
+  Pencil,
+  BarChart3,
+  HeartPulse,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  BalanceCard, SectionTitle, DetailRowGrid, PayoffOverviewCard, AutopayChip, RowCard, MiniCard,
+  DateTile, ProfileActionsList, type BalanceStat, type BalanceProgress, type DetailRow, type ProfileAction,
+} from "@/components/liability/LiabilityOverviewCards";
 import {
   Select,
   SelectContent,
@@ -58,10 +82,10 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import { BillScheduleSection } from "@/components/liability/BillScheduleSection";
-import { AutoPaySection } from "@/components/liability/AutoPaySection";
+import { AutoPaySection, useAutoPaySave } from "@/components/liability/AutoPaySection";
 import { PaymentStatusBadge, PaymentStatusControls } from "@/components/liability/PaymentStatusControls";
 import { autoPaySettingPatch, isAutoPayOn, type OccurrencePaymentStatus } from "@shared/autopay";
-import { DetailHero, type HeroStat } from "@/components/profile/DetailHero";
+import { DetailHero } from "@/components/profile/DetailHero";
 import { Pill } from "@/components/dashboard/visuals";
 import { MetricCard } from "@/components/ui/metric-card";
 import type { LucideIcon } from "lucide-react";
@@ -172,6 +196,24 @@ const SUBTYPE_LABELS: Record<string, string> = {
   financing: "Financing",
   utility_plan: "Utility plan",
   custom: "Other liability",
+};
+
+// The glyph beside the type under the title (owner's design, 2026-11-22: a car
+// for an auto loan). A subtype with none falls back by family.
+const SUBTYPE_ICONS: Record<string, LucideIcon> = {
+  mortgage: Home,
+  auto_loan: Car,
+  credit_card: CreditCard,
+  student_loan: GraduationCap,
+  medical_debt: HeartPulse,
+  business_loan: Building2,
+  line_of_credit: CreditCard,
+};
+
+const ordinal = (n: number) => {
+  const v = n % 100;
+  const suffix = v >= 11 && v <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] || "th");
+  return `${n}${suffix}`;
 };
 
 // ─── Formatting helpers ──────────────────────────────────────────────────────
@@ -911,24 +953,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     : recurringBill
       ? liabilityBillStatus(billNextDueEff, todayISO, false)
       : billStatus;
-  // Whole days from today to the next due date, for the hero's countdown
-  // caption. Both sides parse at LOCAL midnight so the difference is a count of
-  // calendar days rather than a fraction that rounds unpredictably.
-  const billDaysUntil: number | null = (() => {
-    const due = parseLocalDate(billNextDueEff);
-    if (!due) return null;
-    const today = parseLocalDate(todayISO);
-    if (!today) return null;
-    return Math.round((due.getTime() - today.getTime()) / 86400000);
-  })();
-  // The complement of whatever formatListDate chose for the "Next due" tile.
-  // Inside a week it shows a relative label, so the useful extra is the date;
-  // outside a week it shows a date, so the useful extra is the countdown.
-  const nextDueCaption: string | undefined = (() => {
-    if (!billNextDueEff) return undefined;
-    if (billDaysUntil == null) return undefined;
-    return Math.abs(billDaysUntil) < 7 ? formatFullDate(billNextDueEff) : dayLabel(billDaysUntil);
-  })();
   const billTotalTerm: number | null = schedule?.totalPayments ?? null;
   const billPaidCount: number = schedule?.paidCount ?? payments.length;
   const billRemainingTerm: number | null = schedule?.remainingPayments ?? null;
@@ -1087,127 +1111,329 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
   // ─── Render ──────────────────────────────────────────────────────────────
 
-  // The hero's stat tiles. Type-aware, exactly as the old KPI strip was —
-  // amortizing/revolving loans show payoff math, recurring bills show
-  // amount + due + status, one-time debt shows the balance owed. A recurring
-  // bill NEVER shows APR/payoff (the $0.17 bug).
+  // The Overview is the owner's design (2026-11-22): a flat header, ONE
+  // balance card with the liability's live facts, the details as rows, the
+  // payoff ring, then Upcoming / Documents / Alerts / Calendar and the actions.
+  // Type-aware as the old stat strip was: an amortizing loan shows payoff
+  // math, a card its utilization, a recurring bill its amount + due + term.
+  // A recurring bill NEVER shows APR/payoff (the $0.17 bug).
   //
-  // These four are the liability's LIVE facts, and after this change they are
-  // the only place those four appear: the Schedule card below no longer repeats
-  // next due / amount / frequency / autopay, and Details no longer repeats the
-  // term three different ways.
-  const heroStats: HeroStat[] = recurringBill
-    ? [
+  // Everything below is derived from values this page already had (Rule 1):
+  // the balance card, the rows and the cards cannot disagree with the tabs.
+  const autoPaySave = useAutoPaySave(profile.id);
+  // Same keys as <LinkedAssetsCard> and <LiabilityDocumentsCard>, so each is
+  // one request however many places read it.
+  const assetLinksQuery = useQuery<any[]>({
+    queryKey: [`/api/liabilities/${profile.id}/assets`],
+    queryFn: async () => (await apiRequest("GET", `/api/liabilities/${profile.id}/assets`)).json(),
+    enabled: !!profile.id,
+  });
+  const documentsQuery = useQuery<any[]>({
+    queryKey: [`/api/profiles/${profile.id}/documents`],
+    queryFn: async () => (await apiRequest("GET", `/api/profiles/${profile.id}/documents`)).json(),
+    enabled: !!profile.id,
+  });
+  const [addFieldSignal, setAddFieldSignal] = useState(0);
+  const addFieldRef = useRef<HTMLDivElement>(null);
+
+  const TypeIcon: LucideIcon = SUBTYPE_ICONS[subtypeRaw] || (recurringBill ? Receipt : Landmark);
+  const paidOff = !recurringBill && terms.originalBalance > 0 && terms.currentBalance <= 0;
+  const autopayOn = schedule ? schedule.autopay === true : isAutoPayOn(f2);
+
+  // Whose debt this is, as a chip. No owner link means it counts toward the
+  // person it is filed under — the account holder unless that is someone else.
+  const ownerChipLabel = (() => {
+    const links = (currentPartyLinks || []) as any[];
+    const person = (id: string | undefined) => (ownerCandidates || []).find((p: any) => p.id === id);
+    if (links.length === 0) {
+      const parent = person((profile as any).parentProfileId);
+      return parent && parent.type === "person" && parent.name ? `${parent.name} owes this` : "You owe this";
+    }
+    if (links.length > 1) return `Shared · ${links.length} people`;
+    const owner = person(links[0].partyProfileId || links[0].party?.id) || links[0].party;
+    if (!owner || owner.type === "self") return "You owe this";
+    return owner.name ? `${owner.name} owes this` : "You owe this";
+  })();
+  const statusChip: { label: string; accent: string } = recurringBill
+    ? seriesComplete ? { label: "Complete", accent: "240 20% 65%" }
+      : billHeldLabel ? { label: billHeldLabel, accent: "43 96% 53%" }
+      : billStatusEff === "due_today" ? { label: "Due today", accent: "43 96% 53%" }
+      : { label: "Active", accent: "155 60% 50%" }
+    : paidOff ? { label: "Paid off", accent: "155 60% 50%" } : { label: "Active", accent: "155 60% 50%" };
+
+  // THE next date (L4 / A7): a bill's next occurrence still owed, a loan's
+  // payment day counted from today (temporal engine). None when nothing is owed.
+  const nextDueISO: string | null = recurringBill
+    ? (seriesComplete || billHeldLabel ? null : billNextDueEff)
+    : (paidOff ? null : billDueRaw || null);
+  const nextDueDays: number | null = (() => {
+    const due = parseLocalDate(nextDueISO);
+    const today = parseLocalDate(todayISO);
+    return due && today ? Math.round((due.getTime() - today.getTime()) / 86400000) : null;
+  })();
+  const nextDueTone: BalanceStat["tone"] = nextDueDays == null ? undefined : nextDueDays < 0 ? "danger" : nextDueDays === 0 ? "warn" : undefined;
+  const repeats = recurringBill || amortize;
+  const payAmount: number = recurringBill
+    ? Number(schedule?.amount ?? billMonthly) || 0
+    : family === "revolving"
+      ? terms.minimumPayment || summary.monthlyPayment || 0
+      : terms.monthlyPayment || (amortize ? summary.monthlyPayment : 0) || 0;
+  const cadence = recurringBill ? String(billFrequencyLabel || "monthly").toLowerCase() : "monthly";
+  // The day the payment repeats on is the SCHEDULE's day, not the next date's:
+  // a bill due on the 31st falls on Feb 28 and is still "every 31st".
+  const repeatDay: number | null = (() => {
+    if (terms.dueDay) return terms.dueDay;
+    const anchor = String(schedule?.firstPayment || nextDueISO || "");
+    const d = Number(anchor.slice(8, 10));
+    return d >= 1 && d <= 31 ? d : null;
+  })();
+  const cadenceLabel = !repeats ? "One-time payment"
+    : cadence === "monthly" && repeatDay ? `Monthly (every ${ordinal(repeatDay)})` : cap(cadence);
+  const repeatsLabel = !repeats ? "One-time"
+    : cadence === "monthly" && repeatDay ? `Repeats monthly (on the ${ordinal(repeatDay)})` : `Repeats ${cadence}`;
+
+  const paidDown = Math.max(0, summary.originalBalance - summary.currentBalance);
+  const payoffProgress: BalanceProgress | null = summary.originalBalance > 0 ? {
+    title: "Payoff progress",
+    pct: summary.payoffProgressPct,
+    pctLabel: `${summary.payoffProgressPct.toFixed(1)}%`,
+    pctCaption: "paid down",
+    left: `${fmtUSDShort(paidDown)} paid`,
+    right: `${fmtUSDShort(summary.currentBalance)} remaining`,
+    hint: "How much of the original amount has been paid off",
+    testId: "liability-progress",
+  } : null;
+  const notSet = <span className="font-normal text-muted-foreground">Not set</span>;
+  const nextDueStat: BalanceStat = {
+    icon: CalendarIcon,
+    label: "Next due date",
+    value: nextDueISO ? fmtDate(nextDueISO) : paidOff ? "Paid off" : seriesComplete ? "Complete" : billHeldLabel ?? notSet,
+    sub: nextDueISO && nextDueDays != null ? dayLabel(nextDueDays) : undefined,
+    tone: nextDueISO ? nextDueTone : undefined,
+    testId: recurringBill ? "kpi-bill-due" : "kpi-next-due",
+  };
+
+  const balanceCard = recurringBill ? (
+    <BalanceCard
+      label="Amount"
+      value={fmtUSDShort(payAmount)}
+      valueTestId="kpi-bill-monthly"
+      caption={<>
+        {cap(cadence)}
+        {schedule?.annualTotal != null ? ` · ${fmtUSDShort(schedule.annualTotal)} a year` : ""}
+      </>}
+      // A finite-term bill shows progress toward completion (paid of total),
+      // never amortizing payoff. Open-ended bills omit it entirely.
+      progress={billTotalTerm != null && billTotalTerm > 0 ? {
+        title: "Term progress",
+        pct: billProgressPct,
+        pctLabel: `${billProgressPct}%`,
+        pctCaption: "of payments made",
+        left: `${billPaidCount} paid`,
+        right: `${billRemainingTerm ?? Math.max(0, billTotalTerm - billPaidCount)} remaining${missedCount > 0 ? ` · ${missedCount} not recorded` : ""}`,
+        testId: "bill-term-progress",
+      } : null}
+      stats={[
+        { icon: RefreshCw, label: "Frequency", value: cap(cadence) },
+        nextDueStat,
         {
-          // "Monthly amount" truncated to "MONTHLY AMO…" in a half-width tile.
-          // The cadence is a caption, not part of the label.
-          label: "Amount",
-          value: fmtUSDShort(schedule?.amount ?? billMonthly),
-          sub: billFrequencyLabel,
-          icon: DollarSign,
-          testId: "kpi-bill-monthly",
-        },
-        {
-          label: seriesComplete ? "Ended" : "Next due",
-          // Relative inside a week ("Tomorrow", "in 3d"), then "Aug 30" — the
-          // year moves to the caption. A full "Aug 30, 2026" does not fit this
-          // tile, and the countdown is the thing you actually want anyway.
-          value: seriesComplete ? "Complete" : (billNextDueEff ? formatListDate(billNextDueEff) || "—" : "—"),
-          // The caption must say the thing the value ISN'T, or the tile prints
-          // the same fact twice — the duplicate-information problem this pass is
-          // about, at tile scale.
-          //
-          // formatListDate is relative inside a week ("Tomorrow", "in 3d") and
-          // absolute outside it ("Aug 30"), so the complement flips at the same
-          // boundary. Pairing it with dayLabel unconditionally produced
-          // "Tomorrow" over "tomorrow".
-          sub: seriesComplete ? undefined : nextDueCaption,
-          // An overdue bill goes red regardless of the page accent; a due-today
-          // one goes amber. Nothing else on the page carries that signal.
-          accent: billStatusEff === "overdue" ? "0 72% 55%" : billStatusEff === "due_today" ? "43 96% 53%" : undefined,
-          icon: CalendarIcon,
-          testId: "kpi-bill-due",
-        },
-        {
+          icon: TrendingDown,
           label: "Remaining",
           value: billRemainingTerm != null ? `${billRemainingTerm} of ${billTotalTerm}` : "Ongoing",
           sub: billRemainingTerm != null ? "payments" : "no end date",
-          icon: TrendingDown,
           testId: "kpi-bill-remaining",
         },
         {
+          icon: ActivityIcon,
           label: "Status",
           value: seriesComplete ? "Complete" : billHeldLabel ?? BILL_STATUS_META[billStatusEff].label,
           sub: `${payments.length} paid`,
-          icon: ActivityIcon,
           testId: "kpi-bill-status",
         },
-      ]
-    : family === "revolving"
+      ]}
+      autopay={{
+        on: autopayOn,
+        busy: autoPaySave.isPending || !schedule,
+        onChange: (enabled) => autoPaySave.mutate({ enabled }),
+        note: autopayOn
+          ? "Portol records the payment automatically when due and reduces reminder noise."
+          : "You record each payment yourself and get a reminder when one is due.",
+      }}
+    />
+  ) : (
+    <BalanceCard
+      label={family === "one_time" ? "Amount owed" : "Current balance"}
+      value={fmtUSDShort(summary.currentBalance)}
+      valueTestId="kpi-balance"
+      caption={family === "revolving" && creditLimit > 0
+        ? `Credit limit: ${fmtUSDShort(creditLimit)}`
+        : summary.originalBalance > 0 ? `Original amount: ${fmtUSDShort(summary.originalBalance)}` : undefined}
+      progress={family === "revolving" && creditLimit > 0 ? {
+        title: "Utilization",
+        pct: Math.min(100, utilizationPct),
+        pctLabel: `${utilizationPct}%`,
+        pctCaption: "of the limit used",
+        left: `${fmtUSDShort(summary.currentBalance)} used`,
+        right: `${fmtUSDShort(Math.max(0, creditLimit - summary.currentBalance))} available`,
+        testId: "kpi-utilization",
+      } : payoffProgress}
+      stats={[
+        { icon: Percent, label: "APR (Interest rate)", value: summary.annualRate > 0 ? fmtPct(summary.annualRate) : notSet, testId: "kpi-apr" },
+        { icon: Landmark, label: "Lender", value: terms.lender || notSet },
+        {
+          icon: CalendarIcon,
+          label: family === "revolving" ? "Minimum payment" : "Monthly payment",
+          value: payAmount > 0 ? fmtUSD(payAmount) : notSet,
+          testId: family === "revolving" ? "kpi-min-payment" : "kpi-monthly",
+        },
+        nextDueStat,
+      ]}
+      autopay={{
+        on: autopayOn,
+        busy: autoPaySave.isPending || !schedule,
+        onChange: (enabled) => autoPaySave.mutate({ enabled }),
+        note: autopayOn
+          ? "Portol records the payment automatically when due and reduces reminder noise."
+          : "You record each payment yourself and get a reminder when one is due.",
+      }}
+    />
+  );
+
+  // ── "Liability details": each fact once, each a tap from its editor ───────
+  const editTerms = () => { openTermsEditor(); setTab("details"); };
+  const editBill = () => { openBillEditor(); setTab("details"); };
+  const editNameAndNotes = () => {
+    setEditName(profile.name || "");
+    setEditNotes((profile as any).notes || "");
+    setShowEditDialog(true);
+  };
+  const linkedAssets = (assetLinksQuery.data || [])
+    .map((l: any) => (ownerCandidates || []).find((p: any) => p.id === l.assetProfileId))
+    .filter(Boolean) as any[];
+  const linkedAssetRow: DetailRow = {
+    key: "linked-asset",
+    icon: SUBTYPE_ICONS[subtypeRaw] === Car ? Car : Link2,
+    label: "Linked asset",
+    // A failed request is not "none linked" (Rule 7).
+    value: assetLinksQuery.isError ? "Couldn't load"
+      : !assetLinksQuery.data ? "Loading…"
+      : linkedAssets.length === 0 ? "None linked"
+      : `${linkedAssets[0].name}${linkedAssets[0].type ? ` (${cap(String(linkedAssets[0].type).replace(/_/g, " "))})` : ""}${linkedAssets.length > 1 ? ` +${linkedAssets.length - 1}` : ""}`,
+    empty: !assetLinksQuery.data || linkedAssets.length === 0,
+    onClick: () => setTab("details"),
+    actionLabel: "Manage linked assets",
+  };
+  const profileNotes = String((profile as any).notes || "").trim();
+  const notesRow: DetailRow = {
+    key: "notes", icon: FileText, label: "Notes", wide: true,
+    value: profileNotes || "No notes yet", empty: !profileNotes,
+    onClick: editNameAndNotes, actionLabel: "Edit notes",
+  };
+  const detailRows: DetailRow[] = recurringBill
     ? [
-        { label: "Balance", value: fmtUSDShort(summary.currentBalance), icon: DollarSign, testId: "kpi-balance" },
-        { label: "Available", value: creditLimit > 0 ? fmtUSDShort(Math.max(0, creditLimit - summary.currentBalance)) : "—", icon: CalendarIcon, testId: "kpi-available" },
-        { label: "Utilization", value: creditLimit > 0 ? `${utilizationPct}%` : "—", icon: Percent, testId: "kpi-utilization" },
-        { label: "Min payment", value: fmtUSDShort(terms.minimumPayment || summary.monthlyPayment), icon: TrendingDown, testId: "kpi-min-payment" },
+        ...(subtypeLabel !== "Liability" ? [{ key: "type", icon: TypeIcon, label: "Type", value: subtypeLabel }] : []),
+        { key: "amount", icon: Wallet, label: "Recurring amount", value: fmtUSD(payAmount), onClick: editBill, actionLabel: "Edit amount" },
+        { key: "frequency", icon: RefreshCw, label: "Frequency", value: cap(cadence), onClick: editBill, actionLabel: "Edit frequency" },
+        { key: "next-due", icon: CalendarIcon, label: "Next due date", value: nextDueISO ? fmtDate(nextDueISO) : seriesComplete ? "Complete" : billHeldLabel ?? "Not set", empty: !nextDueISO, onClick: editBill, actionLabel: "Edit payment date" },
+        { key: "start", icon: Flag, label: "First payment", value: fmtDate(schedule?.firstPayment ?? terms.firstPaymentDate) || "Not set", empty: !(schedule?.firstPayment ?? terms.firstPaymentDate), onClick: editBill, actionLabel: "Edit first payment" },
+        {
+          key: "term", icon: Layers, label: "Term", onClick: editBill, actionLabel: "Edit term",
+          value: billTotalTerm != null
+            ? `${billRemainingTerm ?? billTotalTerm} of ${billTotalTerm} left`
+            : schedule?.recurrenceEnd ? `Until ${fmtDate(schedule.recurrenceEnd)}` : "Ongoing",
+        },
+        { key: "reminder", icon: Bell, label: "Reminder", value: billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : "None", empty: billReminderLead == null, onClick: editBill, actionLabel: "Edit reminder" },
+        linkedAssetRow,
+        notesRow,
       ]
     : [
+        { key: "lender", icon: Landmark, label: "Lender", value: terms.lender || "Not set", empty: !terms.lender, onClick: editTerms, actionLabel: "Edit lender" },
+        { key: "original", icon: Layers, label: "Original amount", value: terms.originalBalance > 0 ? fmtUSDShort(terms.originalBalance) : "Not set", empty: !(terms.originalBalance > 0), onClick: editTerms, actionLabel: "Edit original amount" },
+        { key: "balance", icon: Wallet, label: "Current balance", value: fmtUSDShort(terms.currentBalance), onClick: editTerms, actionLabel: "Edit current balance" },
+        { key: "payment", icon: CreditCard, label: family === "revolving" ? "Minimum payment" : "Monthly payment", value: payAmount > 0 ? fmtUSD(payAmount) : "Not set", empty: !(payAmount > 0), onClick: editTerms, actionLabel: "Edit payment" },
+        { key: "rate", icon: Percent, label: "Interest rate (APR)", value: summary.annualRate > 0 ? fmtPct(summary.annualRate) : "Not set", empty: !(summary.annualRate > 0), onClick: editTerms, actionLabel: "Edit interest rate" },
+        { key: "start", icon: CalendarIcon, label: "Start date", value: fmtDate(terms.firstPaymentDate) || "Not set", empty: !terms.firstPaymentDate, onClick: editTerms, actionLabel: "Edit start date" },
         {
-          label: family === "one_time" ? "Amount owed" : "Current balance",
-          value: fmtUSDShort(summary.currentBalance),
-          icon: DollarSign,
-          testId: "kpi-balance",
+          // Calculated from today's balance at the stored payment — it opens
+          // the payoff calculator, not a field.
+          key: "payoff", icon: Flag, label: "Payoff date", onClick: () => setTab("payments"), actionLabel: "See the payoff schedule",
+          value: paidOff ? "Paid off"
+            : !amortize || payoffMissing.length > 0 ? "Not enough to project"
+            : summary.neverAmortizes ? "Never at this payment"
+            : summary.remainingMonths > 0 ? fmtDate(summary.payoffDate) : "Not enough to project",
+          empty: !paidOff && (!amortize || payoffMissing.length > 0 || !(summary.remainingMonths > 0)),
         },
-        {
-          label: "Monthly payment",
-          value: amortize && summary.monthlyPayment > 0 ? fmtUSDShort(summary.monthlyPayment) : "—",
-          icon: CalendarIcon,
-          testId: "kpi-monthly",
-        },
-        { label: "APR", value: summary.annualRate > 0 ? fmtPct(summary.annualRate) : "—", icon: Percent, testId: "kpi-apr" },
-        {
-          label: "Payoff",
-          value: amortize && summary.remainingMonths > 0 ? `${summary.remainingMonths} mo` : "—",
-          sub: amortize && summary.remainingMonths > 0 ? fmtDate(summary.payoffDate) : undefined,
-          icon: TrendingDown,
-          testId: "kpi-payoff",
-        },
+        linkedAssetRow,
+        notesRow,
       ];
 
-  const heroProgress = !recurringBill && summary.originalBalance > 0 ? (
-    <div data-testid="liability-progress">
-      <div className="flex justify-between text-[13px] text-muted-foreground mb-1">
-        <span>Paid down</span>
-        <span className="font-semibold tabular-nums">{summary.payoffProgressPct.toFixed(1)}%</span>
-      </div>
-      <Progress value={summary.payoffProgressPct} className="h-2" />
-    </div>
-  ) : recurringBill && billTotalTerm != null && billTotalTerm > 0 ? (
-    // A finite-term bill shows progress toward completion (paid of total),
-    // never amortizing payoff. Open-ended bills omit it entirely.
-    <div data-testid="bill-term-progress">
-      <div className="flex justify-between text-[13px] text-muted-foreground mb-1">
-        <span>{billPaidCount} of {billTotalTerm} payments{missedCount > 0 ? ` · ${missedCount} not recorded` : ""}</span>
-        <span className="font-semibold tabular-nums">{billProgressPct}%</span>
-      </div>
-      <Progress value={billProgressPct} className="h-2" />
-    </div>
-  ) : null;
+  // ── Documents and alerts ───────────────────────────────────────────────────
+  const documentList: any[] | null = Array.isArray(documentsQuery.data) ? documentsQuery.data : null;
+  // A payment marked missed is the alert Auto Pay rules keep raised (A3/A6);
+  // it is derived from the occurrence stamps, not stored here (Rule 5).
+  const missedPayments = scheduleOccs.filter((o) => o.status === "missed").length;
+  const alertCount = missedPayments;
+  const reminderLine = autopayOn && schedule?.autopayReminders !== true
+    ? "Auto Pay is on, so due-date reminders stay quiet."
+    : billReminderLead != null
+      ? `You're reminded ${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before each payment.`
+      : "You're reminded when a payment is due.";
+
+  const profileActions: ProfileAction[] = [
+    {
+      key: "edit", icon: Pencil, label: "Edit liability details",
+      hint: recurringBill ? "Update amount, frequency, dates, reminder, and more" : "Update lender, balance, payment, dates, and more",
+      onClick: recurringBill ? editBill : editTerms,
+    },
+    {
+      key: "add-field", icon: Plus, label: "Add custom field",
+      hint: "Track additional details (e.g., loan number, vehicle VIN, insurance, etc.)",
+      onClick: () => {
+        setAddFieldSignal((n) => n + 1);
+        addFieldRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      },
+    },
+    {
+      key: "history", icon: BarChart3, label: "View payment history",
+      hint: recurringBill ? "See past and upcoming payments" : "See past payments, balances, and payoff progress",
+      onClick: () => setTab("payments"),
+    },
+    {
+      key: "autopay", icon: RefreshCw, label: "Manage autopay",
+      hint: "Update autopay, payment method, or schedule",
+      onClick: () => setTab("payments"),
+    },
+    {
+      // Opens the confirmation below: deleting takes two taps (Rule 8).
+      key: "delete", icon: Trash2, label: "Delete this liability", destructive: true,
+      hint: "Permanently remove this liability and all its data",
+      onClick: () => setShowDeleteProfileDialog(true),
+      testId: "button-delete-profile",
+    },
+  ];
 
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="liability-profile-page">
-      <div className="px-4 md:px-6 pt-4">
+      <div className="px-4 md:px-6 pt-3 max-w-4xl mx-auto">
         <DetailHero
-          testId="liability-hero"
+          testId="liability-header"
+          pageTitle="Liability Profile"
           accent={profileVisual("liability").accent}
-          icon={profileVisual("liability").icon}
+          icon={TypeIcon}
+          typeIcon={TypeIcon}
           title={<span data-testid="liability-title">{profile.name || subtypeLabel}</span>}
-          typeLabel="Liability"
-          badges={subtypeLabel !== "Liability"
-            ? <Pill accent="240 20% 60%">{subtypeLabel}</Pill>
-            : undefined}
-          subtitle={terms.lender
-            ? `${terms.lender}${terms.accountNumberLast4 ? ` · ····${terms.accountNumberLast4}` : ""}`
-            : undefined}
+          typeLabel={subtypeLabel}
+          subtitle={terms.lender && terms.accountNumberLast4 ? `${terms.lender} · ····${terms.accountNumberLast4}` : undefined}
+          badges={<>
+            <button type="button" onClick={() => setTab("details")} title="See who owns this debt" data-testid="chip-owner">
+              <Pill accent="262 83% 72%" className="!text-[12px] !px-2.5 !py-1"><User className="h-3.5 w-3.5" /> {ownerChipLabel}</Pill>
+            </button>
+            <span data-testid="chip-status">
+              <Pill accent={statusChip.accent} className="!text-[12px] !px-2.5 !py-1">
+                <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden /> {statusChip.label}
+              </Pill>
+            </span>
+          </>}
           avatar={{
             src: (profile as any).avatar,
             onPick: () => avatarInputRef.current?.click(),
@@ -1221,49 +1447,39 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           // backHref keeps the tab param inside the hash route.
           backHref="/linked?tab=liabilities"
           backLabel="Back to Liabilities"
-          actions={<>
-            {/* Owner picker deliberately absent — the single source of truth for
-                owners is the Linked People / Linked Profiles section. */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-[13px] gap-1"
-              onClick={() => {
-                setEditName(profile.name || "");
-                setEditNotes((profile as any).notes || "");
-                setShowEditDialog(true);
-              }}
-              data-testid="button-header-edit-profile"
-            >
-              <Edit className="h-3.5 w-3.5" /> Edit
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-[13px] gap-1 text-destructive hover:text-destructive"
-              onClick={() => setShowDeleteProfileDialog(true)}
-              data-testid="button-delete-profile"
-            >
-              <Trash2 className="h-3.5 w-3.5" /> Delete
-            </Button>
-            <Button
-              size="sm"
-              className="h-8 text-[13px] gap-1"
-              onClick={() => openPaymentDialog("minimum")}
-              data-testid="quick-pay-min"
-            >
-              <Plus className="h-3.5 w-3.5" /> Pay
-            </Button>
-          </>}
-          stats={heroStats}
-          progress={heroProgress}
+          menu={
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" className="pressable grid h-10 w-10 place-items-center rounded-full hover:bg-foreground/5 transition-colors"
+                  aria-label="More actions" data-testid="button-liability-menu">
+                  <MoreVertical className="h-5 w-5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[200px]">
+                <DropdownMenuItem onSelect={() => openPaymentDialog(recurringBill ? "custom" : "minimum")} data-testid="quick-pay-min">
+                  <Plus className="h-4 w-4 mr-2" /> Record a payment
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={editNameAndNotes} data-testid="button-header-edit-profile">
+                  <Edit className="h-4 w-4 mr-2" /> Edit name &amp; notes
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => avatarInputRef.current?.click()}>
+                  <Camera className="h-4 w-4 mr-2" /> Change picture
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {/* Opens the confirmation: two taps (Rule 8). */}
+                <DropdownMenuItem onSelect={() => setShowDeleteProfileDialog(true)} className="text-destructive focus:text-destructive" data-testid="menu-delete-profile">
+                  <Trash2 className="h-4 w-4 mr-2" /> Delete this liability
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          }
         />
       </div>
       {/* Rule 33: the schedule payload carries the integrity check of the
           stored record; a row still holding two spellings of one fact with
           two values says so here instead of showing whichever won. */}
       {Array.isArray(schedule?.integrity?.warnings) && schedule.integrity.warnings.length > 0 && (
-        <div className="px-4 md:px-6 pt-2" data-testid="liability-integrity-notice">
+        <div className="px-4 md:px-6 pt-2 max-w-4xl mx-auto" data-testid="liability-integrity-notice">
           <p className="text-[12px] text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
             <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
             <span>These records conflict: {schedule.integrity.warnings.map((w: any) => w.message).join("; ")}. Showing the canonical value.</span>
@@ -1272,202 +1488,154 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       )}
 
       {/* Tabs */}
-      <div className="px-4 md:px-6 pt-4">
+      <div className="px-4 md:px-6 pt-4 max-w-4xl mx-auto">
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} data-testid="liability-tabs">
-          <div className="overflow-x-auto pb-1 border-b border-border/50 -mx-1 px-1" style={{ WebkitOverflowScrolling: "touch" as any }}>
-            <TabsList className="inline-flex h-8 w-max gap-0.5 p-0.5 bg-muted/50">
-              <TabsTrigger value="overview" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-overview">Overview</TabsTrigger>
-              <TabsTrigger value="details" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-details">Details</TabsTrigger>
-              <TabsTrigger value="payments" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-payments">Payments</TabsTrigger>
-              <TabsTrigger value="documents" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-documents">Docs</TabsTrigger>
-              <TabsTrigger value="activity" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-activity">Activity</TabsTrigger>
-              <TabsTrigger value="history" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-history">History</TabsTrigger>
+          <div className="overflow-x-auto pb-1 -mx-1 px-1" style={{ WebkitOverflowScrolling: "touch" as any }}>
+            <TabsList className="inline-flex h-9 w-max gap-0.5 p-0.5 rounded-full bg-muted/50">
+              <TabsTrigger value="overview" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-overview">Overview</TabsTrigger>
+              <TabsTrigger value="details" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-details">Details</TabsTrigger>
+              <TabsTrigger value="payments" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-payments">Payments</TabsTrigger>
+              <TabsTrigger value="documents" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-documents">Docs</TabsTrigger>
+              <TabsTrigger value="activity" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-activity">Activity</TabsTrigger>
+              <TabsTrigger value="history" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-history">History</TabsTrigger>
             </TabsList>
           </div>
 
-          {/* OVERVIEW */}
-          <TabsContent value="overview" className="mt-4 space-y-4">
-            {/* Payoff outlook — remaining balance, payoff date, interest left,
-                the balance falling to zero and the principal/interest split.
-                Drawn from THIS page's summary + amortization (one schedule),
-                so it can never disagree with the KPI tiles or the table.
-                Amortizing / revolving debt only; a record missing balance,
-                rate or payment gets a one-line note instead of a guess. */}
-            {amortize && !recurringBill && (
-              <PayoffOutlook summary={summary} amortization={amortization} todayISO={todayISO} missing={payoffMissing} />
+          {/* OVERVIEW — the owner's design: the summary of this liability.
+              The payment schedule, the payoff chart and calculator live under
+              Payments; owners, linked records and the AI summary under
+              Details. */}
+          <TabsContent value="overview" className="mt-3 space-y-5">
+            {balanceCard}
+
+            <section data-testid="liability-details-section">
+              <SectionTitle>Liability details</SectionTitle>
+              <DetailRowGrid rows={detailRows} />
+              {/* Add field — the same Field | Value | Add as a person's Info
+                  page, for anything the loan/bill screens don't have a box
+                  for; what was added is listed with the rows above it. */}
+              <div ref={addFieldRef} className="mt-2">
+                <AddFieldPanel profileId={profile.id} fields={profile.fields} showFields openSignal={addFieldSignal} />
+              </div>
+              <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2" />
+            </section>
+
+            {!recurringBill && summary.originalBalance > 0 && (
+              <PayoffOverviewCard
+                title="Payoff overview"
+                subtitle={paidOff ? "This debt is paid off." : family === "revolving" ? "Progress toward paying off this balance." : "Progress toward paying off this loan."}
+                figures={[
+                  { label: "Original amount", value: fmtUSDShort(summary.originalBalance), dot: "hsl(262 83% 66%)" },
+                  { label: "Amount paid", value: fmtUSDShort(paidDown), dot: "hsl(187 85% 53%)" },
+                  { label: "Remaining balance", value: fmtUSDShort(summary.currentBalance), dot: "hsl(250 60% 72%)" },
+                ]}
+                pct={summary.payoffProgressPct}
+                pctLabel={`${summary.payoffProgressPct.toFixed(1)}%`}
+                pctCaption="paid down"
+              />
             )}
 
-            {/* AI insights card */}
-            <AISummaryCard profileId={profile.id} valueFingerprint={profileValueFingerprint(profile)} />
+            <RowCard
+              icon={CalendarIcon}
+              title="Upcoming payments"
+              onClick={() => setTab("payments")}
+              actionLabel="Open the payment schedule"
+              trailing={autopayOn && nextDueISO ? <AutopayChip /> : undefined}
+              testId="upcoming-payments-card"
+            >
+              {nextDueISO ? (
+                <>
+                  <span className="block text-[14px] text-muted-foreground">
+                    Next payment: <span className="font-semibold text-foreground" data-testid="upcoming-next-date">{fmtDate(nextDueISO)}</span>
+                  </span>
+                  <span className="block text-[13px] text-muted-foreground tabular-nums">
+                    {payAmount > 0 ? `${fmtUSD(payAmount)} • ` : ""}{cadenceLabel}
+                  </span>
+                </>
+              ) : (
+                <span className="block text-[13px] text-muted-foreground">
+                  {paidOff ? "Nothing left to pay: this debt is paid off."
+                    : seriesComplete ? "Every payment in this series has been made."
+                    : billHeldLabel ? `${billHeldLabel}: no payment is scheduled.`
+                    : "No payment is scheduled. Add a payment amount and a due day."}
+                </span>
+              )}
+            </RowCard>
 
-            {/* User-defined characteristics (shared/record-details): priority,
-                refinance candidate, lender rating… structured and reportable. */}
-            {/* Add field — the same Field | Value | Add as a person's Info page,
-                for anything the loan/bill screens don't have a box for. */}
-            <AddFieldPanel profileId={profile.id} fields={profile.fields} showFields title="Details" />
-            <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 sm:grid-cols-3 gap-2" />
-
-            {/* Linked assets — surfaced near the top for parity with asset profiles */}
-            <section data-testid="overview-linked-assets">
-              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked assets</p>
-              <LinkedAssetsCard liabilityId={profile.id} />
-            </section>
-
-            {/* Ownership — fractional owner shares, atomic + validated. Same
-                slider-based editor as the asset overview, pointed at the
-                liability junction table. The previous "Add Linked Person"
-                modal incrementally inserted rows that tripped the DB-side
-                >100 guard the moment a co-owner was added on top of an
-                existing 100% link. PUT /api/profiles/:id/liability-owners
-                replaces the whole set atomically, validates total=100, and
-                writes phases that never grow the running sum past the
-                guardrail. */}
-            <section data-testid="overview-ownership">
-              <OwnershipEditor
-                profile={profile as any}
-                allProfiles={(ownerCandidates || []) as any}
-                onSaved={() => { /* React Query invalidations handled inside OwnershipEditor */ }}
-                kind="liability"
+            <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-3">
+              <MiniCard
+                icon={FileText}
+                title="Documents"
+                testId="documents-card"
+                // A failed request is not "0 documents" (Rule 7).
+                headline={documentsQuery.isError ? "Couldn't load documents"
+                  : !documentList ? "Loading…"
+                  : `${documentList.length} document${documentList.length === 1 ? "" : "s"}`}
+                detail={documentList && documentList.length > 0
+                  ? documentList.slice(0, 3).map((d: any) => String(d?.name || "Document")).join(", ")
+                  : "Loan agreement, statements, payment schedule"}
+                action={
+                  <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg" onClick={() => setTab("documents")} data-testid="button-add-document">
+                    <Plus className="h-3.5 w-3.5" /> Add document
+                  </Button>
+                }
               />
-            </section>
-
-            {/* Linked people — non-owner roles (co_signer, guarantor, etc.)
-                still live here. Ownership shares are managed by the editor
-                above; this section shows everyone else attached to the
-                liability (and on a fresh liability, it's how you add the
-                first owner since the dialog also surfaces the role). */}
-            <section data-testid="overview-linked-people">
-              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked people</p>
-              <LinkedPeopleTab
-                profileId={profile.id}
-                profileType={profile.type}
-                onChanged={() => { /* React Query invalidations handled inside */ }}
+              <MiniCard
+                icon={Bell}
+                title="Alerts"
+                testId="alerts-card"
+                headline={!schedule ? "Loading…" : alertCount > 0
+                  ? <span className="text-red-500">{alertCount} missed payment{alertCount === 1 ? "" : "s"}</span>
+                  : "No alerts"}
+                detail={reminderLine}
+                action={
+                  <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg" onClick={() => setTab("payments")} data-testid="button-manage-alerts">
+                    {alertCount > 0 ? "Review payments" : "Manage reminders"}
+                  </Button>
+                }
               />
-            </section>
-
-            {/* Composed Overview — what this liability IS decides what shows
-                here. The per-subtype snapshot cards (credit card / mortgage /
-                auto loan / student loan) that used to live at this spot were
-                four hardcoded templates; the composition covers the same
-                ground — utilization, linked collateral, escrow, rate, dates —
-                for subtypes nobody has written a template for yet. */}
-            <DynamicOverview profileId={profile.id} />
-
-            {/* Payment mechanics + payoff math belong to DEBT (amortizing /
-                one-time), not recurring bills. A bill pays through its Schedule &
-                Calendar (below) and has no interest / payoff / amortization, so
-                hide this whole block for recurring bills — it must never show
-                Cost-of-borrowing, "360 months remaining", or a Recent-payments
-                card on a subscription. */}
-            {!recurringBill && (<>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Quick actions</CardTitle>
-              </CardHeader>
-              <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                <QuickActionButton
-                  label="Pay minimum"
-                  hint={fmtUSD(terms.monthlyPayment || summary.monthlyPayment)}
-                  onClick={() => openPaymentDialog("minimum")}
-                  testid="action-min"
-                />
-                <QuickActionButton
-                  label="Pay custom"
-                  hint="Choose amount"
-                  onClick={() => openPaymentDialog("custom")}
-                  testid="action-custom"
-                />
-                <QuickActionButton
-                  label="Extra principal"
-                  hint="+$100"
-                  onClick={() => openPaymentDialog("extra")}
-                  testid="action-extra"
-                />
-                <QuickActionButton
-                  label="Interest only"
-                  hint={fmtUSD((terms.currentBalance * terms.annualRate) / 12)}
-                  onClick={() => openPaymentDialog("interest_only")}
-                  testid="action-interest"
-                />
-              </CardContent>
-            </Card>
-
-            <div className="grid md:grid-cols-2 gap-4">
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Cost of borrowing</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  <Row label="Remaining interest"
-                    value={summary.neverAmortizes ? "Never pays off at this payment" : fmtUSD(summary.totalRemainingInterest)} />
-                  <Row label="Interest paid (history)"
-                    value={fmtUSD(interestPaidToDate)} />
-                  <Row label="Total payments made"
-                    value={fmtUSD(paymentsTotal)} />
-                  <Row label="Original balance"
-                    value={summary.originalBalance ? fmtUSD(summary.originalBalance) : "—"} />
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Schedule</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  <Row label="Next payment due"
-                    value={summary.remainingMonths > 0 ? fmtDate(amortization.rows[0]?.dueDate) : "—"} />
-                  <Row label="Payoff date"
-                    value={summary.remainingMonths > 0 ? fmtDate(summary.payoffDate) : "Paid off"} />
-                  <Row label="Months remaining"
-                    value={summary.remainingMonths > 0 ? `${summary.remainingMonths}` : "0"} />
-                  <Row label="Lender" value={terms.lender || "—"} />
-                </CardContent>
-              </Card>
             </div>
 
-            {/* Recent payments preview */}
-            <Card>
-              <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <CardTitle className="text-base">Recent payments</CardTitle>
-                <Button variant="ghost" size="sm" onClick={() => setTab("payments")}>
-                  See all
-                  <ChevronRight className="w-4 h-4 ml-1" />
-                </Button>
-              </CardHeader>
-              <CardContent>
-                {paymentsQuery.isLoading ? (
-                  <div className="space-y-2">
-                    <Skeleton className="h-10 w-full" />
-                    <Skeleton className="h-10 w-full" />
-                  </div>
-                ) : payments.length === 0 ? (
-                  <div className="text-sm text-muted-foreground py-3" data-testid="no-payments">
-                    No payments recorded yet. Use a quick action above to log one.
-                  </div>
-                ) : (
-                  <div className="divide-y">
-                    {payments.slice(0, 5).map((p) => (
-                      <PaymentRow key={p.id} p={p} />
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-            </>)}
-
-            {/* Nested sections — mirroring asset Overview layout (Linked Assets is now surfaced near the top) */}
-            <section>
-              <p className="micro-label text-muted-foreground mb-2 px-0.5">Nested Liabilities</p>
-              <NestedLiabilitiesCard liabilityId={profile.id} />
+            <section className="bubble p-4" data-testid="calendar-reminders-card">
+              <div className="flex items-start gap-2.5">
+                <CalendarIcon className="h-5 w-5 shrink-0 mt-0.5 text-muted-foreground" strokeWidth={1.8} />
+                <div className="min-w-0">
+                  <h2 className="text-[16px] font-semibold tracking-tight leading-tight">Calendar &amp; reminders</h2>
+                  <p className="text-[13px] text-muted-foreground">Key dates and related reminders for this liability.</p>
+                </div>
+              </div>
+              {nextDueISO ? (
+                <button type="button" onClick={() => navigate("/calendar")} aria-label="Open the calendar"
+                  className="pressable mt-3 flex w-full items-center gap-3 border-t border-foreground/10 pt-3 text-left" data-testid="calendar-next-date">
+                  <DateTile
+                    month={parseLocalDate(nextDueISO)?.toLocaleDateString("en-US", { month: "short" }) || ""}
+                    day={String(Number(nextDueISO.slice(8, 10)))}
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[14px] font-semibold">{!repeats ? "Payment due" : cadence === "monthly" ? "Monthly payment due" : `${cap(cadence)} payment due`}</span>
+                    <span className="block text-[13px] text-muted-foreground tabular-nums">
+                      {payAmount > 0 ? `${fmtUSD(payAmount)} • ` : ""}{repeatsLabel}
+                    </span>
+                    {autopayOn && <span className="mt-1.5 block sm:hidden"><AutopayChip /></span>}
+                  </span>
+                  {autopayOn && <span className="hidden sm:block shrink-0"><AutopayChip /></span>}
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                </button>
+              ) : (
+                <p className="mt-3 border-t border-foreground/10 pt-3 text-[13px] text-muted-foreground">
+                  Nothing from this liability is on your calendar.
+                </p>
+              )}
             </section>
 
-            {/* Schedule & Calendar used to sit here. It's a list of PAYMENTS —
-                every future due date with Pay / Skip / Reschedule on it — so it
-                lives in the Payments tab next to the payment history, not at the
-                bottom of an overview the user has to scroll past to reach it. */}
+            <section>
+              <SectionTitle>Profile actions</SectionTitle>
+              <ProfileActionsList actions={profileActions} />
+            </section>
           </TabsContent>
 
           {/* DETAILS */}
-          <TabsContent value="details" className="mt-4">
+          <TabsContent value="details" className="mt-4 space-y-4">
             {recurringBill && editingBill ? (
               <Card data-testid="bill-details-edit-card">
                 <CardHeader className="pb-2 flex flex-row items-center justify-between">
@@ -1676,6 +1844,47 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 </CardContent>
               </Card>
             )}
+
+            {/* Everything below sat on the Overview before the owner's design
+                (2026-11-22) made that page the summary: who is on this debt,
+                what secures it and what hangs under it are its details. */}
+            <AISummaryCard profileId={profile.id} valueFingerprint={profileValueFingerprint(profile)} />
+
+            <section data-testid="overview-linked-assets">
+              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked assets</p>
+              <LinkedAssetsCard liabilityId={profile.id} />
+            </section>
+
+            {/* Ownership — fractional owner shares, atomic + validated
+                (PUT /api/profiles/:id/liability-owners replaces the whole set
+                and validates total=100). */}
+            <section data-testid="overview-ownership">
+              <OwnershipEditor
+                profile={profile as any}
+                allProfiles={(ownerCandidates || []) as any}
+                onSaved={() => { /* React Query invalidations handled inside OwnershipEditor */ }}
+                kind="liability"
+              />
+            </section>
+
+            {/* Linked people — non-owner roles (co_signer, guarantor, etc.). */}
+            <section data-testid="overview-linked-people">
+              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked people</p>
+              <LinkedPeopleTab
+                profileId={profile.id}
+                profileType={profile.type}
+                onChanged={() => { /* React Query invalidations handled inside */ }}
+              />
+            </section>
+
+            {/* Composed Overview — what this liability IS decides what shows
+                here (utilization, linked collateral, escrow, rate, dates). */}
+            <DynamicOverview profileId={profile.id} />
+
+            <section>
+              <p className="micro-label text-muted-foreground mb-2 px-0.5">Nested Liabilities</p>
+              <NestedLiabilitiesCard liabilityId={profile.id} />
+            </section>
           </TabsContent>
 
           {/* PAYMENTS — unified tab: upcoming schedule + payment history +
@@ -1693,6 +1902,42 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             <AutoPaySection liabilityId={profile.id} />
 
             <BillScheduleSection liabilityId={profile.id} />
+
+            {/* Payment mechanics belong to DEBT (amortizing / one-time), not
+                recurring bills: a bill pays through its schedule above. */}
+            {!recurringBill && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Quick actions</CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <QuickActionButton
+                    label="Pay minimum"
+                    hint={fmtUSD(terms.monthlyPayment || summary.monthlyPayment)}
+                    onClick={() => openPaymentDialog("minimum")}
+                    testid="action-min"
+                  />
+                  <QuickActionButton
+                    label="Pay custom"
+                    hint="Choose amount"
+                    onClick={() => openPaymentDialog("custom")}
+                    testid="action-custom"
+                  />
+                  <QuickActionButton
+                    label="Extra principal"
+                    hint="+$100"
+                    onClick={() => openPaymentDialog("extra")}
+                    testid="action-extra"
+                  />
+                  <QuickActionButton
+                    label="Interest only"
+                    hint={fmtUSD((terms.currentBalance * terms.annualRate) / 12)}
+                    onClick={() => openPaymentDialog("interest_only")}
+                    testid="action-interest"
+                  />
+                </CardContent>
+              </Card>
+            )}
 
             {/* Section 2: Payment history */}
             <div className="space-y-3">
@@ -1734,6 +1979,33 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 </CardContent>
               </Card>
             </div>
+
+            {/* Payoff outlook — the balance falling to zero and the
+                principal/interest split, drawn from THIS page's summary +
+                amortization (one schedule), so it can never disagree with the
+                balance card or the table. A record missing balance, rate or
+                payment gets a one-line note instead of a guess. */}
+            {amortize && !recurringBill && (
+              <PayoffOutlook summary={summary} amortization={amortization} todayISO={todayISO} missing={payoffMissing} />
+            )}
+
+            {!recurringBill && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Cost of borrowing</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  <Row label="Remaining interest"
+                    value={summary.neverAmortizes ? "Never pays off at this payment" : fmtUSD(summary.totalRemainingInterest)} />
+                  <Row label="Interest paid (history)"
+                    value={fmtUSD(interestPaidToDate)} />
+                  <Row label="Total payments made"
+                    value={fmtUSD(paymentsTotal)} />
+                  <Row label="Original balance"
+                    value={summary.originalBalance ? fmtUSD(summary.originalBalance) : "—"} />
+                </CardContent>
+              </Card>
+            )}
 
             {/* Section 3: Payoff Calculator — only for amortizing/revolving debt.
                 Recurring bills + generic one-time debt don't have a payoff

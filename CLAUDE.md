@@ -242,6 +242,23 @@ the Liabilities list in `client/src/pages/trackers.tsx`, the debt tools in
 *Live check (deployed app, smoke account):* `npx tsx tests/live-liability-forms-check.ts`
 and `npx tsx tests/live-assets-liabilities-check.ts`.
 
+**L0. The page is the owner's design, and its Overview is a summary.**
+(Owner, 2026-11-22: "make it look more like the second photo".) The header is
+`DetailHero`'s page layout (`pageTitle`: back chevron, "Liability Profile", the
+⋮ menu, picture, type, the owner and status chips). The Overview is ONE balance
+card (balance, original amount, payoff progress, APR, lender, payment, next due
+date, the Autopay switch), "Liability details" as rows that each open their
+editor, the payoff ring, Upcoming payments, Documents, Alerts, Calendar &
+reminders and Profile actions (`components/liability/LiabilityOverviewCards.tsx`,
+presentation only: every figure is one the page already derives, Rule 1).
+Payment quick actions, the payoff chart and the cost of borrowing live under
+Payments; owners, linked records, nested debts and the AI summary under
+Details. Do not put them back on the Overview. A count from a failed request
+reads "Couldn't load", never 0 (Rule 7). The app's own bookkeeping
+(`source: "obligation"`, `obligationId`, any bare record id) is never listed as
+a detail (`isProvenanceField`, `components/AddFieldPanel.tsx`).
+*Guard:* `tests/liability-profile-design.dom.test.tsx`.
+
 **L1. One debt = one record.** A loan or card IS its own bill: its payment
 amount and due day are fields on it, and the schedule/calendar are derived
 from them (`deriveScheduleFields`, `shared/liability-schedule.ts`). Never

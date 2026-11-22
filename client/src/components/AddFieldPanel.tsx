@@ -10,7 +10,7 @@
 // remove (two taps, Rule 8). Money, rate, date and ownership fields are NOT listed here:
 // they have their own editors (L2/L3 — a rate typed as text would lose its
 // unit marker).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Plus, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -32,7 +32,23 @@ const SCREEN_OWNED_KEYS = new Set([
   "frequency", "billingfrequency", "liabilitytype", "subtype", "category", "liabilitycategory",
   "paymentstatus", "status", "autopay", "autorenew", "paused", "pauseduntil", "recurrence",
   "recurrenceend", "occurrences", "remindme", "reminderleaddays", "ownername", "loan", "finance",
+  // Shown (and edited) as a row of the liability's own details.
+  "lender", "creditor", "servicer",
 ]);
+
+// Where a record came from is the app's bookkeeping, not a detail the user
+// typed: a liability converted from a bill carried "Source: obligation" and
+// "Obligation ID: 2b6ad3c2-…" as two cards on its page (owner, 2026-11-22).
+const PROVENANCE_ID_KEYS = new Set(["obligationid", "sourceid", "sourceobligationid", "legacyid", "externalid"]);
+const PROVENANCE_SOURCES = new Set(["obligation", "chat", "manual", "import", "document", "migration", "plaid", "ai", "system"]);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isProvenanceField(key: string, value: string): boolean {
+  const k = key.toLowerCase().replace(/[^a-z]/g, "");
+  if (PROVENANCE_ID_KEYS.has(k)) return true;
+  if (k === "source" && PROVENANCE_SOURCES.has(value.trim().toLowerCase())) return true;
+  // A bare record id is never something a person typed in as a detail.
+  return k.endsWith("id") && UUID_RE.test(value.trim());
+}
 
 /** The plain text fields a page can list and edit as text. */
 export function freeFormFieldEntries(fields: Record<string, unknown> | null | undefined): Array<[string, string]> {
@@ -46,6 +62,7 @@ export function freeFormFieldEntries(fields: Record<string, unknown> | null | un
     if (SCREEN_OWNED_KEYS.has(k.toLowerCase().replace(/[^a-z]/g, ""))) continue;
     const role = fieldSemantics(k, v).role;
     if (OWN_EDITOR_ROLES.has(role)) continue;
+    if (isProvenanceField(k, v)) continue;
     out.push([k, v]);
   }
   return out;
@@ -81,8 +98,10 @@ function useProfileFieldWrites(profileId: string) {
 }
 
 export function AddFieldPanel({
-  profileId, fields, showFields = false, title,
+  profileId, fields, showFields = false, title, openSignal,
 }: {
+  /** Bump to open the Field | Value form from outside (a page's "Add custom field" action). */
+  openSignal?: number;
   profileId: string;
   fields?: Record<string, unknown> | null;
   showFields?: boolean;
@@ -93,6 +112,7 @@ export function AddFieldPanel({
   const [newKey, setNewKey] = useState("");
   const [newVal, setNewVal] = useState("");
   const [saving, setSaving] = useState(false);
+  useEffect(() => { if (openSignal) setAdding(true); }, [openSignal]);
   const rows = showFields ? freeFormFieldEntries(fields) : [];
 
   const add = async () => {

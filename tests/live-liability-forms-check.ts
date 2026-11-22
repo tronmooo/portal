@@ -94,6 +94,8 @@ async function main() {
       if (!(/5\.50?\s*%/.test(header) && /305,000/.test(header))) console.log(`page text: ${header.slice(0, 900)}`);
 
       // ── Delete → back on the Liabilities list.
+      // "Delete this liability" is the last of the Overview's Profile actions.
+      await page.locator('[data-testid="tab-overview"]').click();
       await page.locator('[data-testid="button-delete-profile"]').click({ timeout: 15000 });
       await page.locator('[data-testid="button-confirm-delete-profile"]').click({ timeout: 15000 });
       // Hash router: "/linked?tab=liabilities" is the URL "/?tab=liabilities#/linked".

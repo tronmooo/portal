@@ -27,8 +27,26 @@ interface ScheduleSettings {
   nextDue: { date: string; effectiveDate: string; amount: number } | null;
 }
 
-export function AutoPaySection({ liabilityId }: { liabilityId: string }) {
+/** The one write for the Auto Pay setting (POST /api/liabilities/:id/autopay),
+ *  shared by this card and the switch in the liability page's balance card. */
+export function useAutoPaySave(liabilityId: string) {
   const { toast } = useToast();
+  return useMutation({
+    mutationFn: async (body: { enabled?: boolean; accountId?: string | null; reminders?: boolean }) =>
+      (await apiRequest("POST", `/api/liabilities/${liabilityId}/autopay`, body)).json(),
+    onSuccess: (_data, body) => {
+      for (const key of [["/api/liabilities", liabilityId, "schedule"], ["/api/profiles"], ["/api/obligations"], ["/api/notifications"], ["/api/tasks"]]) {
+        queryClient.invalidateQueries({ queryKey: key });
+      }
+      if (typeof body.enabled === "boolean") {
+        toast({ title: body.enabled ? "Auto Pay is on" : "Auto Pay is off", description: body.enabled ? undefined : "Nothing more will be recorded automatically. Your payment history is unchanged." });
+      }
+    },
+    onError: (e: any) => toast({ title: "Couldn't save Auto Pay", description: e?.message || "Try again.", variant: "destructive" }),
+  });
+}
+
+export function AutoPaySection({ liabilityId }: { liabilityId: string }) {
   // The same key and fetch as <BillScheduleSection>, so React Query serves
   // both from one request and one cache entry.
   const scheduleKey = ["/api/liabilities", liabilityId, "schedule"];
@@ -45,16 +63,7 @@ export function AutoPaySection({ liabilityId }: { liabilityId: string }) {
     .map((a) => ({ id: String(a.profile?.id ?? a.id ?? ""), name: String(a.profile?.name ?? a.name ?? "Account") }))
     .filter((a) => a.id);
 
-  const save = useMutation({
-    mutationFn: async (body: { enabled?: boolean; accountId?: string | null; reminders?: boolean }) =>
-      (await apiRequest("POST", `/api/liabilities/${liabilityId}/autopay`, body)).json(),
-    onSuccess: () => {
-      for (const key of [scheduleKey, ["/api/profiles"], ["/api/obligations"], ["/api/notifications"], ["/api/tasks"]]) {
-        queryClient.invalidateQueries({ queryKey: key });
-      }
-    },
-    onError: (e: any) => toast({ title: "Couldn't save Auto Pay", description: e?.message || "Try again.", variant: "destructive" }),
-  });
+  const save = useAutoPaySave(liabilityId);
 
   if (!data) return null;
   const on = data.autopay === true;
@@ -74,9 +83,7 @@ export function AutoPaySection({ liabilityId }: { liabilityId: string }) {
               id={`autopay-${liabilityId}`}
               checked={on}
               disabled={save.isPending}
-              onCheckedChange={(enabled) => save.mutate({ enabled }, {
-                onSuccess: () => toast({ title: enabled ? "Auto Pay is on" : "Auto Pay is off", description: enabled ? undefined : "Nothing more will be recorded automatically. Your payment history is unchanged." }),
-              })}
+              onCheckedChange={(enabled) => save.mutate({ enabled })}
               aria-label="Auto Pay"
               data-testid="switch-autopay"
             />

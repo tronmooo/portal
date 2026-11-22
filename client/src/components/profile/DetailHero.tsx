@@ -16,7 +16,7 @@
 // caller; this component just gives them somewhere consistent to sit.
 
 import * as React from "react";
-import { Camera, RefreshCw, ArrowLeft, type LucideIcon } from "lucide-react";
+import { Camera, RefreshCw, ArrowLeft, ChevronLeft, type LucideIcon } from "lucide-react";
 import { Link } from "wouter";
 import { Medallion, Pill } from "@/components/dashboard/visuals";
 import { MetricCard } from "@/components/ui/metric-card";
@@ -70,13 +70,91 @@ export interface DetailHeroProps {
   /** Below the stats — a payoff/term bar. */
   progress?: React.ReactNode;
   testId?: string;
+  /**
+   * The owner's profile-page design (2026-11-22): a flat header — a back
+   * chevron, this title centred, `menu` at the right — over a large picture,
+   * the name, the type with its icon and the chips. Passing it switches the
+   * hero to that layout; the page's own cards carry the numbers, so `stats`
+   * and `progress` are not drawn.
+   */
+  pageTitle?: string;
+  /** The ⋮ control at the right of the top bar (page layout only). */
+  menu?: React.ReactNode;
+  /** The glyph beside `typeLabel` in the page layout (a car for an auto loan). */
+  typeIcon?: LucideIcon;
 }
 
 export function DetailHero({
   title, accent, icon: Icon, typeLabel, badges, subtitle, breadcrumb, notes,
   avatar, backHref, onBack, backLabel = "Back", actions, stats = [], progress,
-  testId = "detail-hero",
+  testId = "detail-hero", pageTitle, menu, typeIcon: TypeIcon,
 }: DetailHeroProps) {
+  if (pageTitle) {
+    const backClass = "pressable grid h-10 w-10 place-items-center rounded-full text-foreground/90 hover:bg-foreground/5 transition-colors";
+    const chevron = <ChevronLeft className="h-6 w-6" strokeWidth={2.2} />;
+    return (
+      <div style={{ ["--accent-hsl" as any]: accent }} data-testid={testId}>
+        <div className="grid grid-cols-[40px_1fr_40px] items-center mb-4">
+          {backHref && backHref.includes("?") ? (
+            // Same reason as below: a query-carrying target stays inside the hash.
+            <a href={`#${backHref}`} className={backClass} aria-label={backLabel} title={backLabel} data-testid="button-back">{chevron}</a>
+          ) : backHref ? (
+            <Link href={backHref} className={backClass} aria-label={backLabel} title={backLabel} data-testid="button-back">{chevron}</Link>
+          ) : onBack ? (
+            <button type="button" onClick={onBack} className={backClass} aria-label={backLabel} title={backLabel} data-testid="button-back">{chevron}</button>
+          ) : <span />}
+          <p className="text-center text-[15px] font-semibold tracking-tight truncate" data-testid="detail-hero-page-title">{pageTitle}</p>
+          <div className="justify-self-end">{menu}</div>
+        </div>
+
+        <div className="flex items-center gap-4">
+          {avatar ? (
+            <>
+              {avatar.inputRef && (
+                <input ref={avatar.inputRef} type="file" accept="image/*" className="hidden" onChange={avatar.onChange} data-testid="input-avatar-upload" />
+              )}
+              <button
+                type="button"
+                className="bubble pressable relative h-[76px] w-[76px] sm:h-[88px] sm:w-[88px] overflow-hidden group shrink-0 grid place-items-center !rounded-2xl"
+                onClick={avatar.onPick}
+                disabled={avatar.busy}
+                title="Change profile picture"
+                data-testid="button-avatar-upload"
+              >
+                {avatar.src
+                  ? <img src={avatar.src} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                  : <Icon className="h-8 w-8" strokeWidth={1.8} style={{ color: `hsl(${accent})` }} />}
+                <span className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                  <Camera className="h-5 w-5 text-white" />
+                </span>
+                {avatar.busy && (
+                  <span className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                    <RefreshCw className="h-5 w-5 text-white animate-spin" />
+                  </span>
+                )}
+              </button>
+            </>
+          ) : (
+            <Medallion icon={Icon} accent={accent} />
+          )}
+          <div className="flex-1 min-w-0">
+            <h1 className="text-[22px] font-bold tracking-tight leading-tight break-words" data-testid="detail-hero-title">{title}</h1>
+            {typeLabel && (
+              <p className="mt-1 flex items-center gap-1.5 text-[14px] text-muted-foreground">
+                {TypeIcon && <TypeIcon className="h-4 w-4 shrink-0" />}
+                <span className="truncate">{typeLabel}</span>
+              </p>
+            )}
+            {subtitle && <p className="text-[13px] text-muted-foreground mt-0.5 truncate">{subtitle}</p>}
+            {breadcrumb}
+            {badges && <div className="flex flex-wrap items-center gap-1.5 mt-2">{badges}</div>}
+          </div>
+        </div>
+        {actions && <div className="flex flex-wrap items-center gap-2 mt-4">{actions}</div>}
+      </div>
+    );
+  }
+
   // A count of zero is not a fact worth a tile. Stats that pass `value` are
   // kept as-is: "Autopay: Off" and "Status: Upcoming" mean something.
   const shown = stats.filter((s) => s.countTo == null || s.countTo > 0);
