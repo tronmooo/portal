@@ -464,8 +464,16 @@ export function buildExecutiveSections(
   // (d) Adherence gaps. `unlogged_gap` is expected-minus-logged, which is NOT
   // the same claim as "you missed a dose" — the wording here has to stay on
   // the honest side of that line (see shared/medication-doses.ts).
+  //
+  // OFF unless the user switched alerts on for that medication (owner,
+  // 2026-11-22: "Never treat unlogged medication as an important event by
+  // default"). The row used to be raised for every medication tracker and,
+  // stamped "today", took the Next Important tile.
+  const gapAlertIds = new Set(
+    Array.isArray(config?.medicationGapTrackerIds) ? config!.medicationGapTrackerIds.map(String) : []);
   for (const t of input.trackers || []) {
     if (!t?.id || !isMedicationTracker(t as any)) continue;
+    if (!gapAlertIds.has(String(t.id))) continue;
     const dose = computeMissedDoses(t as any, { days: 7, now: now.getTime() });
     if (dose.unlogged_gap < ADHERENCE_GAP_MIN) continue;
     cand.health.push({

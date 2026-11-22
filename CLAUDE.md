@@ -111,6 +111,18 @@ green. After a push to `main`:
    twin.)
    *Guards:* `tests/dismiss-stays-dismissed.test.ts`,
    `tests/dashboard-done-means-gone.dom.test.tsx`.
+   **Next Important is something on the calendar.** The tile is
+   `pickNextImportant` (`shared/next-important.ts`): the nearest dated item,
+   same-day items ordered by what they are, never a tracker's reading or
+   logging gap, and null (not a filler) when nothing qualifies. "N doses
+   unlogged" is raised only for a medication the user switched alerts on for
+   (`AttentionConfig.medicationGapTrackerIds`; default none). The Wellness
+   Weight row is a BODY weight: never a workout tracker, never a `sets` field
+   (`isWorkoutShapedTracker`, `BODY_WEIGHT_FIELD`, `client/src/lib/wellness-metrics.ts`).
+   (2026-11-22: "Prilosec: 7 doses unlogged this week" as Next Important;
+   "Weight · 3 sets".)
+   *Guards:* `tests/next-important.test.ts`, `tests/wellness-metrics.test.ts`,
+   `tests/executive-sections-router.test.ts`.
 9. **Ownership has one writer** (`server/ownership-writer.ts`). Profile
    scoping goes through `shared/profile-filter.ts`. Deleting a profile is
    fail-safe: if any cascade step fails, the profile is kept, so no record

@@ -36,6 +36,8 @@ import { useDocSnoozeMap } from "@/lib/docSnooze";
 import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
 import { DismissedAlertsList } from "@/components/dashboard/DismissedAlertsList";
 import { isDateRowDismissed } from "@shared/alert-ids";
+import { pickNextImportant } from "@shared/next-important";
+import { isMedicationTracker } from "@shared/medication-doses";
 import {
   TriangleAlert, CalendarDays, DollarSign, FolderOpen, Flame, Sparkles,
   SlidersHorizontal, ChevronRight, Check, CreditCard, ArrowRight, X, Clock,
@@ -1105,14 +1107,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // important thing at noon, not tomorrow's errand. The upcoming PANEL above
   // keeps tomorrow-onward, because today's rows already sit under Needs
   // attention and would otherwise render twice.
+  // WHAT counts and how same-day items are ordered is one shared rule
+  // (shared/next-important): something really on the calendar, never a
+  // tracker's logging gap or reading by default.
   const nextImportantItem = useMemo(() => {
     const from: ExecSectionId[] = ["today", "bills", "upcoming", "importantDates", "documents", "health"];
-    // An event earlier today whose time has passed is not "next" — the
-    // sections engine marks it tier "soon" ("9:00 AM · passed").
-    const rows = from.flatMap(id => secItems(id))
-      .filter(i => (i.daysUntil ?? 0) >= 0)
-      .filter(i => !(i.kind === "event" && i.daysUntil === 0 && i.tier !== "immediate" && /passed/.test(i.reason)));
-    return rows.slice().sort((a, b) => (a.daysUntil ?? 99) - (b.daysUntil ?? 99))[0] ?? null;
+    return pickNextImportant(from.flatMap(id => secItems(id)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sections]);
 
@@ -1632,7 +1632,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             : undefined}
           // The important-dates list, NOT the Bills panel — this KPI is the
           // first row of Upcoming, so that list is where its record lives.
-          onClick={() => setPopup("upcoming")}
+          // …except an item dated TODAY: Upcoming lists tomorrow onward, so
+          // the tile used to open a panel its own item was not in. That item
+          // opens where it lives.
+          onClick={() => (nextImportant && nextImportant.daysUntil === 0 ? openItem(nextImportant) : setPopup("upcoming"))}
           testId="exec-kpi-next"
           inline={hubEmbedded}
           error={timelineError && !nextImportant}
@@ -1689,7 +1692,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   Tasks). Read out and kept in the DOM; not a visible line —
                   the at-a-glance cards have no room for captions. */}
               <p className="sr-only" data-testid="exec-attention-scope">Expirations &amp; renewals</p>
-              {filtersOpen && <div className="mb-2"><AttentionFilters prefs={prefs} onChange={setPrefs} /></div>}
+              {filtersOpen && <div className="mb-2"><AttentionFilters prefs={prefs} onChange={setPrefs}
+                medications={trackers.filter((t: any) => t?.id && isMedicationTracker(t)).map((t: any) => ({ id: String(t.id), name: String(t.name || "Medication") }))} /></div>}
               {filtersOpen && <div className="mb-2"><DismissedAlertsList /></div>}
               {/* AI advice renders HERE, next to the button that asked for it —
                   not in a separate card at the foot of the grid, where a user

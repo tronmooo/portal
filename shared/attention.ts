@@ -90,6 +90,12 @@ export interface AttentionConfig {
   minTier: AttentionTier;
   /** In the 8–30d band, a bill under this amount isn't worth the real estate. */
   upcomingMinBillAmount: number;
+  /**
+   * Medication trackers the user asked to be alerted about when doses go
+   * unlogged. Empty by default: not logging a dose is not evidence of a
+   * missed one, and the dashboard does not nag about it (owner, 2026-11-22).
+   */
+  medicationGapTrackerIds: string[];
 }
 
 export const DEFAULT_ATTENTION_CONFIG: AttentionConfig = {
@@ -105,6 +111,7 @@ export const DEFAULT_ATTENTION_CONFIG: AttentionConfig = {
   includeBirthdays: false,
   minTier: "upcoming",
   upcomingMinBillAmount: 100,
+  medicationGapTrackerIds: [],
 };
 
 export interface AttentionInputs {

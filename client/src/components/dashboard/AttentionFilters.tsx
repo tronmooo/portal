@@ -92,8 +92,10 @@ const TIERS: Array<{ key: AttentionTier; label: string }> = [
   { key: "upcoming", label: "Everything" },
 ];
 
-export function AttentionFilters({ prefs, onChange }: {
+export function AttentionFilters({ prefs, onChange, medications = [] }: {
   prefs: AttentionConfig; onChange: (next: AttentionConfig) => void;
+  /** The user's medication trackers, each offered its own dose-alert switch. */
+  medications?: Array<{ id: string; name: string }>;
 }) {
   // Local mirror so a rapid series of taps doesn't wait on the network between
   // each one; the parent's write-through keeps them in step.
@@ -131,6 +133,35 @@ export function AttentionFilters({ prefs, onChange }: {
           ))}
         </div>
       </div>
+
+      {/* Off for every medication unless switched on here (2026-11-22): not
+          logging a dose is not a missed dose, so the dashboard says nothing
+          about it by default. On = "N doses unlogged this week" may be named
+          as Next Important. */}
+      {medications.length > 0 && (
+        <div className="space-y-1.5" data-testid="attention-med-alerts">
+          <p className="micro-label text-muted-foreground">Alert me about unlogged doses</p>
+          <div className="flex flex-wrap gap-1.5">
+            {medications.map((m) => {
+              const ids = Array.isArray(draft.medicationGapTrackerIds) ? draft.medicationGapTrackerIds : [];
+              const on = ids.includes(m.id);
+              return (
+                <button
+                  key={m.id}
+                  onClick={() => set({ medicationGapTrackerIds: on ? ids.filter((x) => x !== m.id) : [...ids, m.id] })}
+                  data-testid={`attention-med-alert-${m.id}`}
+                  aria-pressed={on}
+                  className={`rounded-full border px-2 py-1 text-[11px] font-medium transition-colors ${
+                    on ? "border-primary/50 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  {m.name}{on ? " · on" : " · off"}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <button
         onClick={() => set({ ...DEFAULT_ATTENTION_CONFIG })}

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   readMetric, readDailyTotal, extractVitals, primaryFieldOf, countWellnessTrackers,
-  readActivity, isActivityTracker,
+  readActivity, isActivityTracker, isWorkoutShapedTracker,
 } from "../client/src/lib/wellness-metrics";
 import type { Tracker } from "../shared/schema";
 
@@ -240,5 +240,67 @@ describe("activity is recognised however the user named it", () => {
     const v = extractVitals([walk], { now: NOW });
     expect(v.activity.caloriesBurned).toBe(500);
     expect(v.calories.value).toBeNull();
+  });
+});
+
+
+// OWNER REPORT (2026-11-22): the dashboard's Wellness card read "Weight · 3 sets".
+// The body-weight reader took the first tracker whose name or category
+// contained "weight" and printed its first number field.
+describe("Weight is a body weight, never a workout's sets", () => {
+  const at = (d: string, values: Record<string, unknown>) => ({ id: d, timestamp: ISO(d), values }) as any;
+  const pullUps = tracker({
+    id: "wp", name: "Weighted Pull-Ups", category: "fitness",
+    fields: [{ name: "sets", type: "number", unit: "sets" }, { name: "reps", type: "number" }] as any,
+    entries: [at("2026-11-21T10:00:00Z", { sets: 3, reps: 8 })],
+  });
+  const body = tracker({
+    id: "bw", name: "Weight", category: "health", unit: "lbs",
+    fields: [{ name: "weight", type: "number", unit: "lbs" }] as any,
+    entries: [at("2026-11-20T08:00:00Z", { weight: 182.4 })],
+  });
+
+  it("skips a workout tracker that merely has 'weight' in its name", () => {
+    const v = extractVitals([pullUps, body]);
+    expect(v.weight.trackerId).toBe("bw");
+    expect(v.weight.value).toBe(182.4);
+    expect(v.weight.unit).toBe("lbs");
+  });
+
+  it("shows no weight at all when the only match is a workout", () => {
+    const v = extractVitals([pullUps]);
+    expect(v.weight.value).toBeNull();
+    expect(v.weight.unit).not.toBe("sets");
+  });
+
+  it("reads the weight field of a body-weight tracker that picked up a stray sets field", () => {
+    // Workout sets were once logged INTO the body-weight tracker
+    // (shared/canonical-activity): `sets` became its first number field.
+    const polluted = tracker({
+      id: "bw", name: "Weight", category: "health",
+      fields: [{ name: "sets", type: "number", unit: "sets" }, { name: "weight", type: "number", unit: "lbs" }] as any,
+      entries: [at("2026-11-21T10:00:00Z", { sets: 3 }), at("2026-11-20T08:00:00Z", { weight: 182.4 })],
+    });
+    const v = extractVitals([polluted]);
+    expect(v.weight.value).toBe(182.4);
+    expect(v.weight.unit).toBe("lbs");
+  });
+
+  it("has nothing to read when a 'Weight' tracker only ever held sets", () => {
+    const onlySets = tracker({
+      id: "bw", name: "Weight", category: "health",
+      fields: [{ name: "sets", type: "number", unit: "sets" }] as any,
+      entries: [at("2026-11-21T10:00:00Z", { sets: 3 })],
+    });
+    expect(extractVitals([onlySets]).weight.value).toBeNull();
+  });
+
+  it("tells a workout tracker from a body measurement", () => {
+    expect(isWorkoutShapedTracker(pullUps)).toBe(true);
+    expect(isWorkoutShapedTracker(tracker({ name: "Weight Training", category: "health" }))).toBe(true);
+    expect(isWorkoutShapedTracker(tracker({ name: "Bench", category: "strength" }))).toBe(true);
+    expect(isWorkoutShapedTracker(body)).toBe(false);
+    expect(isWorkoutShapedTracker(tracker({ name: "Body Weight", fields: [{ name: "sets", type: "number" }] as any }))).toBe(false);
+    expect(isWorkoutShapedTracker(tracker({ name: "Blood Pressure" }))).toBe(false);
   });
 });
