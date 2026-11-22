@@ -517,6 +517,54 @@ describe("ExecutiveBriefing", () => {
       expect(screen.queryByTestId("exec-card-documents")).toBeNull();
     });
 
+    // 2026-11-22 (owner): "different customizations for different types of
+    // executive dashboards". The tab shows the active one and lets you switch.
+    it("with several dashboards, the tab shows the active one and switches on a tap, saving the choice", async () => {
+      const stored = { value: JSON.stringify({ v: 2, active: "main", widgets: [],
+        dashboards: [
+          { id: "main", name: "Main", quiet: true, hidden: [], order: [], sizes: {} },
+          { id: "all", name: "Everything", quiet: false, hidden: ["money"], order: [], sizes: {} },
+        ] }) as string | null };
+      stubRoutes({ "/api/preferences/exec_card_prefs": prefsRoute(stored), "/api/tasks": TASKS });
+      await mount(enhancedWith());
+      await waitFor(() => expect(screen.getByTestId("exec-card-tasks")).toBeTruthy());
+      const bar = screen.getByTestId("exec-dashboards");
+      expect(within(bar).getAllByRole("tab").map((t) => [t.textContent, t.getAttribute("aria-selected")])).toEqual([["Main", "true"], ["Everything", "false"]]);
+      expect(screen.getByTestId("exec-card-money")).toBeTruthy();
+      expect(screen.queryByTestId("exec-card-documents")).toBeNull();
+      fireEvent.click(screen.getByTestId("exec-dashboard-all"));
+      await waitFor(() => expect(screen.getByTestId("exec-card-documents")).toBeTruthy());
+      expect(screen.queryByTestId("exec-card-money")).toBeNull(); // hidden on that dashboard
+      await waitFor(() => expect(JSON.parse(stored.value!).active).toBe("all"));
+      // Only which one is showing changed; both layouts are as they were.
+      expect(JSON.parse(stored.value!).dashboards.map((d: any) => d.hidden)).toEqual([[], ["money"]]);
+    });
+
+    it("a medium card with nobody beside it takes the whole row on a phone; paired ones stay half", async () => {
+      const widget = (id: string, title: string) => ({ id, title, icon: "book", source: "journal", limit: 2 });
+      const stored = { value: JSON.stringify({ quiet: false, hidden: ["tasks", "schedule", "habits", "documents", "wellness", "activity"],
+        order: ["money", "attention", "w:a", "w:b", "w:c"], sizes: {}, widgets: [widget("a", "Card A"), widget("b", "Card B"), widget("c", "Card C")] }) as string | null };
+      stubRoutes({ "/api/preferences/exec_card_prefs": prefsRoute(stored) });
+      await mount(enhancedWith());
+      const cls = async (id: string) => (await screen.findByTestId(`exec-card-${id}`)).className;
+      // Money is large; Attention pairs with A; B pairs with C: nobody is alone.
+      for (const id of ["attention", "w-a", "w-b", "w-c"]) expect(await cls(id), id).toContain("exec-half");
+      cleanup();
+      // Without C, B has no partner and fills its row.
+      stored.value = JSON.stringify({ ...JSON.parse(stored.value!), widgets: [widget("a", "Card A"), widget("b", "Card B")], order: ["money", "attention", "w:a", "w:b"] });
+      await mount(enhancedWith());
+      expect(await cls("w-b")).toContain("col-span-2 md:col-span-1");
+      expect(await cls("w-a")).toContain("exec-half");
+    });
+
+    it("with one dashboard there is no switcher", async () => {
+      const stored = { value: null as string | null };
+      stubRoutes({ "/api/preferences/exec_card_prefs": prefsRoute(stored), "/api/tasks": TASKS });
+      await mount(enhancedWith());
+      await waitFor(() => expect(screen.getByTestId("exec-card-tasks")).toBeTruthy());
+      expect(screen.queryByTestId("exec-dashboards")).toBeNull();
+    });
+
     it("a custom card that cannot load says so, with a retry — never 'nothing here'", async () => {
       const stored = { value: JSON.stringify({ quiet: true, hidden: [], order: [], widgets: [
         { id: "journal", title: "Recent Journal", icon: "book", source: "journal", limit: 3 },

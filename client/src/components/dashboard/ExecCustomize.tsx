@@ -13,7 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bell, BookOpen, CalendarDays, Car, ChartColumn, CheckSquare, ChevronDown, ChevronRight, Coins, Dumbbell,
   EyeOff, FileText, Flame, GripVertical, Heart, HeartPulse, History, Home, LayoutGrid, Layers, Moon, PawPrint,
-  Plus, RotateCcw, Settings, Sparkles, Star, StickyNote, Target, Trash2, Users, Wallet, Zap, type LucideIcon,
+  LayoutDashboard, Plus, RotateCcw, Settings, Sparkles, Star, StickyNote, Target, Trash2, Users, Wallet, Zap, type LucideIcon,
 } from "lucide-react";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { BubbleModal } from "@/components/ui/bubble-modal";
@@ -21,16 +21,22 @@ import { useToast } from "@/hooks/use-toast";
 import { ExecWidgetBody } from "@/components/dashboard/ExecWidgetBody";
 import { getUserToday } from "@shared/timezone";
 import {
-  DEFAULT_EXEC_CARD_PREFS, EXEC_CARD_HINTS, QUIET_MODE_CARDS, EXEC_CARD_TITLES,
+  EXEC_CARD_HINTS, QUIET_MODE_CARDS, EXEC_CARD_TITLES,
   addExecWidget, execCardSize, execCardTitle, isExecCardVisible, isWidgetCardId, orderedExecCards,
-  parseExecCardPrefs, placeExecCard, removeExecWidget, resetExecCardLayout, setExecCardSize, setExecCardVisible,
+  placeExecCard, removeExecWidget, resetExecCardLayout, setExecCardSize, setExecCardVisible,
   widgetCardId,
   type BuiltInCardId, type ExecCardId, type ExecCardPrefs, type ExecCardSize,
 } from "@shared/exec-card-prefs";
 import {
-  WIDGET_TEMPLATES, describeWidget, newWidgetId, sanitizeWidget,
-  type ExecWidget, type WidgetIcon,
+  WIDGET_ICONS, WIDGET_PROFILE_TYPES, WIDGET_SOURCES, WIDGET_SOURCE_LABELS, WIDGET_TEMPLATES,
+  describeWidget, newWidgetId, sanitizeWidget,
+  type ExecWidget, type WidgetIcon, type WidgetSource,
 } from "@shared/exec-widgets";
+import {
+  DASHBOARD_TEMPLATES, MAX_DASHBOARDS, activeDashboard, activeExecPrefs, addDashboard, defaultExecDashboards,
+  parseExecDashboards, removeDashboard, renameDashboard, serializeExecDashboards, setActiveDashboard, withActiveExecPrefs,
+  type ExecDashboards,
+} from "@shared/exec-dashboards";
 
 export const EXEC_CARD_PREFS_KEY = "exec_card_prefs";
 const QUERY_KEY = ["/api/preferences/exec_card_prefs"];
@@ -38,31 +44,35 @@ const PURPLE = "265 85% 66%";
 
 export function useExecCardPrefs(enabled = true) {
   const queryClient = useQueryClient();
-  const { data, isPending } = useQuery<ExecCardPrefs>({
+  const { data, isPending } = useQuery<ExecDashboards>({
     queryKey: QUERY_KEY,
     enabled,
     queryFn: () => apiRequest("GET", `/api/preferences/${EXEC_CARD_PREFS_KEY}`)
       .then(r => r.json())
-      .then(d => parseExecCardPrefs(d?.value)),
+      .then(d => parseExecDashboards(d?.value)),
     staleTime: 5 * 60_000,
   });
   const save = useMutation({
-    mutationFn: async (next: ExecCardPrefs) => {
-      await apiRequest("PUT", `/api/preferences/${EXEC_CARD_PREFS_KEY}`, { value: JSON.stringify(next) });
+    mutationFn: async (next: ExecDashboards) => {
+      await apiRequest("PUT", `/api/preferences/${EXEC_CARD_PREFS_KEY}`, { value: serializeExecDashboards(next) });
       return next;
     },
     onError: () => { queryClient.invalidateQueries({ queryKey: QUERY_KEY }); },
   });
+  const boards = useMemo(() => data ?? defaultExecDashboards(), [data]);
   return {
     /** False only while the stored choice is still on its way, so the caller
      *  does not flash the default layout over a saved one. A failed read
      *  settles too (the defaults apply) — the dashboard never waits forever. */
     loaded: !enabled || !isPending,
-    prefs: data ?? DEFAULT_EXEC_CARD_PREFS,
+    /** Every dashboard the user has, and which one is showing. */
+    boards,
+    /** The dashboard that is showing, as the layout the tab draws. */
+    prefs: useMemo(() => activeExecPrefs(boards), [boards]),
     saving: save.isPending,
     /** The screen follows at once; the save follows behind it and resolves
      *  when the account has it. */
-    setPrefs: (next: ExecCardPrefs) => {
+    setBoards: (next: ExecDashboards) => {
       queryClient.setQueryData(QUERY_KEY, next);
       return save.mutateAsync(next);
     },
@@ -124,44 +134,53 @@ export function ExecCustomizeDialog({ open, onClose, mode = "everyone", ids = []
   /** The active profile scope, so a widget preview reads what its card will. */
   mode?: string; ids?: string[];
 }) {
-  const { prefs, setPrefs, saving } = useExecCardPrefs(open);
+  const { boards, setBoards, saving } = useExecCardPrefs(open);
   const { toast } = useToast();
-  const [draft, setDraft] = useState<ExecCardPrefs>(prefs);
+  // The draft holds EVERY dashboard; `draft` below is the one being edited.
+  const [draftBoards, setDraftBoards] = useState<ExecDashboards>(boards);
+  const draft = useMemo(() => activeExecPrefs(draftBoards), [draftBoards]);
   const [tab, setTab] = useState<TabKey>("cards");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [hiddenOpen, setHiddenOpen] = useState(false);
   const [armedRemove, setArmedRemove] = useState<string | null>(null);
-  // Which cards were on the tab when the dialog opened: they are the main
-  // list. A card switched off stays in the list (it is still a draft), and a
-  // card that was hidden sits under "Hidden Cards" until it is switched on.
+  const [newBoardOpen, setNewBoardOpen] = useState(false);
+  const [editingWidget, setEditingWidget] = useState<string | null>(null);
+  // Which cards were on the dashboard when it was opened here: they are the
+  // main list. A card switched off stays in the list (it is still a draft),
+  // and a card that was hidden sits under "Hidden Cards" until switched on.
   const [listed, setListed] = useState<Set<string>>(new Set());
+  const relist = (b: ExecDashboards) => {
+    const p = activeExecPrefs(b);
+    setListed(new Set(orderedExecCards(p).filter((id) => isExecCardVisible(p, id))));
+  };
+  const touched = useRef(false);
   const wasOpen = useRef(false);
   useEffect(() => {
     if (open && !wasOpen.current) {
-      setDraft(prefs);
-      setTab("cards"); setExpanded(null); setHiddenOpen(false); setArmedRemove(null);
-      setListed(new Set(orderedExecCards(prefs).filter((id) => isExecCardVisible(prefs, id))));
+      touched.current = false;
+      setDraftBoards(boards); relist(boards);
+      setTab("cards"); setExpanded(null); setHiddenOpen(false); setArmedRemove(null); setNewBoardOpen(false); setEditingWidget(null);
     }
     wasOpen.current = open;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   // The stored choice can land after the dialog is already open (first open of
   // a session): adopt it if the user has not touched anything yet.
-  const touched = useRef(false);
   useEffect(() => {
-    if (open && !touched.current) {
-      setDraft(prefs);
-      setListed(new Set(orderedExecCards(prefs).filter((id) => isExecCardVisible(prefs, id))));
-    }
+    if (open && !touched.current) { setDraftBoards(boards); relist(boards); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefs]);
-  useEffect(() => { if (!open) touched.current = false; }, [open]);
-  const edit = (next: ExecCardPrefs) => { touched.current = true; setDraft(next); };
+  }, [boards]);
+  const editBoards = (next: ExecDashboards) => { touched.current = true; setDraftBoards(next); };
+  /** Change the dashboard being edited. */
+  const edit = (next: ExecCardPrefs) => editBoards(withActiveExecPrefs(draftBoards, next));
+  /** Switch which dashboard is being edited (and shown once saved). */
+  const switchBoard = (next: ExecDashboards) => { editBoards(next); relist(next); setExpanded(null); setEditingWidget(null); };
+  const board = activeDashboard(draftBoards);
 
   const order = orderedExecCards(draft);
   const mainIds = order.filter((id) => listed.has(id));
   const hiddenIds = order.filter((id) => !listed.has(id));
-  const dirty = JSON.stringify(draft) !== JSON.stringify(prefs);
+  const dirty = serializeExecDashboards(draftBoards) !== serializeExecDashboards(boards);
   const todayISO = getUserToday(BROWSER_TIMEZONE);
 
   // ── Reorder: drag the handle (pointer or touch), or arrow keys on it ───────
@@ -207,7 +226,7 @@ export function ExecCustomizeDialog({ open, onClose, mode = "everyone", ids = []
       onChange={(e) => edit(setExecCardSize(draft, id, e.target.value as ExecCardSize))}
       aria-label={`Size of ${title}`}
       data-testid={`exec-customize-size-${id}`}
-      className="shrink-0 h-8 w-[88px] rounded-lg border border-border bg-background/60 px-1.5 text-[12px] font-medium">
+      className="shrink-0 h-8 w-[104px] rounded-lg border border-border bg-background/60 px-1.5 text-[12px] font-medium">
       <option value="large">Large</option>
       <option value="medium">Medium</option>
     </select>
@@ -265,6 +284,9 @@ export function ExecCustomizeDialog({ open, onClose, mode = "everyone", ids = []
             </p>
             {widget && (
               <>
+                <WidgetEditor value={widget}
+                  onChange={(next) => edit({ ...draft, widgets: draft.widgets.map((x) => (x.id === widget.id ? next : x)) })} />
+                <p className="micro-label text-muted-foreground">Preview, from your records</p>
                 <div className="rounded-lg border border-border/60 p-2">
                   <ExecWidgetBody widget={widget} mode={mode} ids={ids} todayISO={todayISO} accent={PURPLE} preview />
                 </div>
@@ -284,7 +306,7 @@ export function ExecCustomizeDialog({ open, onClose, mode = "everyone", ids = []
 
   const save = async () => {
     try {
-      await setPrefs(draft);
+      await setBoards(draftBoards);
       toast({ title: "Executive tab updated" });
       onClose();
     } catch {
@@ -324,6 +346,63 @@ export function ExecCustomizeDialog({ open, onClose, mode = "everyone", ids = []
           </button>
         </div>
       }>
+      {/* Dashboards: each is its own layout over the same cards. */}
+      <div className="rounded-xl border border-border/70 px-3 py-2.5 space-y-2" data-testid="exec-customize-boards">
+        <div className="flex items-center gap-2">
+          <LayoutDashboard className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <div className="flex-1 min-w-0">
+            <p className="text-[14px] font-bold leading-tight">Dashboards</p>
+            <p className="text-[12px] text-muted-foreground leading-tight">Each dashboard has its own cards, order and sizes. You are editing the highlighted one.</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {draftBoards.dashboards.map((d) => (
+            <button key={d.id} type="button" aria-pressed={d.id === board.id}
+              onClick={() => switchBoard(setActiveDashboard(draftBoards, d.id))}
+              data-testid={`exec-customize-board-${d.id}`}
+              className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${d.id === board.id ? "text-white" : "border border-border text-muted-foreground hover:bg-muted"}`}
+              style={d.id === board.id ? { background: `hsl(${PURPLE} / 0.35)`, boxShadow: `inset 0 0 0 1px hsl(${PURPLE} / 0.7)` } : undefined}>
+              {d.name}
+            </button>
+          ))}
+          {draftBoards.dashboards.length < MAX_DASHBOARDS && (
+            <button type="button" onClick={() => setNewBoardOpen((o) => !o)} aria-expanded={newBoardOpen}
+              className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-3 py-1.5 text-[12px] font-semibold text-muted-foreground hover:bg-muted"
+              data-testid="exec-customize-board-new">
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" /> New dashboard
+            </button>
+          )}
+        </div>
+        {newBoardOpen ? (
+          <NewDashboard
+            onCreate={(name, key) => { switchBoard(addDashboard(draftBoards, name, key)); setNewBoardOpen(false); setTab("cards"); }}
+            onCancel={() => setNewBoardOpen(false)} />
+        ) : (
+          <div className="flex items-center gap-2">
+            <label className="text-[11px] text-muted-foreground shrink-0" htmlFor="exec-board-name">Name</label>
+            <input id="exec-board-name" key={board.id} defaultValue={board.name} maxLength={24}
+              onChange={(e) => { if (e.target.value.trim()) editBoards(renameDashboard(draftBoards, board.id, e.target.value)); }}
+              className="flex-1 min-w-0 h-8 rounded-lg border border-border bg-background/60 px-2 text-[13px] font-semibold"
+              data-testid="exec-customize-board-name" />
+            {draftBoards.dashboards.length > 1 && (
+              <button type="button"
+                onClick={() => {
+                  const k = `board:${board.id}`;
+                  if (armedRemove !== k) { setArmedRemove(k); setTimeout(() => setArmedRemove((x) => (x === k ? null : x)), 4000); return; }
+                  setArmedRemove(null);
+                  switchBoard(removeDashboard(draftBoards, board.id));
+                }}
+                className={`shrink-0 inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[12px] font-semibold ${armedRemove === `board:${board.id}` ? "border-red-500/50 bg-red-500/15 text-red-500" : "border-border text-muted-foreground hover:bg-muted"}`}
+                title="Deletes this dashboard's layout. The cards themselves are kept."
+                data-testid="exec-customize-board-delete">
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                {armedRemove === `board:${board.id}` ? "Tap again to delete" : "Delete"}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Tabs */}
       <div role="tablist" className="grid grid-cols-4 gap-1 rounded-xl border border-border/70 p-1" data-testid="exec-customize-tabs">
         {TABS.map((t) => (
@@ -479,13 +558,144 @@ function WidgetIdeas({ onAdd, taken }: { onAdd: (w: Omit<ExecWidget, "id">) => v
   );
 }
 
+/** Start a dashboard: a name and a starting point. */
+function NewDashboard({ onCreate, onCancel }: { onCreate: (name: string, templateKey: string) => void; onCancel: () => void }) {
+  const [name, setName] = useState("");
+  const [key, setKey] = useState("standard");
+  const t = DASHBOARD_TEMPLATES.find((x) => x.key === key)!;
+  return (
+    <div className="rounded-lg border border-border/60 p-2.5 space-y-2" data-testid="exec-customize-board-form">
+      <input value={name} onChange={(e) => setName(e.target.value)} maxLength={24} placeholder={`Name (e.g. ${t.name})`} aria-label="Dashboard name"
+        className="w-full h-8 rounded-lg border border-border bg-background/60 px-2 text-[13px] font-semibold"
+        data-testid="exec-customize-board-form-name" />
+      <p className="micro-label text-muted-foreground">Start from</p>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+        {DASHBOARD_TEMPLATES.map((x) => (
+          <button key={x.key} type="button" aria-pressed={x.key === key} onClick={() => setKey(x.key)}
+            data-testid={`exec-customize-board-template-${x.key}`}
+            className={`rounded-lg border px-2 py-1.5 text-left ${x.key === key ? "border-primary/60 bg-primary/10" : "border-border/70 hover:bg-muted"}`}>
+            <span className="block text-[12px] font-semibold leading-tight">{x.name}</span>
+            <span className="block text-[11px] text-muted-foreground leading-tight mt-0.5">{x.hint}</span>
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={() => onCreate(name, key)}
+          className="rounded-xl px-3 py-1.5 text-[12px] font-bold text-white" style={{ background: `hsl(${PURPLE})` }}
+          data-testid="exec-customize-board-form-create">Create dashboard</button>
+        <button type="button" onClick={onCancel} className="rounded-xl border border-border px-3 py-1.5 text-[12px] font-semibold hover:bg-muted">Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+const DAY_CHOICES: Array<{ label: string; days: number | null }> = [
+  { label: "Default", days: null }, { label: "7 days", days: 7 }, { label: "30 days", days: 30 }, { label: "90 days", days: 90 }, { label: "1 year", days: 365 },
+];
+const SOURCES_WITH_DAYS: WidgetSource[] = ["expenses", "bills", "events", "journal", "notes"];
+
+/**
+ * Every part of a custom card, editable: what it reads, which kinds, a text
+ * filter, how far back or ahead, how many rows, its icon and title. Each
+ * change is held to `sanitizeWidget`, so the card stays one the app can draw.
+ */
+function WidgetEditor({ value, onChange, hideTitle = false }: { value: ExecWidget; onChange: (w: ExecWidget) => void; hideTitle?: boolean }) {
+  const set = (patch: Record<string, unknown>) => {
+    const next = sanitizeWidget({ ...value, ...patch }, value.id);
+    if (next) onChange(next);
+  };
+  const t = value.id;
+  return (
+    <div className="rounded-lg border border-border/60 p-2.5 space-y-2" data-testid={`widget-editor-${t}`}>
+      {!hideTitle && (
+        <label className="block">
+          <span className="micro-label text-muted-foreground">Title</span>
+          {/* Uncontrolled: a half-typed title (one letter) is not a title yet. */}
+          <input key={`${t}:title`} defaultValue={value.title} maxLength={40}
+            onChange={(e) => { if (e.target.value.trim().length >= 2) set({ title: e.target.value }); }}
+            className="mt-0.5 w-full h-8 rounded-lg border border-border bg-background/60 px-2 text-[13px] font-semibold"
+            data-testid={`widget-editor-title-${t}`} />
+        </label>
+      )}
+      <label className="block">
+        <span className="micro-label text-muted-foreground">Shows</span>
+        <select value={value.source} onChange={(e) => set({ source: e.target.value, types: [], days: undefined })}
+          className="mt-0.5 w-full h-8 rounded-lg border border-border bg-background/60 px-2 text-[12px]"
+          data-testid={`widget-editor-source-${t}`}>
+          {WIDGET_SOURCES.map((src) => <option key={src} value={src}>{WIDGET_SOURCE_LABELS[src]}</option>)}
+        </select>
+      </label>
+      {value.source === "profiles" && (
+        <div>
+          <span className="micro-label text-muted-foreground">Which kinds (none selected = all)</span>
+          <div className="mt-0.5 flex flex-wrap gap-1">
+            {WIDGET_PROFILE_TYPES.map((k) => {
+              const on = (value.types ?? []).includes(k);
+              return (
+                <button key={k} type="button" aria-pressed={on}
+                  onClick={() => set({ types: on ? (value.types ?? []).filter((x) => x !== k) : [...(value.types ?? []), k] })}
+                  data-testid={`widget-editor-type-${t}-${k}`}
+                  className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${on ? "border-primary/50 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-muted"}`}>
+                  {k}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <label className="block">
+        <span className="micro-label text-muted-foreground">Only items containing (optional)</span>
+        <input key={`${t}:match:${value.source}`} defaultValue={value.match ?? ""} maxLength={40} placeholder="a word, a category, a name"
+          onChange={(e) => set({ match: e.target.value })}
+          className="mt-0.5 w-full h-8 rounded-lg border border-border bg-background/60 px-2 text-[12px]"
+          data-testid={`widget-editor-match-${t}`} />
+      </label>
+      <div className="grid grid-cols-2 gap-2">
+        {SOURCES_WITH_DAYS.includes(value.source) && (
+          <label className="block">
+            <span className="micro-label text-muted-foreground">Time span</span>
+            <select value={value.days ?? ""} onChange={(e) => set({ days: e.target.value ? Number(e.target.value) : undefined })}
+              className="mt-0.5 w-full h-8 rounded-lg border border-border bg-background/60 px-2 text-[12px]"
+              data-testid={`widget-editor-days-${t}`}>
+              {DAY_CHOICES.map((c) => <option key={c.label} value={c.days ?? ""}>{c.label}</option>)}
+            </select>
+          </label>
+        )}
+        <label className="block">
+          <span className="micro-label text-muted-foreground">Rows</span>
+          <select value={value.limit} onChange={(e) => set({ limit: Number(e.target.value) })}
+            className="mt-0.5 w-full h-8 rounded-lg border border-border bg-background/60 px-2 text-[12px]"
+            data-testid={`widget-editor-limit-${t}`}>
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+      </div>
+      <div>
+        <span className="micro-label text-muted-foreground">Icon</span>
+        <div className="mt-0.5 flex flex-wrap gap-1">
+          {WIDGET_ICONS.map((k) => {
+            const Icon = WIDGET_ICON[k];
+            return (
+              <button key={k} type="button" aria-pressed={value.icon === k} aria-label={`Icon: ${k}`} onClick={() => set({ icon: k })}
+                data-testid={`widget-editor-icon-${t}-${k}`}
+                className={`rounded-lg border p-1.5 ${value.icon === k ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-muted"}`}>
+                <Icon className="h-4 w-4" aria-hidden="true" />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const AI_EXAMPLES = ["My dog's vet visits and care tasks", "How much I spend on groceries", "Journal entries about work", "My sleep and weight", "Goals I'm working on"];
 
 function AiBuilder({ onAdd, mode, ids, todayISO, existing }: {
   onAdd: (w: Omit<ExecWidget, "id">) => void; mode: string; ids: string[]; todayISO: string; existing: ExecWidget[];
 }) {
   const [text, setText] = useState("");
-  const [proposal, setProposal] = useState<{ widget: ExecWidget; by: "ai" | "rules" } | null>(null);
+  const [proposal, setProposal] = useState<{ widget: ExecWidget; by: "ai" | "rules" | "manual" } | null>(null);
   const build = useMutation({
     // A read: the server answers with a widget description and stores nothing.
     mutationFn: async (prompt: string) => {
@@ -519,8 +729,14 @@ function AiBuilder({ onAdd, mode, ids, todayISO, existing }: {
         style={{ background: `hsl(${PURPLE})` }} data-testid="exec-customize-ai-build">
         <Sparkles className="h-3.5 w-3.5" aria-hidden="true" /> {build.isPending ? "Building…" : "Build card"}
       </button>
+      <button type="button"
+        onClick={() => { build.reset(); setProposal({ by: "manual", widget: { id: "preview", title: "My card", icon: "star", source: "journal", limit: 4 } }); }}
+        className="ml-2 inline-flex items-center gap-1.5 rounded-xl border border-border px-3.5 py-2 text-[13px] font-semibold text-muted-foreground hover:bg-muted"
+        data-testid="exec-customize-ai-manual">
+        Build it yourself
+      </button>
       {build.isError && (
-        <p className="text-[12px] text-destructive" data-testid="exec-customize-ai-error">Couldn't build that card. Try again, or pick a Widget Idea.</p>
+        <p className="text-[12px] text-destructive" data-testid="exec-customize-ai-error">Couldn't build that card. Try again, pick a Widget Idea, or build it yourself.</p>
       )}
       {proposal && (
         <div className="rounded-xl border border-border/70 p-3 space-y-2" data-testid="exec-customize-ai-proposal">
@@ -532,6 +748,8 @@ function AiBuilder({ onAdd, mode, ids, todayISO, existing }: {
               data-testid="exec-customize-ai-title" />
           </div>
           <p className="text-[12px] text-muted-foreground" data-testid="exec-customize-ai-description">{describeWidget(proposal.widget)}</p>
+          {/* Every part of the card can be changed before it is added. */}
+          <WidgetEditor value={proposal.widget} hideTitle onChange={(next) => setProposal({ ...proposal, widget: next })} />
           <p className="micro-label text-muted-foreground">Preview, from your records</p>
           <div className="rounded-lg border border-border/60 p-2">
             <ExecWidgetBody widget={proposal.widget} mode={mode} ids={ids} todayISO={todayISO} accent={PURPLE} preview />

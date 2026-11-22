@@ -155,8 +155,24 @@ green. After a push to `main`:
    or is refused, it writes nothing, and with no model it answers by fixed
    rules (`inferWidgetFromText`). Add a new kind of widget by adding a source
    there, never by letting the model emit markup or queries.
+   **Several dashboards, one set of cards** (`shared/exec-dashboards.ts`;
+   owner, 2026-11-22: "different customizations for different types of
+   executive dashboards"). A dashboard is a named LAYOUT — what shows, order,
+   sizes, Quiet Mode — over the eight standard cards and the user's own. The
+   stored row holds all of them (`serializeExecDashboards`; a row from before
+   reads as the one dashboard "Main"). Screens that draw the tab take
+   `activeExecPrefs` and need not know the others exist. A card built while
+   editing one dashboard starts hidden on the rest; removing a card removes it
+   everywhere; deleting a dashboard (two taps, never the last) keeps the
+   cards. New dashboards start from `DASHBOARD_TEMPLATES`. The tab's chip row
+   only SWITCHES the active dashboard; arranging them is the dialog.
+   Every part of a custom card is editable (`WidgetEditor`): source, kinds,
+   text filter, time span, rows, icon, title — each change through
+   `sanitizeWidget`. A medium card with nobody beside it on a phone takes the
+   row (`lonelyMediumCards`); do not hand-code per-card "wide" exceptions.
    *Guards:* `tests/executive-sections.test.tsx`, `tests/exec-card-prefs.test.ts`,
-   `tests/exec-widgets.test.ts`, `tests/exec-customize-dialog.dom.test.tsx`.
+   `tests/exec-widgets.test.ts`, `tests/exec-dashboards.test.ts`,
+   `tests/exec-customize-dialog.dom.test.tsx`.
 9. **Ownership has one writer** (`server/ownership-writer.ts`). Profile
    scoping goes through `shared/profile-filter.ts`. Deleting a profile is
    fail-safe: if any cascade step fails, the profile is kept, so no record

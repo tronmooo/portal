@@ -8,10 +8,15 @@ import { useQueries } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { buildWidgetView, widgetNeeds, type ExecWidget, type WidgetData } from "@shared/exec-widgets";
+import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 
 const ENDPOINT: Record<keyof WidgetData, string> = {
   profiles: "/api/profiles", trackers: "/api/trackers", expenses: "/api/expenses", journal: "/api/journal",
   notes: "/api/notes", tasks: "/api/tasks", goals: "/api/goals", habits: "/api/habits",
+  bills: "/api/obligations",
+  // Read through the calendar timeline (below), which lays recurring events
+  // out at their dates; this entry is only the cache-bus key it lives under.
+  events: "/api/calendar/timeline",
 };
 
 export function ExecWidgetBody({ widget, mode = "everyone", ids = [], todayISO, accent, preview = false }: {
@@ -27,7 +32,17 @@ export function ExecWidgetBody({ widget, mode = "everyone", ids = [], todayISO, 
   const needs = widgetNeeds(widget);
   const param = mode === "selected" && ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
   const results = useQueries({
-    queries: needs.map((k) => ({
+    queries: needs.map((k) => (k === "events" ? {
+      // The same window and key the Executive tab's own Timeline card reads,
+      // so the two share one request and can never disagree.
+      queryKey: timelineQueryKey(canonicalTimelineWindow(todayISO), mode, ids),
+      queryFn: async () => {
+        const data = await apiRequest("GET", timelineUrl(canonicalTimelineWindow(todayISO), mode, ids)).then((r) => r.json());
+        if (!Array.isArray(data)) throw new Error("Unexpected response");
+        return data as any[];
+      },
+      staleTime: 60_000,
+    } : {
       // Its own cache slot (the trailing "widget"), still under the endpoint's
       // key so the cache bus invalidates it with the domain: another reader of
       // the same endpoint may keep a different shape in its slot.

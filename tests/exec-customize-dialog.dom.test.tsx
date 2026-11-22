@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Router } from "wouter";
+import { activeExecPrefs, parseExecDashboards } from "../shared/exec-dashboards";
 
 vi.mock("../client/src/lib/auth", () => ({ useAuth: () => ({ getAuthHeader: () => ({}) }) }));
 
@@ -57,7 +58,9 @@ async function open(onClose: () => void = () => {}) {
 }
 const rowIds = (list = "exec-customize-list") => within(screen.getByTestId(list)).getAllByTestId(/^exec-customize-row-/)
   .map((n) => n.getAttribute("data-testid")!.replace("exec-customize-row-", ""));
-const saved = () => JSON.parse(stored!);
+/** The dashboard that is showing, as saved (the row now holds every dashboard). */
+const saved = () => activeExecPrefs(parseExecDashboards(stored));
+const savedBoards = () => parseExecDashboards(stored);
 
 describe("the dialog matches the owner's design", () => {
   it("has the header, four tabs, Quiet Mode, the card rows, the builder, ideas, hidden cards and the footer", async () => {
@@ -269,5 +272,118 @@ describe("where it opens from", () => {
     const tab = readFileSync(join(process.cwd(), "client/src/components/dashboard/ExecutiveBriefing.tsx"), "utf8");
     expect(tab).not.toContain("exec-customize-toggle");
     expect(tab).not.toContain("<ExecCustomizeDialog");
+  });
+});
+
+
+// ── 2026-11-22 (owner): "different customizations for different types of
+// executive dashboards … fully customizable … but obviously have the ones that
+// are standard." ─────────────────────────────────────────────────────────────
+describe("several dashboards, each its own", () => {
+  const boardIds = () => within(screen.getByTestId("exec-customize-boards")).getAllByTestId(/^exec-customize-board-(?!new|name|delete|form|template)/)
+    .map((n) => n.getAttribute("data-testid")!.replace("exec-customize-board-", ""));
+
+  it("starts with one dashboard, Main, holding the standard cards", async () => {
+    await open();
+    expect(boardIds()).toEqual(["main"]);
+    expect((screen.getByTestId("exec-customize-board-name") as HTMLInputElement).value).toBe("Main");
+    expect(screen.queryByTestId("exec-customize-board-delete")).toBeNull(); // the last one cannot be deleted
+  });
+
+  it("creates a dashboard from a starting point, with its own cards, and leaves the first one as it was", async () => {
+    await open();
+    fireEvent.click(screen.getByTestId("exec-customize-board-new"));
+    fireEvent.click(screen.getByTestId("exec-customize-board-template-money"));
+    fireEvent.change(screen.getByTestId("exec-customize-board-form-name"), { target: { value: "Finances" } });
+    fireEvent.click(screen.getByTestId("exec-customize-board-form-create"));
+    expect(boardIds()).toEqual(["main", "finances"]);
+    // The new dashboard is the one being edited: the Money template's cards.
+    expect(rowIds()).toEqual(["money", "attention", "w:spending-this-month", "w:upcoming-bills", "w:accounts-investments"]);
+    expect(writes).toEqual([]);
+    fireEvent.click(screen.getByTestId("exec-customize-save"));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    const b = savedBoards();
+    expect(b.active).toBe("finances");
+    expect(b.dashboards.map((d) => d.name)).toEqual(["Main", "Finances"]);
+    expect(b.widgets.map((w) => w.title)).toEqual(["Spending This Month", "Upcoming Bills", "Accounts & Investments"]);
+    // Main is untouched: quiet mode, and none of the new cards on it.
+    const main = b.dashboards[0];
+    expect(main.quiet).toBe(true);
+    expect([...main.hidden].sort()).toEqual(["w:accounts-investments", "w:spending-this-month", "w:upcoming-bills"]);
+  });
+
+  it("each dashboard keeps its own switches, order and sizes", async () => {
+    await open();
+    fireEvent.click(screen.getByTestId("exec-customize-board-new"));
+    fireEvent.click(screen.getByTestId("exec-customize-board-template-everything"));
+    fireEvent.click(screen.getByTestId("exec-customize-board-form-create"));
+    fireEvent.click(screen.getByTestId("exec-customize-show-money"));
+    fireEvent.change(screen.getByTestId("exec-customize-size-tasks"), { target: { value: "large" } });
+    // Back to Main: its list is its own.
+    fireEvent.click(screen.getByTestId("exec-customize-board-main"));
+    expect(rowIds()).toEqual(["attention", "tasks", "schedule", "money"]);
+    expect(screen.getByTestId("exec-customize-show-money").getAttribute("aria-checked")).toBe("true");
+    expect((screen.getByTestId("exec-customize-size-tasks") as HTMLSelectElement).value).toBe("medium");
+    fireEvent.click(screen.getByTestId("exec-customize-save"));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    const [main, all] = savedBoards().dashboards;
+    expect(main.hidden).toEqual([]);
+    expect(main.sizes).toEqual({});
+    expect(all.hidden).toEqual(["money"]);
+    expect(all.sizes).toEqual({ tasks: "large" });
+  });
+
+  it("renames a dashboard, and deleting one takes two taps and keeps the cards", async () => {
+    await open();
+    fireEvent.click(screen.getByTestId("exec-customize-board-new"));
+    fireEvent.click(screen.getByTestId("exec-customize-board-template-home"));
+    fireEvent.click(screen.getByTestId("exec-customize-board-form-create"));
+    fireEvent.change(screen.getByTestId("exec-customize-board-name"), { target: { value: "Household" } });
+    expect(screen.getByTestId("exec-customize-board-home-family").textContent).toBe("Household");
+    const del = screen.getByTestId("exec-customize-board-delete");
+    fireEvent.click(del);
+    expect(boardIds()).toEqual(["main", "home-family"]);
+    expect(del.textContent).toContain("Tap again to delete");
+    fireEvent.click(screen.getByTestId("exec-customize-board-delete"));
+    expect(boardIds()).toEqual(["main"]);
+    fireEvent.click(screen.getByTestId("exec-customize-save"));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    // The cards the template created are still the user's, hidden on Main.
+    expect(savedBoards().widgets.map((w) => w.title)).toEqual(["Family", "Pet Care Tracker", "Vehicle Overview", "Home & Property"]);
+    expect(savedBoards().dashboards).toHaveLength(1);
+  });
+});
+
+describe("every part of a custom card can be changed", () => {
+  it("build it yourself: choose what it reads, filter it, size the list, and add it", async () => {
+    await open();
+    fireEvent.click(screen.getByTestId("exec-customize-tab-ai"));
+    fireEvent.click(screen.getByTestId("exec-customize-ai-manual"));
+    fireEvent.change(screen.getByTestId("exec-customize-ai-title"), { target: { value: "Dining out" } });
+    fireEvent.change(screen.getByTestId("widget-editor-source-preview"), { target: { value: "expenses" } });
+    fireEvent.change(screen.getByTestId("widget-editor-match-preview"), { target: { value: "dining" } });
+    fireEvent.change(screen.getByTestId("widget-editor-days-preview"), { target: { value: "90" } });
+    fireEvent.change(screen.getByTestId("widget-editor-limit-preview"), { target: { value: "6" } });
+    fireEvent.click(screen.getByTestId("widget-editor-icon-preview-wallet"));
+    expect(screen.getByTestId("exec-customize-ai-description").textContent).toBe("What you spent matching “dining” in the last 90 days, with the total.");
+    fireEvent.click(screen.getByTestId("exec-customize-ai-add"));
+    fireEvent.click(screen.getByTestId("exec-customize-save"));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(saved().widgets).toEqual([{ id: "dining-out", title: "Dining out", icon: "wallet", source: "expenses", match: "dining", days: 90, limit: 6 }]);
+  });
+
+  it("an existing card is edited in place from its details", async () => {
+    stored = JSON.stringify({ quiet: false, hidden: [], order: [], sizes: {}, widgets: [{ id: "pets", title: "Pet Care Tracker", icon: "paw", source: "profiles", types: ["pet"], limit: 4 }] });
+    await open();
+    await waitFor(() => expect(rowIds()).toContain("w:pets"));
+    fireEvent.click(screen.getByTestId("exec-customize-more-w:pets"));
+    fireEvent.change(screen.getByTestId("widget-editor-title-pets"), { target: { value: "Rex & Luna" } });
+    fireEvent.click(screen.getByTestId("widget-editor-type-pets-vehicle")); // also show vehicles
+    fireEvent.change(screen.getByTestId("widget-editor-limit-pets"), { target: { value: "2" } });
+    // A half-typed title is not saved as the title.
+    fireEvent.change(screen.getByTestId("widget-editor-title-pets"), { target: { value: "R" } });
+    fireEvent.click(screen.getByTestId("exec-customize-save"));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(saved().widgets).toEqual([{ id: "pets", title: "Rex & Luna", icon: "paw", source: "profiles", types: ["pet", "vehicle"], limit: 2 }]);
   });
 });

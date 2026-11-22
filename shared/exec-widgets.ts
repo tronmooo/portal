@@ -18,8 +18,10 @@
 
 import { resolveAssetValue } from "./asset-value";
 import { routeForEntity } from "./entity-routes";
+import { nextBillDate } from "./bills-timeline";
+import { isActiveObligation } from "./obligation-windows";
 
-export const WIDGET_SOURCES = ["profiles", "trackers", "expenses", "journal", "notes", "tasks", "goals", "habits"] as const;
+export const WIDGET_SOURCES = ["profiles", "trackers", "expenses", "bills", "events", "journal", "notes", "tasks", "goals", "habits"] as const;
 export type WidgetSource = (typeof WIDGET_SOURCES)[number];
 
 export const WIDGET_ICONS = ["car", "dumbbell", "paw", "home", "chart", "book", "note", "check", "target", "flame", "star", "heart", "wallet", "users"] as const;
@@ -29,6 +31,8 @@ export const WIDGET_SOURCE_LABELS: Record<WidgetSource, string> = {
   profiles: "People, pets, vehicles, property and other records",
   trackers: "Trackers and their latest readings",
   expenses: "Spending",
+  bills: "Upcoming bills and subscriptions",
+  events: "Upcoming events and appointments",
   journal: "Journal entries",
   notes: "Notes",
   tasks: "Tasks",
@@ -85,7 +89,7 @@ export function sanitizeWidget(raw: unknown, fallbackId?: string): ExecWidget | 
 }
 
 function defaultIconFor(source: WidgetSource): WidgetIcon {
-  return ({ profiles: "users", trackers: "chart", expenses: "wallet", journal: "book", notes: "note", tasks: "check", goals: "target", habits: "flame" } as const)[source];
+  return ({ profiles: "users", trackers: "chart", expenses: "wallet", bills: "wallet", events: "star", journal: "book", notes: "note", tasks: "check", goals: "target", habits: "flame" } as const)[source];
 }
 
 /** A fresh id for a widget the user is adding. */
@@ -114,11 +118,23 @@ export const WIDGET_TEMPLATES: readonly WidgetTemplate[] = [
   { key: "journal", label: ["Recent", "Journal"], widget: { title: "Recent Journal", icon: "book", source: "journal", limit: 3 } },
 ];
 
+/** Widgets the dashboard templates draw on beyond the Widget Ideas. */
+export const EXTRA_WIDGETS = {
+  accounts: { title: "Accounts & Investments", icon: "wallet", source: "profiles", types: ["account", "investment"], limit: 5 },
+  bills: { title: "Upcoming Bills", icon: "wallet", source: "bills", limit: 5 },
+  health: { title: "Health Trackers", icon: "heart", source: "trackers", match: "health", limit: 5 },
+  goals: { title: "My Goals", icon: "target", source: "goals", limit: 4 },
+  family: { title: "Family", icon: "users", source: "profiles", types: ["person"], limit: 5 },
+  events: { title: "Upcoming Events", icon: "star", source: "events", limit: 4 },
+} as const satisfies Record<string, Omit<ExecWidget, "id">>;
+
 // ── A sentence → a widget, by fixed rules ────────────────────────────────────
 
 const RULES: Array<{ re: RegExp; widget: Omit<ExecWidget, "id" | "title" | "limit"> }> = [
   { re: /\bjournal|diary|mood|how i (?:felt|feel)\b/i, widget: { icon: "book", source: "journal" } },
   { re: /\bnotes?\b|memo/i, widget: { icon: "note", source: "notes" } },
+  { re: /\b(?:bills?|subscriptions?|rent|utilities|payments? due|upcoming payments?)\b/i, widget: { icon: "wallet", source: "bills" } },
+  { re: /\b(?:events?|appointments?|calendar|birthdays?|meetings?|schedule)\b/i, widget: { icon: "star", source: "events" } },
   { re: /\bspend|spent|expens|purchas|bought|groceries|grocery|dining|restaurant|budget\b/i, widget: { icon: "wallet", source: "expenses" } },
   { re: /\b(?:cars?|vehicles?|trucks?|motorcycles?)\b/i, widget: { icon: "car", source: "profiles", types: ["vehicle"] } },
   { re: /\b(?:pets?|dogs?|cats?|puppy|kitten)\b/i, widget: { icon: "paw", source: "profiles", types: ["pet"] } },
@@ -133,7 +149,7 @@ const RULES: Array<{ re: RegExp; widget: Omit<ExecWidget, "id" | "title" | "limi
 ];
 
 /** Words that say what kind of card it is, not what to look for. */
-const FILLER = /\b(?:show|me|my|a|an|the|of|for|on|in|to|and|with|all|card|widget|dashboard|track|tracking|tracker|trackers|keep|follow|following|recent|latest|last|this|month|week|overview|summary|list|entries|entry|want|would|like|please|i|see|view|about|how|much|many|what|is|are|am|spent|spend|spending|expenses?|journal|notes?|tasks?|goals?|habits?|log|logs|logged)\b/gi;
+const FILLER = /\b(?:show|me|my|a|an|the|of|for|on|in|to|and|with|all|card|widget|dashboard|track|tracking|tracker|trackers|keep|follow|following|recent|latest|last|this|month|week|overview|summary|list|entries|entry|want|would|like|please|i|see|view|about|how|much|many|what|is|are|am|spent|spend|spending|expenses?|journal|notes?|tasks?|goals?|habits?|log|logs|logged|bills?|subscriptions?|payments?|due|upcoming|events?|appointments?|calendar|coming|up|next)\b/gi;
 
 /**
  * Read a request ("my dog's vet visits", "spending on groceries", "journal
@@ -164,6 +180,7 @@ export function inferWidgetFromText(text: string, id = "widget"): ExecWidget {
 export interface WidgetData {
   profiles?: any[]; trackers?: any[]; expenses?: any[]; journal?: any[];
   notes?: any[]; tasks?: any[]; goals?: any[]; habits?: any[];
+  bills?: any[]; events?: any[];
 }
 
 export interface WidgetRow {
@@ -273,6 +290,24 @@ export function buildWidgetView(w: ExecWidget, data: WidgetData, todayISO: strin
       rows = Array.from(byCat.entries()).sort((a, b) => b[1] - a[1])
         .map(([cat, amt]) => ({ key: `cat:${cat}`, title: cat.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()), sub: sum > 0 ? `${Math.round((amt / sum) * 100)}% of spending` : undefined, right: money(amt), href: routeForEntity("expense") }));
     }
+  } else if (w.source === "bills") {
+    // Each bill at its NEXT date — the rule every bill list follows (A7).
+    const within = addDays(today, w.days ?? 30);
+    const upcoming = (data.bills || [])
+      .filter((b) => b && isActiveObligation(b) && has([b.name, b.category], needle))
+      .map((b) => ({ b, next: nextBillDate(b, today) }))
+      .filter((x): x is { b: any; next: string } => !!x.next && x.next <= within)
+      .sort((a, b) => a.next.localeCompare(b.next));
+    headline = { label: `Next ${w.days ?? 30} days`, value: money(upcoming.reduce((s, x) => s + (Number(x.b.amount) || 0), 0)) };
+    rows = upcoming.map(({ b, next }) => ({ key: `bill:${b.id}`, title: String(b.name || "Bill"), sub: `Due ${shortDay(next)}`, right: money(Number(b.amount) || 0), href: routeForEntity("profile", b.linkedLiabilityId || b.id) }));
+  } else if (w.source === "events") {
+    const within = addDays(today, w.days ?? 60);
+    rows = (data.events || [])
+      // Rows come from the calendar timeline, which also carries bills and
+      // tasks: an "events" card lists events (recurring ones at their dates).
+      .filter((e) => e && (!e.type || e.type === "event") && String(e.date).slice(0, 10) >= today && String(e.date).slice(0, 10) <= within && has([e.title, e.category, e.location], needle))
+      .sort((a, b) => `${a.date} ${a.time || ""}`.localeCompare(`${b.date} ${b.time || ""}`))
+      .map((e) => ({ key: `event:${e.id}`, title: String(e.title || "Event"), sub: [shortDay(e.date), e.time ? String(e.time).slice(0, 5) : "", e.location || ""].filter(Boolean).join(" · "), href: routeForEntity("event", e.id) }));
   } else if (w.source === "journal") {
     const from = w.days ? addDays(today, -w.days) : "";
     rows = (data.journal || [])
@@ -320,6 +355,8 @@ export function describeWidget(w: ExecWidget): string {
       return `Your ${kinds}${about}, with value and the next task for each (${n}).`;
     }
     case "trackers": return `Trackers${about} with their latest reading (${n}).`;
+    case "bills": return `Bills and subscriptions${about} due in the next ${w.days ?? 30} days, each at its next date, with the total.`;
+    case "events": return `Upcoming events${about} in the next ${w.days ?? 60} days (${n}).`;
     case "expenses": return w.match
       ? `What you spent${about} ${w.days ? `in the last ${w.days} days` : "this month"}, with the total.`
       : `Spending by category ${w.days ? `over the last ${w.days} days` : "this month"}, with the total.`;

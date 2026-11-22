@@ -37,6 +37,7 @@ import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
 import { DismissedAlertsList } from "@/components/dashboard/DismissedAlertsList";
 import { isDateRowDismissed } from "@shared/alert-ids";
 import { pickNextImportant } from "@shared/next-important";
+import { setActiveDashboard } from "@shared/exec-dashboards";
 import { useExecCardPrefs, WIDGET_ICON } from "@/components/dashboard/ExecCustomize";
 import { ExecWidgetBody } from "@/components/dashboard/ExecWidgetBody";
 import { execCardPosition, execCardSize, execCardTitle, hiddenExecCards, isExecCardVisible, lonelyMediumCards, orderedExecCards, widgetCardId, type ExecCardId, type ExecCardSize } from "@shared/exec-card-prefs";
@@ -1569,7 +1570,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       empty: activityItems.length === 0 },
   ];
   // The user's own choice of cards and order (Customize; shared/exec-card-prefs).
-  const { prefs: cardPrefs, loaded: cardPrefsLoaded } = useExecCardPrefs(ready);
+  const { prefs: cardPrefs, boards: execBoards, setBoards: setExecBoards, loaded: cardPrefsLoaded } = useExecCardPrefs(ready);
   const cardSize = (id: string): ExecCardSize | null => cardPrefs.sizes[id] ?? null;
   const cardOn = (id: string) => isExecCardVisible(cardPrefs, id as ExecCardId) || openedCards.has(id);
   const cardPos = (id: string) => execCardPosition(cardPrefs, id as ExecCardId);
@@ -1704,6 +1705,30 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       {overviewEnd}
       </div>
 
+      {/* Which dashboard is showing (shared/exec-dashboards). Only a switch:
+          building and arranging dashboards is the ⋮ menu's Customize. The
+          choice is the user's own action and is saved to the account. */}
+      {!feedLoading && execBoards.dashboards.length > 1 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto px-0.5 -mt-0.5" role="tablist" aria-label="Dashboards" data-testid="exec-dashboards">
+          {execBoards.dashboards.map((d) => {
+            const on = d.id === execBoards.active;
+            return (
+              <button key={d.id} type="button" role="tab" aria-selected={on}
+                onClick={() => {
+                  if (on) return;
+                  setOpenedCards(new Set());
+                  setExecBoards(setActiveDashboard(execBoards, d.id)).catch(() => toast({ title: "Couldn't switch dashboards", variant: "destructive" }));
+                }}
+                data-testid={`exec-dashboard-${d.id}`}
+                className={`shrink-0 rounded-full px-3 py-1 text-[12px] font-semibold transition-colors ${on ? "text-white" : "border border-border text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+                style={on ? { background: `hsl(${CARD_ACCENTS.custom} / 0.35)`, boxShadow: `inset 0 0 0 1px hsl(${CARD_ACCENTS.custom} / 0.7)` } : undefined}>
+                {d.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {feedLoading ? (
         <div className="grid grid-cols-2 xl:grid-cols-3 gap-2" data-testid="exec-cards-loading" aria-label="Loading dashboard">
           {[0, 1, 2, 3, 4, 5].map((i) => <BubbleSkeleton key={i} rows={2} height={120} index={i} />)}
@@ -1719,9 +1744,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             {showCard("attention") && <ExecCard
               id="attention" pos={cardPos("attention")} size={cardSize("attention")} fill={cardFill("attention")} icon={TriangleAlert} title="Needs Attention"
               accent={CARD_ACCENTS.attention} index={1} order={1} shortTitle="Attention"
-              // Its phone-row partner is Tasks: when Tasks is folded away this
-              // card takes the row instead of leaving half of it empty.
-              wide={!showCard("tasks")}
+              // A medium card: it shares a phone row with whatever medium card
+              // follows it, and takes the whole row when none does (`fill`).
               count={attentionItems.length}
               subtitle="Upcoming expirations and important dates."
               headerRight={
@@ -2159,7 +2183,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             {showCard("documents") && <ExecCard
               id="documents" pos={cardPos("documents")} size={cardSize("documents")} fill={cardFill("documents")} icon={FolderOpen} title="Documents"
               accent={CARD_ACCENTS.documents} index={6} order={6}
-              wide={!showCard("wellness")}
               headerRight={<ViewLink label="View documents" accent={CARD_ACCENTS.documents} onClick={() => setPopup("docs")} testId="exec-view-documents" />}
             >
               {/* 2026-10-21: the expiring LIST lives in Needs Attention now, so
