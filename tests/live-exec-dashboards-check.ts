@@ -12,6 +12,7 @@ import { acquireGateLock, preferenceLockIo } from "./smoke/fixture/gate-lock";
 import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 import { sanitizeWidget, buildWidgetView } from "../shared/exec-widgets";
 import { activeExecPrefs, parseExecDashboards } from "../shared/exec-dashboards";
+import { orderedExecCards } from "../shared/exec-card-prefs";
 
 const req = createRequire(import.meta.url);
 const { chromium, devices } = (() => {
@@ -53,7 +54,9 @@ async function main() {
     // ── the AI Builder, with the real model ──────────────────────────────
     const asks: Array<[string, (w: any) => boolean, string]> = [
       ["journal entries about work", (w) => w.source === "journal" && /work/i.test(String(w.match || "")), "journal, filtered to work"],
-      ["how much I spend on groceries", (w) => w.source === "expenses" && /grocer/i.test(String(w.match || "")), "spending, filtered to groceries"],
+      // The builder is told the account's own categories and prefers one of
+      // them: an account that files groceries under "food" gets "food".
+      ["how much I spend on groceries", (w) => w.source === "expenses" && /grocer|food/i.test(String(w.match || "")), "spending, filtered to groceries (or the account's own food category)"],
       ["my cars and what they are worth", (w) => w.source === "profiles" && (w.types || []).includes("vehicle"), "vehicle records"],
       ["bills coming up this month", (w) => w.source === "bills", "upcoming bills"],
     ];
@@ -91,6 +94,10 @@ async function main() {
       const page = await ctx.newPage();
       const errors: string[] = [];
       page.on("pageerror", (e: any) => errors.push(String(e)));
+      // Every write the page itself makes, with its answer — so a save that
+      // does not take says why (a 429 from the account's write limit, say).
+      const pageWrites: string[] = [];
+      page.on("response", (r: any) => { const m = r.request().method(); if (m !== "GET" && r.url().includes("/api/")) pageWrites.push(`${m} ${r.url().replace(/^https?:\/\/[^/]+/, "")} → ${r.status()}`); });
       const T = (id: string) => page.locator(`[data-testid="${id}"]`);
       const tap = async (id: string) => { const l = T(id).first(); await l.scrollIntoViewIfNeeded(); if (touch) await l.tap(); else await l.click(); };
       const shot = async (name: string) => { if (SHOT) { await page.waitForTimeout(500); await page.screenshot({ path: `${SHOT}/live-${label}-${name}.png`, fullPage: name !== "dialog" }).catch(() => undefined); } };
@@ -133,10 +140,11 @@ async function main() {
       await T("exec-customize-ai-proposal").waitFor({ timeout: 30000 });
       await page.waitForTimeout(1200);
       const proposal = await T("exec-customize-ai-proposal").textContent() || "";
-      check((await T("widget-editor-source-preview").inputValue()) === "journal", `${label}: the AI Builder proposes a journal card`);
+      const inProposal = (prefix: string) => page.locator(`[data-testid="exec-customize-ai-proposal"] [data-testid^="${prefix}"]`).first();
+      check((await inProposal("widget-editor-source-").inputValue()) === "journal", `${label}: the AI Builder proposes a journal card`);
       check(proposal.includes(word), `${label}: its preview shows the tagged entries from the account`);
       await T("exec-customize-ai-title").fill("Tagged Journal");
-      await T("widget-editor-match-preview").fill(word);
+      await inProposal("widget-editor-match-").fill(word);
       await tap("exec-customize-ai-add");
       await T("exec-customize-list").waitFor({ timeout: 15000 });
 
@@ -144,17 +152,27 @@ async function main() {
       await tap("exec-customize-tab-ai");
       await tap("exec-customize-ai-manual");
       await T("exec-customize-ai-title").fill("Tagged Spend");
-      await T("widget-editor-source-preview").selectOption("expenses");
-      await T("widget-editor-match-preview").fill(word);
-      await T("widget-editor-limit-preview").selectOption("6");
+      await inProposal("widget-editor-source-").selectOption("expenses");
+      await inProposal("widget-editor-match-").fill(word);
+      await inProposal("widget-editor-limit-").selectOption("6");
       await tap("exec-customize-ai-add");
       await T("exec-customize-list").waitFor({ timeout: 15000 });
 
-      // Reorder: put the spending card first.
+      // Reorder: drag the spending card (the last row) up the list. The finger
+      // stays ON SCREEN, as a real one must: the drop point is the highest row
+      // that is visible in the dialog, not a row scrolled out of view above it.
+      const listOrder = () => page.$$eval('[data-testid="exec-customize-list"] > li', (ns: Element[]) => ns.map((n) => n.getAttribute("data-testid")!.replace("exec-customize-row-", "")));
+      const startAt = (await listOrder()).indexOf("w:tagged-spend");
       const handle = T("exec-customize-drag-w:tagged-spend");
-      await handle.scrollIntoViewIfNeeded();
+      // Bring its row to the BOTTOM of the visible list, so there are rows
+      // above it on screen to drag past.
+      await T("exec-customize-row-w:tagged-spend").evaluate((el: Element) => el.scrollIntoView({ block: "end" }));
+      await page.waitForTimeout(300);
       const hb = await handle.boundingBox();
-      const top = await T("exec-customize-row-money").boundingBox();
+      const scrollBox = await T("exec-customize-scroll").boundingBox();
+      const rowTops = await page.$$eval('[data-testid="exec-customize-list"] > li', (ns: Element[]) => ns.map((n) => n.getBoundingClientRect().top));
+      const visibleTop = (scrollBox?.y ?? 0) + 8;
+      const top = { y: Math.min(...rowTops.filter((y) => y >= visibleTop)) };
       if (hb && top) {
         if (touch) {
           const cdp = await ctx.newCDPSession(page);
@@ -168,11 +186,15 @@ async function main() {
         }
       }
       await page.waitForTimeout(300);
-      const first = await page.locator('[data-testid="exec-customize-list"] > li').first().getAttribute("data-testid");
-      check(first === "exec-customize-row-w:tagged-spend", `${label}: dragging a handle ${touch ? "with a finger" : "with the mouse"} reorders the cards`);
+      const orderInDialog = await listOrder();
+      const endAt = orderInDialog.indexOf("w:tagged-spend");
+      check(endAt >= 0 && endAt < startAt, `${label}: dragging a handle ${touch ? "with a finger" : "with the mouse"} moves the card up the list (row ${startAt + 1} → row ${endAt + 1})`);
 
       await tap("exec-customize-save");
-      await T("exec-customize-list").waitFor({ state: "detached", timeout: 15000 });
+      await T("exec-customize-list").waitFor({ state: "detached", timeout: 15000 }).catch(async (e: unknown) => {
+        console.log(`${label}: Save did not close the dialog. The page's own writes: ${pageWrites.join(" | ") || "(none)"}`);
+        throw e;
+      });
       await T("exec-card-w-tagged-spend").waitFor({ timeout: 20000 });
       await page.waitForTimeout(1500);
 
@@ -184,7 +206,9 @@ async function main() {
         `${label}: the hand-built card saved every setting`);
       const tj = b.widgets.find((w) => w.id === "tagged-journal");
       check(!!tj && tj.source === "journal" && tj.match === word, `${label}: the AI-built card saved its source and filter`);
-      check(fin?.order[0] === "w:tagged-spend", `${label}: Finances saved the new order`);
+      // What is on the tab is drawn in the saved order: compare that with the dialog.
+      const drawn = orderedExecCards({ ...activeExecPrefs(b), widgets: b.widgets }).filter((id) => orderInDialog.includes(id));
+      check(JSON.stringify(drawn) === JSON.stringify(orderInDialog), `${label}: Finances saved exactly the order the dialog showed`);
       const mainBoard = b.dashboards.find((d) => d.id === "main")!;
       check(mainBoard.quiet === true && mainBoard.order.length === 0 && b.widgets.every((w) => mainBoard.hidden.includes(`w:${w.id}` as any)),
         `${label}: Main is as it was (quiet mode, built-in order, none of the new cards on it)`);
