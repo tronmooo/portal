@@ -29,6 +29,8 @@ import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, refreshFilterNames, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { useDocSnoozeMap } from "@/lib/docSnooze";
+import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
+import { alertIdsOfDateRow, isDateRowDismissed } from "@shared/alert-ids";
 import { useAlertSnoozes } from "@/hooks/useAlertSnoozes";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { groupDocumentDates, ruleIdsOf, summarizeDocumentUrgency } from "@shared/document-dates";
@@ -1034,17 +1036,18 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
     if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
     return (kpiProfiles.find((p: any) => p.type === "self")?.id) || "";
   }, [filterMode, filterIds, kpiProfiles]);
-  const [docSnoozeMap, saveSnooze] = useDocSnoozeMap();
-  const snoozeDoc = (docIdOrRow: string | { ruleIds?: string[]; ruleId?: string }) => {
-    // A card can stand for several rules (one record, one day, two kinds of
-    // date). Snoozing only the first left its twin on screen.
-    const ids = typeof docIdOrRow === "string" ? [docIdOrRow] : ruleIdsOf(docIdOrRow as any);
+  // Legacy device snoozes are still honoured until they lapse; a dismissal
+  // now goes to the server list every surface shares (useDismissedAlerts).
+  const [docSnoozeMap] = useDocSnoozeMap();
+  const { ids: dismissedAlertIds, dismiss: dismissAlerts } = useDismissedAlerts(true);
+  const snoozeDoc = (row: any) => {
+    // A card can stand for several dates (one record, one day, two kinds of
+    // date). Dismissing only the first left its twin on screen.
+    const ids = alertIdsOfDateRow(row);
     if (ids.length === 0) return;
-    const until = Date.now() + 30 * 86400000;
-    const next = { ...docSnoozeMap };
-    for (const id of ids) next[id] = until;
-    saveSnooze(next);
-    toast({ title: "Document snoozed", description: "Hidden from alerts for 30 days" });
+    dismissAlerts.mutate(ids, {
+      onSuccess: () => toast({ title: "Dismissed", description: "Hidden until you restore it or the date changes." }),
+    });
   };
   const visibleDocs: any[] = useMemo(() => {
     // Per RULE, now that one record can carry several expirations — and still
@@ -1056,9 +1059,10 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
     // that expires and takes its premium on one day read as two documents.
     return groupDocumentDates(
       (enhanced?.expiringDocuments || [])
-        .filter((d: any) => !docSnoozeMap[d.ruleId] && !docSnoozeMap[d.documentId]),
+        .filter((d: any) => !docSnoozeMap[d.ruleId] && !docSnoozeMap[d.documentId]
+          && !isDateRowDismissed(d, dismissedAlertIds)),
     );
-  }, [enhanced, docSnoozeMap]);
+  }, [enhanced, docSnoozeMap, dismissedAlertIds]);
 
   // BUG-20260530-stats-slow-blank-tiles: when /api/stats is slow (8-12s cold
   // for sparse profiles like Craig because the server iterates all storage
@@ -1418,8 +1422,8 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                     </button>
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); snoozeDoc(doc.ruleId || doc.documentId); }}
-                      title="Hide for 30 days"
+                      onClick={(e) => { e.stopPropagation(); snoozeDoc(doc); }}
+                      title="Dismiss"
                       className="h-6 px-1.5 rounded text-[11px] font-semibold flex items-center gap-0.5 bg-muted/60 hover:bg-muted text-muted-foreground shrink-0"
                       data-testid={`btn-snooze-doc-${doc.documentId}`}
                     >

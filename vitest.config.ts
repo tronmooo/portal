@@ -185,6 +185,7 @@ export default defineConfig({
       'tests/due-label.test.ts',
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
+      'tests/dashboard-done-means-gone.dom.test.tsx',
       'tests/executive-attention.test.ts',
       'tests/tasks-popup-focus.dom.test.tsx',
       'tests/modal-history.test.tsx',
@@ -277,6 +278,7 @@ export default defineConfig({
       'tests/document-deletion-lifecycle.test.ts',
       'tests/document-open-perf.test.ts',
       'tests/attention.test.ts',
+      'tests/dismiss-stays-dismissed.test.ts',
       // Dynamic asset & liability Overview composition (2026-08-26).
       'tests/overview-compose.test.ts',
       'tests/overview-engine.test.ts',

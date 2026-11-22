@@ -28,6 +28,7 @@
 // Pure and deterministic. Pinned by tests/document-dates-group.test.ts.
 
 import { ruleTypeLabel, type DateRuleType } from "./date-rules";
+import { alertIdOfDateRow } from "./alert-ids";
 
 export interface DocumentDateRow {
   documentId?: string;
@@ -45,6 +46,8 @@ export interface DocumentDateRow {
 export interface GroupedDocumentDate extends DocumentDateRow {
   /** Every rule this card stands for — dismissing the card dismisses them all. */
   ruleIds: string[];
+  /** Every alert id (shared/alert-ids) this card stands for — the dismissal keys. */
+  alertIds: string[];
   /** The kinds of date that fall on this day, in first-seen order. */
   ruleTypes: string[];
   /** "Expiration · Premium due" — what to print under the record's name. */
@@ -99,6 +102,7 @@ export function groupDocumentDates(
       byKey.set(key, {
         ...row,
         ruleIds: row.ruleId ? [String(row.ruleId)] : [],
+        alertIds: alertIdOfDateRow(row) ? [alertIdOfDateRow(row)] : [],
         ruleTypes: type ? [type] : [],
         typesLabel: type ? ruleTypeLabel(type as DateRuleType) : "",
         mergedCount: 1,
@@ -109,6 +113,8 @@ export function groupDocumentDates(
     if (row.ruleId && !existing.ruleIds.includes(String(row.ruleId))) {
       existing.ruleIds.push(String(row.ruleId));
     }
+    const alertId = alertIdOfDateRow(row);
+    if (alertId && !existing.alertIds.includes(alertId)) existing.alertIds.push(alertId);
     if (type && !existing.ruleTypes.includes(type)) {
       existing.ruleTypes.push(type);
       existing.typesLabel = existing.ruleTypes

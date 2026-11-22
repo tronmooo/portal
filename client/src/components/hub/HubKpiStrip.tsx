@@ -24,7 +24,9 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { useOverflowX } from "@/hooks/useOverflowX";
 import { collectMetrics, wellnessScore, resolveWellnessSubject, belongsToSubject } from "@shared/wellness-readout";
 import { bestHabitStreak } from "@shared/habit-progress";
-import { loadDocSnoozeMap } from "@/lib/docSnooze";
+import { useDocSnoozeMap } from "@/lib/docSnooze";
+import { useDismissedAlertIds } from "@/hooks/useDismissedAlerts";
+import { isDateRowDismissed } from "@shared/alert-ids";
 import { groupDocumentDates, summarizeDocumentUrgency } from "@shared/document-dates";
 import type { DashboardStats, Tracker } from "@shared/schema";
 import { MetricCard } from "@/components/ui/metric-card";
@@ -258,12 +260,16 @@ export function HubKpiStrip() {
   // helpers the popup and the Executive card use), so the tile promises
   // exactly what opening it delivers.
   const rawExpDocs: any[] = enhanced?.expiringDocuments || [];
-  const snoozedDocIds = useMemo(() => Object.keys(loadDocSnoozeMap()), [rawExpDocs.length]);
+  // Dismissed dates (the server list every surface shares) and the snoozes
+  // this device took before dismissals moved there. Both read live.
+  const [docSnoozeMap] = useDocSnoozeMap();
+  const dismissedAlertIds = useDismissedAlertIds(true);
   const expDocs = useMemo(
     () => groupDocumentDates(
-      rawExpDocs.filter((d: any) => !snoozedDocIds.includes(d?.ruleId) && !snoozedDocIds.includes(d?.documentId)),
+      rawExpDocs.filter((d: any) => !docSnoozeMap[d?.ruleId] && !docSnoozeMap[d?.documentId]
+        && !isDateRowDismissed(d, dismissedAlertIds)),
     ),
-    [rawExpDocs, snoozedDocIds],
+    [rawExpDocs, docSnoozeMap, dismissedAlertIds],
   );
   const minDocDays = expDocs.length > 0
     ? Math.min(...expDocs.map((d: any) => (typeof d.daysUntil === "number" ? d.daysUntil : Infinity)))

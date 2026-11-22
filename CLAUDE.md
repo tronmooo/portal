@@ -98,6 +98,20 @@ green. After a push to `main`:
 8. **Destructive buttons take two taps** (`useConfirmArm`). A "snooze" hides
    an alert (`useAlertSnoozes`, synced across devices). It never moves the
    record's real date.
+   **Done means gone, and a dismissal has one store.** A row the user
+   completes, pays or dismisses on the dashboard leaves on the tap and stays
+   out until the write and its refetch settle (`leaveWhile`,
+   `ExecutiveBriefing.tsx`); a failed write brings it back. A dated alert has
+   ONE id whatever shape it takes (`dateAlertId`, `shared/alert-ids.ts`): the
+   document row and its "Expired: …" alert are dismissed together, into the
+   server's `dismissed_notifications` list (`useDismissedAlerts`), and every
+   dismissed alert can be restored (`DismissedAlertsList`). Never write a new
+   dismissal to localStorage (`lib/docSnooze.ts` is read-only legacy), and
+   never raise a bill reminder a second time for an occurrence whose reminder
+   was ticked done (`hasBillReminderFor`). (2026-11-22: a dismissed Home Depot
+   expiration came back as its alert twin.)
+   *Guards:* `tests/dismiss-stays-dismissed.test.ts`,
+   `tests/dashboard-done-means-gone.dom.test.tsx`.
 9. **Ownership has one writer** (`server/ownership-writer.ts`). Profile
    scoping goes through `shared/profile-filter.ts`. Deleting a profile is
    fail-safe: if any cascade step fails, the profile is kept, so no record

@@ -3168,7 +3168,12 @@ describe("D263 notification dismissals merge on the server", () => {
     expect(bell).not.toMatch(/apiRequest\("PUT", `\/api\/preferences\/\$\{DISMISSED_PREF_KEY\}`/);
     expect((bell.match(/dismissOnServer\(/g) || []).length).toBeGreaterThanOrEqual(4);
     const briefing = readFileSync(new URL("../client/src/components/dashboard/ExecutiveBriefing.tsx", import.meta.url), "utf8");
-    expect(briefing).toContain('apiRequest("POST", "/api/notifications/dismiss", { ids: [id] })');
+    // The briefing dismisses through the shared hook (2026-11-22), which sends
+    // only the ids being dismissed to the same merge endpoint.
+    expect(briefing).toContain("useDismissedAlerts(");
+    const hook = readFileSync(new URL("../client/src/hooks/useDismissedAlerts.ts", import.meta.url), "utf8");
+    expect(hook).toContain('apiRequest("POST", `/api/notifications/${kind}`, { ids: list })');
+    expect(hook).not.toContain('apiRequest("PUT"');
     expect(briefing).not.toContain('apiRequest("PUT", "/api/preferences/dismissed_notifications"');
     const ai = readFileSync(new URL("../server/ai-engine.ts", import.meta.url), "utf8");
     expect(ai).toContain("await mergeDismissedNotifications(storage, computedIds)");

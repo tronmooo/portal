@@ -194,7 +194,8 @@ import { ProfileLinkFailure } from "./profile-link-failure";
 import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
-import { buildNotifications, mergeDismissedNotifications } from "./notification-service";
+import { hasBillReminderFor } from "@shared/bill-reminders";
+import { buildNotifications, mergeDismissedNotifications, restoreDismissedNotifications, listDismissedAlerts } from "./notification-service";
 import {
   createNote, updateNote, deleteNote, listNotes,
   upsertJournalEntry, syncDateRulesForEntity,
@@ -2748,8 +2749,11 @@ export async function registerRoutes(
                     // the run after that create it again — a churn of reminder
                     // tasks for a bill whose date sits on a settled day.
                     if (isSettledOccurrence(f, dueKey)) continue;
-                    const dup = (existingTasks || []).some((t: any) =>
-                      t.title === title && String(t.dueDate || "").slice(0, 10) === due && t.status !== "done");
+                    // A reminder the user ticked done counts too: it was their
+                    // answer for this occurrence. Looking only at open tasks
+                    // made the next run create the same reminder again — the
+                    // "I marked it done and it came back" report (2026-11-22).
+                    const dup = hasBillReminderFor(existingTasks, title, due);
                     if (!dup) {
                       try {
                         await scoped.createTask({
@@ -9820,6 +9824,21 @@ Rules:
     if (ids.length === 0) return res.status(400).json({ error: "ids required" });
     const merged = await mergeDismissedNotifications(storage, ids.slice(0, 500));
     res.json({ ids: merged });
+  }));
+
+  // "Restore" in the dashboard's Dismissed list: the ids leave the stored
+  // list and the alerts show again wherever their dates still warrant one.
+  app.post("/api/notifications/restore", asyncHandler(async (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : (typeof req.body?.id === "string" ? [req.body.id] : []);
+    if (ids.length === 0) return res.status(400).json({ error: "ids required" });
+    const kept = await restoreDismissedNotifications(storage, ids.slice(0, 500));
+    res.json({ ids: kept });
+  }));
+
+  // What the user dismissed and could bring back. Registered before the list
+  // route below only for readability; the paths do not overlap.
+  app.get("/api/notifications/dismissed", asyncHandler(async (req, res) => {
+    res.json({ alerts: await listDismissedAlerts(storage, getTimezone(req)) });
   }));
 
   app.get("/api/notifications", asyncHandler(async (req, res) => {

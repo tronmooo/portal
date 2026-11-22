@@ -26,13 +26,16 @@ import { setEventOccurrence } from "@/lib/event-occurrence";
 import { isDoneToday } from "@shared/task-counts";
 import { relativeTimeShort, elapsedDays } from "@shared/relative-time";
 import { netWorthChange } from "@shared/net-worth-change";
-import { useState, useEffect, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useRef, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, recoverWedgedQueries, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
-import { loadDocSnoozeMap } from "@/lib/docSnooze";
+import { useDocSnoozeMap } from "@/lib/docSnooze";
+import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
+import { DismissedAlertsList } from "@/components/dashboard/DismissedAlertsList";
+import { isDateRowDismissed } from "@shared/alert-ids";
 import {
   TriangleAlert, CalendarDays, DollarSign, FolderOpen, Flame, Sparkles,
   SlidersHorizontal, ChevronRight, Check, CreditCard, ArrowRight, X, Clock,
@@ -400,11 +403,13 @@ export function splitKindSuffix(title: string): { main: string; suffix: string |
   return { main: parts.slice(0, -1).join(" — "), suffix };
 }
 
-function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen, stacked = false, sub, pill = true }: {
+function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen, onDismiss, stacked = false, sub, pill = true }: {
   item: AttentionItem;
   busyKeys?: Set<string>; armedKey?: string | null; leavingKeys?: Set<string>;
   onAction: (i: AttentionItem) => void;
   onOpen: (i: AttentionItem) => void;
+  /** Stacked rows only: offers Dismiss on a dated record (see StackedItemRow). */
+  onDismiss?: (i: AttentionItem) => void;
   /** Two lines — title over its detail — with the date in a tinted pill and
    *  a chevron (the reference screenshot's Needs Attention / Upcoming rows). */
   stacked?: boolean;
@@ -413,7 +418,7 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen, stac
   /** Stacked rows only: show the date pill (Upcoming says the date in `sub`). */
   pill?: boolean;
 }) {
-  if (stacked) return <StackedItemRow item={item} busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys} onAction={onAction} onOpen={onOpen} sub={sub} pill={pill} />;
+  if (stacked) return <StackedItemRow item={item} busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys} onAction={onAction} onOpen={onOpen} onDismiss={onDismiss} sub={sub} pill={pill} />;
   const tone: PillTone = item.kind === "alert" ? "critical" : toneForDays(item.daysUntil);
   const hsl = tonePalette(tone);
   const Icon = KIND_ICON[item.kind] ?? TriangleAlert;
@@ -472,11 +477,12 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen, stac
   );
 }
 
-function StackedItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen, sub, pill }: {
+function StackedItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen, onDismiss, sub, pill }: {
   item: AttentionItem;
   busyKeys?: Set<string>; armedKey?: string | null; leavingKeys?: Set<string>;
   onAction: (i: AttentionItem) => void;
   onOpen: (i: AttentionItem) => void;
+  onDismiss?: (i: AttentionItem) => void;
   sub?: string; pill: boolean;
 }) {
   const tone: PillTone = item.kind === "alert" ? "critical" : toneForDays(item.daysUntil);
@@ -525,6 +531,21 @@ function StackedItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpe
       <span className={`shrink-0 inline-flex empty:hidden ${pillText ? "exec-opt" : ""}`}>
         <ActionButton item={item} busy={!!busyKeys?.has(item.key)} armed={armedKey === item.key} onAction={onAction} />
       </span>
+      {/* A dated record (an expired document) has no "done" of its own, so
+          it gets the same Dismiss an alert has — without it the only way to
+          clear the row was two levels down in the Documents panel. Always
+          shown: it is the one thing this row can be told. */}
+      {onDismiss && item.kind === "document" && (item.dismissIds?.length ?? 0) > 0 && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDismiss(item); }}
+          data-testid={`exec-dismiss-${item.key}`}
+          aria-label={`Dismiss — ${item.title}`}
+          title="Dismiss"
+          className="touch-hit shrink-0 inline-flex items-center rounded-full border border-border/70 bg-background/60 px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-all active:scale-95"
+        >
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      )}
       <ChevronRight className="exec-opt h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
     </div>
   );
@@ -770,6 +791,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // Rows the user just completed, held for the exit animation so they slide
   // out instead of blinking away when the refetch lands.
   const [leavingKeys, setLeavingKeys] = useState<Set<string>>(new Set());
+  // Rows that have finished leaving. They stay out of every list on this tab
+  // until the write and the refetch behind it have settled, so a completed
+  // row cannot blink back in between (2026-11-22: "when I mark things done
+  // they should disappear"). A failed write brings the row back.
+  const [goneKeys, setGoneKeys] = useState<Set<string>>(new Set());
   const [filtersOpen, setFiltersOpen] = useState(false);
   const mode = filterMode;
   const ids = filterIds;
@@ -831,14 +857,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     staleTime: 60_000,
   });
   // Dismissed alerts — same store the bell and the AI's dismiss tool write.
-  const { data: dismissedIds = [] } = useQuery<string[]>({
-    queryKey: ["/api/preferences/dismissed_notifications"],
-    enabled: ready,
-    queryFn: () => apiRequest("GET", "/api/preferences/dismissed_notifications")
-      .then(r => r.json())
-      .then(d => { try { return JSON.parse(d?.value || "[]"); } catch { return []; } }),
-    staleTime: 60_000,
-  });
+  // One list for every shape an alert takes (hooks/useDismissedAlerts): an
+  // "Expired: X" alert and X's document row are dismissed by the same id.
+  const { ids: dismissedIds, dismiss: dismissAlerts } = useDismissedAlerts(ready);
   // Cash flow needs income; the key matches HubKpiStrip/HeroKPISection so the
   // three surfaces share one cache slot and agree to the dollar.
   const { data: incomesRaw } = useQuery<any>({
@@ -953,7 +974,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     .filter(r => r.title && !dismissedAdvice.has(r.i)), [recommendations, dismissedAdvice]);
 
   // ── Route every record to exactly one feed slot ────────────────────────────
-  const snoozedDocumentIds = useMemo(() => Object.keys(loadDocSnoozeMap()), [allExpiringDocs.length]);
+  // Snoozes taken on this device before dismissals moved to the server are
+  // still honoured until they lapse; nothing writes new ones from this tab.
+  // Read live: the list used to be read once per document COUNT, so it went
+  // stale the moment a snooze changed.
+  const [docSnoozeMap] = useDocSnoozeMap();
+  const snoozedDocumentIds = useMemo(() => Object.keys(docSnoozeMap), [docSnoozeMap]);
   const sectionInput = useMemo(() => ({
     today: todayStr,
     tasks, bills: allBills, documents: allExpiringDocs, habits,
@@ -968,8 +994,14 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   }), [todayStr, tasks, allBills, allExpiringDocs, habits, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, stats, obligations, trackers]);
 
   const sections = useMemo(
-    () => buildExecutiveSections(sectionInput, prefs),
-    [sectionInput, prefs]);
+    () => {
+      const built = buildExecutiveSections(sectionInput, prefs);
+      if (goneKeys.size === 0) return built;
+      return built
+        .map((sec) => ({ ...sec, items: sec.items.filter((i) => !goneKeys.has(i.key)) }))
+        .filter((sec) => sec.items.length > 0);
+    },
+    [sectionInput, prefs, goneKeys]);
   const secItems = (id: ExecSectionId): AttentionItem[] => sections.find(s => s.id === id)?.items ?? [];
 
   // NEEDS ATTENTION = documents, renewals and deadlines (2026-10-21: "except
@@ -1111,7 +1143,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const cashFlow = monthlyExpenses != null ? monthlyIncome - monthlyExpenses : null;
 
   // Tasks
-  const pending = (tasks || []).filter((t: any) => t.status !== "done");
+  const goneTaskCount = (tasks || []).filter((t: any) => t.status !== "done" && goneKeys.has(`task:${t.id}`)).length;
+  const pending = (tasks || []).filter((t: any) => t.status !== "done" && !goneKeys.has(`task:${t.id}`));
   const daysFromToday = (dateStr: any): number | null => {
     const t = String(dateStr || "").slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
@@ -1122,7 +1155,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // day. Slicing the instant compared UTC's date with the user's, so a chore
   // finished this morning east of Greenwich (or last night in the US) read
   // as "0 completed today".
-  const doneToday = (tasks || []).filter((t: any) => isDoneToday(t, todayStr, BROWSER_TIMEZONE)).length;
+  // A task just ticked counts as done at once, with the row that left.
+  const doneToday = (tasks || []).filter((t: any) => isDoneToday(t, todayStr, BROWSER_TIMEZONE)).length + goneTaskCount;
   const sortedPending = pending.slice().sort((a: any, b: any) =>
     (daysFromToday(a.dueDate) ?? 9e9) - (daysFromToday(b.dueDate) ?? 9e9));
 
@@ -1178,7 +1212,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // window — overdue first, in red, with the two-tap Pay — not just the
   // not-yet-due part.
   const billsDueSoon = selectUpcomingBills(allBills as any[])
-    .slice()
+    .filter((b: any) => !goneKeys.has(`bill:${b.id}`))
     .sort((a: any, b: any) => (a.daysUntil ?? 0) - (b.daysUntil ?? 0));
   const overdueBillCount = billsDueSoon.filter((b: any) => (b.daysUntil ?? 0) < 0).length;
   const billItemFor = (id: string): AttentionItem | undefined =>
@@ -1194,6 +1228,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       // Filtering on the record id alone left a dismissed row in this card and in
       // the count below while the popup and the executive section hid it.
       .filter((d: any) => !snoozedDocumentIds.includes(d.ruleId) && !snoozedDocumentIds.includes(d.documentId))
+      // …and a dismissed date is hidden here exactly as it is in Needs
+      // Attention, so "N expired" counts what that card lists.
+      .filter((d: any) => !isDateRowDismissed(d, dismissedIds))
       .filter((d: any) => typeof d.daysUntil === "number"),
   ).sort((a: any, b: any) => (a.daysUntil ?? 0) - (b.daysUntil ?? 0));
   // Expired and expiring are different states (F-57): a policy that lapsed
@@ -1287,10 +1324,41 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // ── Actions ────────────────────────────────────────────────────────────────
   const markBusy = (key: string, on: boolean) =>
     setBusyKeys(prev => { const next = new Set(prev); on ? next.add(key) : next.delete(key); return next; });
-  /** Play the row out, then let the refetch remove it for real. */
-  const markLeaving = (key: string) => {
-    setLeavingKeys(prev => new Set(prev).add(key));
-    setTimeout(() => setLeavingKeys(prev => { const n = new Set(prev); n.delete(key); return n; }), 400);
+  const setKey = (set: Dispatch<SetStateAction<Set<string>>>, key: string, on: boolean) =>
+    set(prev => { const n = new Set(prev); on ? n.add(key) : n.delete(key); return n; });
+  /** Resolves once the refetches a write started have landed (bounded). */
+  const refetchesSettled = () => new Promise<void>((resolve) => {
+    let tries = 0;
+    const tick = () => {
+      if (queryClient.isFetching() === 0 || ++tries > 40) resolve();
+      else setTimeout(tick, 250);
+    };
+    setTimeout(tick, 250);
+  });
+  /**
+   * The row leaves ON THE TAP and stays gone: it slides out while the write is
+   * in flight, is kept out of every list until the refetch has landed, and is
+   * only then handed back to the data — which by now no longer contains it.
+   * If the write fails the row returns (the mutation says why).
+   *
+   * It used to wait for the server before moving, then drop its "leaving"
+   * mark after 400 ms whether or not the refetch had arrived, so a completed
+   * row sat still, slid out, and blinked back.
+   */
+  const leavingNow = useRef(new Set<string>());
+  const leaveWhile = (key: string, start: () => Promise<any>) => {
+    // A second tap on a row already on its way out must not write twice.
+    if (leavingNow.current.has(key)) return;
+    leavingNow.current.add(key);
+    setKey(setLeavingKeys, key, true);
+    const out = setTimeout(() => setKey(setGoneKeys, key, true), 320);
+    const back = () => {
+      clearTimeout(out);
+      leavingNow.current.delete(key);
+      setKey(setLeavingKeys, key, false);
+      setKey(setGoneKeys, key, false);
+    };
+    start().then(() => refetchesSettled()).then(back, back);
   };
 
   const payBill = useMutation({
@@ -1369,18 +1437,18 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       toast({ title: "Check-in failed", variant: "destructive" });
     },
   });
-  const dismissAlert = useMutation({
-    // Same store the bell and the AI's dismiss_notifications tool write to.
-    // The server merges the id into the stored list (D263): writing back
-    // the list this component last read dropped dismissals made elsewhere.
-    mutationFn: async (id: string) => { await apiRequest("POST", "/api/notifications/dismiss", { ids: [id] }); },
-    onSuccess: () => {
-      toast({ title: "Alert dismissed" });
-      queryClient.invalidateQueries({ queryKey: ["/api/preferences/dismissed_notifications"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
-    },
-    onError: () => toast({ title: "Couldn't dismiss alert", variant: "destructive" }),
-  });
+  /**
+   * Dismiss = "I know; stop showing me this". Stored on the server under the
+   * alert's id (shared/alert-ids), so the row is gone on every device and in
+   * both of its shapes, and stays gone until it is restored from the
+   * Dismissed list or its date changes. The record is not touched.
+   */
+  const dismissIds = (ids: string[]) => {
+    if (ids.length === 0) return;
+    dismissAlerts.mutate(ids, {
+      onSuccess: () => toast({ title: "Dismissed", description: "Restore it any time from the Dismissed list in this card's filters." }),
+    });
+  };
 
   const idOf = (item: AttentionItem) => item.sourceKey.split(":").slice(1).join(":");
 
@@ -1388,10 +1456,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     const kind = item.action?.kind;
     if (!kind || kind === "open") { navigate(item.href); return; }
     const key = item.key;
-    const run = (p: Promise<any>) => {
-      markBusy(key, true);
-      p.then(() => markLeaving(key)).catch(() => {}).finally(() => markBusy(key, false));
-    };
+    const run = (start: () => Promise<any>) => leaveWhile(key, start);
     switch (kind) {
       case "pay":
         // Money moves once. First tap arms, second commits; the arm lapses so
@@ -1402,24 +1467,26 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           return;
         }
         setArmedKey(null);
-        run(payBill.mutateAsync(idOf(item)));
+        run(() => payBill.mutateAsync(idOf(item)));
         return;
-      case "complete": run(completeTask.mutateAsync(idOf(item))); return;
+      case "complete": run(() => completeTask.mutateAsync(idOf(item))); return;
       // No two-tap arming: logging a dose is trivially undone from Wellness,
       // unlike `pay`, which moves money.
-      case "taken": run(markMedTaken.mutateAsync(idOf(item))); return;
+      case "taken": run(() => markMedTaken.mutateAsync(idOf(item))); return;
       case "markdone": {
         // The row carries no tags of its own — look the occurrence back up in
         // the timeline by the id the item key was built from.
         const rowId = item.key.replace(/^event:/, "");
         const row = (Array.isArray(timelineRaw) ? timelineRaw : []).find((r: any) => r?.id === rowId);
         if (!row) { navigate(item.href); return; }
-        run(markOccurrenceDone.mutateAsync(row));
+        run(() => markOccurrenceDone.mutateAsync(row));
         return;
       }
-      case "checkin": run(checkinHabit.mutateAsync(idOf(item))); return;
+      case "checkin": run(() => checkinHabit.mutateAsync(idOf(item))); return;
       case "dismiss":
-        run(dismissAlert.mutateAsync(item.key.replace(/^alert:/, "")));
+        // The dismissed list is written on the tap (useDismissedAlerts), so
+        // the row is already gone from the data — nothing to hold out.
+        dismissIds([item.key.replace(/^alert:/, "")]);
         return;
       default:
         navigate(item.href);
@@ -1611,6 +1678,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   the at-a-glance cards have no room for captions. */}
               <p className="sr-only" data-testid="exec-attention-scope">Expirations &amp; renewals</p>
               {filtersOpen && <div className="mb-2"><AttentionFilters prefs={prefs} onChange={setPrefs} /></div>}
+              {filtersOpen && <div className="mb-2"><DismissedAlertsList /></div>}
               {/* AI advice renders HERE, next to the button that asked for it —
                   not in a separate card at the foot of the grid, where a user
                   watching this card never saw it arrive (F-44 / BUG-06). */}
@@ -1703,7 +1771,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     {attentionItems.map((i) => (
                       <ItemRow key={i.key} item={i} stacked
                         busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
-                        onAction={onAction} onOpen={openItem} />
+                        onAction={onAction} onOpen={openItem}
+                        onDismiss={(it) => dismissIds(it.dismissIds || [])} />
                     ))}
                   </ExpandableRows>
                 </div>
@@ -1747,13 +1816,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                         style={{ ["--accent-hsl" as any]: CARD_ACCENTS.tasks }}
                       >
                         <button
-                          onClick={() => {
-                            markBusy(`task:${t.id}`, true);
-                            completeTask.mutateAsync(t.id)
-                              .then(() => markLeaving(`task:${t.id}`))
-                              .catch(() => {})
-                              .finally(() => markBusy(`task:${t.id}`, false));
-                          }}
+                          onClick={() => leaveWhile(`task:${t.id}`, () => completeTask.mutateAsync(t.id))}
                           disabled={busy}
                           className={`h-[18px] w-[18px] rounded-full border-2 shrink-0 transition-colors hover:border-emerald-500 ${busy ? "animate-pulse border-emerald-500" : "border-muted-foreground/50"}`}
                           aria-label={`Complete ${t.title}`}
