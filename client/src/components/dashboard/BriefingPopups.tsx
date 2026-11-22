@@ -15,7 +15,9 @@ import { invalidateDomain } from "@/lib/cache-bus";
 import { addMonthsClamped, addYearsClamped, toISODate } from "@shared/date-math";
 import { useToast } from "@/hooks/use-toast";
 import { useDocSnoozeMap } from "@/lib/docSnooze";
-import { groupDocumentDates, countDocumentDateRecords, ruleIdsOf } from "@shared/document-dates";
+import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
+import { alertIdsOfDateRow, isDateRowDismissed } from "@shared/alert-ids";
+import { groupDocumentDates, countDocumentDateRecords } from "@shared/document-dates";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -469,7 +471,12 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
             <input type="date" value={editDue} onChange={e => setEditDue(e.target.value)}
               className="h-8 px-2.5 rounded-full border border-border bg-background text-xs" data-testid={`bill-edit-due-${b.id}`} />
             <ActionBtn label="Save" icon={Check} disabled={editBill.isPending} testId={`bill-edit-save-${b.id}`}
-              onClick={() => editBill.mutate({ id: b.id, ...(editAmount ? { amount: Number(editAmount) } : {}), ...(editDue ? { nextDueDate: editDue } : {}) })} />
+              onClick={() => editBill.mutate({ id: b.id, ...(editAmount ? { amount: Number(editAmount) } : {}), 
+                // Only a date the user CHANGED is written. The box opens on the
+                // date the list shows (the bill's next date, which may be rolled
+                // forward from a stale stored one); sending it back untouched
+                // would turn that read rule into a write on an amount-only edit.
+                ...(editDue && editDue !== due ? { nextDueDate: editDue } : {}) })} />
             <ActionBtn label="Cancel" onClick={() => setEditId(null)} />
           </div>
         ) : confirmDeleteId === b.id ? (
@@ -646,7 +653,10 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
   const owners = useOwnerNames();
   const { data: allDocsRaw } = useQuery<any[]>({ queryKey: ["/api/documents"], staleTime: 60_000, enabled: open });
   const docById = useMemo(() => new Map((Array.isArray(allDocsRaw) ? allDocsRaw : []).map((d: any) => [d.id, d])), [allDocsRaw]);
-  const [snoozeMap, saveSnooze] = useDocSnoozeMap();
+  // Snoozes taken on this device before dismissals moved to the server are
+  // still honoured until they lapse; this panel no longer writes new ones.
+  const [snoozeMap] = useDocSnoozeMap();
+  const { ids: dismissedIds, dismiss: dismissAlerts } = useDismissedAlerts(open);
   const [renewId, setRenewId] = useState<string | null>(null);
   const [renewDate, setRenewDate] = useState("");
 
@@ -707,18 +717,23 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
    * policy that expires and takes its premium the same day). Snoozing only the
    * first rule left its twin on screen, which read as "dismiss did nothing".
    */
-  const dismissRules = (ids: string[], label: string) => {
+  const dismissRows = (rows: any[], label: string) => {
+    // Stored on the server under each date's alert id (shared/alert-ids): the
+    // same list the bell and Needs Attention read, so the date is hidden in
+    // every shape and on every device, until restored or renewed. It used to
+    // be a 30-day mark in this browser only, which is how a dismissed
+    // expiration came back as an "Expired: …" alert (2026-11-22).
+    const ids = Array.from(new Set(rows.flatMap((d: any) => alertIdsOfDateRow(d))));
     if (ids.length === 0) return;
-    const until = Date.now() + 30 * 86400000;
-    const next = { ...snoozeMap };
-    for (const id of ids) next[id] = until;
-    saveSnooze(next);
-    toast({ title: label, description: "Hidden from document alerts for 30 days." });
+    dismissAlerts.mutate(ids, {
+      onSuccess: () => toast({ title: label, description: "Hidden until you restore it (Needs Attention → filters → Dismissed) or the date changes." }),
+    });
   };
 
   // Per-rule, with the record id still honoured so snoozes taken before rows
   // became per-rule keep working…
-  const unsnoozed = (docs || []).filter((d: any) => !snoozeMap[d.ruleId] && !snoozeMap[d.documentId]);
+  const unsnoozed = (docs || []).filter((d: any) =>
+    !snoozeMap[d.ruleId] && !snoozeMap[d.documentId] && !isDateRowDismissed(d, dismissedIds));
   // …then ONE CARD PER RECORD PER DAY. A homeowners policy that expires and
   // takes its premium on June 1 is one thing to act on, not two rows with the
   // same name and the same date — the "why does it say two documents when
@@ -796,8 +811,8 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
               {d.sourceEntityType !== "profile" && (
                 <ActionBtn label="Renewed — set new date" icon={RefreshCw} onClick={() => { setRenewId(rowKey(d)); setRenewDate(""); }} testId={`doc-renew-${rowKey(d)}`} />
               )}
-              <ActionBtn label="Dismiss 30d" icon={BellOff}
-                onClick={() => dismissRules(ruleIdsOf(d), "Alert dismissed")}
+              <ActionBtn label="Dismiss" icon={BellOff}
+                onClick={() => dismissRows([d], "Alert dismissed")}
                 testId={`doc-dismiss-${rowKey(d)}`} />
             </div>
           )}
@@ -815,8 +830,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
     : undefined;
   /** Clear the whole list in one action — the "how do I clear this?" ask. */
   const dismissAll = () => {
-    const ids = visible.flatMap((d: any) => ruleIdsOf(d));
-    dismissRules(ids, `Cleared ${visible.length} alert${visible.length === 1 ? "" : "s"}`);
+    dismissRows(visible, `Cleared ${visible.length} alert${visible.length === 1 ? "" : "s"}`);
   };
   return (
     <PopupShell open={open} onClose={onClose} title="Document Dates · Due & Expiring" icon={FileText}
@@ -825,7 +839,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
       footerLabel="Open Documents" footerHref="/linked?tab=documents">
       {visible.length > 0 && (
         <div className="flex justify-end px-1 pt-1">
-          <ActionBtn label="Clear all · 30d" icon={BellOff} onClick={dismissAll} testId="doc-dismiss-all" />
+          <ActionBtn label="Clear all" icon={BellOff} onClick={dismissAll} testId="doc-dismiss-all" />
         </div>
       )}
       {visible.length === 0 ? (

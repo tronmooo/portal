@@ -55,6 +55,26 @@ export function primaryFieldOf(t: Tracker): string {
   );
 }
 
+/** A field that holds a body weight: "weight", "body_weight", "mass", "lbs", "kg", or the generic "value". */
+export const BODY_WEIGHT_FIELD = /weight|\bmass\b|^lbs?$|^kgs?$|^pounds?$|^value$/i;
+
+/**
+ * A tracker that records workouts rather than a body measurement: it is named
+ * like an exercise ("Weighted Pull-Ups", "Weight Training", "Weights"), filed
+ * under a workout category, or counts sets and reps. Its numbers are loads and
+ * repetitions, never the person's weight. A tracker called exactly "Weight" /
+ * "Body weight" that picked up a stray `sets` field (workout sets once logged
+ * into it) stays a body-weight tracker: its weight field is still read.
+ */
+export function isWorkoutShapedTracker(t: Tracker): boolean {
+  const name = String(t?.name || "").trim().toLowerCase();
+  if (/^(body\s*)?(weight|mass)$/.test(name)) return false;
+  // Whole words: "press" must not catch "Blood Pressure".
+  if (/\b(weighted|weights|weight\s*(training|lifting|room|session)|lift(s|ing)?|workout|exercise|strength|pull-?ups?|push-?ups?|squats?|press(es)?|curls?|deadlifts?)\b/.test(name)) return true;
+  if (/workout|exercise|strength|weightlifting|fitness|gym/.test(String(t?.category || "").toLowerCase())) return true;
+  return (t?.fields || []).some((f) => /^(sets?|reps?|repetitions?)$/i.test(String(f?.name || "")));
+}
+
 /** Entries newest→oldest (defensive copy; server order isn't guaranteed). */
 function entriesNewestFirst(t: Tracker): TrackerEntry[] {
   return (t.entries || [])
@@ -386,7 +406,13 @@ export function extractVitals(
     : { ...EMPTY, value: activity.steps, unit: "steps" };
   return {
     activity,
-    weight: readMetric(trackers, [/weight/, /\bmass\b/]),
+    // BODY weight only. "weight" is also in "Weighted Pull-Ups" and in a
+    // strength tracker's load field, and the reader used to take the first
+    // tracker whose name or category contained the word and print its first
+    // number field — which is how the Wellness card read "Weight · 3 sets"
+    // (2026-11-22). A workout tracker is never the body-weight source, and
+    // the value comes from a weight field, never from sets or reps.
+    weight: readMetric((trackers || []).filter((t) => !isWorkoutShapedTracker(t)), [/weight/, /\bmass\b/], { fieldPattern: BODY_WEIGHT_FIELD }),
     bloodPressureSys: bpSys,
     bloodPressureDia: bpDia,
     heartRate: readMetric(trackers, [/heart\s*rate/, /\bhr\b/, /pulse/], { unit: "bpm" }),

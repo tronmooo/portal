@@ -37,7 +37,7 @@ import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersi
 import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
 import { isAutoPayOn, wantsDueReminders } from "@shared/autopay";
 import { runAutopayForLiability, setAutoPay, setOccurrenceStatus, reconcileBankTransaction, withPaymentStatuses } from "./autopay";
-import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
+import { retireGeneratedBillReminderTasks, withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { generateTitle } from "./content-title";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { enrichNutritionEntry, rescaleNutritionEntry, forgetEnrichmentMode } from "./nutrition-enrichment";
@@ -194,7 +194,8 @@ import { ProfileLinkFailure } from "./profile-link-failure";
 import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
-import { buildNotifications, mergeDismissedNotifications } from "./notification-service";
+import { shownOccurrenceToPay, rollBillsForward } from "@shared/bills-timeline";
+import { buildNotifications, mergeDismissedNotifications, restoreDismissedNotifications, listDismissedAlerts } from "./notification-service";
 import {
   createNote, updateNote, deleteNote, listNotes,
   upsertJournalEntry, syncDateRulesForEntity,
@@ -2655,7 +2656,7 @@ export async function registerRoutes(
       return { advanced, ended, remindersRetired, users: users.length };
   }
 
-  async function runLiabilityDueScan(): Promise<{ autopaid: number; reminded: number }> {
+  async function runLiabilityDueScan(): Promise<{ autopaid: number; reminded: number; retired: number }> {
       const { createClient } = await import("@supabase/supabase-js");
       const url = process.env.VITE_SUPABASE_URL;
       const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -2667,7 +2668,11 @@ export async function registerRoutes(
       const { createScopedStorage, requestStorageContext } = await import("./storage");
 
       let autopaid = 0;
-      let reminded = 0;
+      // Always 0 now: the scan raises no reminder tasks. Kept in the answer
+      // so the cron's callers and logs keep their shape.
+      const reminded = 0;
+      /** Generated "Bill due" tasks moved to Trash by this run. */
+      let retired = 0;
       for (const u of users) {
         try {
           const scoped = createScopedStorage(u.id);
@@ -2698,6 +2703,14 @@ export async function registerRoutes(
                 // Doubles left by earlier overlapping runs (D260) heal here,
                 // whether or not this run writes anything else for the user.
                 if (await collapseDuplicateBillReminders(scoped, log, existingTasks).catch(() => 0)) userWrote = true;
+                // The "Bill due: <name>" tasks earlier scans generated are
+                // retired (moved to Trash, so nothing is lost): bills are not
+                // tasks. Only the scan's own fingerprint matches — a task the
+                // user typed is left alone (shared/bill-reminders).
+                {
+                  const n = await retireGeneratedBillReminderTasks(scoped, existingTasks, profiles, log).catch(() => 0);
+                  if (n) { userWrote = true; retired += n; }
+                }
                 for (const bill of bills) {
                   const f: any = bill.fields || {};
                   // `dueKey` addresses the occurrence (its anchor day); `due`
@@ -2733,37 +2746,14 @@ export async function registerRoutes(
                       if (paid?.ok && !paid.deduped && paid.amount > 0) autopaid++;
                     } catch { /* per-bill best effort */ }
                   }
-                  // Auto Pay raises no reminder unless the user asked to keep
-                  // them — and never one for the occurrence it just recorded.
-                  if (paidNow || !wantsDueReminders(f)) {
-                    continue;
-                  } else {
-                    // Non-autopay: surface a timed TASK at the due date, deduped
-                    // on title + date. A task is checkable and lands on the
-                    // calendar at its hour; the reminder rows this used to write
-                    // were neither.
-                    const title = `Bill due: ${bill.name}`;
-                    // An occurrence already paid or skipped needs no reminder.
-                    // Creating one anyway made the next run close it (D92) and
-                    // the run after that create it again — a churn of reminder
-                    // tasks for a bill whose date sits on a settled day.
-                    if (isSettledOccurrence(f, dueKey)) continue;
-                    const dup = (existingTasks || []).some((t: any) =>
-                      t.title === title && String(t.dueDate || "").slice(0, 10) === due && t.status !== "done");
-                    if (!dup) {
-                      try {
-                        await scoped.createTask({
-                          title,
-                          priority: "high",
-                          dueDate: due,
-                          dueTime: "09:00",
-                          linkedProfiles: [bill.id],
-                        } as any);
-                        reminded++;
-                        userWrote = true;
-                      } catch { /* best effort */ }
-                    }
-                  }
+                  // No reminder TASK is raised for a bill (owner, 2026-11-22:
+                  // "bills belong to Finance and the Calendar, not Tasks").
+                  // A bill coming due is said by the bell's due-soon alert and
+                  // listed under Money; Auto Pay stays quiet unless "Remind me
+                  // anyway" is on (A6). The scan used to create a "Bill due:
+                  // <name>" task here for every bill at or past its date,
+                  // however old, which is what filled the Tasks card.
+                  void paidNow;
                 }
                 if (userWrote) {
                   // An overlapping run may have created the same reminder
@@ -2777,7 +2767,7 @@ export async function registerRoutes(
           });
         } catch { /* skip user */ }
       }
-      return { autopaid, reminded };
+      return { autopaid, reminded, retired };
   }
   const cronLiabilityDueScan: any = asyncHandler(async (req: any, res: any) => {
     if (!cronAuthorized(req)) {
@@ -7024,7 +7014,11 @@ Rules:
     if (!uid) return false;
     try {
       const { advanced, ended } = await storage.repairRecurringTasks(getUserToday(getTimezone(req)));
-      if (!advanced && !ended) return false;
+      // The "Bill due: <name>" tasks the due scan used to generate are retired
+      // here too (A7), so every task surface stops showing them on the first
+      // read after deploy rather than after the next nightly scan.
+      const retired = await retireGeneratedBillReminderTasks(storage).catch(() => 0);
+      if (!advanced && !ended && !retired) return false;
       bustUserCaches(uid, ["tasks"]);
       const v = await bumpDataVersionNow(uid, ["tasks"]);
       if (v) (req as any).__dataVersions = mergeVersionMaps((req as any).__dataVersions || {}, v);
@@ -8974,6 +8968,13 @@ Rules:
     // payment date the caller chose — previously validated and then silently
     // dropped on the floor.
     let failReason: string | undefined;
+    // The occurrence the caller named — or, for a plain "Pay" on a bill whose
+    // stored date is stale, the one the lists show (its next date). Without
+    // this a tap on "Netflix · Nov 25" settled July, the row stayed, and each
+    // further tap recorded another real payment (2026-11-22 audit).
+    const namedOccurrence = isCalendarDay(String(req.body?.occurrenceDate || "")) ? String(req.body.occurrenceDate) : null;
+    const shownOccurrence = namedOccurrence ? null
+      : shownOccurrenceToPay(await storage.getObligation(req.params.id).catch(() => null) as any, getUserToday(getTimezone(req)));
     const inflight = (async () => {
       const result = await payBillOccurrence(storage, req.params.id, {
         amount: amount ?? null,
@@ -8983,7 +8984,7 @@ Rules:
         // which one was meant: it paid the current occurrence and folded the
         // second request (same money, seconds later) into the first, so
         // catching up two months paid one (D276).
-        occurrenceDate: isCalendarDay(String(req.body?.occurrenceDate || "")) ? String(req.body.occurrenceDate) : null,
+        occurrenceDate: namedOccurrence ?? shownOccurrence,
         // Pay-from-account: the occurrence route honoured accountId, this one
         // silently dropped it, so the source account's balance never moved.
         accountId: accountId || null,
@@ -9820,6 +9821,21 @@ Rules:
     if (ids.length === 0) return res.status(400).json({ error: "ids required" });
     const merged = await mergeDismissedNotifications(storage, ids.slice(0, 500));
     res.json({ ids: merged });
+  }));
+
+  // "Restore" in the dashboard's Dismissed list: the ids leave the stored
+  // list and the alerts show again wherever their dates still warrant one.
+  app.post("/api/notifications/restore", asyncHandler(async (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : (typeof req.body?.id === "string" ? [req.body.id] : []);
+    if (ids.length === 0) return res.status(400).json({ error: "ids required" });
+    const kept = await restoreDismissedNotifications(storage, ids.slice(0, 500));
+    res.json({ ids: kept });
+  }));
+
+  // What the user dismissed and could bring back. Registered before the list
+  // route below only for readability; the paths do not overlap.
+  app.get("/api/notifications/dismissed", asyncHandler(async (req, res) => {
+    res.json({ alerts: await listDismissedAlerts(storage, getTimezone(req)) });
   }));
 
   app.get("/api/notifications", asyncHandler(async (req, res) => {
@@ -11176,7 +11192,9 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
             );
           };
           const openTasks = tasks.filter((t: any) => t?.status !== "done");
-          const activeObs = obligations.filter((o: any) => o?.status !== "cancelled" && o?.status !== "paused");
+          // Bills at their NEXT date (A7), so the advice is never told a
+          // subscription last recorded months ago is "overdue".
+          const activeObs = rollBillsForward(obligations.filter((o: any) => o?.status !== "cancelled" && o?.status !== "paused") as any[], todayISO);
           const meds = activeObs.filter((o: any) => String(o.kind || "").toLowerCase() === "medication");
           const takenToday = (o: any) =>
             (o.payments || []).some((p: any) => String(p?.date || "").slice(0, 10) === todayISO);

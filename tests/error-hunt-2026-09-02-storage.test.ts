@@ -258,7 +258,9 @@ describe("#5 upcomingBills daysUntil is a whole-day difference of calendar dates
     expect(Number.isNaN(calendarDaysUntil("garbage", userToday))).toBe(true);
   });
   it("the storage method reads the user's today, not an instant", () => {
-    const i = SRC.indexOf("const upcomingBills = allObligations");
+    // 2026-11-22: the list is built from each bill's NEXT date (rollBillsForward).
+    const i = SRC.indexOf("const upcomingBills = rolledObligations");
+    expect(i).toBeGreaterThan(-1);
     const body = SRC.slice(i, i + 900);
     expect(body).toContain("calendarDaysUntil(o.nextDueDate, today, this._timezone)");
     expect(body).not.toContain("new Date(o.nextDueDate).getTime() - now.getTime()");

@@ -17,6 +17,7 @@
 // score = urgency (shared curve) + impact. Higher surfaces sooner.
 
 import { isQuietAutoPayBill } from "./autopay";
+import { isDateRowDismissed, alertIdsOfDateRow } from "./alert-ids";
 import { dayLabel, urgencyScore } from "./now-rank";
 import { ruleClaimKey, dateRuleVerbs, DOC_UPCOMING_WINDOW_DAYS, type DateRuleType } from "./date-rules";
 import { isHabitDueOn, isHabitDoneOn, type HabitScheduleShape } from "./habit-schedule";
@@ -63,6 +64,11 @@ export interface AttentionItem {
    * and so a due date can earn a slot an expiration would not.
    */
   ruleType?: string;
+  /**
+   * The alert ids (shared/alert-ids) a "Dismiss" on this row stores. Set on
+   * document rows; an alert row's id is its own key.
+   */
+  dismissIds?: string[];
   /** Rolled-up members (habits for the day, a medication's doses). */
   children?: AttentionItem[];
   /** Members represented by this row, including itself. */
@@ -84,6 +90,12 @@ export interface AttentionConfig {
   minTier: AttentionTier;
   /** In the 8–30d band, a bill under this amount isn't worth the real estate. */
   upcomingMinBillAmount: number;
+  /**
+   * Medication trackers the user asked to be alerted about when doses go
+   * unlogged. Empty by default: not logging a dose is not evidence of a
+   * missed one, and the dashboard does not nag about it (owner, 2026-11-22).
+   */
+  medicationGapTrackerIds: string[];
 }
 
 export const DEFAULT_ATTENTION_CONFIG: AttentionConfig = {
@@ -99,6 +111,7 @@ export const DEFAULT_ATTENTION_CONFIG: AttentionConfig = {
   includeBirthdays: false,
   minTier: "upcoming",
   upcomingMinBillAmount: 100,
+  medicationGapTrackerIds: [],
 };
 
 export interface AttentionInputs {
@@ -329,11 +342,24 @@ export function computeAttention(
   // Documents. And a snooze taken by rule id stopped suppressing this one.
   {
     const snoozed = new Set(input.snoozedDocumentIds || []);
+    const dismissedAlertIds = new Set(input.dismissedNotificationIds || []);
     const bestByDoc = new Map<string, { doc: any; du: number }>();
     for (const d of input.documents || []) {
       const id = d?.documentId || d?.id;
       if (!id) continue;
-      if (snoozed.has(d?.ruleId) || snoozed.has(id)) continue;
+      // Hidden by the user: dismissed (the server store, shared with the alert
+      // this date also raises) or snoozed on this device before dismissals
+      // moved to the server. Either way the RECORD is still claimed, so the
+      // notifications pass cannot raise the same date as "Expired: <name>" in
+      // the row's place — which is how a dismissed Home Depot expiration came
+      // back (2026-11-22).
+      if (snoozed.has(d?.ruleId) || snoozed.has(id) || isDateRowDismissed(d, dismissedAlertIds)) {
+        alsoClaim(`document:${id}`);
+        if (d?.relatedProfileId && d?.expirationDate) {
+          alsoClaim(profileExpirationClaimKey(d.relatedProfileId, d.expirationDate));
+        }
+        continue;
+      }
       const du = typeof d.daysUntil === "number" ? d.daysUntil : daysBetween(today, d.expirationDate);
       if (du == null || du > cfg.docsWithinDays) continue;
       const groupKey = d?.ruleId || id;
@@ -368,6 +394,7 @@ export function computeAttention(
         // and `/documents/<profileId>` leads nowhere. The row knows its record.
         href: String(doc?.href || "").replace(/^#/, "") || `/documents/${id}`,
         action: { kind: "open", label: "Review" },
+        dismissIds: alertIdsOfDateRow(doc),
       });
       // …and the DOCUMENT, so the notifications pass does not raise the same
       // expiration again under the entity's own key.

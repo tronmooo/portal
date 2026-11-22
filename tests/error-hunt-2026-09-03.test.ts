@@ -3004,7 +3004,8 @@ describe("D257 cron writes invalidate the user's caches", () => {
     // Every write path in the scan marks the user as written to.
     expect(scan.indexOf("userWrote = true")).toBeLessThan(scan.indexOf("closeBillReminderTasksWhere("));
     // Auto Pay on a loan, the duplicate collapse, the reminder close, Auto
-    // Pay on a bill, the reminder create.
+    // Pay on a bill, and retiring a generated "Bill due" task (2026-11-22:
+    // the scan no longer creates reminder tasks; it trashes the ones it made).
     expect((scan.match(/userWrote = true/g) || []).length).toBe(5);
   });
 });
@@ -3168,7 +3169,12 @@ describe("D263 notification dismissals merge on the server", () => {
     expect(bell).not.toMatch(/apiRequest\("PUT", `\/api\/preferences\/\$\{DISMISSED_PREF_KEY\}`/);
     expect((bell.match(/dismissOnServer\(/g) || []).length).toBeGreaterThanOrEqual(4);
     const briefing = readFileSync(new URL("../client/src/components/dashboard/ExecutiveBriefing.tsx", import.meta.url), "utf8");
-    expect(briefing).toContain('apiRequest("POST", "/api/notifications/dismiss", { ids: [id] })');
+    // The briefing dismisses through the shared hook (2026-11-22), which sends
+    // only the ids being dismissed to the same merge endpoint.
+    expect(briefing).toContain("useDismissedAlerts(");
+    const hook = readFileSync(new URL("../client/src/hooks/useDismissedAlerts.ts", import.meta.url), "utf8");
+    expect(hook).toContain('apiRequest("POST", `/api/notifications/${kind}`, { ids: list })');
+    expect(hook).not.toContain('apiRequest("PUT"');
     expect(briefing).not.toContain('apiRequest("PUT", "/api/preferences/dismissed_notifications"');
     const ai = readFileSync(new URL("../server/ai-engine.ts", import.meta.url), "utf8");
     expect(ai).toContain("await mergeDismissedNotifications(storage, computedIds)");
@@ -3592,7 +3598,10 @@ describe("D276 POST /obligations/:id/pay honours an explicit occurrenceDate", as
     const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
     const i = src.indexOf('app.post("/api/obligations/:id/pay"');
     const block = src.slice(i, i + 6000);
-    expect(block).toContain('occurrenceDate: isCalendarDay(String(req.body?.occurrenceDate || "")) ? String(req.body.occurrenceDate) : null,');
+    // 2026-11-22: the named occurrence is still forwarded verbatim; when none
+    // is named and the stored date is stale, the occurrence the lists show is.
+    expect(block).toContain('const namedOccurrence = isCalendarDay(String(req.body?.occurrenceDate || "")) ? String(req.body.occurrenceDate) : null;');
+    expect(block).toContain("occurrenceDate: namedOccurrence ?? shownOccurrence,");
   });
   it("two explicit occurrences paid seconds apart are two payments, not one folded into the other", async () => {
     const { payBillOccurrence } = await import("../server/liability-payments");

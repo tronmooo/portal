@@ -98,6 +98,47 @@ green. After a push to `main`:
 8. **Destructive buttons take two taps** (`useConfirmArm`). A "snooze" hides
    an alert (`useAlertSnoozes`, synced across devices). It never moves the
    record's real date.
+   **Done means gone, and a dismissal has one store.** A row the user
+   completes, pays or dismisses on the dashboard leaves on the tap and stays
+   out until the write and its refetch settle (`leaveWhile`,
+   `ExecutiveBriefing.tsx`); a failed write brings it back. A dated alert has
+   ONE id whatever shape it takes (`dateAlertId`, `shared/alert-ids.ts`): the
+   document row and its "Expired: …" alert are dismissed together, into the
+   server's `dismissed_notifications` list (`useDismissedAlerts`), and every
+   dismissed alert can be restored (`DismissedAlertsList`). Never write a new
+   dismissal to localStorage (`lib/docSnooze.ts` is read-only legacy).
+   (2026-11-22: a dismissed Home Depot expiration came back as its alert
+   twin.)
+   *Guards:* `tests/dismiss-stays-dismissed.test.ts`,
+   `tests/dashboard-done-means-gone.dom.test.tsx`.
+   **Next Important is something on the calendar.** The tile is
+   `pickNextImportant` (`shared/next-important.ts`): the nearest dated item,
+   same-day items ordered by what they are, never a tracker's reading or
+   logging gap, and null (not a filler) when nothing qualifies. "N doses
+   unlogged" is raised only for a medication the user switched alerts on for
+   (`AttentionConfig.medicationGapTrackerIds`; default none). The Wellness
+   Weight row is a BODY weight: never a workout tracker, never a `sets` field
+   (`isWorkoutShapedTracker`, `BODY_WEIGHT_FIELD`, `client/src/lib/wellness-metrics.ts`).
+   (2026-11-22: "Prilosec: 7 doses unlogged this week" as Next Important;
+   "Weight · 3 sets".)
+   *Guards:* `tests/next-important.test.ts`, `tests/wellness-metrics.test.ts`,
+   `tests/executive-sections-router.test.ts`.
+   **The dashboard shows what there is, once.** Schedule and Upcoming are
+   ONE Timeline card (today's events, then everything coming up in date
+   order; bills stay under Money, expirations under Needs Attention). A card
+   with nothing to show folds into the quiet row under the grid
+   (`QUIET_CARDS`, `exec-quiet-cards`, `ExecutiveBriefing.tsx`) and opens in
+   place on a tap; it folds only once its data has loaded, and the row says
+   when a profile filter may be why (Rule 4). Needs Attention, Money and
+   Documents always render. Money leads with Assets / Debt / Net worth from
+   the snapshot (Rule 1). The Documents card never repeats what Needs
+   Attention lists. (Owner, 2026-11-22.)
+   Which cards show and their order is the user's (`shared/exec-card-prefs.ts`,
+   preference `exec_card_prefs`, panel `ExecCustomize`): quiet mode is the
+   DEFAULT (Needs Attention, Tasks, Timeline, Money), and every card the
+   preferences hide is named under the grid and opens on a tap
+   (`exec-hidden-cards`) — hidden never reads as missing.
+   *Guards:* `tests/executive-sections.test.tsx`, `tests/exec-card-prefs.test.ts`.
 9. **Ownership has one writer** (`server/ownership-writer.ts`). Profile
    scoping goes through `shared/profile-filter.ts`. Deleting a profile is
    fail-safe: if any cascade step fails, the profile is kept, so no record
@@ -395,10 +436,43 @@ bank's amount in place and never becomes a second expense. A transaction id
 matched once answers the same payment again and writes nothing.
 
 **A6. Quiet unless something is wrong.** An upcoming Auto Pay bill is not in
-Needs Attention and raises no reminder task or due-soon alert
-(`isQuietAutoPayBill`, `wantsDueReminders`) unless the user turned "Remind me
-anyway" on. An overdue Auto Pay bill and a missed payment are the exceptions
-that show. Turning Auto Pay off stops future recording only.
+Needs Attention and raises no due-soon alert (`isQuietAutoPayBill`) unless
+the user turned "Remind me anyway" on. A payment marked missed is the
+exception that shows. Turning Auto Pay off stops future recording only.
+
+**A7. A bill is not a task, and a list names its next date.** No bill ever
+becomes a task: the due scan creates none and moves the "Bill due: <name>"
+tasks it used to generate to Trash (`isGeneratedBillReminderTask`,
+`shared/bill-reminders.ts` — the scan's exact fingerprint, never a task a
+person typed or edited). A recurring bill's elapsed due date is ASSUMED PAID
+(owner, 2026-11-21 for Finance, 2026-11-22 everywhere): every list, the bell
+and the month's still-to-pay total read the bill through `rollBillsForward` /
+`nextBillDate` (`shared/bills-timeline.ts`), so nothing shows "115d overdue"
+or counts five months of a subscription in one month's Expenses. It is a READ
+rule: the stored date still moves only on pay / skip / missed. The dashboard
+Money card has no Pay button; a row opens Bills & Payments (`BillsDuePopup`),
+the Finance tab's panel.
+The walk steps over an occurrence already paid, skipped or marked missed
+(`settledDates` on the obligation, from the bill's own stamps), because the
+stored date does not move when a LATER date is the one settled. A plain "Pay"
+(no date named) on a bill whose stored date is stale settles the date the lists
+show (`shownOccurrenceToPay`, in the pay route) — never an old month with the
+row left in place. An edit form writes a due date only when the user changed
+it. The Liabilities list (`nextBillDateForFields`), the bill page header, the
+calendar (a recurring bill's past date is not "late") and the AI advice count
+read the same next date. Generated bill tasks are retired on the first read of
+the task list as well as by the scan (`retireGeneratedBillReminderTasks`).
+The bell removes dismissed ids BEFORE collapsing a record's notices, follows
+the shared dismissed list after mount, and opening a dated alert from it does
+not dismiss it.
+*Guards:* `tests/bills-next-date.test.ts`, `tests/dismiss-stays-dismissed.test.ts`,
+`tests/executive-sections.test.tsx`, `tests/bills-and-alerts-consistency.test.ts`,
+`tests/bell-dismiss-shared.dom.test.tsx`.
+*Live check:* `npx tsx tests/live-dashboard-consistency-check.ts`.
+*Known gaps (2026-11-22):* the bill page's schedule still lists unrecorded past
+dates as overdue (it is where one is recorded); chat's bill table and
+"I paid X" still read the stored date; a profile page's "Clear document alerts"
+still writes the browser-only 30-day snooze (`ProfileAlertsSection.tsx`).
 
 ## Record details rules (a characteristic is a typed, reportable value on any record)
 

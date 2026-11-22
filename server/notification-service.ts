@@ -13,7 +13,9 @@ import { getUserToday, parseLocalDate } from "@shared/timezone";
 import { parseRecurringMeta, nextOccurrence, missedOccurrences, kindDef } from "@shared/recurring-dates";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
-import { rulesFromAll, daysBetweenISO, isAlertDateRule } from "@shared/date-rules";
+import { rulesFromAll, daysBetweenISO, isAlertDateRule, isDocumentAttentionRule } from "@shared/date-rules";
+import { dateAlertId } from "@shared/alert-ids";
+import { rollBillsForward } from "@shared/bills-timeline";
 import { dateRuleNotice, overdueTaskSeverity, formatNoticeDate } from "@shared/notification-rules";
 import { isActiveObligation } from "@shared/obligation-windows";
 import { BILL_REMINDER_TASK_PREFIX } from "./liability-payments";
@@ -85,10 +87,97 @@ export const DISMISSED_NOTIFICATIONS_PREF = "dismissed_notifications";
  */
 export async function mergeDismissedNotifications(storage: IStorage, ids: string[]): Promise<string[]> {
   const add = (ids || []).filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
-  const current = Array.from(await readDismissedNotificationIds(storage));
-  const merged = Array.from(new Set([...current, ...add]));
-  if (merged.length !== current.length) await storage.setPreference(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(merged));
-  return merged;
+  return withDismissedLock(storage, async () => {
+    const current = Array.from(await readDismissedNotificationIds(storage));
+    const merged = Array.from(new Set([...current, ...add]));
+    if (merged.length !== current.length) await storage.setPreference(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(merged));
+    return merged;
+  });
+}
+
+/**
+ * Takes ids back OUT of the dismissed list ("Restore" in the dashboard's
+ * Dismissed list) and returns what is left. The alert shows again wherever
+ * its date still warrants one; nothing about the record changes.
+ */
+export async function restoreDismissedNotifications(storage: IStorage, ids: string[]): Promise<string[]> {
+  const drop = new Set((ids || []).filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim()));
+  return withDismissedLock(storage, async () => {
+    const current = Array.from(await readDismissedNotificationIds(storage));
+    const kept = current.filter((id) => !drop.has(id));
+    if (kept.length !== current.length) await storage.setPreference(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(kept));
+    return kept;
+  });
+}
+
+// The list is one preference row, read, changed and written back. Two
+// dismissals arriving together (two taps, the bell and the briefing, chat)
+// each read the same list and the second write dropped the first one's id —
+// an alert the user had just dismissed came back on the next load. Rule 6:
+// the read-modify-write runs under the user's lock and re-reads inside it.
+const DISMISSED_LOCK = "dismissed_notifications";
+async function withDismissedLock<T>(storage: IStorage, fn: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + 4_000;
+  let held = false;
+  try {
+    while (!held) {
+      held = await storage.acquireUserLock(DISMISSED_LOCK, 10_000);
+      if (held || Date.now() > deadline) break;
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  } catch { /* a store without locks still merges; it just cannot serialize */ }
+  try {
+    return await fn();
+  } finally {
+    if (held) await storage.releaseUserLock(DISMISSED_LOCK).catch(() => { /* the ttl frees it */ });
+  }
+}
+
+export interface DismissedAlert {
+  id: string;
+  title: string;
+  message?: string;
+  entityId?: string;
+  entityType?: string;
+  dueDate?: string;
+}
+
+/**
+ * The alerts that WOULD be showing if the user had not dismissed them — what
+ * the Dismissed list offers to restore. Derived on each read from the records
+ * and the id list: an id whose date has since been renewed, or whose record is
+ * gone, describes nothing any more and is not listed.
+ */
+export async function listDismissedAlerts(storage: IStorage, notifTz: string): Promise<DismissedAlert[]> {
+  const dismissed = await readDismissedNotificationIds(storage);
+  if (dismissed.size === 0) return [];
+  const out = new Map<string, DismissedAlert>();
+  // Dated fields first, one entry per date: the bell's list keeps only the
+  // most severe notice per record, and a document row can be dismissed for a
+  // date the bell never raises (a document's payment date).
+  const todayStr = getUserToday(notifTz);
+  const [documents, profiles] = await Promise.all([storage.getDocuments(), storage.getProfiles()]);
+  for (const rule of rulesFromAll({ profiles, documents })) {
+    if (!rule.active || rule.supersededBy) continue;
+    if (!isAlertDateRule(rule) && !isDocumentAttentionRule(rule)) continue;
+    const key = rule.sourcePath || rule.sourceField;
+    const id = dateAlertId({ sourceEntityType: rule.sourceEntityType, sourceEntityId: rule.sourceEntityId, path: key, date: rule.date });
+    if (!id || !dismissed.has(id)) continue;
+    const isDoc = rule.sourceEntityType === "document";
+    const notice = dateRuleNotice({
+      ruleType: rule.ruleType, isDocument: isDoc, entityName: rule.subtitle || rule.label,
+      fieldKey: isDoc ? undefined : key, diff: daysBetweenISO(todayStr, rule.date), date: rule.rawValue || rule.date,
+    });
+    out.set(id, {
+      id, title: notice.title, message: notice.message,
+      entityId: rule.sourceEntityId, entityType: isDoc ? "document" : "profile", dueDate: rule.date,
+    });
+  }
+  for (const n of await buildNotifications(storage, notifTz, { includeDismissed: true })) {
+    if (!dismissed.has(n.id) || out.has(n.id)) continue;
+    out.set(n.id, { id: n.id, title: n.title, message: n.message, entityId: n.entityId, entityType: n.entityType, dueDate: (n as any).dueDate });
+  }
+  return Array.from(out.values());
 }
 
 /** Preference key holding notification filters: {muted_severities?, muted_types?}. */
@@ -146,7 +235,10 @@ function daysDiff(dateA: Date, dateB: Date): number {
  * Compute the current notification list (deduped, severity-sorted) for the
  * user the storage instance is scoped to. `notifTz` drives "today".
  */
-export async function buildNotifications(storage: IStorage, notifTz: string): Promise<AppNotification[]> {
+export async function buildNotifications(
+  storage: IStorage, notifTz: string,
+  opts?: { /** Keep what the user dismissed (the Dismissed list reads it). */ includeDismissed?: boolean },
+): Promise<AppNotification[]> {
   const notifications: AppNotification[] = [];
   // "Today" in the USER's zone (notifTz), not the server clock: at 5 PM
   // Pacific the server's UTC day had already rolled, so a task due today read
@@ -219,7 +311,9 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       // The DATE is part of the id (D244): a dismissal is of one fact — this
       // expiry, this due day — never of every later one. Correct the date, or
       // let the next occurrence arrive, and the notice is new again.
-      id: `${isDoc ? "doc" : "profile"}-exp-${rule.sourceEntityId}-${key}-${rule.date}`,
+      // Built by the shared rule so a document row derives the SAME id and
+      // one dismissal hides both shapes of this date (shared/alert-ids).
+      id: dateAlertId({ sourceEntityType: rule.sourceEntityType, sourceEntityId: rule.sourceEntityId, path: key, date: rule.date }),
       type: "document_expiring" as const,
       entityId: rule.sourceEntityId,
       entityType: isDoc ? "document" : "profile",
@@ -298,7 +392,10 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   }
 
   // --- Bills/Obligations ---
-  for (const ob of obligations) {
+  // Each bill at its NEXT date: an elapsed due date is assumed paid
+  // (shared/bills-timeline), so the bell says what is coming. A payment the
+  // user marked missed keeps its own alert below (A3).
+  for (const ob of rollBillsForward(obligations as any[], todayStr) as typeof obligations) {
     if (!ob.nextDueDate) continue;
     // A paused or cancelled bill is not due (D222) — the bills list already
     // hides it; the bell kept warning about it.
@@ -460,11 +557,20 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     }
   } catch { /* recurring-date bell entries are best-effort */ }
 
+  // Dismissed ids leave BEFORE the per-record collapse below. Collapsing
+  // first kept only a record's most severe notice, so dismissing that one hid
+  // every other notice about the record (a policy's later deadline; a missed
+  // payment on a liability whose expired date had been dismissed) — until the
+  // hidden one grew more severe and reappeared looking like the dismissed
+  // alert coming back. One dismissal is of one fact (shared/alert-ids).
+  const dismissedFirst = opts?.includeDismissed ? new Set<string>() : await readDismissedNotificationIds(storage);
+  const candidates = dismissedFirst.size > 0 ? notifications.filter((n) => !dismissedFirst.has(n.id)) : notifications;
+
   // Deduplicate: keep only the most severe notification per entityId
   const severityOrder: Record<string, number> = { critical: 0, warning: 1, info: 2 };
   const seenEntities = new Map<string, number>();
   const deduped: AppNotification[] = [];
-  for (const notif of notifications) {
+  for (const notif of candidates) {
     const dedupeKey = notif.entityId && notif.entityType
       ? `${notif.entityType}:${notif.entityId}`
       : notif.id;
@@ -516,7 +622,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   // the chat and the dismiss tool agree on what is showing. (Custom rows are
   // stamped dismissed_at in their own table and never enter the list.)
   const dismissed = await readDismissedNotificationIds(storage);
-  const visible = dismissed.size > 0 ? filtered.filter((n) => !dismissed.has(n.id)) : filtered;
+  const visible = dismissed.size > 0 && !opts?.includeDismissed ? filtered.filter((n) => !dismissed.has(n.id)) : filtered;
 
   // Sort: critical first, then warning, then info
   visible.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);

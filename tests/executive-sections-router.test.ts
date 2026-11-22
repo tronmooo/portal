@@ -351,15 +351,28 @@ describe("health, activity and insights", () => {
       expect(titles(secs, "health")[0]).toContain("hypertensive crisis");
     });
 
+    // 2026-11-22 (owner): "Never treat unlogged medication as an important
+    // event by default." No row unless alerts are on for THAT medication.
+    const metformin = {
+      id: "tr1", name: "Metformin", category: "medication", unit: "twice daily",
+      createdAt: `${day(-30)}T00:00:00Z`,
+      fields: [{ name: "adherence", type: "select" }],
+      entries: [],
+    };
+    it("says nothing about unlogged doses by default", () => {
+      const secs = run({ trackers: [metformin] });
+      expect(byId(secs).health).toBeUndefined();
+      expect(allKeys(secs).filter((k: string) => k.startsWith("tracker:"))).toEqual([]);
+    });
+    it("only alerts for the medication the user switched on", () => {
+      const other = { ...metformin, id: "tr2", name: "Prilosec" };
+      const secs = run({ trackers: [metformin, other] }, { medicationGapTrackerIds: ["tr2"] });
+      expect(titles(secs, "health")).toHaveLength(1);
+      expect(titles(secs, "health")[0]).toContain("Prilosec");
+    });
+
     it("calls an unlogged dose a gap, not a confirmed miss", () => {
-      const secs = run({
-        trackers: [{
-          id: "tr1", name: "Metformin", category: "medication", unit: "twice daily",
-          createdAt: `${day(-30)}T00:00:00Z`,
-          fields: [{ name: "adherence", type: "select" }],
-          entries: [],
-        }],
-      });
+      const secs = run({ trackers: [metformin] }, { medicationGapTrackerIds: ["tr1"] });
       const [item] = byId(secs).health.items;
       expect(item.title).toContain("unlogged this week");
       expect(item.reason).toContain("not a confirmed miss");

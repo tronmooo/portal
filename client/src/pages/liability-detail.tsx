@@ -892,8 +892,13 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   // (shared/liability-status): that IS the next due date, and it reads
   // "Overdue" here exactly as it does on the bills list and the calendar,
   // instead of rolling forward silently (F-16).
+  // 2026-11-22 (A7): the header names the bill's NEXT date, as the dashboard,
+  // Finance and the bell do — an elapsed date is assumed paid. It used to hold
+  // an unpaid date inside a 30-day grace window as "Overdue", so tapping
+  // "Netflix · Nov 25" on the dashboard landed on "Overdue · Oct 25". The
+  // schedule below still lists every past date, where one can be recorded.
   const nextFutureOcc = scheduleOccs.find(
-    (o) => (o.effectiveDate >= todayISO || isWithinOverdueGrace(o.effectiveDate, todayISO)) && o.status !== "paid" && o.status !== "skipped",
+    (o) => o.effectiveDate >= todayISO && o.status !== "paid" && o.status !== "skipped" && o.status !== "missed",
   );
   const billNextDueEff = nextFutureOcc?.effectiveDate
     || schedule?.nextDue?.effectiveDate
@@ -1181,7 +1186,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     // never amortizing payoff. Open-ended bills omit it entirely.
     <div data-testid="bill-term-progress">
       <div className="flex justify-between text-[13px] text-muted-foreground mb-1">
-        <span>{billPaidCount} of {billTotalTerm} payments{missedCount > 0 ? ` · ${missedCount} missed` : ""}</span>
+        <span>{billPaidCount} of {billTotalTerm} payments{missedCount > 0 ? ` · ${missedCount} not recorded` : ""}</span>
         <span className="font-semibold tabular-nums">{billProgressPct}%</span>
       </div>
       <Progress value={billProgressPct} className="h-2" />
@@ -1568,7 +1573,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                         : "Ongoing — no end date"}
                   />
                   <Row label="Payments made" value={String(billPaidCount)} />
-                  {missedCount > 0 && <Row label="Missed" value={`${missedCount}`} />}
+                  {missedCount > 0 && <Row label="Not recorded" value={`${missedCount}`} />}
                   <Row label="Annual total" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : "—"} />
                   <Row label="Reminder" value={billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : "None"} />
                   <Row label="Auto Pay" value={isAutoPayOn(f2) ? "On" : "Off"} />

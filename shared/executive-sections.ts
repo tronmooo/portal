@@ -24,6 +24,7 @@
 // display.
 
 import { isQuietAutoPayBill } from "./autopay";
+import { isDateRowDismissed, alertIdsOfDateRow } from "./alert-ids";
 import { computeAttention, BIRTHDAY_RE, type AttentionItem, type AttentionInputs, type AttentionConfig } from "./attention";
 import { relativeTimeShort } from "./relative-time";
 import { ruleClaimKey, dateRuleVerbs, DOC_UPCOMING_WINDOW_DAYS, type DateRuleType } from "./date-rules";
@@ -463,8 +464,16 @@ export function buildExecutiveSections(
   // (d) Adherence gaps. `unlogged_gap` is expected-minus-logged, which is NOT
   // the same claim as "you missed a dose" — the wording here has to stay on
   // the honest side of that line (see shared/medication-doses.ts).
+  //
+  // OFF unless the user switched alerts on for that medication (owner,
+  // 2026-11-22: "Never treat unlogged medication as an important event by
+  // default"). The row used to be raised for every medication tracker and,
+  // stamped "today", took the Next Important tile.
+  const gapAlertIds = new Set(
+    Array.isArray(config?.medicationGapTrackerIds) ? config!.medicationGapTrackerIds.map(String) : []);
   for (const t of input.trackers || []) {
     if (!t?.id || !isMedicationTracker(t as any)) continue;
+    if (!gapAlertIds.has(String(t.id))) continue;
     const dose = computeMissedDoses(t as any, { days: 7, now: now.getTime() });
     if (dose.unlogged_gap < ADHERENCE_GAP_MIN) continue;
     cand.health.push({
@@ -552,6 +561,7 @@ export function buildExecutiveSections(
   // ── §7 Documents & Expirations ─────────────────────────────────────────────
   {
     const snoozed = new Set(input.snoozedDocumentIds || []);
+    const dismissedAlertIds = new Set(input.dismissedNotificationIds || []);
     const bestByDoc = new Map<string, { doc: any; du: number }>();
     for (const d of input.documents || []) {
       const id = d?.documentId || d?.id;
@@ -560,6 +570,9 @@ export function buildExecutiveSections(
       // record id alone meant dismissing a passport also hid the licence.
       // The record id is still honoured so snoozes made before this keep working.
       if (snoozed.has(d?.ruleId) || snoozed.has(id)) continue;
+      // …and a dismissal is stored server-side under the date's alert id, the
+      // same key the bell uses, so one dismissal hides both shapes.
+      if (isDateRowDismissed(d, dismissedAlertIds)) continue;
       // Group by the RULE, not by the record it hangs off. `documentId` is the
       // source entity now, so a person carrying both a passport and a licence
       // expiring inside the window collapsed to whichever was nearer and the
@@ -595,6 +608,7 @@ export function buildExecutiveSections(
         daysUntil: du, score: 0,
         href: String(doc.href || "").replace(/^#/, "") || `/documents/${id}`,
         action: { kind: "open", label: "Review" },
+        dismissIds: alertIdsOfDateRow(doc),
       });
     }
   }
