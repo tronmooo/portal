@@ -38,6 +38,7 @@ import {
   User,
   Maximize2,
   ChevronRight,
+  Send,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { stringifyField, stringifyFieldFor, isMoneyFieldKey, previewUnrenderable, isLineItemArray, formatLineItem } from "@/lib/field-display";
@@ -47,7 +48,6 @@ import { DOCUMENT_UPLOAD_ACCEPT, invalidateDocumentBlob, prefetchDocument, useDo
 import { userVisibleTags } from "@shared/system-tags";
 import { documentHasFile } from "@shared/document-file";
 import EditableTitle from "@/components/EditableTitle";
-import { ShareButton } from "@/components/DocumentViewer";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { classifyDateField, bareDateOf, daysBetweenISO, countdownLabel } from "@shared/date-rules";
 import { UPCOMING_WINDOW_DAYS } from "@shared/extraction-calendar";
@@ -982,6 +982,45 @@ function DocumentBody({
     }
   };
 
+  // Send the FILE itself to somebody: the phone's own share sheet (Messages,
+  // Mail, AirDrop…) with the document attached. The old Share menu opened an
+  // email or text with a sentence about the document and nothing attached.
+  const [sending, setSending] = useState(false);
+  const sendFile = async () => {
+    if (sending) return;
+    setSending(true);
+    try {
+      // A PDF's bytes are already here; an image is previewed from a
+      // phone-sized variant, so the original is fetched to send.
+      const blob = file.blob && kind !== "image"
+        ? file.blob
+        : await apiRequest("GET", `/api/documents/${doc.id}/file`).then((r) => r.blob()).catch(() => file.blob);
+      if (!blob) throw new Error("no file");
+      const type = blob.type || doc.mimeType || "application/octet-stream";
+      const ext = type === "application/pdf" ? "pdf" : type === "image/jpeg" ? "jpg" : type.startsWith("image/") ? type.slice(6).split("+")[0] : "";
+      const filename = !ext || new RegExp(`\\.${ext === "jpg" ? "jpe?g" : ext}$`, "i").test(doc.name) ? doc.name : `${doc.name}.${ext}`;
+      const shared = new File([blob], filename, { type });
+      const nav = navigator as Navigator & { canShare?: (data: ShareData) => boolean };
+      if (typeof nav.share === "function" && nav.canShare?.({ files: [shared] })) {
+        await nav.share({ files: [shared], title: doc.name });
+      } else {
+        // No share sheet in this browser: hand over the file to attach.
+        await downloadFile();
+        toast({ title: "Sharing isn't available in this browser", description: "The file was downloaded so you can attach it to a message." });
+      }
+    } catch (err: any) {
+      // Closing the share sheet without sending is not a failure.
+      if (err?.name !== "AbortError") toast({ title: "Couldn't send the file", description: doc.name, variant: "destructive" });
+    } finally {
+      setSending(false);
+    }
+  };
+  const sendButton = (testId: string, className: string, variant: "ghost" | "outline") => (
+    <Button variant={variant} size="icon" className={className} onClick={sendFile} disabled={sending} aria-label="Send to someone" title="Send to someone" data-testid={testId}>
+      {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+    </Button>
+  );
+
   const tabs: { id: DocTab; label: string; icon: typeof FileText }[] = [
     { id: "overview", label: "Overview", icon: Sparkles },
     { id: "data", label: "Extracted Data", icon: Layers },
@@ -1037,7 +1076,7 @@ function DocumentBody({
         {/* No file — sharing or downloading it can only fail. */}
         {viewable && (
           <div className="flex items-center gap-1.5 shrink-0">
-            <ShareButton id={doc.id} name={doc.name} mimeType={doc.mimeType} data={inlineData} size="icon" />
+            {sendButton("btn-send-doc", "h-9 w-9 rounded-xl shrink-0", "outline")}
             <Button
               variant="outline"
               size="icon"
@@ -1060,9 +1099,9 @@ function DocumentBody({
       )}
 
       {/* Tabs */}
-      <div className={cn("flex items-center gap-1.5 px-3 sm:px-4 shrink-0", tab === "file" ? "py-2" : "pb-3")}>
+      <div className={cn("flex items-center shrink-0", tab === "file" ? "gap-0.5 px-2 sm:gap-1 sm:px-4 py-2" : "gap-1 px-3 sm:px-4 pb-3")}>
         {tab === "file" && (
-          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full shrink-0" onClick={leave.run} aria-label={leave.label} title={leave.label} data-testid="btn-back-from-file">
+          <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-9 sm:w-9 rounded-full shrink-0" onClick={leave.run} aria-label={leave.label} title={leave.label} data-testid="btn-back-from-file">
             <LeaveIcon className="h-4 w-4" />
           </Button>
         )}
@@ -1075,18 +1114,28 @@ function DocumentBody({
               aria-selected={tab === id}
               onClick={() => setTab(id)}
               className={cn(
-                "flex-1 min-w-0 flex items-center justify-center gap-1.5 rounded-full px-1.5 py-2 text-[13px] sm:text-sm font-medium whitespace-nowrap transition-colors",
+                // Sized by its label (not thirds), and a label that still
+                // cannot fit is cut with an ellipsis: it never runs over the
+                // tab beside it.
+                "flex-auto min-w-0 overflow-hidden flex items-center justify-center gap-1.5 rounded-full px-1.5 sm:px-2 py-2 text-[13px] sm:text-sm font-medium transition-colors",
                 tab === id ? "bg-primary text-primary-foreground shadow" : "text-muted-foreground hover:text-foreground"
               )}
               data-testid={`tab-doc-${id}`}
             >
               {id !== "overview" && <Icon className="hidden sm:block h-4 w-4 shrink-0" />}
-              {label}
+              {/* The file tab's row also holds the way out, Send and
+                  Download, so on a phone the middle label is shortened. */}
+              {id === "data" && tab === "file" ? (
+                <span className="truncate"><span className="sm:hidden">Data</span><span className="hidden sm:inline">{label}</span></span>
+              ) : (
+                <span className="truncate">{label}</span>
+              )}
             </button>
           ))}
         </div>
+        {tab === "file" && viewable && sendButton("btn-send-from-file", "h-8 w-8 sm:h-9 sm:w-9 rounded-full shrink-0", "ghost")}
         {tab === "file" && viewable && (
-          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full shrink-0" onClick={downloadFile} aria-label="Download file" title="Download file" data-testid="btn-download-from-file">
+          <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-9 sm:w-9 rounded-full shrink-0" onClick={downloadFile} aria-label="Download file" title="Download file" data-testid="btn-download-from-file">
             <Download className="h-4 w-4" />
           </Button>
         )}

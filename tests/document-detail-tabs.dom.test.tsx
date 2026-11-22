@@ -106,6 +106,27 @@ describe("the document view opens on the file", () => {
     expect(screen.queryByTestId("doc-file-view")).toBeNull();
   });
 
+  it("Send hands the file itself to the phone's share sheet", async () => {
+    const share = vi.fn(async (_data: ShareData) => {});
+    Object.assign(navigator, { share, canShare: (d: ShareData) => !!d.files?.length });
+    blobState.blob = new Blob(["%PDF"], { type: "application/pdf" });
+    try {
+      mount();
+      fireEvent.click(await screen.findByTestId("btn-send-from-file"));
+      await waitFor(() => expect(share).toHaveBeenCalledTimes(1));
+      const sent = share.mock.calls[0][0].files![0];
+      expect(sent.name).toBe(`${DOC.name}.pdf`);
+      expect(sent.type).toBe("application/pdf");
+      // The same Send sits in the header on the other tabs.
+      fireEvent.click(screen.getByTestId("tab-doc-overview"));
+      expect(screen.getByTestId("btn-send-doc")).toBeTruthy();
+    } finally {
+      blobState.blob = null;
+      delete (navigator as any).share;
+      delete (navigator as any).canShare;
+    }
+  });
+
   it("the Overview is built from the document's own fields", async () => {
     mount();
     fireEvent.click(await screen.findByTestId("tab-doc-overview"));
@@ -151,6 +172,7 @@ describe("the document view opens on the file", () => {
     await waitFor(() => expect(screen.getByTestId("preview-discarded")).toBeTruthy());
     expect(screen.queryByTestId("doc-zoom-toolbar")).toBeNull();
     expect(screen.queryByTestId("btn-download-from-file")).toBeNull();
+    expect(screen.queryByTestId("btn-send-from-file")).toBeNull();
   });
 
   it("a document added without a file opens on the Overview and offers to attach one", async () => {
