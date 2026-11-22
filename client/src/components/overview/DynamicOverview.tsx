@@ -36,7 +36,7 @@ import type {
 
 // ── Value formatting ─────────────────────────────────────────────────────────
 
-function formatValue(v: OverviewValue): string {
+export function formatValue(v: OverviewValue): string {
   const raw = v.value;
   if (raw == null || raw === "") return "—";
   switch (v.displayType) {
@@ -63,7 +63,7 @@ function formatValue(v: OverviewValue): string {
 /** Estimates and model-derived numbers must never read as hand-entered fact.
  *  Only provenance that CHANGES how much you should trust a number is marked —
  *  putting an "AI" chip on everything would make the chip meaningless. */
-function ProvenanceMark({ value }: { value: OverviewValue }) {
+export function ProvenanceMark({ value }: { value: OverviewValue }) {
   if (value.provenance === "user" || value.provenance === "document") return null;
   const label =
     value.provenance === "calculated" ? "calculated"
@@ -87,7 +87,7 @@ function ProvenanceMark({ value }: { value: OverviewValue }) {
   );
 }
 
-function toneClass(tone?: OverviewValue["tone"]): string {
+export function toneClass(tone?: OverviewValue["tone"]): string {
   switch (tone) {
     case "positive": return "text-emerald-500";
     case "negative": return "text-red-500";
@@ -98,7 +98,7 @@ function toneClass(tone?: OverviewValue["tone"]): string {
 
 // ── Inline field editing ─────────────────────────────────────────────────────
 
-function useFieldWrite(profileId: string) {
+export function useFieldWrite(profileId: string) {
   const { toast } = useToast();
   return async (fieldKey: string, value: string | null) => {
     try {
@@ -500,7 +500,7 @@ function GroupedSection({ section, profileId }: { section: OverviewSection; prof
   );
 }
 
-function renderSection(section: OverviewSection, profileId: string) {
+export function renderSection(section: OverviewSection, profileId: string) {
   switch (section.component) {
     case "financialSummary": return <FinancialSection key={section.id} section={section} profileId={profileId} />;
     case "progressIndicator": return <ProgressSection key={section.id} section={section} />;
@@ -525,7 +525,7 @@ function renderSection(section: OverviewSection, profileId: string) {
  * with a value it doesn't have (or has an old one), and this offers to go get
  * one. The estimate is never written silently — the user accepts it.
  */
-function FindValueButton({ profileId, fieldKey }: { profileId: string; fieldKey: string }) {
+export function FindValueButton({ profileId, fieldKey }: { profileId: string; fieldKey: string }) {
   const [finding, setFinding] = useState(false);
   const [found, setFound] = useState<{ estimatedValue: number; confidence: string; explanation: string } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -646,7 +646,7 @@ function IdentityHeader({ spec, autoValuation }: { spec: OverviewSpec; autoValua
   );
 }
 
-function AttentionStrip({ spec }: { spec: OverviewSpec }) {
+export function AttentionStrip({ spec }: { spec: OverviewSpec }) {
   if (spec.attentionItems.length === 0) return null;
   return (
     <div className="space-y-1.5" data-testid="overview-attention">
@@ -673,6 +673,7 @@ export function DynamicOverview({
   fallback,
   children,
   autoValuation = true,
+  renderBody,
 }: {
   profileId: string;
   /** False when the user turned automatic value tracking off for this asset:
@@ -687,6 +688,10 @@ export function DynamicOverview({
    *  belongs-to). Rendered only when a composition actually loaded, so a
    *  fallback render never shows them twice. */
   children?: React.ReactNode;
+  /** Draws a loaded composition in a layout of the caller's own (the asset
+   *  profile's). The composition, its loading state and its fallback stay
+   *  here, so a custom layout can never show a blank page. */
+  renderBody?: (spec: OverviewSpec) => React.ReactNode;
 }) {
   const { data: spec, isLoading, isError } = useQuery<OverviewSpec>({
     queryKey: ["/api/profiles", profileId, "overview"],
@@ -733,6 +738,7 @@ export function DynamicOverview({
     );
   }
   if (isError || !spec?.identity) return <>{fallback ?? null}</>;
+  if (renderBody) return <div className="space-y-4" data-testid="dynamic-overview">{renderBody(spec)}</div>;
 
   return (
     <div className="space-y-3" data-testid="dynamic-overview">

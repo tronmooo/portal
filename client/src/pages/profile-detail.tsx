@@ -1,6 +1,9 @@
 import { NewNoteForm } from "@/components/notes/NewNoteForm";
 import { DetailValueCells } from "@/components/details/DetailValueCells";
 import { AddFieldPanel } from "@/components/AddFieldPanel";
+import { AssetOverviewBody, AssetProfileActions } from "@/components/asset/AssetOverviewLayout";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import type { OverviewSpec } from "@shared/overview-spec";
 import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
@@ -201,6 +204,7 @@ import {
 } from "@/components/ui/popover";
 import {
   ArrowLeft,
+  MoreHorizontal,
   User,
   PawPrint,
   Car,
@@ -3209,10 +3213,39 @@ function formatFieldDisplayValue(fieldKey: string, raw: string): string {
  * Overview is purpose-built) and as the fallback if a composition can't be
  * fetched, so the page can never end up blank.
  */
-function InfoTab({ profile, onEdit }: { profile: ProfileDetail; onEdit: () => void }) {
+/** An owned thing drawn to the asset mock-up (2026-11-22). An account is an
+ *  asset too, but its page is its balance — it keeps AccountOverview. */
+function usesAssetLayout(profile: any): boolean {
+  return !!profile && isAssetTabProfile(profile) && !isAccountProfile(profile);
+}
+
+function InfoTab({ profile, onEdit, onOpenDocuments }: { profile: ProfileDetail; onEdit: () => void; onOpenDocuments?: () => void }) {
   const dynamic = isAssetTabProfile(profile as any) || isLiabilityTabProfile(profile as any);
   const legacy = <StaticInfoTab profile={profile} onEdit={onEdit} />;
   if (!dynamic) return legacy;
+  if (usesAssetLayout(profile)) {
+    const auto = isAutoValuationEnabled(profile.fields);
+    return (
+      <div className="space-y-4">
+        <CurrentValueCard profileId={profile.id} fields={profile.fields} />
+        <DynamicOverview
+          profileId={profile.id}
+          fallback={legacy}
+          autoValuation={auto}
+          renderBody={(spec) => (
+            <AssetOverviewBody
+              spec={spec}
+              profile={profile as any}
+              autoValuation={auto}
+              onEdit={onEdit}
+              onOpenDocuments={onOpenDocuments}
+              locationSlot={<OverviewEditors profile={profile} />}
+            />
+          )}
+        />
+      </div>
+    );
+  }
   return (
     <>
       {/* Add field — the same Field | Value | Add as a person's Info page.
@@ -13274,6 +13307,17 @@ export default function ProfileDetailPage() {
     return `Shared · ${linked.length} people`;
   }, [currentPartyLinks, personOptions, profile]);
 
+  // The asset hero names what the thing is and its status from the same
+  // composition the Overview below is drawn from (one cache entry, one fetch).
+  const assetLayout = usesAssetLayout(profile);
+  const { data: heroSpec } = useQuery<OverviewSpec>({
+    queryKey: ["/api/profiles", id, "overview"],
+    queryFn: async () => (await apiRequest("GET", `/api/profiles/${id}/overview`)).json(),
+    enabled: assetLayout && !!id,
+    staleTime: 0,
+    retry: false,
+  });
+
   if (isLoading) {
     return (
       <div className="overflow-y-auto h-full pb-24">
@@ -13376,6 +13420,51 @@ export default function ProfileDetailPage() {
     return out;
   })();
 
+  const pageTabs = getTabsForType(profile.type, profile);
+  const openTab = (value: string) => navigate(`/profiles/${id}/${slugForProfileTab(pageTabs, value)}`);
+  const hasTab = (value: string) => pageTabs.some(t => t.value === value);
+  const tagPills = (profile.tags ?? []).slice().sort((a, b) => a.localeCompare(b)).map(tag => (
+    <Pill key={tag} accent="240 20% 60%">
+      <Tag className="h-2.5 w-2.5" />{tag}
+    </Pill>
+  ));
+  // Who owns it, from the owner links (an asset with none is the user's own).
+  const ownerPillLabel = (() => {
+    const owners = (currentPartyLinks || []).map((l: any) => {
+      const pid = l.partyProfileId || l.party?.id;
+      return { id: pid, name: l.party?.name || personOptions.find((p: any) => p.id === pid)?.name };
+    }).filter((o: any) => o.name);
+    const self = personOptions.find((p: any) => p.type === "self");
+    if (owners.length === 0) {
+      const named = profile.fields?.ownerName;
+      return named && named !== self?.name ? `Owned by ${named}` : "You own this";
+    }
+    if (owners.length === 1) return owners[0].id === self?.id ? "You own this" : `Owned by ${owners[0].name}`;
+    return ownerButtonLabel;
+  })();
+  const heroStatus = heroSpec?.identity?.status;
+  const statusTone = heroStatus?.tone === "positive" ? "good" : heroStatus?.tone === "critical" ? "critical"
+    : heroStatus?.tone === "warning" ? "warn" : "neutral";
+  const assetBadges = (
+    <>
+      {hasTab("contained") ? (
+        <button type="button" onClick={() => openTab("contained")} title="Open ownership" data-testid="hero-owner-pill">
+          <Pill tone="ai"><User className="h-3 w-3" />{ownerPillLabel}</Pill>
+        </button>
+      ) : (
+        <Pill tone="ai"><User className="h-3 w-3" />{ownerPillLabel}</Pill>
+      )}
+      {heroStatus && (
+        <span data-testid="hero-status-pill">
+          <Pill tone={statusTone} className="capitalize">
+            <span className="h-1.5 w-1.5 rounded-full bg-current" />{heroStatus.label}
+          </Pill>
+        </span>
+      )}
+      {tagPills}
+    </>
+  );
+
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="page-profile-detail">
       <div className="px-4 md:px-6 pt-4">
@@ -13384,12 +13473,15 @@ export default function ProfileDetailPage() {
           accent={visual.accent}
           icon={visual.icon}
           title={<span data-testid="text-profile-detail-name">{profile.name}</span>}
-          typeLabel={isAccountProfile(profile) ? accountKindMeta(accountKindOf(profile)).label : profile.type}
-          badges={(profile.tags ?? []).slice().sort((a, b) => a.localeCompare(b)).map(tag => (
-            <Pill key={tag} accent="240 20% 60%">
-              <Tag className="h-2.5 w-2.5" />{tag}
-            </Pill>
-          ))}
+          pageTitle={assetLayout ? "Asset Profile" : undefined}
+          subtitle={assetLayout ? (
+            <span className="inline-flex items-center gap-1.5 capitalize" data-testid="hero-entity-label">
+              <visual.icon className="h-3.5 w-3.5" />
+              {heroSpec?.identity?.entityLabel || String(profile.type).replace(/_/g, " ")}
+            </span>
+          ) : undefined}
+          typeLabel={assetLayout ? undefined : isAccountProfile(profile) ? accountKindMeta(accountKindOf(profile)).label : profile.type}
+          badges={assetLayout ? assetBadges : tagPills}
           breadcrumb={
             /* Only renders when this profile has a parent chain. `omitCurrent`
                because the hero title directly above IS the current node — it was
@@ -13406,7 +13498,7 @@ export default function ProfileDetailPage() {
               />
             ) : undefined
           }
-          notes={profile.notes}
+          notes={assetLayout ? undefined : profile.notes /* an asset's notes are the Notes tile */}
           avatar={{
             src: profile.avatar,
             onPick: () => avatarInputRef.current?.click(),
@@ -13416,7 +13508,35 @@ export default function ProfileDetailPage() {
           }}
           backHref={backHref}
           backLabel={backLabel}
-          actions={<>
+          actions={assetLayout ? (
+            /* The mock-up's ⋯ menu. Edit and Delete are also the first and last
+               rows of Profile actions at the bottom of the Overview. */
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-9 w-9 -mr-2 rounded-full" aria-label="Asset actions" data-testid="button-profile-menu">
+                  <MoreHorizontal className="h-5 w-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[180px]">
+                <DropdownMenuItem onSelect={() => setShowEditDialog(true)} data-testid="button-header-edit-profile">
+                  <Edit className="h-4 w-4 mr-2" /> Edit asset details
+                </DropdownMenuItem>
+                {hasTab("contained") && (
+                  <DropdownMenuItem onSelect={() => openTab("contained")} data-testid="menu-open-ownership">
+                    <User className="h-4 w-4 mr-2" /> Ownership &amp; what's inside
+                  </DropdownMenuItem>
+                )}
+                {hasTab("trackers") && (
+                  <DropdownMenuItem onSelect={() => openTab("trackers")} data-testid="menu-open-documents">
+                    <FileText className="h-4 w-4 mr-2" /> Documents
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onSelect={() => setShowDeleteDialog(true)} className="text-destructive focus:text-destructive" data-testid="button-delete-profile">
+                  <Trash2 className="h-4 w-4 mr-2" /> Delete this asset
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : <>
             {/* Owner picker deliberately absent — the single source of truth for
                 owners is the Linked People section in the Overview. */}
             <Button
@@ -13445,16 +13565,18 @@ export default function ProfileDetailPage() {
       {/* AI Summary Card — isolated so a malformed summary payload (e.g. a
           stale cached entry missing highlights/actionItems) degrades to a
           compact inline error instead of blanking the whole profile page. */}
-      <div className="px-4 md:px-6 pt-4">
-        <SectionErrorBoundary name="profile-ai-summary" inline>
-          <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} valueFingerprint={profileValueFingerprint(profile)} fields={profile.fields} />
-        </SectionErrorBoundary>
-      </div>
+      {!assetLayout && (
+        <div className="px-4 md:px-6 pt-4">
+          <SectionErrorBoundary name="profile-ai-summary" inline>
+            <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} valueFingerprint={profileValueFingerprint(profile)} fields={profile.fields} />
+          </SectionErrorBoundary>
+        </div>
+      )}
 
       {/* Profile Tabs — always use the full tab system */}
       <div className="px-4 md:px-6 pb-6">
         {(() => {
-          const tabs = getTabsForType(profile.type, profile);
+          const tabs = pageTabs;
           const tabValues = new Set(tabs.map(t => t.value));
           const activeTab = resolveProfileTab(tabs, urlTabSlug);
           return (
@@ -13480,7 +13602,11 @@ export default function ProfileDetailPage() {
 
               {tabValues.has("info") && (
                 <TabsContent value="info" className="mt-4 px-1 sm:px-0">
-                  <InfoTab profile={profile} onEdit={() => setShowEditDialog(true)} />
+                  <InfoTab
+                    profile={profile}
+                    onEdit={() => setShowEditDialog(true)}
+                    onOpenDocuments={tabValues.has("trackers") ? () => openTab("trackers") : undefined}
+                  />
                   {/* Person/Self Overview — single home for net worth, assets,
                       and liabilities (June 2026 restructure). The Finance tab
                       no longer shows asset/liability rollups; the Belongings
@@ -13584,11 +13710,28 @@ export default function ProfileDetailPage() {
                       previously unreachable from here (clearing lived inside an
                       expanded row of a dashboard popup; Delete only in the page
                       header). User report 2026-08-26. */}
-                  <ProfileAlertsSection
-                    profileId={profile.id}
-                    profileType={profile.type}
-                    onDelete={() => setShowDeleteDialog(true)}
-                  />
+                  {assetLayout ? (
+                    <>
+                      {/* The AI summary sits under the composed page on an asset:
+                          the mock-up leads with the value, not with prose. */}
+                      <div className="mt-4">
+                        <SectionErrorBoundary name="profile-ai-summary" inline>
+                          <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} valueFingerprint={profileValueFingerprint(profile)} fields={profile.fields} />
+                        </SectionErrorBoundary>
+                      </div>
+                      <AssetProfileActions
+                        profileId={profile.id}
+                        onEdit={() => setShowEditDialog(true)}
+                        onDelete={() => setShowDeleteDialog(true)}
+                      />
+                    </>
+                  ) : (
+                    <ProfileAlertsSection
+                      profileId={profile.id}
+                      profileType={profile.type}
+                      onDelete={() => setShowDeleteDialog(true)}
+                    />
+                  )}
                 </TabsContent>
               )}
 

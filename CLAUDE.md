@@ -519,8 +519,10 @@ not dismiss it.
 *Live check:* `npx tsx tests/live-dashboard-consistency-check.ts`.
 *Known gaps (2026-11-22):* the bill page's schedule still lists unrecorded past
 dates as overdue (it is where one is recorded); chat's bill table and
-"I paid X" still read the stored date; a profile page's "Clear document alerts"
-still writes the browser-only 30-day snooze (`ProfileAlertsSection.tsx`).
+"I paid X" still read the stored date; on a person, pet or account page "Clear
+document alerts" still writes the browser-only 30-day snooze
+(`ProfileAlertsSection.tsx`) — an asset's dismisses into the server list
+(`AssetProfileActions`).
 
 ## Record details rules (a characteristic is a typed, reportable value on any record)
 
@@ -583,6 +585,35 @@ liability the free-form fields are listed under it. Money, rate, date, switch
 and schedule fields are never listed there as text (L2/L3).
 *Guards:* `tests/info-tab-editable.dom.test.tsx`, `tests/add-field-panel.dom.test.tsx`,
 `tests/overview-render.dom.test.tsx`.
+
+## Asset profile layout (the owner's mock-up; a drawing of stores other screens read)
+
+Owner, 2026-11-22: "make it look more like the second photo and connect
+everything so nothing loses connections". An owned thing's Overview
+(`usesAssetLayout`, `client/src/pages/profile-detail.tsx`; an account keeps
+`AccountOverview`) is `AssetOverviewBody` + `AssetProfileActions`
+(`client/src/components/asset/AssetOverviewLayout.tsx`), under the restyled
+`CurrentValueCard` and a `DetailHero` with `pageTitle`. Read this before
+touching either.
+*Guard:* `tests/asset-overview-layout.dom.test.tsx`.
+
+**P1. The layout owns no data.** Details, dates and "Not set" suggestions are
+the composed `OverviewSpec` (passed through `DynamicOverview`'s `renderBody`,
+which keeps the loading state and the fallback); Financial position is the
+purchase price (else the user's typed value, `userEnteredAssetValue`) against
+`currentAssetValue` (Rule 1); a tile writes ONE field with the page's PATCH.
+Add a section by reading a store that exists, never by storing a copy.
+**P2. Alerts are the rule engine's.** The Alerts card and "Clear document
+alerts" are `useRecordAlerts`: `rulesFromAll` over the UNFLATTENED profile row
+and its documents, filtered by `isAlertDateRule`, identified by `dateAlertId`
+(the bell's id), cleared and restored through `useDismissedAlerts` (Rule 8).
+Never the browser snooze.
+**P3. Nothing is reachable from one place only.** Edit and Delete are in the
+header's ⋯ menu and in Profile actions; Add field is a Profile action
+(`AddFieldPanel inline`); documents open the Documents tab; the owner pill
+opens Contained. Delete only opens the page's confirmation (Rule 8). Opening
+the page writes nothing (Rule 3); a failed documents load is not "No documents
+yet" (Rule 7).
 
 ## Recurring occurrence rules (one date at a time; the series keeps its schedule)
 

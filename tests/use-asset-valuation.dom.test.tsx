@@ -73,7 +73,7 @@ describe("CurrentValueCard + useAssetValuation", () => {
     mount("a");
     expect(screen.getByTestId("current-value-amount").textContent).toBe("$20,000");
     expect(screen.getByTestId("current-value-range").textContent).toContain("$18,000");
-    expect(screen.getByTestId("current-value-confidence").textContent).toMatch(/medium confidence · 70%/);
+    expect(screen.getByTestId("current-value-confidence").textContent).toBe("Confidence: 70%");
     await new Promise(r => setTimeout(r, 30));
     expect(calls.filter(c => c.url.includes("/refresh"))).toHaveLength(0);
   });
