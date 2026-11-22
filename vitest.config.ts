@@ -186,6 +186,7 @@ export default defineConfig({
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
       'tests/dashboard-done-means-gone.dom.test.tsx',
+      'tests/bell-dismiss-shared.dom.test.tsx',
       'tests/executive-attention.test.ts',
       'tests/tasks-popup-focus.dom.test.tsx',
       'tests/modal-history.test.tsx',
@@ -280,6 +281,7 @@ export default defineConfig({
       'tests/attention.test.ts',
       'tests/dismiss-stays-dismissed.test.ts',
       'tests/bills-next-date.test.ts',
+      'tests/bills-and-alerts-consistency.test.ts',
       'tests/next-important.test.ts',
       'tests/exec-card-prefs.test.ts',
       // Dynamic asset & liability Overview composition (2026-08-26).

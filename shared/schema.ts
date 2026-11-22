@@ -774,6 +774,8 @@ export interface Obligation {
   linkedProfiles: string[];
   linkedAssetId?: string;
   linkedLiabilityId?: string;
+  /** Occurrence days already paid, skipped or marked missed (read-only; from the bill's own stamps). */
+  settledDates?: string[];
   linkedDocumentId?: string;
   recurrenceEnd?: string;        // YYYY-MM-DD — stop generating occurrences after this date
   currency: string;

@@ -37,7 +37,7 @@ import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersi
 import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
 import { isAutoPayOn, wantsDueReminders } from "@shared/autopay";
 import { runAutopayForLiability, setAutoPay, setOccurrenceStatus, reconcileBankTransaction, withPaymentStatuses } from "./autopay";
-import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
+import { retireGeneratedBillReminderTasks, withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { generateTitle } from "./content-title";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { enrichNutritionEntry, rescaleNutritionEntry, forgetEnrichmentMode } from "./nutrition-enrichment";
@@ -194,7 +194,7 @@ import { ProfileLinkFailure } from "./profile-link-failure";
 import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
-import { isGeneratedBillReminderTask } from "@shared/bill-reminders";
+import { shownOccurrenceToPay, rollBillsForward } from "@shared/bills-timeline";
 import { buildNotifications, mergeDismissedNotifications, restoreDismissedNotifications, listDismissedAlerts } from "./notification-service";
 import {
   createNote, updateNote, deleteNote, listNotes,
@@ -2708,13 +2708,8 @@ export async function registerRoutes(
                 // tasks. Only the scan's own fingerprint matches — a task the
                 // user typed is left alone (shared/bill-reminders).
                 {
-                  // Paused and ended bills count: their reminders are just as stale.
-                  const billIds = new Set<string>(profiles.filter((p: any) => isRecurringBillProfile(p)).map((p: any) => String(p.id)));
-                  const knownIds = new Set<string>(profiles.map((p: any) => String(p.id)));
-                  for (const t of existingTasks) {
-                    if (!isGeneratedBillReminderTask(t, (id: string) => billIds.has(id) || !knownIds.has(id))) continue;
-                    try { if (await scoped.deleteTask(String(t.id))) { userWrote = true; retired++; } } catch { /* best effort */ }
-                  }
+                  const n = await retireGeneratedBillReminderTasks(scoped, existingTasks, profiles, log).catch(() => 0);
+                  if (n) { userWrote = true; retired += n; }
                 }
                 for (const bill of bills) {
                   const f: any = bill.fields || {};
@@ -7019,7 +7014,11 @@ Rules:
     if (!uid) return false;
     try {
       const { advanced, ended } = await storage.repairRecurringTasks(getUserToday(getTimezone(req)));
-      if (!advanced && !ended) return false;
+      // The "Bill due: <name>" tasks the due scan used to generate are retired
+      // here too (A7), so every task surface stops showing them on the first
+      // read after deploy rather than after the next nightly scan.
+      const retired = await retireGeneratedBillReminderTasks(storage).catch(() => 0);
+      if (!advanced && !ended && !retired) return false;
       bustUserCaches(uid, ["tasks"]);
       const v = await bumpDataVersionNow(uid, ["tasks"]);
       if (v) (req as any).__dataVersions = mergeVersionMaps((req as any).__dataVersions || {}, v);
@@ -8969,6 +8968,13 @@ Rules:
     // payment date the caller chose — previously validated and then silently
     // dropped on the floor.
     let failReason: string | undefined;
+    // The occurrence the caller named — or, for a plain "Pay" on a bill whose
+    // stored date is stale, the one the lists show (its next date). Without
+    // this a tap on "Netflix · Nov 25" settled July, the row stayed, and each
+    // further tap recorded another real payment (2026-11-22 audit).
+    const namedOccurrence = isCalendarDay(String(req.body?.occurrenceDate || "")) ? String(req.body.occurrenceDate) : null;
+    const shownOccurrence = namedOccurrence ? null
+      : shownOccurrenceToPay(await storage.getObligation(req.params.id).catch(() => null) as any, getUserToday(getTimezone(req)));
     const inflight = (async () => {
       const result = await payBillOccurrence(storage, req.params.id, {
         amount: amount ?? null,
@@ -8978,7 +8984,7 @@ Rules:
         // which one was meant: it paid the current occurrence and folded the
         // second request (same money, seconds later) into the first, so
         // catching up two months paid one (D276).
-        occurrenceDate: isCalendarDay(String(req.body?.occurrenceDate || "")) ? String(req.body.occurrenceDate) : null,
+        occurrenceDate: namedOccurrence ?? shownOccurrence,
         // Pay-from-account: the occurrence route honoured accountId, this one
         // silently dropped it, so the source account's balance never moved.
         accountId: accountId || null,
@@ -11186,7 +11192,9 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
             );
           };
           const openTasks = tasks.filter((t: any) => t?.status !== "done");
-          const activeObs = obligations.filter((o: any) => o?.status !== "cancelled" && o?.status !== "paused");
+          // Bills at their NEXT date (A7), so the advice is never told a
+          // subscription last recorded months ago is "overdue".
+          const activeObs = rollBillsForward(obligations.filter((o: any) => o?.status !== "cancelled" && o?.status !== "paused") as any[], todayISO);
           const meds = activeObs.filter((o: any) => String(o.kind || "").toLowerCase() === "medication");
           const takenToday = (o: any) =>
             (o.payments || []).some((p: any) => String(p?.date || "").slice(0, 10) === todayISO);

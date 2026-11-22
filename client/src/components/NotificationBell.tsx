@@ -93,6 +93,14 @@ function getSeverityStyles(severity: Notification["severity"]) {
 // Persist dismissed IDs to the preferences API so they survive page reloads
 const DISMISSED_PREF_KEY = "dismissed_notifications";
 
+async function fetchDismissedIds(): Promise<string[]> {
+  const res = await apiRequest("GET", `/api/preferences/${DISMISSED_PREF_KEY}`);
+  const json = await res.json().catch(() => null);
+  if (!json?.value) return [];
+  const list = JSON.parse(json.value);
+  return Array.isArray(list) ? list : [];
+}
+
 async function loadDismissedIds(): Promise<string[]> {
   try {
     // Audit fix: this used raw fetch() which bypassed the auth interceptor,
@@ -105,13 +113,7 @@ async function loadDismissedIds(): Promise<string[]> {
     // now share one cache slot — the dashboard used to fetch it twice per load.
     const parsed = await queryClient.fetchQuery<string[]>({
       queryKey: [`/api/preferences/${DISMISSED_PREF_KEY}`],
-      queryFn: async () => {
-        const res = await apiRequest("GET", `/api/preferences/${DISMISSED_PREF_KEY}`);
-        const json = await res.json().catch(() => null);
-        if (!json?.value) return [];
-        const list = JSON.parse(json.value);
-        return Array.isArray(list) ? list : [];
-      },
+      queryFn: fetchDismissedIds,
       // staleTime 0: a concurrent fetch under this key (the briefing's) is
       // joined, which is the double-request the dashboard load paid for; a
       // completed one is re-read so a dismissal made elsewhere is not hidden
@@ -134,7 +136,12 @@ async function dismissOnServer(ids: string[]): Promise<string[] | null> {
   try {
     const res = await apiRequest("POST", "/api/notifications/dismiss", { ids });
     const json = await res.json().catch(() => null);
-    return Array.isArray(json?.ids) ? json.ids : null;
+    const merged = Array.isArray(json?.ids) ? json.ids : null;
+    // One list, every reader (2026-11-22): the dashboard's rows read this same
+    // cache slot, so a dismissal made here hides them at once instead of at
+    // their next refetch.
+    if (merged) queryClient.setQueryData([`/api/preferences/${DISMISSED_PREF_KEY}`], merged);
+    return merged;
   } catch {
     return null; // local state still hides the item for this session
   }
@@ -160,6 +167,18 @@ export function NotificationBell() {
       .then(ids => { if (ids.length > 0) setDismissedIds(new Set(ids)); })
       .finally(() => setDismissedReady(true));
   }, []);
+
+  // Follow the shared list after mount too: an alert RESTORED from the
+  // dashboard's Dismissed list must come back here, and one dismissed there
+  // must leave. The set above used to be loaded once and never looked at again.
+  const { data: sharedDismissed } = useQuery<string[]>({
+    queryKey: [`/api/preferences/${DISMISSED_PREF_KEY}`],
+    queryFn: fetchDismissedIds,
+    staleTime: 60_000,
+  });
+  useEffect(() => {
+    if (Array.isArray(sharedDismissed)) setDismissedIds(new Set(sharedDismissed));
+  }, [sharedDismissed]);
 
   // Read the active profile scope from the ONE reactive store binding. The bell
   // previously mirrored the store into local state, so during a profile switch
@@ -205,13 +224,21 @@ export function NotificationBell() {
     (notification: Notification) => {
       // Mark as read (same persistence as the X button) so badge count decrements
       // and the item disappears from the unread list after click.
-      setDismissedIds(prev => {
-        if (prev.has(notification.id)) return prev;
-        const next = new Set(Array.from(prev));
-        next.add(notification.id);
-        return next;
-      });
-      void dismissOnServer([notification.id]).then((merged) => { if (merged) setDismissedIds(new Set(merged)); });
+      //
+      // EXCEPT a dated record alert ("Expired: Home Depot …"). Its id is the
+      // one the dashboard's Needs Attention row is dismissed under
+      // (shared/alert-ids), so opening it from here would silently remove that
+      // row too. Looking at an expiration is not dismissing it: that takes the
+      // X (here or on the dashboard), and Restore brings it back.
+      if (notification.type !== "document_expiring") {
+        setDismissedIds(prev => {
+          if (prev.has(notification.id)) return prev;
+          const next = new Set(Array.from(prev));
+          next.add(notification.id);
+          return next;
+        });
+        void dismissOnServer([notification.id]).then((merged) => { if (merged) setDismissedIds(new Set(merged)); });
+      }
       // Deep-link to the RECORD the notification names (Rule 24: one route
       // resolver, shared/entity-routes, via lib/notification-route). A task
       // lands on its card, a bill on its row, a document on its page; an

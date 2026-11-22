@@ -4930,7 +4930,10 @@ export class SupabaseStorage implements IStorage {
             completed: o.status === "paid",
             meta: {
               kind: fam === "recurring" ? "bill" : "payment",
-              status: toUiStatus(o.status),
+              // A recurring bill's elapsed date is assumed paid (A7): it is a
+              // past date on the calendar, not a red "late" one. A loan or
+              // card instalment that was not paid is still late.
+              status: fam === "recurring" && o.status === "overdue" ? "pending" : toUiStatus(o.status),
               amount: o.amount,
               recurrence: freq,
               occurrenceId: o.occurrenceId,
@@ -6046,6 +6049,12 @@ export class SupabaseStorage implements IStorage {
       leadTimeDays: 3,
       autoLogExpense: false,
       linkedLiabilityId: p.id,
+      // The occurrence days already closed (paid / skipped / missed), for the
+      // read rule that names a bill's NEXT date (shared/bills-timeline): it
+      // must step over a date settled from the calendar or from a rolled row,
+      // which leaves the stored due date where it was.
+      settledDates: Object.keys((f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {})
+        .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && isSettledOccurrence(f, d)),
       // The bill's owner chain is its parent PLUS every party on it (a
       // co-signer, a responsible party): a bill Linda co-signs is Linda's on
       // her bills list, snapshot, timeline and bell, the way her co-owned

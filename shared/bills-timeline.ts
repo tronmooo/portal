@@ -36,6 +36,14 @@ export interface BillsTimelineObligation {
   autopay?: boolean;
   linkedLiabilityId?: string | null;
   payments?: Array<{ id?: string; amount?: number; date?: string | null }> | null;
+  /**
+   * Occurrence days the user or Auto Pay already closed (paid, skipped or
+   * marked missed) — the bill's own stamps. The stored due date only moves
+   * when the occurrence it names is the one settled, so "Mark paid" on a later
+   * date (from the calendar, or from a row this module rolled forward) leaves
+   * it behind; without these the walk would keep naming a date that is done.
+   */
+  settledDates?: readonly string[] | null;
 }
 
 export interface BillTimelineRow {
@@ -115,7 +123,9 @@ export function buildBillsTimeline(
     if (!DAY.test(stored)) continue;
     const end = DAY.test(String(o.recurrenceEnd || "").slice(0, 10)) ? String(o.recurrenceEnd).slice(0, 10) : "";
 
+    const settled = new Set((o.settledDates || []).map((d) => String(d).slice(0, 10)));
     if (isOneTimeFrequency(frequency)) {
+      if (settled.has(stored)) continue; // its one occurrence is closed
       if (stored >= today) { if (stored <= horizon) upcoming.push(row(stored, "upcoming")); }
       else if (stored >= since) past.push(row(stored, "assumed"));
       continue;
@@ -127,9 +137,11 @@ export function buildBillsTimeline(
     let cur = stored;
     // Every elapsed cycle is assumed paid; the walk stops at the first date on
     // or after today. Bounded: ten years of weekly cycles.
-    for (let guard = 0; guard < 600 && cur < today; guard++) {
+    // A date the user already closed is neither assumed (a paid one is in
+    // the payments above; a skipped or missed one was not paid) nor upcoming.
+    for (let guard = 0; guard < 600 && (cur < today || settled.has(cur)); guard++) {
       if (end && cur > end) break;
-      if (cur >= since) past.push(row(cur, "assumed"));
+      if (cur < today && cur >= since && !settled.has(cur)) past.push(row(cur, "assumed"));
       const next = advance(cur, rule);
       if (!DAY.test(next) || next <= cur) { cur = ""; break; }
       cur = next;
@@ -150,26 +162,30 @@ export function buildBillsTimeline(
  * bill whose day has passed, or a series past its end.
  */
 export function nextBillDate(
-  o: Pick<BillsTimelineObligation, "frequency" | "nextDueDate" | "recurrenceEnd"> | null | undefined,
+  o: Pick<BillsTimelineObligation, "frequency" | "nextDueDate" | "recurrenceEnd" | "settledDates"> | null | undefined,
   todayISO: string,
 ): string | null {
   const today = String(todayISO || "").slice(0, 10);
   const stored = String(o?.nextDueDate || "").slice(0, 10);
   if (!DAY.test(today) || !DAY.test(stored)) return null;
   const end = DAY.test(String(o?.recurrenceEnd || "").slice(0, 10)) ? String(o!.recurrenceEnd).slice(0, 10) : "";
-  if (stored >= today) return end && stored > end ? null : stored;
+  const settled = new Set((o?.settledDates || []).map((d) => String(d).slice(0, 10)));
+  const open = (d: string) => d >= today && !settled.has(d);
+  if (open(stored)) return end && stored > end ? null : stored;
   const frequency = String(o?.frequency || "monthly");
   if (isOneTimeFrequency(frequency)) return null;
   const rule = billRecurrenceRule(frequency);
   if (!rule.unit) return null;
   rule.anchorDay = Number(stored.slice(8, 10));
   let cur = stored;
-  for (let guard = 0; guard < 600 && cur < today; guard++) {
+  // Past dates are assumed paid; a date already paid, skipped or marked
+  // missed is done. The first date that is neither is what is next.
+  for (let guard = 0; guard < 600 && !open(cur); guard++) {
     const next = advance(cur, rule);
     if (!DAY.test(next) || next <= cur) return null;
     cur = next;
   }
-  if (cur < today || (end && cur > end)) return null;
+  if (!open(cur) || (end && cur > end)) return null;
   return cur;
 }
 
@@ -199,4 +215,46 @@ export function rollBillsForward<T extends { frequency?: string | null; nextDueD
     out.push(next === stored ? o : { ...o, nextDueDate: next });
   }
   return out;
+}
+
+/**
+ * Which occurrence a plain "Pay" (no date named) settles when the bill's
+ * stored date is stale: the one every list shows — its next date.
+ *
+ * The lists roll a stale date forward, so the row says "Netflix · Nov 25". A
+ * dateless pay used to settle the STORED occurrence (July): the row stayed,
+ * and every further tap recorded another real payment for another old month
+ * while the amount shown was still counted as owed. Null when the stored date
+ * is today or ahead (the pay operation's own rule applies, unchanged) or when
+ * nothing is coming.
+ */
+export function shownOccurrenceToPay(
+  o: Pick<BillsTimelineObligation, "frequency" | "nextDueDate" | "recurrenceEnd" | "settledDates"> | null | undefined,
+  todayISO: string,
+): string | null {
+  const today = String(todayISO || "").slice(0, 10);
+  const stored = String(o?.nextDueDate || "").slice(0, 10);
+  if (!DAY.test(today) || !DAY.test(stored) || stored >= today) return null;
+  return nextBillDate(o, today);
+}
+
+/**
+ * A recurring bill's next date read straight off its record's fields — for the
+ * screens that hold the profile rather than the obligation projection (the
+ * Liabilities list). `storedDue` is the record's stored due date. Falls back
+ * to that date when nothing is coming (a one-time bill, an ended series), so
+ * the caller still has a date to show.
+ */
+export function nextBillDateForFields(fields: Record<string, any> | null | undefined, storedDue: string | null | undefined, todayISO: string): string | null {
+  const stored = String(storedDue || "").slice(0, 10);
+  if (!DAY.test(stored)) return storedDue ? String(storedDue) : null;
+  const f = fields || {};
+  const occ = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {};
+  const settledDates = Object.keys(occ).filter((d) => DAY.test(d) && ["paid", "skipped", "missed"].includes(String(occ[d]?.status)));
+  return nextBillDate({
+    frequency: f.frequency ?? f.billingFrequency ?? "monthly",
+    nextDueDate: stored,
+    recurrenceEnd: typeof f.recurrenceEnd === "string" ? f.recurrenceEnd : null,
+    settledDates,
+  }, todayISO) ?? stored;
 }

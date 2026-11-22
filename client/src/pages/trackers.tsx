@@ -1,6 +1,7 @@
 import { changedFieldsOnly } from "@shared/field-patch";
 import { BROWSER_TIMEZONE as TRACKER_TZ } from "@/lib/queryClient";
 import { resolveLiabilityDueDate, deriveScheduleFields } from "@shared/liability-schedule";
+import { nextBillDateForFields } from "@shared/bills-timeline";
 import { getUserToday as tzUserToday, toLocalDateStr as tzLocalDateStr } from "@shared/timezone";
 import { readBalance, readInterestRatePct } from "@shared/liability-fields";
 import { daysUntilISO } from "@shared/date-rules";
@@ -7116,10 +7117,16 @@ export default function TrackersPage() {
                 // counted from today. Reading the stored date first let a loan's
                 // first-payment date from 2022 win, and the card of a loan added
                 // today said "1601d overdue" while its page said "Due in 13d".
+                // A recurring BILL shows its NEXT date (A7): an elapsed due date
+                // is assumed paid, exactly as the dashboard, Finance and the bell
+                // read it. Printing the stored date put "120d overdue" on a
+                // subscription card while every list said it was due next week.
                 const rawDue = isRecurringBillRecord(liab)
-                  ? (resolveLiabilityDueDate({ ...fin, ...fields })
-                    ?? deriveScheduleFields(fields, liab.type_key ?? liab.typeKey, tzUserToday(TRACKER_TZ)).nextDueDate
-                    ?? fin.dueDate)
+                  ? nextBillDateForFields(fields,
+                      resolveLiabilityDueDate({ ...fin, ...fields })
+                        ?? deriveScheduleFields(fields, liab.type_key ?? liab.typeKey, tzUserToday(TRACKER_TZ)).nextDueDate
+                        ?? fin.dueDate,
+                      tzUserToday(TRACKER_TZ))
                   : (getRecordTemporalStatus({ kind: "liability", fields: { ...fin, ...fields }, row: liab }, tzUserToday(TRACKER_TZ)).nextOccurrence ?? null);
                 const due = fmtDue(rawDue);
                 const dueIn = daysUntilDue(rawDue);

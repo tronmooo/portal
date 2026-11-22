@@ -3,7 +3,8 @@
 //     task, and the Dashboard, Finance and the bell agree on its date (A7);
 //   - a dismissed alert stays dismissed across a NEW sign-in, hides both of
 //     its shapes, and returns only on Restore ("Done means gone");
-//   - none of it creates an expense.
+//   - a plain Pay on a rolled row settles the date shown, once;
+//   - nothing else creates an expense, and no existing task is removed.
 //   npx tsx tests/live-dashboard-consistency-check.ts
 // Takes the gate lock; deletes what it creates and restores what it dismisses.
 import { api, getSmokeToken } from "./smoke/fixture/api";
@@ -23,9 +24,10 @@ async function main() {
   let billId: string | undefined;
   let docId: string | undefined;
   let dismissedId: string | undefined;
+  let paidExpenseIds: string[] = [];
   try {
     console.log(`production is serving ${String((await (await fetch(`${UI_BASE}/api/version`)).json()).sha).slice(0, 7)}`);
-    const expensesBefore = list(await api("GET", "/expenses"), "expenses").length;
+    const expenseIdsBefore = new Set(list(await api("GET", "/expenses"), "expenses").map((e) => e.id));
     const tasksBefore = list(await api("GET", "/tasks"), "tasks");
 
     // ── a bill whose stored date is four months back ─────────────────────
@@ -53,6 +55,21 @@ async function main() {
 
     const tasksAfterBill = list(await api("GET", "/tasks"), "tasks");
     check(!tasksAfterBill.some((t) => String(t.title).includes(billName)), "Tasks: creating the bill made no task");
+
+    // ── "Pay" on the row settles the date it shows, once ─────────────────
+    const shownDate = String(mine?.dueDate || "").slice(0, 10);
+    const paid = await api("POST", `/obligations/${billId}/pay`, {});
+    check(paid.ok, "a plain Pay on the listed bill is accepted");
+    const afterPay = ((await api("GET", "/dashboard-enhanced")).data?.financeSnapshot?.upcomingBills || []) as any[];
+    const mineAfter = afterPay.find((b) => b.id === billId);
+    check(!mineAfter || String(mineAfter.dueDate).slice(0, 10) > shownDate, `the row moves on from ${shownDate} (now ${mineAfter ? String(mineAfter.dueDate).slice(0, 10) : "outside the 30-day window"}) — done means gone`);
+    const expensesAfterPay = list(await api("GET", "/expenses"), "expenses");
+    paidExpenseIds = expensesAfterPay.filter((e) => !expenseIdsBefore.has(e.id)).map((e) => e.id);
+    check(paidExpenseIds.length === 1, `one payment, one expense (${paidExpenseIds.length} new)`);
+    const again = await api("POST", `/obligations/${billId}/pay`, {});
+    const expensesAfterSecond = list(await api("GET", "/expenses"), "expenses").filter((e) => !expenseIdsBefore.has(e.id));
+    check(again.ok && expensesAfterSecond.length === 1, "an immediate second tap records nothing more");
+    paidExpenseIds = expensesAfterSecond.map((e) => e.id);
 
     // ── a document that expired, dismissed from one shape ────────────────
     const doc = await api("POST", "/documents", { name: `Warranty ${tag}`, type: "warranty", mimeType: "text/plain", fileData: "", extractedData: { expirationDate: plusDays(-20) } });
@@ -88,11 +105,13 @@ async function main() {
     check(list(await api("GET", "/notifications"), "notifications").some((n) => n.id === id), "…and the alert shows again");
 
     // ── nothing was spent, nothing was removed ───────────────────────────
-    check(list(await api("GET", "/expenses"), "expenses").length === expensesBefore, `no expense was created (${expensesBefore} before and after)`);
+    const newExpenses = list(await api("GET", "/expenses"), "expenses").filter((e) => !expenseIdsBefore.has(e.id));
+    check(newExpenses.length === 1, `nothing but the one payment created an expense (${newExpenses.length} new in the whole run)`);
     const tasksNow = list(await api("GET", "/tasks"), "tasks");
     check(tasksBefore.every((t) => tasksNow.some((n) => n.id === t.id)), "every task that existed before is still there");
   } finally {
     if (dismissedId) await api("POST", "/notifications/restore", { ids: [dismissedId] }).catch(() => undefined);
+    for (const id of paidExpenseIds) await api("DELETE", `/expenses/${id}`).catch(() => undefined);
     if (docId) await api("DELETE", `/documents/${docId}`).catch(() => undefined);
     if (billId) await api("DELETE", `/obligations/${billId}`).catch(() => undefined);
     await release();

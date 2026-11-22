@@ -452,8 +452,27 @@ or counts five months of a subscription in one month's Expenses. It is a READ
 rule: the stored date still moves only on pay / skip / missed. The dashboard
 Money card has no Pay button; a row opens Bills & Payments (`BillsDuePopup`),
 the Finance tab's panel.
+The walk steps over an occurrence already paid, skipped or marked missed
+(`settledDates` on the obligation, from the bill's own stamps), because the
+stored date does not move when a LATER date is the one settled. A plain "Pay"
+(no date named) on a bill whose stored date is stale settles the date the lists
+show (`shownOccurrenceToPay`, in the pay route) — never an old month with the
+row left in place. An edit form writes a due date only when the user changed
+it. The Liabilities list (`nextBillDateForFields`), the bill page header, the
+calendar (a recurring bill's past date is not "late") and the AI advice count
+read the same next date. Generated bill tasks are retired on the first read of
+the task list as well as by the scan (`retireGeneratedBillReminderTasks`).
+The bell removes dismissed ids BEFORE collapsing a record's notices, follows
+the shared dismissed list after mount, and opening a dated alert from it does
+not dismiss it.
 *Guards:* `tests/bills-next-date.test.ts`, `tests/dismiss-stays-dismissed.test.ts`,
-`tests/executive-sections.test.tsx`.
+`tests/executive-sections.test.tsx`, `tests/bills-and-alerts-consistency.test.ts`,
+`tests/bell-dismiss-shared.dom.test.tsx`.
+*Live check:* `npx tsx tests/live-dashboard-consistency-check.ts`.
+*Known gaps (2026-11-22):* the bill page's schedule still lists unrecorded past
+dates as overdue (it is where one is recorded); chat's bill table and
+"I paid X" still read the stored date; a profile page's "Clear document alerts"
+still writes the browser-only 30-day snooze (`ProfileAlertsSection.tsx`).
 
 ## Record details rules (a characteristic is a typed, reportable value on any record)
 

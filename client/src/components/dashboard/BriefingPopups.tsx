@@ -471,7 +471,12 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
             <input type="date" value={editDue} onChange={e => setEditDue(e.target.value)}
               className="h-8 px-2.5 rounded-full border border-border bg-background text-xs" data-testid={`bill-edit-due-${b.id}`} />
             <ActionBtn label="Save" icon={Check} disabled={editBill.isPending} testId={`bill-edit-save-${b.id}`}
-              onClick={() => editBill.mutate({ id: b.id, ...(editAmount ? { amount: Number(editAmount) } : {}), ...(editDue ? { nextDueDate: editDue } : {}) })} />
+              onClick={() => editBill.mutate({ id: b.id, ...(editAmount ? { amount: Number(editAmount) } : {}), 
+                // Only a date the user CHANGED is written. The box opens on the
+                // date the list shows (the bill's next date, which may be rolled
+                // forward from a stale stored one); sending it back untouched
+                // would turn that read rule into a write on an amount-only edit.
+                ...(editDue && editDue !== due ? { nextDueDate: editDue } : {}) })} />
             <ActionBtn label="Cancel" onClick={() => setEditId(null)} />
           </div>
         ) : confirmDeleteId === b.id ? (

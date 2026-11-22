@@ -12,6 +12,7 @@
 // different rows depending on whether you typed it into a form or into chat.
 // That is not a synchronization bug, but it is the same disease: two code paths
 // answering one question. Both callers now land here.
+import { isGeneratedBillReminderTask } from "@shared/bill-reminders";
 import { allocatePayment, interestChargedInMonth, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName } from "@shared/liability-types";
 import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate, resolveOccurrenceKey, lastSeriesOccurrence } from "@shared/liability-recurrence";
@@ -695,6 +696,38 @@ export async function collapseDuplicateBillReminders(storage: IStorage, logger: 
     try { if (await storage.deleteTask(id)) removed++; } catch (e: any) { logger.warn?.(`[bill-reminders] could not drop duplicate ${id}: ${e?.message || e}`); }
   }
   return removed;
+}
+
+/**
+ * Moves to Trash every "Bill due: <name>" task an earlier due scan generated
+ * (shared/bill-reminders: the scan's exact fingerprint — a task a person typed
+ * or edited is left alone). A bill is not a task (Auto Pay rule A7). Runs from
+ * the daily scan and, like the recurring-task rollover, when the task list is
+ * read — so the Tasks card, the Tasks page and the calendar stop showing them
+ * on the first load, not a day later. A soft delete: `restoreTask` brings one
+ * back. Returns how many were retired.
+ */
+export async function retireGeneratedBillReminderTasks(
+  storage: IStorage, tasks?: any[], profiles?: any[], logger: PaymentLogger = noopLogger,
+): Promise<number> {
+  if (!tasks) tasks = await storage.getTasks().catch(() => [] as any[]);
+  const maybe = (tasks as any[]).filter((t) => t && t.status !== "done"
+    && typeof t.title === "string" && t.title.startsWith(BILL_REMINDER_TASK_PREFIX));
+  if (maybe.length === 0) return 0;
+  // "Is the linked record a bill, or gone?" needs the WHOLE profile list. A
+  // failed read must not make every record look gone (Rule 7): retire nothing.
+  if (!profiles) {
+    try { profiles = await storage.getProfiles(); } catch { return 0; }
+  }
+  if (!Array.isArray(profiles)) return 0;
+  const billIds = new Set<string>(profiles.filter((p: any) => isRecurringBillProfile(p)).map((p: any) => String(p.id)));
+  const knownIds = new Set<string>(profiles.map((p: any) => String(p.id)));
+  let retired = 0;
+  for (const t of maybe) {
+    if (!isGeneratedBillReminderTask(t, (id: string) => billIds.has(id) || !knownIds.has(id))) continue;
+    try { if (await storage.deleteTask(String(t.id))) retired++; } catch (e: any) { logger.warn?.(`[bill-reminders] could not retire ${t.id}: ${e?.message || e}`); }
+  }
+  return retired;
 }
 
 /** True for an open "Bill due" reminder task that belongs to this bill. */

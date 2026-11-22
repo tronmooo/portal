@@ -557,11 +557,20 @@ export async function buildNotifications(
     }
   } catch { /* recurring-date bell entries are best-effort */ }
 
+  // Dismissed ids leave BEFORE the per-record collapse below. Collapsing
+  // first kept only a record's most severe notice, so dismissing that one hid
+  // every other notice about the record (a policy's later deadline; a missed
+  // payment on a liability whose expired date had been dismissed) — until the
+  // hidden one grew more severe and reappeared looking like the dismissed
+  // alert coming back. One dismissal is of one fact (shared/alert-ids).
+  const dismissedFirst = opts?.includeDismissed ? new Set<string>() : await readDismissedNotificationIds(storage);
+  const candidates = dismissedFirst.size > 0 ? notifications.filter((n) => !dismissedFirst.has(n.id)) : notifications;
+
   // Deduplicate: keep only the most severe notification per entityId
   const severityOrder: Record<string, number> = { critical: 0, warning: 1, info: 2 };
   const seenEntities = new Map<string, number>();
   const deduped: AppNotification[] = [];
-  for (const notif of notifications) {
+  for (const notif of candidates) {
     const dedupeKey = notif.entityId && notif.entityType
       ? `${notif.entityType}:${notif.entityId}`
       : notif.id;

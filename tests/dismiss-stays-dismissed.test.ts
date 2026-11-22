@@ -219,7 +219,6 @@ describe("a bill is not a task: the due scan raises no reminder and retires the 
     expect(from).toBeGreaterThan(-1);
     expect(scan.length).toBeGreaterThan(500);
     expect(scan).not.toContain("createTask(");
-    expect(scan).toContain("isGeneratedBillReminderTask(t,");
-    expect(scan).toContain("scoped.deleteTask(String(t.id))");
+    expect(scan).toContain("retireGeneratedBillReminderTasks(scoped, existingTasks, profiles, log)");
   });
 });

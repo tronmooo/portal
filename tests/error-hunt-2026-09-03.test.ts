@@ -3598,7 +3598,10 @@ describe("D276 POST /obligations/:id/pay honours an explicit occurrenceDate", as
     const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
     const i = src.indexOf('app.post("/api/obligations/:id/pay"');
     const block = src.slice(i, i + 6000);
-    expect(block).toContain('occurrenceDate: isCalendarDay(String(req.body?.occurrenceDate || "")) ? String(req.body.occurrenceDate) : null,');
+    // 2026-11-22: the named occurrence is still forwarded verbatim; when none
+    // is named and the stored date is stale, the occurrence the lists show is.
+    expect(block).toContain('const namedOccurrence = isCalendarDay(String(req.body?.occurrenceDate || "")) ? String(req.body.occurrenceDate) : null;');
+    expect(block).toContain("occurrenceDate: namedOccurrence ?? shownOccurrence,");
   });
   it("two explicit occurrences paid seconds apart are two payments, not one folded into the other", async () => {
     const { payBillOccurrence } = await import("../server/liability-payments");
