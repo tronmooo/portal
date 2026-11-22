@@ -10,10 +10,25 @@
 // and tasks. The rest — habits, documents, wellness, recent activity — is one
 // tap away, never gone: the dashboard names what is hidden (Rule 4).
 
-export const EXEC_CARD_IDS = ["attention", "tasks", "schedule", "money", "habits", "documents", "wellness", "activity"] as const;
-export type ExecCardId = (typeof EXEC_CARD_IDS)[number];
+import { sanitizeWidget, type ExecWidget } from "./exec-widgets";
 
-export const EXEC_CARD_TITLES: Record<ExecCardId, string> = {
+export const EXEC_CARD_IDS = ["attention", "tasks", "schedule", "money", "habits", "documents", "wellness", "activity"] as const;
+/** A built-in card. */
+export type BuiltInCardId = (typeof EXEC_CARD_IDS)[number];
+/** Any card on the tab: a built-in one, or a custom widget as `w:<widget id>`. */
+export type ExecCardId = BuiltInCardId | `w:${string}`;
+
+export type ExecCardSize = "large" | "medium";
+/** The built-in layout: which cards take the full row on a phone. */
+export const DEFAULT_CARD_SIZE: Record<BuiltInCardId, ExecCardSize> = {
+  attention: "medium", tasks: "medium", schedule: "large", money: "large",
+  habits: "large", documents: "medium", wellness: "medium", activity: "large",
+};
+
+export const widgetCardId = (widgetId: string): ExecCardId => `w:${widgetId}`;
+export const isWidgetCardId = (id: string): id is `w:${string}` => id.startsWith("w:");
+
+export const EXEC_CARD_TITLES: Record<BuiltInCardId, string> = {
   attention: "Needs Attention",
   tasks: "Tasks",
   schedule: "Timeline",
@@ -25,19 +40,25 @@ export const EXEC_CARD_TITLES: Record<ExecCardId, string> = {
 };
 
 /** One line under each title in the Customize panel. */
-export const EXEC_CARD_HINTS: Record<ExecCardId, string> = {
-  attention: "Expired documents and deadlines worth reviewing",
+export const EXEC_CARD_HINTS: Record<BuiltInCardId, string> = {
+  attention: "Expiring documents, important items, and alerts",
   tasks: "Things you decided to do",
-  schedule: "Today's events and what is coming up",
-  money: "Assets, debt, this month and upcoming payments",
+  schedule: "Today's events, upcoming items, and reminders",
+  money: "Assets, debt, net worth, and upcoming payments",
   habits: "Today's habits and check-ins",
-  documents: "Your library and recent uploads",
+  documents: "Recent uploads and key documents",
   wellness: "Latest health readings",
   activity: "What was logged recently",
 };
 
+/** A card's name, built-in or custom. */
+export function execCardTitle(prefs: ExecCardPrefs, id: ExecCardId): string {
+  if (isWidgetCardId(id)) return prefs.widgets.find((w) => widgetCardId(w.id) === id)?.title ?? "Custom card";
+  return EXEC_CARD_TITLES[id];
+}
+
 /** What quiet mode keeps on screen. */
-export const QUIET_MODE_CARDS: readonly ExecCardId[] = ["attention", "schedule", "money", "tasks"];
+export const QUIET_MODE_CARDS: readonly BuiltInCardId[] = ["attention", "schedule", "money", "tasks"];
 
 export interface ExecCardPrefs {
   /** Show only QUIET_MODE_CARDS. */
@@ -46,33 +67,65 @@ export interface ExecCardPrefs {
   hidden: ExecCardId[];
   /** The user's order. Empty = the built-in order. */
   order: ExecCardId[];
+  /** Sizes the user picked. A card with no entry keeps the built-in layout. */
+  sizes: Partial<Record<string, ExecCardSize>>;
+  /** Cards the user built (shared/exec-widgets). Shown in every mode: a card
+   *  someone made is one they asked to see. */
+  widgets: ExecWidget[];
 }
 
-export const DEFAULT_EXEC_CARD_PREFS: ExecCardPrefs = { quiet: true, hidden: [], order: [] };
+export const DEFAULT_EXEC_CARD_PREFS: ExecCardPrefs = { quiet: true, hidden: [], order: [], sizes: {}, widgets: [] };
 
-const isId = (x: unknown): x is ExecCardId => typeof x === "string" && (EXEC_CARD_IDS as readonly string[]).includes(x);
-const uniqueIds = (xs: unknown): ExecCardId[] => (Array.isArray(xs) ? Array.from(new Set(xs.filter(isId))) : []);
+const isBuiltIn = (x: unknown): x is BuiltInCardId => typeof x === "string" && (EXEC_CARD_IDS as readonly string[]).includes(x);
+/** Every card id these preferences know: the built-ins, then the widgets. */
+export function allExecCardIds(prefs: Pick<ExecCardPrefs, "widgets">): ExecCardId[] {
+  return [...EXEC_CARD_IDS, ...prefs.widgets.map((w) => widgetCardId(w.id))];
+}
 
 /** Read a stored blob; anything unrecognised falls back to the defaults. */
 export function parseExecCardPrefs(raw: string | null | undefined): ExecCardPrefs {
-  if (!raw) return { ...DEFAULT_EXEC_CARD_PREFS };
+  const base = (): ExecCardPrefs => ({ ...DEFAULT_EXEC_CARD_PREFS, hidden: [], order: [], sizes: {}, widgets: [] });
+  if (!raw) return base();
   try {
     const saved = JSON.parse(raw);
-    if (!saved || typeof saved !== "object") return { ...DEFAULT_EXEC_CARD_PREFS };
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return base();
+    const widgets: ExecWidget[] = [];
+    for (const w of Array.isArray(saved.widgets) ? saved.widgets.slice(0, 20) : []) {
+      const ok = sanitizeWidget(w);
+      if (ok && !widgets.some((x) => x.id === ok.id)) widgets.push(ok);
+    }
+    const known = new Set<string>(allExecCardIds({ widgets }));
+    const ids = (xs: unknown): ExecCardId[] => (Array.isArray(xs)
+      ? Array.from(new Set(xs.filter((x): x is ExecCardId => typeof x === "string" && known.has(x)))) : []);
+    const sizes: Partial<Record<string, ExecCardSize>> = {};
+    if (saved.sizes && typeof saved.sizes === "object") {
+      for (const [id, v] of Object.entries(saved.sizes)) if (known.has(id) && (v === "large" || v === "medium")) sizes[id] = v;
+    }
     return {
       quiet: typeof saved.quiet === "boolean" ? saved.quiet : DEFAULT_EXEC_CARD_PREFS.quiet,
-      hidden: uniqueIds(saved.hidden),
-      order: uniqueIds(saved.order),
+      hidden: ids(saved.hidden),
+      order: ids(saved.order),
+      sizes,
+      widgets,
     };
   } catch {
-    return { ...DEFAULT_EXEC_CARD_PREFS };
+    return base();
   }
 }
 
 /** Is this card on screen under these preferences? */
 export function isExecCardVisible(prefs: ExecCardPrefs, id: ExecCardId): boolean {
+  if (prefs.hidden.includes(id)) return false;
+  // A card the user built is theirs to see in quiet mode too; quiet mode trims
+  // the BUILT-IN cards down to the essentials.
+  if (isWidgetCardId(id)) return true;
   if (prefs.quiet) return QUIET_MODE_CARDS.includes(id);
-  return !prefs.hidden.includes(id);
+  return true;
+}
+
+/** The size a card is drawn at: the user's pick, else the built-in layout. */
+export function execCardSize(prefs: ExecCardPrefs, id: ExecCardId): ExecCardSize {
+  return prefs.sizes[id] ?? (isBuiltIn(id) ? DEFAULT_CARD_SIZE[id] : "medium");
 }
 
 /** Cards these preferences keep off screen, in display order. */
@@ -82,14 +135,58 @@ export function hiddenExecCards(prefs: ExecCardPrefs): ExecCardId[] {
 
 /** Every card in the user's order; cards they never placed keep the built-in order after it. */
 export function orderedExecCards(prefs: ExecCardPrefs): ExecCardId[] {
-  const placed = prefs.order.filter(isId);
-  return [...placed, ...EXEC_CARD_IDS.filter((id) => !placed.includes(id))];
+  const all = allExecCardIds(prefs);
+  const placed = prefs.order.filter((id) => all.includes(id));
+  return [...placed, ...all.filter((id) => !placed.includes(id))];
 }
 
 /** A card's position (1-based), or null when the user never reordered (built-in layout applies). */
 export function execCardPosition(prefs: ExecCardPrefs, id: ExecCardId): number | null {
-  if (prefs.order.length === 0) return null;
+  // With custom cards on the tab every card needs a place, so the built-in
+  // (source-order) layout no longer applies on its own.
+  if (prefs.order.length === 0 && prefs.widgets.length === 0) return null;
   return orderedExecCards(prefs).indexOf(id) + 1;
+}
+
+/** Put a card at a given index (drag and drop). */
+export function placeExecCard(prefs: ExecCardPrefs, id: ExecCardId, toIndex: number): ExecCardPrefs {
+  const order = orderedExecCards(prefs);
+  const at = order.indexOf(id);
+  if (at < 0) return prefs;
+  const to = Math.max(0, Math.min(order.length - 1, toIndex));
+  if (to === at) return prefs;
+  order.splice(at, 1);
+  order.splice(to, 0, id);
+  return { ...prefs, order };
+}
+
+export function setExecCardSize(prefs: ExecCardPrefs, id: ExecCardId, size: ExecCardSize): ExecCardPrefs {
+  return { ...prefs, sizes: { ...prefs.sizes, [id]: size } };
+}
+
+/** Add a card the user built; it lands at the end and is shown. */
+export function addExecWidget(prefs: ExecCardPrefs, widget: ExecWidget): ExecCardPrefs {
+  if (prefs.widgets.some((w) => w.id === widget.id)) return prefs;
+  return { ...prefs, widgets: [...prefs.widgets, widget] };
+}
+
+/** Remove a custom card and every trace of it in the layout. */
+export function removeExecWidget(prefs: ExecCardPrefs, widgetId: string): ExecCardPrefs {
+  const id = widgetCardId(widgetId);
+  const { [id]: _gone, ...sizes } = prefs.sizes;
+  return {
+    ...prefs,
+    widgets: prefs.widgets.filter((w) => w.id !== widgetId),
+    hidden: prefs.hidden.filter((x) => x !== id),
+    order: prefs.order.filter((x) => x !== id),
+    sizes,
+  };
+}
+
+/** "Reset to Default": the built-in layout and quiet mode. The cards the user
+ *  built are kept — a reset of the layout is not a delete (Rule 8). */
+export function resetExecCardLayout(prefs: ExecCardPrefs): ExecCardPrefs {
+  return { ...DEFAULT_EXEC_CARD_PREFS, hidden: [], order: [], sizes: {}, widgets: prefs.widgets };
 }
 
 /** Move a card one place earlier (-1) or later (+1). */
@@ -108,7 +205,32 @@ export function moveExecCard(prefs: ExecCardPrefs, id: ExecCardId, dir: -1 | 1):
  * exactly the one card the user touched.
  */
 export function setExecCardVisible(prefs: ExecCardPrefs, id: ExecCardId, visible: boolean): ExecCardPrefs {
-  const hiddenNow = prefs.quiet ? EXEC_CARD_IDS.filter((c) => !QUIET_MODE_CARDS.includes(c)) : prefs.hidden;
-  const hidden = visible ? hiddenNow.filter((c) => c !== id) : Array.from(new Set([...hiddenNow, id]));
+  const hiddenNow: ExecCardId[] = prefs.quiet
+    ? Array.from(new Set<ExecCardId>([...prefs.hidden, ...EXEC_CARD_IDS.filter((c) => !QUIET_MODE_CARDS.includes(c))]))
+    : prefs.hidden;
+  const hidden = visible ? hiddenNow.filter((c) => c !== id) : Array.from(new Set<ExecCardId>([...hiddenNow, id]));
   return { ...prefs, quiet: false, hidden };
+}
+
+/**
+ * Medium cards with no partner on a two-column (phone) grid: a medium card
+ * followed by a large one, or left over at the end, would hold half a row
+ * with nothing beside it. The dashboard lets such a card take the whole row
+ * on a phone instead. `cards` is what is on screen, in order.
+ */
+export function lonelyMediumCards(cards: ReadonlyArray<{ id: string; size: ExecCardSize }>): Set<string> {
+  const lonely = new Set<string>();
+  let open: string | null = null; // a medium card waiting for a partner
+  for (const c of cards) {
+    if (c.size === "large") {
+      if (open) lonely.add(open);
+      open = null;
+    } else if (open) {
+      open = null; // paired
+    } else {
+      open = c.id;
+    }
+  }
+  if (open) lonely.add(open);
+  return lonely;
 }

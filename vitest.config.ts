@@ -284,6 +284,9 @@ export default defineConfig({
       'tests/bills-and-alerts-consistency.test.ts',
       'tests/next-important.test.ts',
       'tests/exec-card-prefs.test.ts',
+      'tests/exec-widgets.test.ts',
+      'tests/exec-dashboards.test.ts',
+      'tests/exec-customize-dialog.dom.test.tsx',
       // Dynamic asset & liability Overview composition (2026-08-26).
       'tests/overview-compose.test.ts',
       'tests/overview-engine.test.ts',

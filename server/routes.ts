@@ -195,6 +195,7 @@ import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { shownOccurrenceToPay, rollBillsForward } from "@shared/bills-timeline";
+import { buildWidgetFromPrompt } from "./exec-widget-builder";
 import { buildNotifications, mergeDismissedNotifications, restoreDismissedNotifications, listDismissedAlerts } from "./notification-service";
 import {
   createNote, updateNote, deleteNote, listNotes,
@@ -11775,6 +11776,31 @@ No emojis. No prose outside the JSON.`,
     } catch (err: any) {
       res.status(500).json({ error: "Failed to set preference" });
     }
+  }));
+
+  // ---- Executive tab: build a custom widget from a sentence ----
+  // The AI Builder in the Customize dialog. A read: it answers with a widget
+  // description and writes nothing; the widget is stored with the card
+  // preferences only when the user saves the dialog.
+  app.get("/api/exec-widgets/suggest", asyncHandler(async (req, res) => {
+    const prompt = String(req.query.prompt ?? "").trim();
+    if (prompt.length < 3) return res.status(400).json({ error: "Describe what the card should show" });
+    if (prompt.length > 300) return res.status(400).json({ error: "Keep the description under 300 characters" });
+    // What the user actually has, so a filter can name a real tracker or
+    // category. Best effort: a failed read only makes the suggestion less
+    // specific, it never fails the request.
+    const [trackers, expenses, profiles] = await Promise.all([
+      storage.getTrackers().catch(() => [] as any[]),
+      storage.getExpenses().catch(() => [] as any[]),
+      storage.getProfiles().catch(() => [] as any[]),
+    ]);
+    const uniq = (xs: unknown[]) => Array.from(new Set(xs.map((x) => String(x ?? "").trim()).filter(Boolean)));
+    const built = await buildWidgetFromPrompt(prompt, {
+      trackerNames: uniq((trackers as any[]).map((t) => t?.name)),
+      expenseCategories: uniq((expenses as any[]).map((e) => e?.category)),
+      profileTypes: uniq((profiles as any[]).map((p) => p?.type)).filter((t) => t !== "self"),
+    });
+    res.json(built);
   }));
 
   // ---- Onboarding Status ----

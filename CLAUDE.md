@@ -133,12 +133,46 @@ green. After a push to `main`:
    Documents always render. Money leads with Assets / Debt / Net worth from
    the snapshot (Rule 1). The Documents card never repeats what Needs
    Attention lists. (Owner, 2026-11-22.)
-   Which cards show and their order is the user's (`shared/exec-card-prefs.ts`,
-   preference `exec_card_prefs`, panel `ExecCustomize`): quiet mode is the
-   DEFAULT (Needs Attention, Tasks, Timeline, Money), and every card the
+   Which cards show, their order and their size is the user's
+   (`shared/exec-card-prefs.ts`, preference `exec_card_prefs`): quiet mode is
+   the DEFAULT (Needs Attention, Tasks, Timeline, Money), and every card the
    preferences hide is named under the grid and opens on a tap
    (`exec-hidden-cards`) — hidden never reads as missing.
-   *Guards:* `tests/executive-sections.test.tsx`, `tests/exec-card-prefs.test.ts`.
+   **Customize opens from the ⋮ menu at the top right, never from the tab
+   itself** (owner, 2026-11-22: "at the bottom, the customization shouldn't be
+   there"). It is the `ExecCustomizeDialog` (`components/dashboard/ExecCustomize.tsx`),
+   built to the owner's design: tabs (Cards & Widgets, My Custom, AI Builder,
+   Layout), Quiet Mode, a row per card (drag handle, size, switch, details),
+   Widget Ideas, Hidden Cards, and Reset / Cancel / Save. It edits a DRAFT:
+   opening writes nothing (Rule 3), Save Changes writes the one preference row,
+   Cancel drops it; Reset to Default keeps the cards the user built.
+   **A custom card stores no data.** A widget (`shared/exec-widgets.ts`) is a
+   typed description — a source, a filter, a row count — rendered from the
+   same lists every screen reads (`ExecWidgetBody`; Rule 1), with an error and
+   retry when a list fails (Rule 7). The AI Builder
+   (`GET /api/exec-widgets/suggest`, `server/exec-widget-builder.ts`) only
+   CHOOSES among sources the app can draw: its answer passes `sanitizeWidget`
+   or is refused, it writes nothing, and with no model it answers by fixed
+   rules (`inferWidgetFromText`). Add a new kind of widget by adding a source
+   there, never by letting the model emit markup or queries.
+   **Several dashboards, one set of cards** (`shared/exec-dashboards.ts`;
+   owner, 2026-11-22: "different customizations for different types of
+   executive dashboards"). A dashboard is a named LAYOUT — what shows, order,
+   sizes, Quiet Mode — over the eight standard cards and the user's own. The
+   stored row holds all of them (`serializeExecDashboards`; a row from before
+   reads as the one dashboard "Main"). Screens that draw the tab take
+   `activeExecPrefs` and need not know the others exist. A card built while
+   editing one dashboard starts hidden on the rest; removing a card removes it
+   everywhere; deleting a dashboard (two taps, never the last) keeps the
+   cards. New dashboards start from `DASHBOARD_TEMPLATES`. The tab's chip row
+   only SWITCHES the active dashboard; arranging them is the dialog.
+   Every part of a custom card is editable (`WidgetEditor`): source, kinds,
+   text filter, time span, rows, icon, title — each change through
+   `sanitizeWidget`. A medium card with nobody beside it on a phone takes the
+   row (`lonelyMediumCards`); do not hand-code per-card "wide" exceptions.
+   *Guards:* `tests/executive-sections.test.tsx`, `tests/exec-card-prefs.test.ts`,
+   `tests/exec-widgets.test.ts`, `tests/exec-dashboards.test.ts`,
+   `tests/exec-customize-dialog.dom.test.tsx`.
 9. **Ownership has one writer** (`server/ownership-writer.ts`). Profile
    scoping goes through `shared/profile-filter.ts`. Deleting a profile is
    fail-safe: if any cascade step fails, the profile is kept, so no record
