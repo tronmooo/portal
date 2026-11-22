@@ -31,6 +31,7 @@ import type { ChatMutation, ParsedAction, RecurrencePattern } from "@shared/sche
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate, isNutritionTrackerName } from "@shared/nutrition-shaped";
 import { rescaleNutritionEntry, enrichNutritionEntry } from "./nutrition-enrichment";
+import { splitCombinedFoodLog } from "./meal-split";
 import { planTrackerEntryCandidate, planProfileCandidate, planObligationCandidate, enrichItem } from "./item-enrichment";
 import { recapLine, describeSources, CONFIDENCE_LABEL } from "@shared/nutrition-enrichment";
 import { formatAttribute } from "@shared/item-identity";
@@ -6123,8 +6124,8 @@ BEHAVIOR:
   Example: "I drank a Coke" → log_tracker_entry for Nutrition with values: { item: "Coca-Cola", calories: 140, sugar: 39, carbs: 39, protein: 0, fat: 0 }.
   Example: "Had a grande latte from Starbucks" → log_tracker_entry for Nutrition with values: { item: "Grande Latte (Starbucks)", calories: 190, protein: 13, carbs: 18, fat: 7 }.
   ALWAYS set the "item" field to a human-readable food name. Capitalize it. This is the most visible part of the entry.
-  KEEP THE SPECIFICS IN "item": brand, product, flavor, restaurant, size and the user's quantity wording ("Quaker Instant Oatmeal Maple & Brown Sugar (1 packet) + 2% milk (1 cup)", "Coca-Cola (12 oz)", "Big Mac + medium fries"). The server's enrichment layer identifies specific products from that text AFTER the entry is saved and refines the numbers with label data — still pass your best estimate now; a generic estimate for a vague item ("cereal") is correct and stays.
-  ONE MEAL = ONE ENTRY: several foods eaten together ("3 eggs, 2 wheat toast with butter, a banana and coffee with creamer") are ONE log_tracker_entry whose item lists every component and whose values are the meal totals — never six separate meals. Separate eating occasions (breakfast and lunch) are separate entries.
+  KEEP THE SPECIFICS IN "item": brand, product, flavor, restaurant, size and the user's quantity wording ("Quaker Instant Oatmeal Maple & Brown Sugar (1 packet) with 2% milk (1 cup)", "Coca-Cola (12 oz)", "Big Mac", "McDonald's Medium Fries"). The server's enrichment layer identifies specific products from that text AFTER the entry is saved and refines the numbers with label data — still pass your best estimate now; a generic estimate for a vague item ("cereal") is correct and stays.
+  ONE FOOD = ONE ENTRY: every separate food or drink is its OWN log_tracker_entry with its OWN item and its OWN numbers. "Ate a banana and a doughnut" → TWO calls: { item: "Banana", calories: 105, ... } and { item: "Doughnut", calories: 250, ... }. "3 eggs, 2 wheat toast with butter, a banana and coffee with creamer" → FOUR calls (3 Eggs · 2 Wheat Toast with Butter · Banana · Coffee with Creamer). NEVER join foods into one item with "+", "and" or commas, and never send meal totals. What was added TO a food stays with it ("coffee with cream and sugar", "toast with butter", "oatmeal with milk"), and a single dish is one food however many ingredients name it ("mac and cheese", "bacon, egg and cheese sandwich", "chicken burrito bowl"). The server splits a combined item into separate entries anyway, with rougher numbers than yours.
   PORTION CORRECTIONS: "actually I only ate half" / "I had two of those" → update_tracker_entry(trackerName:"Nutrition", values:{}, scaleBy:0.5 or 2). Never log a second entry and never halve the numbers yourself.
   USER-STATED LABEL VALUES WIN: "it says 210 calories and 20g protein" → pass exactly calories:210, protein:20; the server keeps them even if a product lookup disagrees.
 - ITEM IDENTITY (every tracker and profile, not just food): keep the identifying words the user gave — brand, product line, model, year, trim, plan tier, strength, size — in the record's name/item/drug field exactly as said ("2021 Honda CR-V EX AWD", "MacBook Air M3 15-inch", "Netflix Premium", "Advil 200 mg", "Nature Made Fish Oil 1200 mg", "Purina Pro Plan Sensitive Skin & Stomach Salmon"). The server's Item Enrichment Layer identifies the exact product from that text AFTER the record is saved and fills the attributes identity changes (specs, MPG, strength, plan price…). Never invent such attributes yourself and NEVER guess a medication strength when several exist: "I took Advil" → drug:"Advil" with no dosage; "two Advil 200 mg tablets" → dosage:200, count:2 (the server computes the 400 mg total). A generic mention ("my car", "pain medicine") saves as the generic record it is.
@@ -9604,6 +9605,11 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           const existingNums = Object.entries(e.values).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
           const newNums = Object.entries(entryValues).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
           if (existingNums.length === 0 || newNums.length === 0) return false;
+          // Two DIFFERENT foods with the same numbers are two entries (one
+          // food = one entry): the item named is part of what makes a log
+          // "the same one again".
+          const itemOf = (v: any) => String(v?.item ?? "").trim().toLowerCase();
+          if (itemOf(e.values) && itemOf(entryValues) && itemOf(e.values) !== itemOf(entryValues)) return false;
           return newNums.every(([k, v]) => e.values[k] === v);
         });
         if (recentDup) {
@@ -16419,6 +16425,19 @@ async function runBulkLogPath(
     return null;
   }
   if (ops.length === 0) return null;
+  // One food = one entry (server/meal-split.ts): an operation that logs
+  // several foods as one item becomes one operation per food.
+  {
+    const perFood: ExtractedOperation[] = [];
+    for (const op of ops) {
+      const parts = op.tool === "log_tracker_entry"
+        ? await splitCombinedFoodLog(op.input as Record<string, any>, userMessage).catch(() => null)
+        : null;
+      if (!parts) perFood.push(op);
+      else for (const input of parts) perFood.push({ ...op, input, raw: String(input.values?.item || op.raw) });
+    }
+    ops = perFood;
+  }
 
   // ── Phase B: execute every operation independently ──
   const startedAt = Date.now();
@@ -18243,9 +18262,26 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       }
 
       // Collect tool_use blocks
-      const toolUses = response.content.filter(
+      const modelToolUses = response.content.filter(
         (b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use"
       );
+      // ONE FOOD = ONE ENTRY (owner, 2026-11-22: "Eat a banana and a doughnut"
+      // was saved as one "Banana + Doughnut" entry). A nutrition log that
+      // names several foods runs as one call PER FOOD, so each gets its own
+      // entry, card, ledger row and undo. The model still receives a single
+      // result for the call it made (merged below, under its own id).
+      const toolUses: Anthropic.Messages.ToolUseBlock[] = [];
+      const splitFoodCalls = new Map<string, string[]>();
+      for (const t of modelToolUses) {
+        const parts = t.name === "log_tracker_entry"
+          ? await splitCombinedFoodLog(t.input as Record<string, any>, userMessage).catch(() => null)
+          : null;
+        if (!parts) { toolUses.push(t); continue; }
+        const ids = parts.map((_, n) => `${t.id}::food${n + 1}`);
+        splitFoodCalls.set(t.id, ids);
+        parts.forEach((input, n) => toolUses.push({ ...t, id: ids[n], input }));
+        logger.info("ai", `One food = one entry: split "${String((t.input as any)?.values?.item || "").slice(0, 80)}" into ${parts.length} entries`);
+      }
 
       // Structured trace log — surfaces in Vercel logs so we can SEE what
       // Claude did on every chat turn. Critical for diagnosing "processing
@@ -18880,6 +18916,24 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         reorder(allActions, actionsBeforeRound);
         reorder(allResults, resultsBeforeRound);
         for (let k = 0; k < allOperations.length; k++) allOperations[k].index = k;
+        // A call split per food answers the model under the id IT sent: one
+        // tool_result, listing every entry that was written.
+        for (const [originalId, partIds] of splitFoodCalls) {
+          const parts = toolResults.filter((r) => partIds.includes(r.tool_use_id));
+          if (parts.length === 0) continue;
+          const at = toolResults.indexOf(parts[0]);
+          const parsed = parts.map((r) => { try { return JSON.parse(String(r.content)); } catch { return String(r.content); } });
+          for (const r of parts) toolResults.splice(toolResults.indexOf(r), 1);
+          toolResults.splice(at, 0, {
+            type: "tool_result",
+            tool_use_id: originalId,
+            content: JSON.stringify({
+              note: "One food = one entry: each food in this call was saved as its OWN entry. Do not log any of them again, and describe them as separate entries.",
+              foods: parsed,
+            }),
+            is_error: parts.every((r) => r.is_error === true),
+          });
+        }
       }
 
       // Add assistant response + tool results to messages for next iteration

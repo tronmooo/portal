@@ -192,6 +192,20 @@ green. After a push to `main`:
     *Guards:* `tests/tracker-create-no-duplicates.test.ts`,
     `tests/bp-heart-rate-split.test.ts`.
 
+11a. **One food = one entry.** Every separate food or drink the user reports
+    is its own Nutrition entry with its own numbers ("a banana and a
+    doughnut" = two). The chat prompt asks the model for one log per food,
+    and the server does not depend on it: a `log_tracker_entry` whose item
+    joins several foods is split per food BEFORE it runs
+    (`splitCombinedFoodLog`, `server/meal-split.ts`; the rule is
+    `splitSeparateFoods`, `shared/food-split.ts`), in the tool loop and the
+    bulk lane alike, so each food has its own card and undo. What was added
+    to a food stays with it ("coffee with cream and sugar"), and a single
+    dish is one food ("mac and cheese"). Never bring back a "one meal = one
+    entry" prompt line. (Owner, 2026-11-22: "Banana + Doughnut, 355 kcal".)
+    *Guards:* `tests/one-food-one-entry.test.ts`,
+    `tests/chat-one-food-one-entry.test.ts`.
+
 12. **A date about a person never shows someone else's name.** Records with
     no owner default to the account holder, so "Jordan's birthday" can be
     stored under Bob. Every screen that prints an owner beside a dated item's
