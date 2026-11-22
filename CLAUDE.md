@@ -123,6 +123,17 @@ green. After a push to `main`:
    "Weight · 3 sets".)
    *Guards:* `tests/next-important.test.ts`, `tests/wellness-metrics.test.ts`,
    `tests/executive-sections-router.test.ts`.
+   **The dashboard shows what there is, once.** Schedule and Upcoming are
+   ONE Timeline card (today's events, then everything coming up in date
+   order; bills stay under Money, expirations under Needs Attention). A card
+   with nothing to show folds into the quiet row under the grid
+   (`QUIET_CARDS`, `exec-quiet-cards`, `ExecutiveBriefing.tsx`) and opens in
+   place on a tap; it folds only once its data has loaded, and the row says
+   when a profile filter may be why (Rule 4). Needs Attention, Money and
+   Documents always render. Money leads with Assets / Debt / Net worth from
+   the snapshot (Rule 1). The Documents card never repeats what Needs
+   Attention lists. (Owner, 2026-11-22.)
+   *Guard:* `tests/executive-sections.test.tsx`.
 9. **Ownership has one writer** (`server/ownership-writer.ts`). Profile
    scoping goes through `shared/profile-filter.ts`. Deleting a profile is
    fail-safe: if any cascade step fails, the profile is kept, so no record

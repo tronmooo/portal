@@ -1095,14 +1095,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // How the list splits, so the week you have to act on is legible without
   // reading every row's date. Mirrors the Important Dates subtitle the
   // sections engine writes (shared/executive-sections `subtitleFor`).
-  const importantDatesNote = useMemo(() => {
-    const week = importantDates.filter(i => (i.daysUntil ?? 99) <= 7).length;
-    const rest = importantDates.length - week;
-    if (week > 0 && rest > 0) return `${week} in the next 7 days · ${rest} more within 45`;
-    if (week > 0) return `${week} in the next 7 days`;
-    if (rest > 0) return `${rest} within the next 45 days`;
-    return null;
-  }, [importantDates]);
+  // ONE TIMELINE (2026-11-22, owner: "Schedule and Upcoming occupy two large
+  // cards — combine overlapping upcoming information into one useful
+  // timeline"). Today's events lead the card; under them, everything coming
+  // up — occasions, appointments, tasks, deadlines — in date order, each
+  // shown once. Bills stay under Money and expirations under Needs Attention.
+  const comingUp = useMemo(() => {
+    const seen = new Set<string>();
+    return [...importantDates, ...upcomingPreview]
+      .filter((i) => (seen.has(i.key) ? false : (seen.add(i.key), true)))
+      .sort((a, b) => (a.daysUntil ?? 99) - (b.daysUntil ?? 99));
+  }, [importantDates, upcomingPreview]);
   // The "Next Important" tile: today counts — a 2 pm appointment is the next
   // important thing at noon, not tomorrow's errand. The upcoming PANEL above
   // keeps tomorrow-onward, because today's rows already sit under Needs
@@ -1528,6 +1531,30 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     }
   };
 
+  // ── Cards with nothing to show fold away ────────────────────────────────────
+  // 2026-11-22 (owner): "Empty cards consume considerable space — collapse
+  // empty sections automatically." A card whose list is empty no longer holds
+  // half a row to say so: it is named in one compact row under the grid
+  // (`exec-quiet-cards`), and a tap opens it in place — so nothing becomes
+  // unreachable and the row still says a profile filter may be why (Rule 4).
+  // Needs Attention, Money and Documents always render: they carry controls
+  // (filters, the Dismissed list) or figures that are never "empty".
+  const [openedCards, setOpenedCards] = useState<Set<string>>(new Set());
+  const QUIET_CARDS: Array<{ id: string; title: string; icon: LucideIcon; accent: string; empty: boolean; note: string }> = [
+    { id: "tasks", title: "Tasks", icon: CheckSquare, accent: CARD_ACCENTS.tasks, note: "no open tasks",
+      empty: !tasksPending && !tasksError && sortedPending.length === 0 && doneToday === 0 },
+    { id: "schedule", title: "Timeline", icon: CalendarDays, accent: CARD_ACCENTS.schedule, note: "nothing today or coming up",
+      empty: !timelinePending && eventsToday.length === 0 && comingUp.length === 0 },
+    { id: "habits", title: "Habits", icon: Flame, accent: CARD_ACCENTS.habits, note: "none scheduled today",
+      empty: habitsDueToday.length === 0 },
+    { id: "wellness", title: "Wellness", icon: Heart, accent: CARD_ACCENTS.wellness, note: "no readings",
+      empty: !hasWellness && latestVitals.length === 0 && dosesDue.length === 0 },
+    { id: "activity", title: "Recent Activity", icon: History, accent: CARD_ACCENTS.activity, note: "nothing recent",
+      empty: activityItems.length === 0 },
+  ];
+  const quietCards = QUIET_CARDS.filter((c) => c.empty && !openedCards.has(c.id));
+  const showCard = (id: string) => !quietCards.some((c) => c.id === id);
+
   // Hold the skeleton grid until the enhanced snapshot has landed too: with
   // tasks in and the snapshot still in flight the grid rendered a run of
   // cards with nothing in them, which read as blank space for the 4–7s the
@@ -1660,6 +1687,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="attention" icon={TriangleAlert} title="Needs Attention"
               accent={CARD_ACCENTS.attention} index={1} order={1} shortTitle="Attention"
+              // Its phone-row partner is Tasks: when Tasks is folded away this
+              // card takes the row instead of leaving half of it empty.
+              wide={!showCard("tasks")}
               count={attentionItems.length}
               subtitle="Upcoming expirations and important dates."
               headerRight={
@@ -1796,7 +1826,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             </ExecCard>
 
             {/* ── Tasks ────────────────────────────────────────────────────── */}
-            <ExecCard
+            {showCard("tasks") && <ExecCard
               id="tasks" icon={CheckSquare} title="Tasks"
               accent={CARD_ACCENTS.tasks} index={2} order={2}
               headerRight={<ViewLink label="View all tasks" accent={CARD_ACCENTS.tasks} onClick={() => go("/dashboard/tasks")} testId="exec-view-tasks" />}
@@ -1856,20 +1886,20 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   )}
                 </div>
               )}
-            </ExecCard>
+            </ExecCard>}
 
             {/* ── Schedule ─────────────────────────────────────────────────── */}
-            <ExecCard
-              id="schedule" icon={CalendarDays} title="Schedule"
-              accent={CARD_ACCENTS.schedule} index={3} order={3}
+            {showCard("schedule") && <ExecCard
+              id="schedule" icon={CalendarDays} title="Timeline"
+              accent={CARD_ACCENTS.schedule} index={3} order={3} wide
               subtitle={<>Today · {fmtWeekdayDate(new Date())}{nextUp ? <span className="exec-opt"> · Next up <span className="font-semibold" style={{ color: `hsl(${CARD_ACCENTS.schedule})` }}>{nextUp.title}</span></span> : null}</>}
               headerRight={<ViewLink label="View schedule" accent={CARD_ACCENTS.schedule} onClick={() => setPopup("events")} testId="exec-view-calendar" />}
             >
               {eventsToday.length === 0 ? (
-                // One empty state per card: when "Dates to remember" below is
-                // empty too, its message covers both.
-                importantDates.length > 0 && (
-                  <p className="text-[12px] text-muted-foreground" data-testid="exec-schedule-empty">Nothing scheduled today.</p>
+                // One empty state per card: when "Coming up" below is empty
+                // too, its message covers both.
+                comingUp.length > 0 && (
+                  <p className="text-[12px] text-muted-foreground mb-1.5" data-testid="exec-schedule-empty">Nothing scheduled today.</p>
                 )
               ) : (
                 <div className={LIST}>
@@ -1910,41 +1940,31 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 </div>
               )}
 
-              {/* ── Dates to remember ───────────────────────────────────────
-                  Birthdays, anniversaries and occasions — with the DATE and
-                  the countdown, so a birthday is never a surprise.
-                  Expirations moved to Needs Attention (2026-10-21) so a
-                  passport isn't listed twice. Always rendered, empty
-                  included: a block that appears only when it has contents is
-                  a block nobody knows to look for. */}
-              <div className="mt-1.5 pt-1.5 border-t border-border/60" data-testid="exec-important-dates">
+              {/* ── Coming up ───────────────────────────────────────────────
+                  What used to be two blocks in two cards ("Dates to remember"
+                  here, the Upcoming card beside it), merged and in date order. */}
+              <div className={eventsToday.length > 0 ? "mt-1.5 pt-1.5 border-t border-border/60" : ""} data-testid="exec-timeline-coming">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="micro-label text-muted-foreground"><span className="exec-long">Dates to remember</span><span className="exec-short" aria-hidden="true">Dates</span></p>
+                  <p className="micro-label text-muted-foreground">Coming up</p>
                   <ViewLink
-                    label="View all dates"
+                    label="View all upcoming"
                     accent={CARD_ACCENTS.schedule}
-                    onClick={() => go("/calendar?tab=recurring")}
-                    testId="exec-view-important-dates"
+                    onClick={() => setPopup("upcoming")}
+                    testId="exec-view-upcoming"
                   />
                 </div>
-                {importantDatesNote && (
-                  <p className="text-[11px] text-muted-foreground mt-0.5" data-testid="exec-important-dates-note">
-                    {importantDatesNote}
-                  </p>
-                )}
-                {importantDates.length === 0 ? (
+                {comingUp.length === 0 ? (
                   <CardEmpty icon={CalendarDays} accent={CARD_ACCENTS.schedule}>
                     {eventsToday.length === 0
-                      ? "Nothing today, and no birthdays or occasions in the next 45 days."
-                      : "No birthdays or occasions in the next 45 days."}
+                      ? "Your day is clear, and nothing is coming up in the next 30 days."
+                      : "Nothing else coming up in the next 30 days."}
                   </CardEmpty>
                 ) : (
                   <div className={`${LIST} mt-1`}>
-                    {/* Capped at 2 so Schedule stays level with its row partners; the
-                        expander and "View all dates" carry the rest. */}
-                    <ExpandableRows id="important-dates" count={importantDates.length} cap={2}>
-                      {importantDates.map((i) => (
-                        <ItemRow key={i.key} item={i}
+                    <ExpandableRows id="timeline" count={comingUp.length} cap={CARD_ROWS + 1}>
+                      {comingUp.map((i) => (
+                        <ItemRow key={i.key} item={i} stacked pill={false}
+                          sub={i.daysUntil != null ? `${capitalize(inDaysLabel(i.daysUntil))} · ${fmtShortDate(dateFromDays(i.daysUntil))}` : i.reason}
                           busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
                           onAction={onAction} onOpen={openItem} />
                       ))}
@@ -1952,12 +1972,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   </div>
                 )}
               </div>
-            </ExecCard>
+            </ExecCard>}
 
             {/* ── Habits ───────────────────────────────────────────────────── */}
-            <ExecCard
+            {showCard("habits") && <ExecCard
               id="habits" icon={Flame} title="Habits"
-              accent={CARD_ACCENTS.habits} index={4} order={5} wide
+              accent={CARD_ACCENTS.habits} index={5} order={5} wide
               subtitle={habitsDueToday.length > 0
                 ? `Today · ${habitsDoneCount} of ${habitsDueToday.length} done${habitsNotScheduled > 0 ? ` · ${habitsNotScheduled} not scheduled` : ""}`
                 : undefined}
@@ -2010,12 +2030,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   )}
                 </>
               )}
-            </ExecCard>
+            </ExecCard>}
 
             {/* ── Money ────────────────────────────────────────────────────── */}
             <ExecCard
               id="money" icon={DollarSign} title="Money"
-              accent={CARD_ACCENTS.money} index={5} order={6} wide
+              accent={CARD_ACCENTS.money} index={4} order={4} wide
               // Explicit navigation, and labelled as such: Finance is a tab,
               // not an expansion of this card.
               headerRight={<ViewLink label="Open finances" accent={CARD_ACCENTS.money} onClick={() => go("/dashboard/finance")} testId="exec-view-finances" />}
@@ -2023,6 +2043,29 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               {/* Two stacked lists of the tab's one row style. Side-by-side
                   columns left ~165px per column at phone width — too narrow
                   for an icon, a label and an amount. */}
+              {/* What you own, what you owe, what is left (2026-11-22, owner:
+                  "Money only shows income, expenses and negative cash flow —
+                  show financial position"). The server's snapshot totals, the
+                  same ones the Net Worth panel opens with (Rule 1). */}
+              <div className="grid grid-cols-3 gap-1.5 mb-1.5" data-testid="exec-money-position">
+                {([
+                  { key: "assets", label: "Assets", sub: "What you own",
+                    value: snap == null ? loadingDots : fmtUSD(snap.totalAssetValue ?? 0), hsl: "155 65% 45%", cls: "" },
+                  { key: "debt", label: "Debt", sub: "What you owe",
+                    value: snap == null ? loadingDots : fmtUSD(snap.totalLiabilities ?? 0), hsl: "0 72% 58%", cls: "" },
+                  { key: "networth", label: "Net worth", sub: "Assets minus debt",
+                    value: netWorth == null ? loadingDots : fmtUSD(netWorth), hsl: CARD_ACCENTS.money,
+                    cls: netWorth != null && netWorth < 0 ? "text-red-500" : "" },
+                ] as const).map((r) => (
+                  <button key={r.key} type="button" onClick={() => setPopup("networth")}
+                    className="exec-tile bubble-row px-2 py-1 min-w-0 text-left" title={r.sub}
+                    style={{ ["--accent-hsl" as any]: r.hsl }} data-testid={`exec-money-${r.key}`}>
+                    <p className="micro-label text-muted-foreground truncate">{r.label}</p>
+                    <p className={`text-[13px] font-bold tabular-nums truncate ${r.cls}`}>{r.value}</p>
+                  </button>
+                ))}
+              </div>
+              <p className="micro-label text-muted-foreground mb-1">This month</p>
               <div className="grid grid-cols-3 gap-1.5" data-testid="exec-money-month">
                 {([
                   { key: "income", label: "Income", sub: "Coming in this month",
@@ -2083,17 +2126,21 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             {/* ── Documents ────────────────────────────────────────────────── */}
             <ExecCard
               id="documents" icon={FolderOpen} title="Documents"
-              accent={CARD_ACCENTS.documents} index={6} order={7}
+              accent={CARD_ACCENTS.documents} index={6} order={6}
+              wide={!showCard("wellness")}
               headerRight={<ViewLink label="View documents" accent={CARD_ACCENTS.documents} onClick={() => setPopup("docs")} testId="exec-view-documents" />}
             >
               {/* 2026-10-21: the expiring LIST lives in Needs Attention now, so
                   this card is the library: how the documents stand (counts)
                   and what was added lately — no row repeated from above. */}
-              <div className="grid grid-cols-3 gap-1.5" data-testid="exec-docs-counts">
+              <div className="grid grid-cols-2 gap-1.5" data-testid="exec-docs-counts">
                 {([
-                  { key: "expired", label: "Expired", n: docsUrgency.expired, hs: "0 72% 58%" },
-                  { key: "soon", label: "Expiring", n: docsSoonCount, hs: "25 90% 56%" },
+                  // 2026-11-22 (owner): "Documents repeats expired information
+                  // from Attention." What has expired is listed (and can be
+                  // dismissed) under Needs Attention; this card is the library
+                  // and what is still ahead.
                   { key: "total", label: "Library", n: recentDocsRes?.total ?? (recentDocsRes ? recentDocsRes.rows.length : null), hs: CARD_ACCENTS.documents },
+                  { key: "soon", label: "Expiring", n: docsSoonCount, hs: "25 90% 56%" },
                 ] as const).map((c) => (
                   <button key={c.key} type="button" onClick={() => setPopup("docs")}
                     className="exec-tile bubble-row px-2 py-1 text-left min-w-0" style={{ ["--accent-hsl" as any]: c.hs }}
@@ -2106,10 +2153,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   </button>
                 ))}
               </div>
-              <p className="text-[11px] text-muted-foreground mt-1 truncate" data-testid="exec-docs-caption"
-                title={visibleDocs.length === 0 ? undefined : docsUrgency.label || undefined}>
-                {visibleDocs.length === 0 ? "Nothing expiring in the next 90 days." : (docsUrgency.label || "") + " · listed under Needs Attention"}
-              </p>
               <p className="micro-label text-muted-foreground mt-1.5 mb-1">Recently added</p>
               {recentDocsError ? (
                 <p className="text-[12px] text-muted-foreground" data-testid="exec-docs-recent-error">Couldn't load recent documents.</p>
@@ -2142,9 +2185,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             </ExecCard>
 
             {/* ── Wellness ─────────────────────────────────────────────────── */}
-            <ExecCard
+            {showCard("wellness") && <ExecCard
               id="wellness" icon={Heart} title="Wellness"
-              accent={CARD_ACCENTS.wellness} index={7} order={8}
+              accent={CARD_ACCENTS.wellness} index={7} order={7}
               headerRight={<ViewLink label="View wellness" accent={CARD_ACCENTS.wellness} onClick={() => setPopup("wellness:score")} testId="exec-view-wellness" />}
             >
               {dosesDue.length > 0 && (
@@ -2206,40 +2249,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   )}
                 </>
               )}
-            </ExecCard>
-
-            {/* ── Upcoming ─────────────────────────────────────────────────── */}
-            <ExecCard
-              id="upcoming" icon={Clock} title="Upcoming"
-              accent={CARD_ACCENTS.upcoming} index={8} order={4}
-              subtitle="What's coming next"
-              headerRight={<ViewLink label="View all upcoming" accent={CARD_ACCENTS.upcoming} onClick={() => setPopup("upcoming")} testId="exec-view-upcoming" />}
-            >
-              {upcomingPreview.length === 0 ? (
-                <CardEmpty icon={Clock} accent={CARD_ACCENTS.upcoming}>
-                  {importantDates.length > 0
-                    ? "Nothing else coming up — your dates are under Schedule."
-                    : "Nothing coming up in the next few weeks."}
-                </CardEmpty>
-              ) : (
-                <div className={LIST}>
-                  <ExpandableRows id="upcoming" count={upcomingPreview.length} cap={CARD_ROWS}>
-                    {upcomingPreview.map((i) => (
-                      <ItemRow key={i.key} item={i} stacked pill={false}
-                        sub={i.daysUntil != null ? `${capitalize(inDaysLabel(i.daysUntil))} · ${fmtShortDate(dateFromDays(i.daysUntil))}` : i.reason}
-                        busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
-                        onAction={onAction} onOpen={openItem} />
-                    ))}
-                  </ExpandableRows>
-                </div>
-              )}
-            </ExecCard>
+            </ExecCard>}
 
           {/* ── Recent Activity — the last card of the grid (index.css gives a
               trailing card whatever is left of its row) ─────────────────── */}
-          <ExecCard
+          {showCard("activity") && <ExecCard
             id="activity" icon={History} title="Recent Activity"
-            accent={CARD_ACCENTS.activity} index={9} order={9} wide
+            accent={CARD_ACCENTS.activity} index={8} order={8} wide
           >
             {activityItems.length === 0 ? (
               <CardEmpty icon={History} accent={CARD_ACCENTS.activity}>
@@ -2267,10 +2283,35 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 </ExpandableRows>
               </div>
             )}
-          </ExecCard>
+          </ExecCard>}
 
           </div>
         </>
+      )}
+
+      {!feedLoading && quietCards.length > 0 && (
+        <div className="mt-2 bubble px-3 py-2 flex flex-wrap items-center gap-1.5" data-testid="exec-quiet-cards">
+          <span className="text-[11px] text-muted-foreground mr-1">Nothing to show right now:</span>
+          {quietCards.map((c) => (
+            <button key={c.id} type="button"
+              onClick={() => setOpenedCards((prev) => new Set(prev).add(c.id))}
+              className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+              style={{ ["--accent-hsl" as any]: c.accent }}
+              title={`${c.title}: ${c.note}. Tap to open.`}
+              aria-label={`Open ${c.title} (${c.note})`}
+              data-testid={`exec-quiet-${c.id}`}>
+              <c.icon className="h-3 w-3" style={{ color: `hsl(${c.accent})` }} aria-hidden="true" />
+              {c.title}
+            </button>
+          ))}
+          {/* A profile filter can be why a list is empty: say so here, where
+              the cards that would have said it are folded away (Rule 4). */}
+          {mode === "selected" && ids.length > 0 && (
+            <span className="text-[11px] text-muted-foreground basis-full" data-testid="exec-quiet-scope">
+              A profile filter is on — other people's items are hidden, not deleted.
+            </span>
+          )}
+        </div>
       )}
 
       {/* The canonical drill-downs. Each is the app's ONE component for that

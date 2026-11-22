@@ -126,14 +126,25 @@ describe("ExecutiveBriefing", () => {
       expect(screen.getByTestId(id), id).toBeTruthy();
     }
 
-    // The card grid, with Recent Activity present at the bottom.
-    for (const id of [
-      "exec-card-attention", "exec-card-tasks", "exec-card-schedule", "exec-card-habits",
-      "exec-card-money", "exec-card-documents", "exec-card-wellness", "exec-card-upcoming",
-      "exec-card-activity",
-    ]) {
+    // The cards that always render: they hold controls or figures.
+    for (const id of ["exec-card-attention", "exec-card-money", "exec-card-documents"]) {
       expect(screen.getByTestId(id), id).toBeTruthy();
     }
+    // 2026-11-22 (owner): "collapse empty sections automatically". A card
+    // with nothing to show is one chip in the quiet row, not half a screen —
+    // and a tap opens it in place, so nothing is out of reach.
+    // (A card folds once its own data has loaded — never while it is pending.)
+    await waitFor(() => { expect(screen.getByTestId("exec-quiet-tasks")).toBeTruthy(); expect(screen.getByTestId("exec-quiet-schedule")).toBeTruthy(); });
+    const quiet = screen.getByTestId("exec-quiet-cards");
+    for (const id of ["tasks", "schedule", "habits", "wellness", "activity"]) {
+      expect(within(quiet).getByTestId(`exec-quiet-${id}`), id).toBeTruthy();
+      expect(screen.queryByTestId(`exec-card-${id}`), id).toBeNull();
+    }
+    fireEvent.click(screen.getByTestId("exec-quiet-habits"));
+    expect(screen.getByTestId("exec-card-habits").textContent).toContain("No habits scheduled today.");
+    expect(screen.queryByTestId("exec-quiet-habits")).toBeNull();
+    // Schedule and Upcoming are one Timeline card now.
+    expect(screen.queryByTestId("exec-card-upcoming")).toBeNull();
 
     // The old surfaces are gone — the tile row, the AI brief bubble, the
     // sections feed, and every section of the board before that.
@@ -194,7 +205,10 @@ describe("ExecutiveBriefing", () => {
     const docs = screen.getByTestId("exec-card-documents");
     expect(docs.textContent).not.toContain("Passport");
     expect(screen.getByTestId("exec-docs-count-soon").textContent).toContain("1");
-    expect(screen.getByTestId("exec-docs-count-expired").textContent).toContain("0");
+    // 2026-11-22: what has expired is Needs Attention's alone — the Documents
+    // card no longer repeats it as a tile or a caption.
+    expect(screen.queryByTestId("exec-docs-count-expired")).toBeNull();
+    expect(docs.textContent).not.toContain("Needs Attention");
   });
 
   it("shows the most recently added documents in the Documents card", async () => {
@@ -254,7 +268,8 @@ describe("ExecutiveBriefing", () => {
 
   it("at a glance: Recent Activity is a card of the grid, and the page menu sits in the top bar", async () => {
     const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
-    wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={{}} enhanced={enhancedWith()}
+    wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} enhanced={enhancedWith()}
+      stats={{ recentActivity: [{ id: "a1", type: "task", description: "Completed: Call mechanic", timestamp: new Date().toISOString() }] }}
       overviewEnd={<button data-testid="page-menu">menu</button>} />);
     const activity = await screen.findByTestId("exec-card-activity");
     expect(activity.parentElement!.className).toContain("exec-grid");
@@ -268,21 +283,25 @@ describe("ExecutiveBriefing", () => {
   // row, and the half cards are ordered so each has a partner.
   it("phone layout: two columns, half cards paired, wide cards on their own row", async () => {
     await mount(enhancedWith());
+    // Open every folded card so the whole layout is on screen.
+    for (const id of ["tasks", "schedule", "habits", "wellness", "activity"]) fireEvent.click(await screen.findByTestId(`exec-quiet-${id}`));
     const grid = screen.getByTestId("exec-card-attention").parentElement!;
     expect(grid.className).toMatch(/(^| )grid-cols-2( |$)/);
     const cls = (id: string) => screen.getByTestId(`exec-card-${id}`).className;
-    for (const id of ["habits", "money", "activity"]) {
+    // The Timeline carries today AND what is coming, so it takes the full row.
+    const wides = ["schedule", "money", "habits", "activity"];
+    for (const id of wides) {
       expect(cls(id), id).toContain("col-span-2");
       expect(cls(id), id).not.toContain("exec-half");
     }
-    const halves = ["attention", "tasks", "schedule", "upcoming", "documents", "wellness"];
+    const halves = ["attention", "tasks", "documents", "wellness"];
     for (const id of halves) expect(cls(id), id).toContain("exec-half");
     const order = (id: string) => Number(/(?:^| )order-(\d)(?: |$)/.exec(cls(id))![1]);
-    // Pairs: 1-2, 3-4, then two wide cards (5, 6), 7-8, then the last wide one.
-    expect(halves.map(order)).toEqual([1, 2, 3, 4, 7, 8]);
-    expect(["habits", "money", "activity"].map(order)).toEqual([5, 6, 9]);
+    // Attention + Tasks, then Timeline, Money, Habits, then Documents + Wellness, then Activity.
+    expect(halves.map(order)).toEqual([1, 2, 6, 7]);
+    expect(wides.map(order)).toEqual([3, 4, 5, 8]);
     // From 768px the source order applies again.
-    for (const id of [...halves, "habits", "money", "activity"]) expect(cls(id)).toContain("md:order-none");
+    for (const id of [...halves, ...wides]) expect(cls(id)).toContain("md:order-none");
   });
 
   it("never names an event that already happened today as Next Important", async () => {
@@ -341,13 +360,13 @@ describe("ExecutiveBriefing", () => {
         { id: "b2", name: "Internet", amount: 60, daysUntil: 4, status: "upcoming" },
       ] },
     }));
-    await waitFor(() => expect(screen.getByTestId("exec-important-dates").textContent).toContain("Mom's Birthday"));
+    await waitFor(() => expect(screen.getByTestId("exec-timeline-coming").textContent).toContain("Mom's Birthday"));
     const ids = Array.from(document.querySelectorAll("[data-testid^='exec-item-'], [data-testid^='exec-money-bill-']"))
       .map((el) => el.getAttribute("data-testid")!.replace(/^exec-money-bill-/, "exec-item-bill:"));
     expect(ids.length).toBeGreaterThan(0);
     expect(new Set(ids).size).toBe(ids.length);
-    // The upcoming bill is Money's, not also the Upcoming card's.
-    expect(screen.getByTestId("exec-card-upcoming").textContent).not.toContain("Internet");
+    // The upcoming bill is Money's, not also the Timeline's.
+    expect(screen.getByTestId("exec-card-schedule").textContent).not.toContain("Internet");
   });
 
   it("opens Bills & Payments — the Finance tab's panel — from a bill row", async () => {
@@ -366,6 +385,45 @@ describe("ExecutiveBriefing", () => {
     expect(screen.getByTestId("exec-money-bill-b1")).toBeTruthy();
     expect(screen.queryByTestId("exec-action-bill:b1")).toBeNull();
     expect(screen.getByTestId("exec-card-money").querySelector('[data-testid^="exec-action-bill:"]')).toBeNull();
+  });
+
+  // 2026-11-22 (owner): "Money only shows income, expenses, and negative cash
+  // flow — show financial position."
+  it("Money leads with what you own, what you owe and net worth, from the snapshot", async () => {
+    await mount(enhancedWith({
+      financeSnapshot: { upcomingBills: [], totalAssetValue: 48200, totalLiabilities: 13050 },
+    }));
+    const pos = screen.getByTestId("exec-money-position");
+    expect(screen.getByTestId("exec-card-money").contains(pos)).toBe(true);
+    expect(screen.getByTestId("exec-money-assets").textContent).toContain("$48,200");
+    expect(screen.getByTestId("exec-money-debt").textContent).toContain("$13,050");
+    // One source (Rule 1): assets minus debt, the figure the overview tile shows.
+    expect(screen.getByTestId("exec-money-networth").textContent).toContain("$35,150");
+    // It sits above this month's income / expenses / cash flow.
+    const month = screen.getByTestId("exec-money-month");
+    expect(pos.compareDocumentPosition(month) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // …and opens the Net Worth panel, in place.
+    fireEvent.click(screen.getByTestId("exec-money-networth"));
+    await waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  });
+
+  it("a card with something to show is never folded away", async () => {
+    stubRoutes({ "/api/tasks": [{ id: "t1", title: "Call mechanic", status: "todo", dueDate: today() }] });
+    await mount(enhancedWith());
+    await waitFor(() => expect(screen.getByTestId("exec-card-tasks").textContent).toContain("Call mechanic"));
+    expect(screen.queryByTestId("exec-quiet-tasks")).toBeNull();
+  });
+
+  it("the quiet row says a profile filter may be why a list is empty (Rule 4)", async () => {
+    const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
+    wrap(<ExecutiveBriefing filterMode="selected" filterIds={["p1"]} stats={{}} enhanced={enhancedWith()} />);
+    const note = await screen.findByTestId("exec-quiet-scope");
+    expect(note.textContent).toContain("hidden, not deleted");
+    cleanup();
+    // With everyone showing there is no filter to mention.
+    await mount(enhancedWith());
+    await screen.findByTestId("exec-quiet-cards");
+    expect(screen.queryByTestId("exec-quiet-scope")).toBeNull();
   });
 
   it("shows a real all-clear when nothing needs attention", async () => {
@@ -471,12 +529,12 @@ describe("ExecutiveBriefing", () => {
       ],
     });
     await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
-    // Occasions live in Schedule's Important dates block — the one place on
+    // Occasions live in the Timeline's "Coming up" list — the one place on
     // the tab that answers "when is it actually happening".
     await waitFor(() => {
-      expect(screen.getByTestId("exec-important-dates").textContent).toContain("Maya's Graduation");
+      expect(screen.getByTestId("exec-timeline-coming").textContent).toContain("Maya's Graduation");
     });
-    const dates = screen.getByTestId("exec-important-dates");
+    const dates = screen.getByTestId("exec-timeline-coming");
     expect(dates.textContent).toContain("Mom's Birthday");
     // Writable occurrence → Done. A profile-derived date is read-only — its
     // sourceId is not an event id, so offering Done would PATCH into a 404.
@@ -503,7 +561,7 @@ describe("ExecutiveBriefing", () => {
         ],
       });
       await mount(enhancedWith());
-      const block = await screen.findByTestId("exec-important-dates");
+      const block = await screen.findByTestId("exec-timeline-coming");
       await waitFor(() => expect(block.textContent).toContain("Mom's Birthday"));
       // Expirations moved to Needs Attention (2026-10-21) — listed once.
       expect(block.textContent).not.toContain("Passport");
@@ -517,34 +575,39 @@ describe("ExecutiveBriefing", () => {
       expect(screen.getByTestId("exec-card-schedule").contains(block)).toBe(true);
     });
 
-    it("says how the list splits, so the week you must act on is legible", async () => {
+    // 2026-11-22 (owner): "Combine overlapping upcoming information into one
+    // useful timeline." A task, an occasion and an appointment are one list
+    // in date order — not a "dates" block here and an Upcoming card there.
+    it("is ONE list in date order: a task, a birthday and an appointment", async () => {
       stubRoutes({
+        "/api/tasks": [{ id: "t1", title: "Call the insurance company", status: "todo", dueDate: soon(1) }],
         "/api/calendar/timeline": [
+          { id: "ev-appt", type: "event", title: "Dentist visit", date: soon(10), time: "10:00", sourceId: "ev-appt", linkedProfiles: [] },
           { id: "ev-b1", type: "event", title: "Mom's Birthday", date: soon(3), allDay: true,
             sourceId: "ev-b1", linkedProfiles: [], meta: { kind: "birthday", recurrence: "yearly" } },
-          { id: "ev-b2", type: "event", title: "Dad's Birthday", date: soon(20), allDay: true,
-            sourceId: "ev-b2", linkedProfiles: [], meta: { kind: "birthday", recurrence: "yearly" } },
         ],
       });
       await mount(enhancedWith());
-      await waitFor(() => {
-        // Mom (3d) is inside the week; Dad (20d) is not.
-        expect(screen.getByTestId("exec-important-dates-note").textContent)
-          .toBe("1 in the next 7 days · 1 more within 45");
-      });
+      const block = await screen.findByTestId("exec-timeline-coming");
+      await waitFor(() => expect(block.textContent).toContain("Dentist visit"));
+      const at = ["Call the insurance company", "Mom's Birthday", "Dentist visit"].map((t) => block.textContent!.indexOf(t));
+      expect(at.every((i) => i >= 0)).toBe(true);
+      expect(at).toEqual([...at].sort((a, b) => a - b));
+      expect(screen.getByTestId("exec-card-schedule").contains(block)).toBe(true);
+      expect(screen.queryByTestId("exec-card-upcoming")).toBeNull();
     });
 
-    it("is present and explains itself when there is nothing coming up", async () => {
+    it("folds away when there is nothing today or coming up, and explains itself when opened", async () => {
       await mount(enhancedWith({ expiringDocuments: [] }));
-      const block = await screen.findByTestId("exec-important-dates");
-      expect(block.textContent).toContain("Dates to remember");
+      await waitFor(() => expect(screen.queryByTestId("exec-card-schedule")).toBeNull());
+      fireEvent.click(await screen.findByTestId("exec-quiet-schedule"));
+      const card = screen.getByTestId("exec-card-schedule");
       // One empty state for the whole card, not one per block.
-      expect(block.textContent).toContain("Nothing today, and no birthdays or occasions in the next 45 days.");
+      expect(card.textContent).toContain("Your day is clear, and nothing is coming up in the next 30 days.");
       expect(screen.queryByTestId("exec-schedule-empty")).toBeNull();
-      expect(screen.getByTestId("exec-card-schedule").textContent).not.toContain("Nothing scheduled today.");
     });
 
-    it("does not also render the same date in the Upcoming card", async () => {
+    it("renders a date once, and View all upcoming still opens the complete list", async () => {
       stubRoutes({
         "/api/calendar/timeline": [
           { id: "ev-b1", type: "event", title: "Mom's Birthday", date: soon(3), allDay: true,
@@ -553,9 +616,8 @@ describe("ExecutiveBriefing", () => {
       });
       await mount(enhancedWith());
       await waitFor(() => {
-        expect(screen.getByTestId("exec-important-dates").textContent).toContain("Mom's Birthday");
+        expect(screen.getByTestId("exec-timeline-coming").textContent).toContain("Mom's Birthday");
       });
-      expect(screen.getByTestId("exec-card-upcoming").textContent).not.toContain("Mom's Birthday");
       // One row, one testid — the duplicate is what made the DOM ambiguous.
       expect(screen.getAllByTestId("exec-item-event:ev-b1")).toHaveLength(1);
       // "View all upcoming" is still the COMPLETE list, because the KPI above
@@ -630,7 +692,8 @@ describe("ExecutiveBriefing", () => {
       expect(opened()).toContain("Task");
       // Still on Executive underneath — the tab was never navigated away.
       expect(screen.getByTestId("executive-briefing")).toBeTruthy();
-      expect(screen.getByTestId("exec-card-tasks")).toBeTruthy();
+      // No open tasks here, so Tasks is folded into the quiet row.
+      expect(screen.getByTestId("exec-quiet-tasks")).toBeTruthy();
     });
 
     it("Next Important — opens the Upcoming dates, never the Bills panel", async () => {
@@ -694,11 +757,11 @@ describe("ExecutiveBriefing", () => {
 
     it("closing a panel returns to Executive with the tab intact", async () => {
       await mount(enhancedWith());
-      fireEvent.click(screen.getByTestId("exec-view-upcoming"));
+      fireEvent.click(screen.getByTestId("exec-kpi-next"));
       const dlg = await screen.findByTestId("upcoming-popup");
       fireEvent.keyDown(dlg, { key: "Escape", code: "Escape" });
       await waitFor(() => expect(screen.queryByTestId("upcoming-popup")).toBeNull());
-      expect(screen.getByTestId("exec-card-upcoming")).toBeTruthy();
+      expect(screen.getByTestId("exec-card-money")).toBeTruthy();
       expect(screen.getByTestId("exec-overview")).toBeTruthy();
     });
   });
