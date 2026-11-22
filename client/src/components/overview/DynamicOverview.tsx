@@ -100,7 +100,7 @@ export function toneClass(tone?: OverviewValue["tone"]): string {
 
 export function useFieldWrite(profileId: string) {
   const { toast } = useToast();
-  return async (fieldKey: string, value: string | null) => {
+  return async (fieldKey: string, value: string | number | null) => {
     try {
       // A null value removes the field (the explicit delete signal: storage
       // merges `fields`, so omitting or blanking a key removes nothing).

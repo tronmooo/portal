@@ -94,7 +94,7 @@ function mount(over: { onEdit?: () => void; onDelete?: () => void; onOpenDocumen
         <DynamicOverview
           profileId={ID}
           renderBody={(spec) => (
-            <AssetOverviewBody spec={spec} profile={PROFILE} autoValuation onEdit={over.onEdit ?? (() => {})} onOpenDocuments={over.onOpenDocuments} />
+            <AssetOverviewBody spec={spec} profile={PROFILE} autoValuation onOpenDocuments={over.onOpenDocuments} />
           )}
         />
         <AssetProfileActions profileId={ID} onEdit={over.onEdit ?? (() => {})} onDelete={over.onDelete ?? (() => {})} />
@@ -120,7 +120,7 @@ describe("asset profile layout", () => {
     fireEvent.change(screen.getByTestId("overview-field-input-purchasePrice"), { target: { value: "$450" } });
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0]).toMatchObject({ method: "PATCH", url: `/api/profiles/${ID}`, body: { fields: { purchasePrice: "450" } } });
+    expect(writes()[0]).toMatchObject({ method: "PATCH", url: `/api/profiles/${ID}`, body: { fields: { purchasePrice: 450 } } });
   });
 
   it("an existing field opens as a tile that can be removed in two taps", async () => {
@@ -132,6 +132,51 @@ describe("asset profile layout", () => {
     fireEvent.click(screen.getByTestId("overview-field-remove-brand"));
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(writes()[0].body).toEqual({ fieldsToDelete: ["brand"] });
+  });
+
+  it("Location, Notes and the entered value are edited where they are shown", async () => {
+    mount();
+    // Location: the same `location` field the chat's update_profile writes.
+    fireEvent.click(await screen.findByTestId("asset-detail-location"));
+    fireEvent.change(screen.getByTestId("overview-field-input-location"), { target: { value: "Office" } });
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0].body).toEqual({ fields: { location: "Office" } });
+
+    // Notes: the record's own `notes`, not a field.
+    fireEvent.click(screen.getByTestId("asset-detail-notes"));
+    fireEvent.change(screen.getByTestId("asset-notes-input"), { target: { value: "Work laptop" } });
+    fireEvent.click(screen.getByTestId("asset-notes-save"));
+    await waitFor(() => expect(writes()).toHaveLength(2));
+    expect(writes()[1]).toMatchObject({ method: "PATCH", url: `/api/profiles/${ID}`, body: { notes: "Work laptop" } });
+
+    // The user's number: written as currentValue (a number), and it has no
+    // remove button — a value is changed, not deleted.
+    fireEvent.click(screen.getByTestId("asset-detail-entered-value"));
+    expect(screen.queryByLabelText(/Remove Your entered value/)).toBeNull();
+    fireEvent.change(screen.getByTestId("overview-field-input-currentValue"), { target: { value: "550" } });
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(writes()).toHaveLength(3));
+    expect(writes()[2].body).toEqual({ fields: { currentValue: 550 } });
+  });
+
+  it("an odd tile out takes the whole row, so the grid has no empty half", async () => {
+    mount();
+    const grid = (await screen.findByTestId("asset-detail-location")).parentElement!;
+    // Every tile but Notes (always full width) — the last of an odd count spans.
+    const cells = Array.from(grid.children).slice(0, -1);
+    const spans = cells.filter((c) => c.className.includes("col-span-2"));
+    expect(spans.length).toBe(cells.length % 2);
+    if (spans.length) expect(spans[0]).toBe(cells[cells.length - 1]);
+  });
+
+  it("an alert's date is changed from the Alerts card", async () => {
+    mount();
+    fireEvent.click(await screen.findByTestId("asset-alert-edit-warrantyExpiration"));
+    fireEvent.change(screen.getByTestId("asset-date-input-warrantyExpiration"), { target: { value: "2032-01-01" } });
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0].body).toEqual({ fields: { warrantyExpiration: "2032-01-01" } });
   });
 
   it("Financial position is the user's number against the current value", async () => {
@@ -186,8 +231,7 @@ describe("asset profile layout", () => {
     mount({ onEdit, onDelete, onOpenDocuments });
     await screen.findByTestId("asset-details");
     fireEvent.click(screen.getByTestId("action-edit-profile"));
-    fireEvent.click(screen.getByTestId("asset-detail-notes"));
-    expect(onEdit).toHaveBeenCalledTimes(2);
+    expect(onEdit).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId("asset-add-document"));
     expect(onOpenDocuments).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId("button-delete-profile-info-tab"));

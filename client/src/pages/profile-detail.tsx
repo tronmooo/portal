@@ -3237,9 +3237,7 @@ function InfoTab({ profile, onEdit, onOpenDocuments }: { profile: ProfileDetail;
               spec={spec}
               profile={profile as any}
               autoValuation={auto}
-              onEdit={onEdit}
               onOpenDocuments={onOpenDocuments}
-              locationSlot={<OverviewEditors profile={profile} />}
             />
           )}
         />

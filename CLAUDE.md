@@ -608,6 +608,13 @@ alerts" are `useRecordAlerts`: `rulesFromAll` over the UNFLATTENED profile row
 and its documents, filtered by `isAlertDateRule`, identified by `dateAlertId`
 (the bell's id), cleared and restored through `useDismissedAlerts` (Rule 8).
 Never the browser snooze.
+**P4. No empty halves, and everything shown is edited where it is shown.**
+The details grid is built as a list and an odd tile out takes the row; a single
+financial fact takes its row. Location, Notes (the record's `notes`), the
+user's entered value (written as `currentValue`, a number; it has no remove),
+every field tile and every alert date open an editor in place — the same
+fields the chat's `update_profile` writes, so a chat edit and a tile edit are
+the same write. Only what the app calculated is read-only.
 **P3. Nothing is reachable from one place only.** Edit and Delete are in the
 header's ⋯ menu and in Profile actions; Add field is a Profile action
 (`AddFieldPanel inline`); documents open the Documents tab; the owner pill

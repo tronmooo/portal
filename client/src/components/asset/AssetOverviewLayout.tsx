@@ -25,7 +25,9 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
+import { formatApiError } from "@/lib/formatError";
 import { formatMoneyCompact, parseLocalDate } from "@/lib/format";
 import { localTodayISO } from "@/lib/dates";
 import { useToast } from "@/hooks/use-toast";
@@ -93,6 +95,7 @@ function SectionTitle({ children, action }: { children: React.ReactNode; action?
 
 function FieldTile({
   profileId, fieldKey, label, display, raw, kind = "text", reason, readOnly, testId, removeTestId, wide,
+  removable = true, iconKey,
 }: {
   profileId: string;
   fieldKey: string;
@@ -107,19 +110,24 @@ function FieldTile({
   testId?: string;
   removeTestId?: string;
   wide?: boolean;
+  /** False for a value that can be changed but not removed (the value itself). */
+  removable?: boolean;
+  /** Picks the icon when the stored key does not say what the tile is. */
+  iconKey?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const { confirm, isArmed } = useConfirmArm();
   const write = useFieldWrite(profileId);
-  const Icon = iconFor(fieldKey);
+  const Icon = iconFor(iconKey || fieldKey);
   const unset = display == null;
 
   const save = async () => {
     const text = draft.trim();
     if (!text) return;
-    const value = kind === "money" ? String(parseMoney(text)) : text;
+    // Money is stored as a number, like every other amount the app writes.
+    const value = kind === "money" ? parseMoney(text) : text;
     setSaving(true);
     const ok = await write(fieldKey, value);
     setSaving(false);
@@ -145,7 +153,7 @@ function FieldTile({
           <Button size="sm" className="h-9 text-xs" disabled={saving || !draft.trim()} onClick={() => void save()}>
             {saving ? "…" : "Save"}
           </Button>
-          {!unset && (
+          {!unset && removable && (
             <Button
               size="sm"
               variant={isArmed("rm") ? "destructive" : "ghost"}
@@ -193,6 +201,56 @@ function FieldTile({
       data-testid={testId}
     >
       {body}
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
+    </button>
+  );
+}
+
+/** The record's notes, edited where they are shown (the same `notes` the Edit
+ *  dialog and the chat's update_profile write). */
+function NotesTile({ profileId, notes }: { profileId: string; notes: string }) {
+  const { toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    setSaving(true);
+    try {
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, { notes: draft.trim() });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      void invalidateDomains("profiles");
+      setEditing(false);
+    } catch (err: any) {
+      toast({ title: "Failed to save notes", description: formatApiError(err), variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+  if (editing) {
+    return (
+      <div className={`col-span-2 ${TILE_BOX} ring-1 ring-primary/40 space-y-1.5`}>
+        <label className="text-[12px] text-muted-foreground" htmlFor={`notes-${profileId}`}>Notes</label>
+        <textarea id={`notes-${profileId}`} rows={3} autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
+          className="w-full rounded-md border border-input bg-background px-2.5 py-2 text-[14px]"
+          placeholder="Anything worth remembering about this asset" data-testid="asset-notes-input" />
+        <div className="flex justify-end gap-1.5">
+          <Button size="sm" variant="ghost" className="h-9 text-xs" onClick={() => setEditing(false)}>Cancel</Button>
+          <Button size="sm" className="h-9 text-xs" disabled={saving || draft.trim() === notes.trim()} onClick={() => void save()} data-testid="asset-notes-save">
+            {saving ? "…" : "Save"}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <button type="button" className={`${TILE} col-span-2`} onClick={() => { setDraft(notes); setEditing(true); }} data-testid="asset-detail-notes">
+      <StickyNote className="h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
+      <span className="flex-1 min-w-0">
+        <span className="block text-[12px] text-muted-foreground">Notes</span>
+        <span className={`block text-[14px] ${notes.trim() ? "line-clamp-3 whitespace-pre-line" : "text-muted-foreground/70"}`}>
+          {notes.trim() || "No notes yet"}
+        </span>
+      </span>
       <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
     </button>
   );
@@ -304,10 +362,21 @@ function ValueChangeCard({ profile, extra }: {
 
 function ExtraFacts({ values, bare }: { values: OverviewValue[]; bare?: boolean }) {
   if (values.length === 0) return null;
+  const frame = bare ? "mt-2" : "mt-3 pt-3 border-t border-border/40";
+  // One fact takes the row (label left, number right) rather than a third of it.
+  if (values.length === 1) {
+    const v = values[0];
+    return (
+      <div className={`flex items-center justify-between gap-3 ${frame}`} data-testid={`overview-metric-${v.semanticKey}`}>
+        <p className="text-[13px] text-muted-foreground flex items-center gap-1.5 min-w-0">{v.label}<ProvenanceMark value={v} /></p>
+        <p className={`text-[16px] font-bold tabular-nums ${toneClass(v.tone)}`}>{formatValue(v)}</p>
+      </div>
+    );
+  }
   return (
-    <div className={`grid grid-cols-2 sm:grid-cols-3 gap-3 ${bare ? "mt-2" : "mt-3 pt-3 border-t border-border/40"}`}>
-      {values.map((v) => (
-        <div key={v.semanticKey} className="min-w-0" data-testid={`overview-metric-${v.semanticKey}`}>
+    <div className={`grid grid-cols-2 gap-3 ${frame}`}>
+      {values.map((v, i) => (
+        <div key={v.semanticKey} className={`min-w-0 ${values.length % 2 === 1 && i === values.length - 1 ? "col-span-2" : ""}`} data-testid={`overview-metric-${v.semanticKey}`}>
           <p className="text-[12px] text-muted-foreground flex items-center gap-1 truncate">{v.label}<ProvenanceMark value={v} /></p>
           <p className={`text-[16px] font-bold tabular-nums leading-tight ${toneClass(v.tone)}`}>{formatValue(v)}</p>
           {v.note && <p className="text-[11px] text-muted-foreground/80 truncate">{v.note}</p>}
@@ -411,7 +480,8 @@ function DocumentsCard({ documents, loading, failed, onRetry, onAdd }: {
   );
 }
 
-function AlertsCard({ alerts, onAdd }: { alerts: RecordAlert[]; onAdd: () => void }) {
+function AlertsCard({ alerts, profileId, onAdd }: { alerts: RecordAlert[]; profileId: string; onAdd: () => void }) {
+  const [, navigate] = useLocation();
   const live = alerts.filter((a) => !a.cleared);
   const cleared = alerts.length - live.length;
   return (
@@ -428,10 +498,19 @@ function AlertsCard({ alerts, onAdd }: { alerts: RecordAlert[]; onAdd: () => voi
       ) : (
         <div className="min-w-0">
           {live.slice(0, 3).map((a) => (
-            <div key={a.id} className="py-0.5 min-w-0" data-testid="asset-alert-row">
-              <p className="text-[13px] font-medium truncate">{a.title}</p>
-              <p className="text-[12px] text-muted-foreground truncate">{a.when}</p>
-            </div>
+            a.rule.sourceEntityType === "document" ? (
+              // A document's date is changed on the document.
+              <button key={a.id} type="button" className="block w-full text-left py-0.5 min-w-0"
+                onClick={() => navigate(`/documents/${a.rule.sourceEntityId}`)} data-testid="asset-alert-row">
+                <span className="block text-[13px] font-medium truncate">{a.title}</span>
+                <span className="block text-[12px] text-muted-foreground truncate">{a.when}</span>
+              </button>
+            ) : (
+              <div key={a.id} data-testid="asset-alert-row">
+                <DateRow profileId={profileId} fieldKey={a.rule.sourcePath || a.rule.sourceField} label={a.title}
+                  iso={a.rule.date} note={a.when} compact testId={`asset-alert-edit-${a.rule.sourceField}`} />
+              </div>
+            )
           ))}
           {live.length > 3 && <p className="text-[12px] text-muted-foreground">+{live.length - 3} more</p>}
           {cleared > 0 && (
@@ -467,9 +546,11 @@ function DateBadge({ iso }: { iso: string | null }) {
   );
 }
 
-function DateRow({ profileId, fieldKey, label, iso, note, chip, reason, removeTestId }: {
+function DateRow({ profileId, fieldKey, label, iso, note, chip, reason, removeTestId, compact, testId }: {
   profileId: string; fieldKey: string; label: string; iso: string | null;
   note?: string; chip?: string; reason?: string; removeTestId?: string;
+  /** No date badge — a row inside a narrow card. */
+  compact?: boolean; testId?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -487,7 +568,7 @@ function DateRow({ profileId, fieldKey, label, iso, note, chip, reason, removeTe
     return (
       <div className="py-2 space-y-1.5">
         <label className="text-[12px] text-muted-foreground" htmlFor={`date-${fieldKey}`}>{label}</label>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Input id={`date-${fieldKey}`} type="date" className="h-9 text-[14px] flex-1 min-w-0" value={draft} autoFocus
             onChange={(e) => setDraft(e.target.value)} data-testid={`asset-date-input-${fieldKey}`} />
           <Button size="sm" className="h-9 text-xs" disabled={saving || !draft} onClick={() => void save()}>{saving ? "…" : "Save"}</Button>
@@ -510,12 +591,12 @@ function DateRow({ profileId, fieldKey, label, iso, note, chip, reason, removeTe
     );
   }
   return (
-    <button type="button" className="w-full flex items-center gap-3 py-2 text-left"
+    <button type="button" className={`w-full flex items-center text-left ${compact ? "gap-1.5 py-0.5" : "gap-3 py-2"}`}
       onClick={() => { setDraft(iso ? iso.slice(0, 10) : ""); setEditing(true); }}
-      data-testid={`asset-date-row-${fieldKey}`}>
-      <DateBadge iso={iso} />
+      data-testid={testId || `asset-date-row-${fieldKey}`}>
+      {!compact && <DateBadge iso={iso} />}
       <span className="flex-1 min-w-0">
-        <span className="block text-[14px] font-semibold truncate">{label}</span>
+        <span className={`block truncate ${compact ? "text-[13px] font-medium" : "text-[14px] font-semibold"}`}>{label}</span>
         <span className="block text-[12px] text-muted-foreground truncate">{iso ? (note || "On your calendar") : (reason || "Not set")}</span>
       </span>
       {chip && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{chip}</span>}
@@ -584,17 +665,13 @@ function AddDateForm({ profileId, options, onDone }: {
 // ── The layout ───────────────────────────────────────────────────────────────
 
 export function AssetOverviewBody({
-  spec, profile, autoValuation, onEdit, onOpenDocuments, locationSlot,
+  spec, profile, autoValuation, onOpenDocuments,
 }: {
   spec: OverviewSpec;
   profile: AssetLayoutProfile;
   autoValuation: boolean;
-  /** Opens the profile's Edit dialog (name, notes, every field). */
-  onEdit: () => void;
   /** Opens the tab where documents are listed and uploaded. */
   onOpenDocuments?: () => void;
-  /** The location editor — it writes a relationship, so the page owns it. */
-  locationSlot?: React.ReactNode;
 }) {
   const [, navigate] = useLocation();
   const [showMore, setShowMore] = useState(false);
@@ -607,7 +684,8 @@ export function AssetOverviewBody({
   const purchaseDateKey = Object.keys(fields).find((k) => PURCHASE_DATE_RE.test(k) && fields[k]) || "purchaseDate";
   const purchaseDate = fields[purchaseDateKey] ? String(fields[purchaseDateKey]) : "";
   // Drawn by this layout itself, so the composition's copy is not repeated.
-  const staple = new Set([priceKey, purchaseDateKey, "purchasePrice", "purchaseDate", "userEnteredValue"]);
+  const staple = new Set([priceKey, purchaseDateKey, "purchasePrice", "purchaseDate", "userEnteredValue", "location"]);
+  const location = typeof fields.location === "string" ? fields.location.trim() : "";
   const entered = userEnteredAssetValue(fields);
 
   const fieldSections = spec.sections.filter((s) => !SPECIAL.has(s.component));
@@ -647,14 +725,50 @@ export function AssetOverviewBody({
   const metrics = summary.filter((m) => m.sourceReference?.kind !== "field");
   const financial = spec.sections.filter((s) => s.component === "financialSummary").flatMap((s) => s.values || []);
 
-  const tile = (v: OverviewValue) => v.editable ? (
-    <FieldTile key={v.semanticKey} profileId={profile.id} fieldKey={v.editable.fieldKey} label={v.label}
+  const tile = (v: OverviewValue) => (wide: boolean) => v.editable ? (
+    <FieldTile key={v.semanticKey} profileId={profile.id} fieldKey={v.editable.fieldKey} label={v.label} wide={wide}
       display={formatValue(v)} raw={rawOf(v)} kind={kindOf(v)}
       testId={`overview-field-${v.semanticKey}`} removeTestId={`overview-field-remove-${v.semanticKey}`} />
   ) : (
-    <FieldTile key={v.semanticKey} profileId={profile.id} fieldKey={v.semanticKey} label={v.label}
+    <FieldTile key={v.semanticKey} profileId={profile.id} fieldKey={v.semanticKey} label={v.label} wide={wide}
       display={formatValue(v)} readOnly testId={`overview-field-${v.semanticKey}`} />
   );
+
+  // The grid as a list, so an odd tile out takes the row instead of leaving
+  // half of it empty.
+  const tiles: Array<(wide: boolean) => React.ReactNode> = [
+    // The user's own number. Changing it is the same write as typing a value
+    // anywhere else: `currentValue`, which the server stamps as the user's.
+    ...(autoValuation && entered > 0 ? [(wide: boolean) => (
+      <FieldTile key="entered" profileId={profile.id} fieldKey="currentValue" label="Your entered value" kind="money" wide={wide}
+        display={formatMoneyCompact(entered)} raw={String(entered)} removable={false} testId="asset-detail-entered-value" />
+    )] : []),
+    (wide) => (
+      <FieldTile key="price" profileId={profile.id} fieldKey={priceKey} iconKey="purchasePrice" label="Purchase price" kind="money" wide={wide}
+        display={price > 0 ? formatMoneyCompact(price) : null} raw={price > 0 ? String(price) : ""}
+        reason="Unlocks appreciation since you bought it"
+        testId="overview-missing-purchasePrice" removeTestId="overview-field-remove-purchasePrice" />
+    ),
+    (wide) => (
+      <FieldTile key="pdate" profileId={profile.id} fieldKey={purchaseDateKey} iconKey="purchaseDate" label="Purchase date" kind="date" wide={wide}
+        display={purchaseDate ? (parseLocalDate(purchaseDate)?.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) ?? purchaseDate) : null}
+        raw={/^\d{4}-\d{2}-\d{2}/.test(purchaseDate) ? purchaseDate.slice(0, 10) : ""}
+        reason="Dates how long you have owned it"
+        testId="asset-detail-purchase-date" removeTestId="overview-field-remove-purchaseDate" />
+    ),
+    (wide) => (
+      <FieldTile key="location" profileId={profile.id} fieldKey="location" label="Location" wide={wide}
+        display={location || null} raw={location} reason="Where it is kept — a room, a garage, a safe"
+        testId="asset-detail-location" removeTestId="overview-field-remove-location" />
+    ),
+    ...fieldMetrics.map(tile),
+    ...shown.filter((v) => !fieldMetrics.some((m) => m.semanticKey === v.semanticKey)).map(tile),
+    ...missingFields.map((m) => (wide: boolean) => (
+      <FieldTile key={m.semanticKey} profileId={profile.id} fieldKey={m.fieldKey} label={m.label} wide={wide}
+        display={null} reason={m.reason} testId={`overview-missing-${m.semanticKey}`} />
+    )),
+    ...(showMore ? more.map(tile) : []),
+  ];
 
   const sectionsOf = (...components: string[]) =>
     spec.sections.filter((s) => components.includes(s.component)).map((s) => renderSection(s, profile.id));
@@ -669,37 +783,8 @@ export function AssetOverviewBody({
           Asset details
         </SectionTitle>
         <div className="grid grid-cols-2 gap-2">
-          {autoValuation && entered > 0 && (
-            <FieldTile profileId={profile.id} fieldKey="userEnteredValue" label="Your entered value"
-              display={formatMoneyCompact(entered)} readOnly testId="asset-detail-entered-value" />
-          )}
-          <FieldTile profileId={profile.id} fieldKey={priceKey} label="Purchase price" kind="money"
-            display={price > 0 ? formatMoneyCompact(price) : null} raw={price > 0 ? String(price) : ""}
-            reason="Unlocks appreciation since you bought it"
-            testId="overview-missing-purchasePrice" removeTestId="overview-field-remove-purchasePrice" />
-          <FieldTile profileId={profile.id} fieldKey={purchaseDateKey} label="Purchase date" kind="date"
-            display={purchaseDate ? (parseLocalDate(purchaseDate)?.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) ?? purchaseDate) : null}
-            raw={/^\d{4}-\d{2}-\d{2}/.test(purchaseDate) ? purchaseDate.slice(0, 10) : ""}
-            reason="Dates how long you have owned it"
-            testId="asset-detail-purchase-date" removeTestId="overview-field-remove-purchaseDate" />
-          {fieldMetrics.map(tile)}
-          {shown.filter((v) => !fieldMetrics.some((m) => m.semanticKey === v.semanticKey)).map(tile)}
-          {missingFields.map((m) => (
-            <FieldTile key={m.semanticKey} profileId={profile.id} fieldKey={m.fieldKey} label={m.label}
-              display={null} reason={m.reason} testId={`overview-missing-${m.semanticKey}`} />
-          ))}
-          {showMore && more.map(tile)}
-          {locationSlot && <div className="col-span-2">{locationSlot}</div>}
-          <button type="button" className={`${TILE} col-span-2`} onClick={onEdit} data-testid="asset-detail-notes">
-            <StickyNote className="h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
-            <span className="flex-1 min-w-0">
-              <span className="block text-[12px] text-muted-foreground">Notes</span>
-              <span className={`block truncate ${profile.notes ? "text-[14px]" : "text-[14px] text-muted-foreground/70"}`}>
-                {profile.notes?.trim() || "No notes yet"}
-              </span>
-            </span>
-            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
-          </button>
+          {tiles.map((t, i) => t(tiles.length % 2 === 1 && i === tiles.length - 1))}
+          <NotesTile profileId={profile.id} notes={profile.notes || ""} />
         </div>
         {more.length > 0 && (
           <button type="button" className="text-[12px] text-muted-foreground hover:text-foreground flex items-center gap-1 px-0.5"
@@ -712,8 +797,8 @@ export function AssetOverviewBody({
 
       {metrics.length > 0 && (
         <div className={`grid gap-2 ${metrics.length >= 3 ? "grid-cols-3" : "grid-cols-2"}`} data-testid="overview-summary-metrics">
-          {metrics.map((m) => (
-            <div key={m.semanticKey} className={`${TILE_BOX} min-w-0`} data-testid={`overview-summary-${m.semanticKey}`}>
+          {metrics.map((m, i) => (
+            <div key={m.semanticKey} className={`${TILE_BOX} min-w-0 ${metrics.length % (metrics.length >= 3 ? 3 : 2) !== 0 && i === metrics.length - 1 ? "col-span-full" : ""}`} data-testid={`overview-summary-${m.semanticKey}`}>
               <p className="text-[12px] text-muted-foreground flex items-center gap-1 truncate">{m.label}<ProvenanceMark value={m} /></p>
               <p className={`text-[16px] font-bold tabular-nums leading-tight ${toneClass(m.tone)}`}>{formatValue(m)}</p>
               {m.note && <p className="text-[11px] text-muted-foreground/80 truncate">{m.note}</p>}
@@ -729,7 +814,7 @@ export function AssetOverviewBody({
       <div className="grid grid-cols-2 gap-2">
         <DocumentsCard documents={documents} loading={documentsQuery.isLoading} failed={documentsQuery.isError}
           onRetry={() => void documentsQuery.refetch()} onAdd={onOpenDocuments} />
-        <AlertsCard alerts={alerts} onAdd={() => setAddingDate(true)} />
+        <AlertsCard alerts={alerts} profileId={profile.id} onAdd={() => setAddingDate(true)} />
       </div>
 
       {/* ── Calendar & reminders ── */}
