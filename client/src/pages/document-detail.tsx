@@ -42,8 +42,12 @@ import { cn } from "@/lib/utils";
 import { stringifyField, stringifyFieldFor, isMoneyFieldKey, previewUnrenderable, isLineItemArray, formatLineItem } from "@/lib/field-display";
 import { formatFullDate, formatMoney } from "@/lib/format";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
-import { useDocumentBlobUrl, classifyDocument, type DocumentBlobState, prefetchDocumentBlob, wasFileDiscarded } from "@/lib/document-preview";
+import { DOCUMENT_UPLOAD_ACCEPT, invalidateDocumentBlob, prefetchDocument, useDocumentBlobUrl, classifyDocument, type DocumentBlobState, wasFileDiscarded } from "@/lib/document-preview";
 import { userVisibleTags } from "@shared/system-tags";
+import { documentHasFile } from "@shared/document-file";
+import EditableTitle from "@/components/EditableTitle";
+import { ShareButton } from "@/components/DocumentViewer";
+import { hashNavigate } from "@/lib/hashNavigate";
 import { classifyDateField, bareDateOf, daysBetweenISO, countdownLabel } from "@shared/date-rules";
 import { UPCOMING_WINDOW_DAYS } from "@shared/extraction-calendar";
 
@@ -274,7 +278,7 @@ type DocTab = "overview" | "data" | "file";
 // The whole page below the tabs belongs to the file: no card, no side panel,
 // the controls float over it.
 
-function PreviewPanel({ doc, file, onDownload }: { doc: Document; file: DocumentBlobState; onDownload: () => void }) {
+function PreviewPanel({ doc, file, noFile, onDownload }: { doc: Document; file: DocumentBlobState; noFile: boolean; onDownload: () => void }) {
   const fileDiscarded = wasFileDiscarded(doc);
   const kind = classifyDocument(doc.mimeType);
   const isImage = kind === "image";
@@ -286,7 +290,7 @@ function PreviewPanel({ doc, file, onDownload }: { doc: Document; file: Document
     handleMouseDown, handleMouseMove, handleMouseUp,
   } = useViewerControls(isPdf ? 0.5 : 0.25);
   const { url: previewUrl, blob, error: blobError } = file;
-  const zoomable = !!previewUrl && !blobError && (isImage || isPdf);
+  const zoomable = !noFile && !!previewUrl && !blobError && (isImage || isPdf);
 
   return (
     <div className="relative h-full overflow-hidden bg-muted/20" data-testid="doc-file-view">
@@ -298,6 +302,41 @@ function PreviewPanel({ doc, file, onDownload }: { doc: Document; file: Document
             This file wasn't kept. You chose to extract only, so it was read
             once to pull its fields and then discarded.
           </p>
+        </div>
+      ) : noFile ? (
+        <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center" data-testid="preview-no-file">
+          <FileText className="h-12 w-12 text-muted-foreground" />
+          <p className="text-sm font-medium">{doc.name}</p>
+          <p className="text-xs text-muted-foreground max-w-xs">
+            This document was added without a file attached. Only its extracted details are saved.
+          </p>
+          <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30 hover:bg-muted/50 cursor-pointer text-xs font-medium">
+            <input
+              type="file"
+              accept={DOCUMENT_UPLOAD_ACCEPT}
+              className="hidden"
+              data-testid="input-attach-file"
+              onChange={(e) => {
+                const picked = e.target.files?.[0];
+                if (!picked) return;
+                const reader = new FileReader();
+                reader.onload = async () => {
+                  const base64 = String(reader.result).split(",")[1];
+                  try {
+                    await apiRequest("PATCH", `/api/documents/${doc.id}`, { fileData: base64, mimeType: picked.type });
+                    // The document's bytes just changed — drop anything the
+                    // blob cache is holding for this id.
+                    invalidateDocumentBlob(doc.id);
+                    void invalidateDomains("documents");
+                  } catch (err) {
+                    console.error("Upload failed", err);
+                  }
+                };
+                reader.readAsDataURL(picked);
+              }}
+            />
+            Attach a file
+          </label>
         </div>
       ) : blobError ? (
         <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center" data-testid="preview-error">
@@ -448,9 +487,11 @@ function OverviewPanel({
   doc,
   file,
   fileLabel,
+  noFile,
   onOpenTab,
 }: {
   doc: Document;
+  noFile: boolean;
   file: DocumentBlobState;
   fileLabel: string;
   onOpenTab: (tab: DocTab) => void;
@@ -480,11 +521,11 @@ function OverviewPanel({
     <div className="mx-auto w-full max-w-4xl space-y-4 p-4" data-testid="doc-overview">
       <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] sm:grid-cols-[220px_minmax(0,1fr)] gap-3 sm:gap-4">
         {/* Thumbnail — opens the full-page file view. */}
-        {fileDiscarded || !(kind === "pdf" || kind === "image") || file.error ? (
+        {fileDiscarded || noFile || !(kind === "pdf" || kind === "image") || file.error ? (
           <div className="bubble aspect-[3/4] flex flex-col items-center justify-center gap-2 p-3 text-center" data-testid="doc-thumbnail-none">
             <FileText className="h-8 w-8 text-muted-foreground" />
             <p className="text-xs text-muted-foreground">
-              {fileDiscarded ? "File not kept" : file.error ? "Preview unavailable" : "No preview"}
+              {fileDiscarded ? "File not kept" : noFile ? "No file attached" : file.error ? "Preview unavailable" : "No preview"}
             </p>
           </div>
         ) : (
@@ -862,20 +903,39 @@ function PageSkeleton() {
 
 // ─── Document body: header, tabs, the three views ─────────────────────────────
 
+/**
+ * Where the document view is shown. The view is the same in all three; only
+ * the way out differs: a page goes Back, a dialog closes, and the copy inside
+ * a chat message opens the full page.
+ */
+export type DocumentWorkspaceVariant = "page" | "dialog" | "embedded";
+
 function DocumentBody({
   doc,
   onUpdate,
   isUpdating,
   onBack,
+  variant,
+  fileData,
 }: {
   doc: Document;
   onUpdate: (patch: Partial<Document>) => void;
   isUpdating: boolean;
   onBack: () => void;
+  variant: DocumentWorkspaceVariant;
+  /** Bytes the opener already holds (a just-uploaded file), base64. */
+  fileData?: string;
 }) {
   const { toast } = useToast();
-  const [tab, setTab] = useState<DocTab>("overview");
   const fileDiscarded = wasFileDiscarded(doc);
+  const inlineData = doc.fileData || (fileData && fileData !== "__LAZY_LOAD__" ? fileData : "") || "";
+  // Added without a file (not "extract only", which says so itself).
+  const noFile = !fileDiscarded && !documentHasFile({ ...doc, fileData: inlineData || undefined });
+  const viewable = !fileDiscarded && !noFile;
+  // Opening a document shows the document: the file tab comes first whenever
+  // there is a file to show ("open my driver's license" lands on the licence,
+  // not on a summary of it).
+  const [tab, setTab] = useState<DocTab>(viewable ? "file" : "overview");
   const kind = classifyDocument(doc.mimeType);
   const fileLabel = kind === "pdf" ? "PDF" : kind === "image" ? "Image" : "File";
 
@@ -885,19 +945,20 @@ function DocumentBody({
   // blob: URL. The shared hook resolves a blob: URL — from inline base64 when a
   // freshly-uploaded doc still has it, otherwise via the authenticated /file
   // endpoint. Resolved once here: the thumbnail and the file view share it.
-  const file = useDocumentBlobUrl(doc.id, doc.mimeType, (doc as any).fileData, !fileDiscarded);
+  const file = useDocumentBlobUrl(doc.id, doc.mimeType, inlineData || undefined, viewable);
 
   const downloadFile = async () => {
     // Build the download from the bytes already resolved for the preview, else
     // from the authenticated /file endpoint (works for base64 + Supabase-Storage
-    // docs alike) rather than the now-empty doc.fileData.
+    // docs alike) rather than the now-empty doc.fileData. An image is PREVIEWED
+    // from a phone-sized variant, so its download always fetches the original.
     try {
       let href: string;
       let revoke: string | null = null;
-      if (file.url) {
+      if (file.url && kind !== "image") {
         href = file.url;
-      } else if (doc.fileData) {
-        href = `data:${doc.mimeType};base64,${doc.fileData}`;
+      } else if (inlineData) {
+        href = inlineData.startsWith("data:") ? inlineData : `data:${doc.mimeType};base64,${inlineData}`;
       } else {
         const blob = await apiRequest("GET", `/api/documents/${doc.id}/file`).then((r) => r.blob());
         href = URL.createObjectURL(blob);
@@ -923,11 +984,18 @@ function DocumentBody({
   ];
   const date = docDateLabel(doc.createdAt);
 
+  // The way out, by where the view is shown.
+  const leave =
+    variant === "dialog" ? { label: "Close", icon: X, run: onBack }
+    : variant === "embedded" ? { label: "Open full page", icon: Maximize2, run: () => hashNavigate(`/documents/${doc.id}`) }
+    : { label: "Back", icon: ArrowLeft, run: onBack };
+  const LeaveIcon = leave.icon;
+
   return (
-    <div className="flex flex-col h-full overflow-hidden" data-testid="page-document-detail">
-      {/* Header — folded away on the file tab, which gets the whole page;
-          Back and Download move into the tab row there. */}
-      <div className={cn("flex items-start gap-2 px-3 sm:px-4 pt-3 pb-2 shrink-0", tab === "file" && "hidden")}>
+    <div className="flex flex-col h-full overflow-hidden" data-testid="page-document-detail" data-variant={variant}>
+      {/* Header — folded away on the file tab, which gets the whole view;
+          the way out and Download move into the tab row there. */}
+      <div className={cn("flex items-start gap-2 px-3 sm:px-4 pt-3 pb-2 shrink-0", tab === "file" && "hidden")} data-testid="doc-header">
         {/* BUG-D01: use history.back() so the back button returns to wherever
             the user came from (Documents tab, Linked page, Trackers, etc.),
             not always hardcoded to the Dashboard. Falls back to Dashboard if
@@ -936,42 +1004,61 @@ function DocumentBody({
           variant="ghost"
           size="sm"
           className="gap-1.5 h-9 px-2 text-sm shrink-0"
-          onClick={onBack}
+          onClick={leave.run}
+          aria-label={leave.label}
+          title={leave.label}
           data-testid="btn-back-to-dashboard"
         >
-          <ArrowLeft className="h-4 w-4" />
-          Back
+          <LeaveIcon className="h-4 w-4" />
+          {variant === "page" && "Back"}
         </Button>
         <FileText className="h-5 w-5 mt-2 text-muted-foreground shrink-0" />
         <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold leading-tight line-clamp-2 break-words" data-testid="heading-doc-name">{doc.name}</h1>
+          <h1 className="text-lg font-semibold leading-tight break-words">
+            <EditableTitle
+              value={doc.name}
+              testId="heading-doc-name"
+              className="max-w-full"
+              textClassName="line-clamp-2 break-words"
+              onSave={(name) => onUpdate({ name })}
+            />
+          </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             <span className="capitalize" data-testid="badge-doc-type">{docTypeLabel(doc.type)}</span>
             {date && <span data-testid="text-doc-date"> • {date}</span>}
             {isUpdating && <span className="ml-2 inline-flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />Saving…</span>}
           </p>
         </div>
-        {/* No file was kept — a download button here can only fail. */}
-        {!fileDiscarded && (
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-9 w-9 rounded-xl shrink-0"
-            onClick={downloadFile}
-            data-testid="btn-download-doc"
-            title="Download file"
-            aria-label="Download file"
-          >
-            <Download className="h-4 w-4" />
-          </Button>
+        {/* No file — sharing or downloading it can only fail. */}
+        {viewable && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <ShareButton id={doc.id} name={doc.name} mimeType={doc.mimeType} data={inlineData} size="icon" />
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 rounded-xl shrink-0"
+              onClick={downloadFile}
+              data-testid="btn-download-doc"
+              title="Download file"
+              aria-label="Download file"
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+          </div>
         )}
       </div>
+
+      {/* On the file tab the name is one slim line: it is the first thing
+          shown when a document opens, so it still has to say what it is. */}
+      {tab === "file" && (
+        <p className="px-4 pt-2 text-xs text-muted-foreground text-center truncate shrink-0" data-testid="text-doc-name">{doc.name}</p>
+      )}
 
       {/* Tabs */}
       <div className={cn("flex items-center gap-1.5 px-3 sm:px-4 shrink-0", tab === "file" ? "py-2" : "pb-3")}>
         {tab === "file" && (
-          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full shrink-0" onClick={onBack} aria-label="Back" data-testid="btn-back-from-file">
-            <ArrowLeft className="h-4 w-4" />
+          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full shrink-0" onClick={leave.run} aria-label={leave.label} title={leave.label} data-testid="btn-back-from-file">
+            <LeaveIcon className="h-4 w-4" />
           </Button>
         )}
         <div role="tablist" aria-label="Document views" className="flex flex-1 min-w-0 rounded-full border border-border bg-muted/30 p-1">
@@ -993,7 +1080,7 @@ function DocumentBody({
             </button>
           ))}
         </div>
-        {tab === "file" && !fileDiscarded && (
+        {tab === "file" && viewable && (
           <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full shrink-0" onClick={downloadFile} aria-label="Download file" title="Download file" data-testid="btn-download-from-file">
             <Download className="h-4 w-4" />
           </Button>
@@ -1005,14 +1092,14 @@ function DocumentBody({
       {tab === "file" ? (
         <div className="flex-1 min-h-0 border-t border-border">
           <SectionErrorBoundary name="document-preview" inline>
-            <PreviewPanel doc={doc} file={file} onDownload={downloadFile} />
+            <PreviewPanel doc={doc} file={file} noFile={noFile} onDownload={downloadFile} />
           </SectionErrorBoundary>
         </div>
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto">
           {tab === "overview" ? (
             <SectionErrorBoundary name="document-overview" inline>
-              <OverviewPanel doc={doc} file={file} fileLabel={fileLabel} onOpenTab={setTab} />
+              <OverviewPanel doc={doc} file={file} fileLabel={fileLabel} noFile={noFile} onOpenTab={setTab} />
             </SectionErrorBoundary>
           ) : (
             <SectionErrorBoundary name="document-data-panel" inline>
@@ -1025,19 +1112,31 @@ function DocumentBody({
   );
 }
 
-// ─── Document Detail Page ─────────────────────────────────────────────────────
+// ─── Document workspace ───────────────────────────────────────────────────────
+// The ONE document view. The /documents/:id page, the dialog a profile's
+// Documents tab opens, and the copy inside a chat message all render this, so
+// a document looks and behaves the same wherever it is opened.
 
-export default function DocumentDetailPage() {
-  useEffect(() => { document.title = "Document — Portol"; }, []);
-  const [, params] = useRoute("/documents/:id");
-  const [, navigate] = useLocation();
+export function DocumentWorkspace({
+  id,
+  variant,
+  onBack,
+  fileData,
+  mimeType = "",
+}: {
+  id: string;
+  variant: DocumentWorkspaceVariant;
+  onBack: () => void;
+  fileData?: string;
+  /** Known before the metadata answers: lets the PDF renderer warm up early. */
+  mimeType?: string;
+}) {
   const { toast } = useToast();
-  const id = params?.id ?? "";
 
-  // PERF: start pulling the binary from the route id alone, in parallel with
-  // the metadata query. The preview can't mount until `doc` resolves, but its
+  // PERF: start pulling the binary from the id alone, in parallel with the
+  // metadata query. The preview can't mount until `doc` resolves, but its
   // bytes don't depend on that response — so there's no reason to wait for it.
-  useEffect(() => { if (id) prefetchDocumentBlob(id); }, [id]);
+  useEffect(() => { if (id) prefetchDocument(id, mimeType); }, [id, mimeType]);
 
   const { data: doc, isLoading, error } = useQuery<Document>({
     queryKey: ["/api/documents", id],
@@ -1092,22 +1191,40 @@ export default function DocumentDetailPage() {
       <div className="h-full flex flex-col items-center justify-center gap-3" data-testid="page-document-detail-error">
         <FileText className="h-12 w-12 text-muted-foreground" />
         <p className="text-sm font-medium">Document not found</p>
-        <Button variant="outline" size="sm" onClick={() => {
-          if (window.history.length > 1) window.history.back();
-          else navigate("/dashboard");
-        }} data-testid="btn-back-error">
-          <ArrowLeft className="h-3.5 w-3.5 mr-1.5" />
-          Back
-        </Button>
+        {variant !== "embedded" && (
+          <Button variant="outline" size="sm" onClick={onBack} data-testid="btn-back-error">
+            <ArrowLeft className="h-3.5 w-3.5 mr-1.5" />
+            {variant === "dialog" ? "Close" : "Back"}
+          </Button>
+        )}
       </div>
     );
   }
 
   return (
     <DocumentBody
+      // A different document is a different view: its tab starts over.
+      key={doc.id}
       doc={doc}
       onUpdate={(patch) => mutation.mutate(patch)}
       isUpdating={mutation.isPending}
+      onBack={onBack}
+      variant={variant}
+      fileData={fileData}
+    />
+  );
+}
+
+// ─── Document Detail Page ─────────────────────────────────────────────────────
+
+export default function DocumentDetailPage() {
+  useEffect(() => { document.title = "Document — Portol"; }, []);
+  const [, params] = useRoute("/documents/:id");
+  const [, navigate] = useLocation();
+  return (
+    <DocumentWorkspace
+      id={params?.id ?? ""}
+      variant="page"
       onBack={() => {
         if (window.history.length > 1) window.history.back();
         else navigate("/dashboard");

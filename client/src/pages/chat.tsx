@@ -43,7 +43,7 @@ const ArtifactPanel = lazy(() =>
 const SmartFillDialog = lazy(() =>
   import("@/components/SmartFillDialog").then((m) => ({ default: m.SmartFillDialog }))
 );
-const DocumentViewer = lazy(() => import("@/components/DocumentViewer"));
+const DocumentWorkspace = lazy(() => import("@/pages/document-detail").then((m) => ({ default: m.DocumentWorkspace })));
 import { prefetchDocument } from "@/lib/document-preview";
 const ChatChartBody = lazy(() => import("@/components/ChatChartRenderer"));
 
@@ -538,63 +538,28 @@ function LazyDocumentPreview({
   id: string; name: string; mimeType: string; data: string;
   extractedData?: Record<string, any>;
 }) {
-  const isPdf = mimeType === "application/pdf";
   // PERF: start the binary download (and, for a PDF, the PDF.js chunk) the
   // moment the message renders. DocumentViewer itself is code-split, so waiting
   // for its chunk before the fetch could even begin put two serial downloads in
   // front of the first pixel of the document.
   useEffect(() => { prefetchDocument(id, mimeType); }, [id, mimeType]);
-  // DocumentViewer (inline mode) already knows how to handle data==="__LAZY_LOAD__":
-  // it fetches the binary via GET /api/documents/:id/file as a blob URL. We just
-  // need to give it a parent with a real height so its h-full doesn't collapse.
-  const fields = extractedData
-    ? Object.entries(extractedData).filter(([k, v]) => {
-        if (!v && v !== 0) return false;
-        if (k.startsWith("_")) return false;
-        // Skip nested objects like { value, confidence }
-        const val = (v && typeof v === "object" && "value" in (v as any)) ? (v as any).value : v;
-        return val !== null && val !== undefined && String(val).trim().length > 0;
-      })
-    : [];
-
-  const formatKey = (k: string) =>
-    k.replace(/([A-Z])/g, " $1").replace(/_/g, " ").trim().replace(/\b\w/g, c => c.toUpperCase());
-  const formatVal = (v: any) => {
-    const val = (v && typeof v === "object" && "value" in (v as any)) ? (v as any).value : v;
-    return String(val);
-  };
-
+  // The message shows the same document view as everywhere else (file first,
+  // Overview and Extracted Data one tap away), in a box with a real height so
+  // its h-full doesn't collapse. `extractedData` is read from the stored
+  // document by the view itself, so the two can't disagree.
+  void extractedData;
   return (
-    <div className="mt-2 space-y-2">
-      <div style={{ height: isPdf ? 480 : 360 }}>
-        {/* DocumentViewer is code-split — same-size skeleton while the chunk loads */}
-        <Suspense
-          fallback={
-            <div className="h-full w-full rounded-xl border border-border bg-muted/30 animate-pulse flex items-center justify-center" aria-label="Loading document viewer">
-              <FileText className="h-8 w-8 text-muted-foreground/50" />
-            </div>
-          }
-        >
-          <DocumentViewer id={id} name={name} mimeType={mimeType} data={data} inline />
-        </Suspense>
-      </div>
-      {fields.length > 0 && (
-        <div className="rounded-xl border border-border bg-muted/10 overflow-hidden">
-          <div className="px-3 py-2 border-b border-border bg-muted/20">
-            <p className="micro-label text-muted-foreground">
-              Extracted data · {fields.length} field{fields.length === 1 ? "" : "s"}
-            </p>
+    <div className="mt-2 rounded-2xl border border-border bg-background overflow-hidden" style={{ height: "min(72dvh, 640px)" }} data-testid={`chat-doc-${id}`}>
+      {/* The view is code-split — same-size skeleton while the chunk loads */}
+      <Suspense
+        fallback={
+          <div className="h-full w-full bg-muted/30 animate-pulse flex items-center justify-center" aria-label="Loading document viewer">
+            <FileText className="h-8 w-8 text-muted-foreground/50" />
           </div>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-3 py-2.5">
-            {fields.map(([k, v]) => (
-              <div key={k} className="min-w-0">
-                <p className="text-[11px] text-muted-foreground">{formatKey(k)}</p>
-                <p className="text-xs font-medium truncate" title={formatVal(v)}>{formatVal(v)}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+        }
+      >
+        <DocumentWorkspace id={id} variant="embedded" mimeType={mimeType} fileData={data} onBack={() => {}} />
+      </Suspense>
     </div>
   );
 }

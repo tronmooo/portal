@@ -743,6 +743,14 @@ function NonRenderablePreview({
 }
 
 // ─── DocumentViewerDialog ─────────────────────────────────────────────────────
+// A document opened from a profile's Documents tab (or any list that keeps the
+// user where they are) shows the SAME view as the /documents/:id page — the
+// shared DocumentWorkspace, opening on the file — instead of a second,
+// differently laid-out viewer. Full screen on a phone.
+
+const DocumentWorkspace = lazy(() =>
+  import("@/pages/document-detail").then((m) => ({ default: m.DocumentWorkspace })),
+);
 
 export function DocumentViewerDialog({
   open,
@@ -759,240 +767,40 @@ export function DocumentViewerDialog({
   mimeType: string;
   data: string;
 }) {
-  // liveName tracks the displayed title locally so the rename feels
-  // instant even before parent caches invalidate. Synced from `name`
-  // when it changes from the outside.
-  const [liveName, setLiveName] = useState<string>(name);
-  useEffect(() => { setLiveName(name); }, [name]);
-  const { toast } = useToast();
-
   // PERF: the binary download and the PDF.js chunk start the instant the dialog
-  // opens — in parallel with the metadata query below, and without waiting for
-  // the viewer subtree to mount. Previously the chain was strictly serial
-  // (metadata → file → renderer chunk → first page), so the user watched a
-  // spinner through three round-trips they could have paid for at once.
+  // opens — in parallel with the view's own chunk and metadata query.
   useEffect(() => {
     if (open && id) prefetchDocument(id, mimeType);
   }, [open, id, mimeType]);
 
-  // Metadata (extracted fields, type, whether a binary exists). Served without
-  // the binary, and cached by React Query so reopening the same document
-  // renders its details immediately instead of re-fetching every time.
-  const { data: meta, isLoading: metaLoading } = useQuery<any>({
-    queryKey: ["/api/documents", id],
-    queryFn: () => apiRequest("GET", `/api/documents/${id}`).then((r) => r.json()),
-    enabled: open && !!id,
-    staleTime: 60_000,
-  });
-
-  // Locally attached file (see the "Attach a file" flow below) wins over the
-  // server's answer until the query refetches.
-  const [attachedData, setAttachedData] = useState<string | null>(null);
-  useEffect(() => { if (!open) setAttachedData(null); }, [open]);
-
-  const extractedData: Record<string, any> | null =
-    meta?.extractedData && Object.keys(meta.extractedData).length > 0 ? meta.extractedData : null;
-  const docType: string | null = meta?.type ?? null;
-  const actualMime: string = meta?.mimeType || mimeType;
-
-  // The inline viewer always has the id and will fetch the binary via /file when needed.
-  const displayData = data || attachedData || "";
-  // Render the preview optimistically: `hasFile` only ever gates it AFTER the
-  // metadata query has answered. Waiting for that answer first is what made
-  // opening a document feel slow — the viewer can start fetching bytes now and
-  // fall back to the "no file attached" card in the rare case there are none.
-  // QA 2026-09-18 BUG-31: the same predicate the Documents list prints its
-  // "Format" from (shared/document-file), so the two can't disagree.
-  const knownNoFile = !!meta && !documentHasFile(meta) && !displayData;
-  const shouldShowPreview = !knownNoFile;
-  const hasFile = !!meta && documentHasFile(meta);
-  const formatFieldKey = humanizeDocumentFieldKey;
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* Wave 11: Cap dialog at 85vh on desktop, 90vh on mobile, with a tighter
-          max-w on wide displays so it never feels like it eats the viewport.
-          Header is single-row (title + Download + close) instead of stacked. */}
-      <DialogContent className="max-w-[96vw] md:max-w-5xl lg:max-w-6xl xl:max-w-[1400px] max-h-[90dvh] sm:h-[90dvh] flex flex-col overflow-hidden p-0" data-testid={`dialog-doc-viewer-${id}`}>
-        <DialogHeader className="px-3 py-2 border-b border-border shrink-0">
-          <div className="flex items-center justify-between gap-2">
-            {/* Title is inline-editable here so the user doesn't have to
-                close the viewer just to rename. EditableTitle stops click
-                propagation internally so the dialog won't close on edit
-                clicks. Saves via the same PATCH /api/documents/:id route
-                used elsewhere and refreshes both the dialog title and any
-                lists that show this document. */}
-            <DialogTitle className="text-sm flex items-center gap-2 min-w-0 flex-1" asChild>
-              <div className="flex items-center gap-2 min-w-0 flex-1">
-                <FileText className="h-4 w-4 shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <EditableTitle
-                    value={liveName}
-                    inputClassName="text-sm"
-                    onSave={async (newName) => {
-                      await apiRequest("PATCH", `/api/documents/${id}`, { name: newName });
-                      setLiveName(newName);
-                      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
-                      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-                      toast({ title: `Renamed to “${newName}”` });
-                    }}
-                  />
-                </div>
-                {docType && <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal shrink-0">{docType.replace(/_/g, ' ')}</span>}
-              </div>
-            </DialogTitle>
-            {/* Shown optimistically for the same reason the preview is: the
-                only state that hides it is a metadata answer of "no file". */}
-            {(displayData || hasFile || !meta) && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2 shrink-0"
-                onClick={async () => {
-                  try {
-                    let href: string;
-                    let revoke: string | null = null;
-                    if (displayData) {
-                      const prefix = `data:${actualMime};base64,`;
-                      href = displayData.startsWith("data:") ? displayData : prefix + displayData;
-                    } else {
-                      // Lazy-loaded doc: fetch the binary from the authenticated endpoint.
-                      const blob = await apiRequest("GET", `/api/documents/${id}/file`).then((r) => r.blob());
-                      href = URL.createObjectURL(blob);
-                      revoke = href;
-                    }
-                    const link = document.createElement("a");
-                    link.href = href;
-                    link.download = liveName;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                    if (revoke) setTimeout(() => URL.revokeObjectURL(revoke!), 10_000);
-                  } catch {
-                    toast({ title: "Download failed", description: liveName, variant: "destructive" });
-                  }
-                }}
-              >
-                <Download className="h-3.5 w-3.5 mr-1" />
-                Download
-              </Button>
-            )}
-          </div>
+      <DialogContent
+        hideCloseButton
+        className="flex flex-col gap-0 p-0 overflow-hidden w-screen max-w-none h-[100dvh] max-h-[100dvh] rounded-none sm:w-[96vw] sm:max-w-6xl sm:h-[92dvh] sm:max-h-[92dvh] sm:rounded-2xl"
+        data-testid={`dialog-doc-viewer-${id}`}
+      >
+        <DialogHeader className="sr-only">
+          <DialogTitle>{name || "Document"}</DialogTitle>
         </DialogHeader>
-
-        {/* Real-app layout: side-by-side on desktop (extracted data on the left
-            sidebar, document preview takes the rest), stacked on mobile.
-            Each pane scrolls independently so neither one squishes the other.
-
-            PERF: this is rendered immediately — there is no full-dialog
-            "Loading document..." gate any more. The preview pane starts
-            resolving its bytes on mount while the details pane fills in, so the
-            two costs overlap instead of stacking. */}
-        <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
-          {/* ── Left sidebar: Extracted Data ────────────────────────────── */}
-          <aside className="shrink-0 md:w-[40%] md:max-w-[480px] md:min-w-[320px] border-b md:border-b-0 md:border-r border-border bg-muted/30 flex flex-col min-h-0 max-h-[35vh] md:max-h-none">
-            <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border/60 bg-background/40">
-              <p className="micro-label text-muted-foreground">
-                Extracted Data
-              </p>
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
-              {extractedData && Object.keys(extractedData).length > 0 ? (
-                <div className="space-y-2">
-                  {Object.entries(extractedData)
-                    .filter(([_, v]) => v != null && v !== '')
-                    .map(([key, rawVal]) => {
-                      const val = (rawVal && typeof rawVal === 'object' && !Array.isArray(rawVal) && 'value' in rawVal) ? (rawVal as any).value : rawVal;
-                      // A receipt's line items get a row each — one long
-                      // "2 x A - $4 . 1 x B - $9" line is unreadable, and
-                      // JSON.stringify (what this used to do for any object)
-                      // is worse.
-                      if (isLineItemArray(val)) {
-                        return (
-                          <div key={key} className="flex flex-col gap-0.5">
-                            <span className="micro-label text-muted-foreground/80">{formatFieldKey(key)}</span>
-                            <ul className="space-y-0.5">
-                              {(val as any[]).map((item, i) => (
-                                <li key={i} className="text-sm font-medium text-foreground break-words">{formatLineItem(item)}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        );
-                      }
-                      // Money-keyed numbers (tax, subtotal, total…) print as money
-                      // like the line items beside them (QA 2026-09-18).
-                      const display = stringifyFieldFor(key, val) || previewUnrenderable(val);
-                      if (!display || display === 'null' || display === 'undefined') return null;
-                      return (
-                        <div key={key} className="flex flex-col gap-0.5">
-                          <span className="micro-label text-muted-foreground/80">{formatFieldKey(key)}</span>
-                          <span className="text-sm font-medium text-foreground break-words" title={display}>{display}</span>
-                        </div>
-                      );
-                    })}
+        <div className="flex-1 min-h-0">
+          {open && id && (
+            <Suspense
+              fallback={
+                <div className="h-full flex items-center justify-center text-muted-foreground" aria-label="Loading document">
+                  <Loader2 className="h-6 w-6 animate-spin" />
                 </div>
-              ) : metaLoading ? (
-                // Skeleton rather than a blocking spinner — the preview next
-                // to it is already loading its bytes.
-                <div className="space-y-3 py-1" aria-label="Loading document details">
-                  {[0, 1, 2, 3].map((i) => (
-                    <div key={i} className="space-y-1.5">
-                      <div className="h-2 w-20 rounded bg-muted-foreground/15 animate-pulse" />
-                      <div className="h-3.5 w-32 rounded bg-muted-foreground/10 animate-pulse" />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground py-3">No extracted data for this document.</p>
-              )}
-            </div>
-          </aside>
-
-          {/* ── Right pane: Document preview ────────────────────────────── */}
-          <div className="flex-1 min-h-0 flex flex-col bg-neutral-900/40 dark:bg-black/30">
-            {shouldShowPreview ? (
-              <div className="flex-1 min-h-0 overflow-auto flex items-start justify-center p-4">
-                <div className="w-full h-full max-w-full">
-                  <DocumentViewer id={id} name={name} mimeType={actualMime} data={displayData} inline />
-                </div>
-              </div>
-            ) : (
-              <div className="flex-1 flex flex-col items-center justify-center py-8 text-center px-4">
-                <FileText className="h-10 w-10 text-muted-foreground mb-3" />
-                <p className="text-sm font-medium">{name}</p>
-                <p className="text-xs text-muted-foreground mt-2 max-w-md">
-                  This document was added without a file attached — only the extracted details on the left are saved.
-                </p>
-                <label className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30 hover:bg-muted/50 cursor-pointer text-xs font-medium">
-                  <input
-                    type="file"
-                    accept={DOCUMENT_UPLOAD_ACCEPT}
-                    className="hidden"
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      const reader = new FileReader();
-                      reader.onload = async () => {
-                        const base64 = String(reader.result).split(",")[1];
-                        try {
-                          await apiRequest("PATCH", `/api/documents/${id}`, { fileData: base64, mimeType: file.type });
-                          // The document's bytes just changed — drop anything
-                          // the blob cache is holding for this id.
-                          invalidateDocumentBlob(id);
-                          setAttachedData(base64);
-                          queryClient.invalidateQueries({ queryKey: ["/api/documents", id] });
-                        } catch (err) {
-                          console.error("Upload failed", err);
-                        }
-                      };
-                      reader.readAsDataURL(file);
-                    }}
-                  />
-                  Attach a file
-                </label>
-              </div>
-            )}
-          </div>
+              }
+            >
+              <DocumentWorkspace
+                id={id}
+                variant="dialog"
+                mimeType={mimeType}
+                fileData={data}
+                onBack={() => onOpenChange(false)}
+              />
+            </Suspense>
+          )}
         </div>
       </DialogContent>
     </Dialog>

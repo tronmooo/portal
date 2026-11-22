@@ -17,6 +17,8 @@ interface EditableTitleProps {
   testId?: string;
   /** Tooltip on the pencil — "Edit title" reads wrong on a person's name. */
   editLabel?: string;
+  /** How the shown text fits its box. One truncated line unless told otherwise. */
+  textClassName?: string;
 }
 
 export default function EditableTitle({
@@ -31,6 +33,7 @@ export default function EditableTitle({
   onEditingChange,
   testId,
   editLabel = "Edit title",
+  textClassName = "truncate",
 }: EditableTitleProps) {
   const [internalEditing, setInternalEditing] = useState(false);
   const editing = externalEditing !== undefined ? externalEditing : internalEditing;
@@ -133,7 +136,7 @@ export default function EditableTitle({
 
   return (
     <span className={cn("inline-flex items-center gap-1 group min-w-0", className)}>
-      <span className="truncate" data-testid={testId}>{value || placeholder}</span>
+      <span className={textClassName} data-testid={testId}>{value || placeholder}</span>
       {!disabled && (
         <button
           type="button"

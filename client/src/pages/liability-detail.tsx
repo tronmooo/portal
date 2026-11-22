@@ -105,6 +105,7 @@ import {
 } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HistoryTab } from "@/components/ProfileSharedTabs";
+import { DocumentViewerDialog } from "@/components/DocumentViewer";
 import { DocumentDeleteDialog } from "@/components/DocumentDeleteDialog";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
@@ -3166,6 +3167,7 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  const [viewingDocId, setViewingDocId] = useState<string | null>(null);
 
   const docsQuery = useQuery<LiabilityDocument[]>({
     queryKey: [`/api/profiles/${liabilityId}/documents`],
@@ -3209,6 +3211,7 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
   }
 
   const docs = docsQuery.data || [];
+  const viewingDoc = viewingDocId ? docs.find((d) => d.id === viewingDocId) : undefined;
 
   return (
     <Card data-testid="liability-documents-card">
@@ -3270,15 +3273,16 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
                     </div>
                   </div>
                 </div>
+                {/* Opens the shared document view (file first). This was a bare
+                    link to the file endpoint, which a new tab cannot load: the
+                    request carries no sign-in. */}
                 <Button
                   size="sm"
                   variant="ghost"
-                  asChild
+                  onClick={() => setViewingDocId(doc.id)}
                   data-testid={`liability-doc-view-${doc.id}`}
                 >
-                  <a href={`/api/documents/${doc.id}/file`} target="_blank" rel="noopener noreferrer">
-                    View
-                  </a>
+                  View
                 </Button>
                 <Button
                   size="icon"
@@ -3304,6 +3308,16 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
         onOpenChange={(open) => { if (!open) setDeletingDocId(null); }}
         onDeleted={() => setDeletingDocId(null)}
       />
+      {viewingDoc && (
+        <DocumentViewerDialog
+          open
+          onOpenChange={(open) => { if (!open) setViewingDocId(null); }}
+          id={viewingDoc.id}
+          name={viewingDoc.name}
+          mimeType={viewingDoc.mimeType || ""}
+          data=""
+        />
+      )}
     </Card>
   );
 }
