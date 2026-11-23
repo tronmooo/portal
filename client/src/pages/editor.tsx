@@ -1207,8 +1207,8 @@ export default function EditorPage() {
           We render this on screens < md only; the existing desktop header
           below is wrapped in `hidden md:flex`. */}
       <div
-        className="md:hidden flex items-center gap-2 px-3 shrink-0 bg-card border-b"
-        style={{ height: 52, paddingTop: "env(safe-area-inset-top, 0px)" }}
+        className="md:hidden flex items-center gap-1 px-2 shrink-0 bg-card border-b"
+        style={{ minHeight: 52, paddingTop: "env(safe-area-inset-top, 0px)" }}
         data-testid="mobile-editor-top-bar"
       >
         {type === "doc" && docFocused ? (
@@ -1275,19 +1275,14 @@ export default function EditorPage() {
           >
             <UserPlus className="h-5 w-5" />
           </Button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9"
-            onClick={() => saveMut.mutate()}
-            disabled={saveMut.isPending}
-            aria-label="Insert"
-            data-testid="button-mobile-insert"
-          >
-            <Plus className="h-5 w-5" />
-          </Button>
-        )}
+        ) : null}
+        {/* A phone has a Save button too, with its name on it (owner,
+            2026-11-23). It was only "Save now" inside the ⋯ menu, beside a +
+            labelled Insert that saved. */}
+        <Button size="sm" className="h-9 px-3 shrink-0" onClick={() => saveMut.mutate()} disabled={saveMut.isPending} data-testid="button-mobile-save">
+          {saveMut.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
+          Save
+        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="h-9 w-9" aria-label="More" data-testid="button-mobile-more">
@@ -1476,7 +1471,7 @@ export default function EditorPage() {
         </DropdownMenu>
         <Button size="sm" onClick={() => saveMut.mutate()} disabled={saveMut.isPending} data-testid="button-editor-save">
           {saveMut.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
-          <span className="hidden sm:inline">Save</span>
+          Save
         </Button>
         <WorkspaceCloseButton onClose={closeWorkspace} className="ml-1" />
       </div>
@@ -1622,7 +1617,7 @@ export default function EditorPage() {
               data-testid="doc-editor-canvas"
             >
               {!(editor?.getText() || "").trim() && !docFocused && (
-                <p className="absolute pointer-events-none text-muted-foreground/60 text-sm" data-testid="doc-empty-hint">
+                <p className="absolute pointer-events-none text-white/55 md:text-muted-foreground/60 text-sm" data-testid="doc-empty-hint">
                   Start typing, choose a template, or ask AI to create something…
                 </p>
               )}
@@ -1670,8 +1665,11 @@ export default function EditorPage() {
               IMG_0420 exactly: @  |  B  I  U  S  |  A(color)  highlight  |  align  A.
               Sits above the iOS keyboard. Single row, no wrap. */}
           <div
-            className="md:hidden border-t bg-card flex items-center px-2 shrink-0"
-            style={{ height: 56, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+            // One row that scrolls sideways: on a 375px phone the last three
+            // buttons (list, heading, links) were past the right edge with no
+            // way to reach them.
+            className="md:hidden border-t bg-card flex items-center px-2 shrink-0 overflow-x-auto overscroll-x-contain"
+            style={{ minHeight: 56, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
             data-testid="toolbar-doc-mobile"
           >
             {/* @-mention trigger — inserts "@" at the cursor so the existing
@@ -1720,7 +1718,7 @@ export default function EditorPage() {
             <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()} aria-label="Heading" data-testid="button-doc-heading">
               <Type className="h-5 w-5" />
             </Button>
-            <div className="flex-1" />
+            <div className="flex-1 min-w-0" />
             <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 relative" onClick={() => setLinksOpen(true)} aria-label="Linked entities" title="Show linked entities" data-testid="button-doc-links">
               <Link2 className="h-5 w-5" />
               {mentionTokens.length > 0 && (

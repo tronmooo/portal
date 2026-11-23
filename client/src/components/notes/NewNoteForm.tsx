@@ -53,7 +53,7 @@ export function NewNoteForm({ profileId, onDone, autoFocus = true }: {
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Title (optional — written for you if left blank)"
         aria-label="Note title"
-        className="h-8 text-sm"
+        className="h-10 md:h-8 text-sm"
         autoFocus={autoFocus}
         data-testid="new-note-title"
       />
@@ -68,11 +68,14 @@ export function NewNoteForm({ profileId, onDone, autoFocus = true }: {
         data-testid="new-note-content"
       />
       <div className="flex gap-2">
-        <Button size="sm" className="h-7 text-xs" disabled={empty || save.isPending} onClick={() => save.mutate()} data-testid="new-note-save">
+        {/* Never disabled for being empty: a tap on Save always answers. */}
+        <Button size="sm" className="h-10 px-4 text-sm md:h-8 md:text-xs" disabled={save.isPending}
+          onClick={() => (empty ? toast({ title: "Nothing to save yet", description: "Write the note first, then tap Save note." }) : save.mutate())}
+          data-testid="new-note-save">
           {save.isPending ? "Saving…" : "Save note"}
         </Button>
         {onDone && (
-          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setTitle(""); setContent(""); onDone(); }}>Cancel</Button>
+          <Button size="sm" variant="ghost" className="h-10 px-4 text-sm md:h-8 md:text-xs" onClick={() => { setTitle(""); setContent(""); onDone(); }}>Cancel</Button>
         )}
       </div>
     </div>

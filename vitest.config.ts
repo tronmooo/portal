@@ -68,6 +68,8 @@ export default defineConfig({
       'tests/workspace-ai.test.ts',
       'tests/chat-workspace-buttons.dom.test.tsx',
       'tests/workspace-notes.dom.test.tsx',
+      'tests/workspace-save-button.dom.test.tsx',
+      'tests/keyboard-aware-surfaces.test.ts',
       'tests/note-markdown.test.ts',
       'tests/doc-rich-content.test.ts',
       'tests/journal-workspace.dom.test.tsx',

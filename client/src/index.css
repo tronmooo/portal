@@ -1492,6 +1492,40 @@ body[data-workspace] [data-app-floating] { display: none !important; }
 /* The page reserves scrollbar gutters on desktop (see "Round 9 fix" above);
    a workspace never scrolls the page, so it takes that width back. */
 html[data-workspace], body[data-workspace] { scrollbar-gutter: auto; overflow: hidden; }
+/* ── Keyboard-aware surfaces (lib/visual-viewport.ts) ────────────────────────
+   While the on-screen keyboard is up, every fixed surface is laid out inside
+   what the phone still shows (--vvh tall, starting --vv-top down, with --kb
+   covered at the bottom), so its Save button and its X stay on screen.
+   Guard: tests/keyboard-aware-surfaces.test.ts. */
+/* A full-screen workspace: header at the top of the visible area, the page
+   under it, nothing behind the keyboard. */
+html[data-keyboard] .workspace-surface {
+  top: var(--vv-top, 0px);
+  bottom: auto;
+  height: var(--vvh, 100dvh);
+}
+/* What little height is left belongs to the header (Save, the X) and the page
+   being written. A secondary bar steps aside unless it is being typed in. */
+html[data-keyboard] .workspace-surface [data-workspace-secondary]:not(:focus-within) { display: none; }
+/* Every centred dialog (components/ui/dialog.tsx, alert-dialog.tsx, and the
+   popups built on them): centred in the visible area and no taller than it,
+   so a footer is above the keyboard and a long form scrolls inside it. */
+html[data-keyboard] [data-surface="dialog"] {
+  top: calc(var(--vv-top, 0px) + var(--vvh, 100dvh) / 2);
+  max-height: calc(var(--vvh, 100dvh) - 1rem);
+}
+/* Sheets and drawers: a bottom one sits on the keyboard; a side one spans
+   the visible area. */
+html[data-keyboard] [data-surface="sheet-bottom"] {
+  bottom: var(--kb, 0px);
+  max-height: calc(var(--vvh, 100dvh) - 0.5rem);
+  overflow-y: auto;
+}
+html[data-keyboard] [data-surface="sheet-side"] {
+  top: var(--vv-top, 0px);
+  bottom: auto;
+  height: var(--vvh, 100dvh);
+}
 /* Inside a workspace the writing surface is the page itself: no focus box
    around the note, the document or a title while typing in it. */
 .workspace-surface textarea:focus-visible,

@@ -7,7 +7,7 @@
 // what is pending first.
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BookOpen, FileInput, FileText, Loader2, StickyNote, X } from "lucide-react";
+import { BookOpen, Check, FileInput, FileText, Loader2, StickyNote, X } from "lucide-react";
 import { hashNavigate } from "@/lib/hashNavigate";
 
 export type WorkspaceKind = "notes" | "journal" | "document" | "fill";
@@ -30,6 +30,48 @@ export function useFullScreenWorkspace(): void {
       document.documentElement.removeAttribute("data-workspace");
     };
   }, []);
+}
+
+/** What the Save button has to say. */
+export type WorkspaceSaveState = "empty" | "dirty" | "saving" | "saved" | "error";
+
+/**
+ * The Save button every writing workspace shows in its header (owner,
+ * 2026-11-23: "there needs to be a save button. I need to be able to see
+ * it"). The workspace still saves itself; this is the same save, on demand,
+ * and it always says where things stand: Save / Saving… / Saved / Retry.
+ * It is never disabled for having nothing to do: a tap always answers.
+ */
+export function WorkspaceSaveButton({ state, onSave, className = "" }: {
+  state: WorkspaceSaveState;
+  onSave: () => void | Promise<void>;
+  className?: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const working = busy || state === "saving";
+  const saved = state === "saved" && !busy;
+  const label = working ? "Saving…" : saved ? "Saved" : state === "error" ? "Retry save" : "Save";
+  return (
+    <button
+      type="button"
+      disabled={working}
+      onClick={async () => {
+        if (busy) return;
+        setBusy(true);
+        try { await onSave(); } finally { setBusy(false); }
+      }}
+      aria-label={saved ? "Saved. Tap to save again" : label}
+      className={`h-9 px-3 shrink-0 rounded-full text-sm font-semibold flex items-center gap-1.5 transition-colors ${
+        saved ? "border border-border text-muted-foreground bg-transparent"
+          : state === "error" ? "bg-destructive text-destructive-foreground"
+          : "bg-primary text-primary-foreground"} ${className}`}
+      data-state={working ? "saving" : state}
+      data-testid="button-workspace-save"
+    >
+      {working ? <Loader2 className="h-4 w-4 animate-spin" /> : saved ? <Check className="h-4 w-4" /> : null}
+      {label}
+    </button>
+  );
 }
 
 /**
@@ -69,13 +111,15 @@ export function WorkspaceCloseButton({ onClose, className = "" }: { onClose: () 
 }
 
 export function WorkspaceShell({
-  kind, title, status, actions, onClose, children,
+  kind, title, status, save, actions, onClose, children,
 }: {
   kind: WorkspaceKind;
   /** The title area: usually an input. */
   title?: ReactNode;
   /** "Saved", "Saving…", "Not saved yet" … */
   status?: string;
+  /** A writing workspace's Save button: always in the header, on every screen size. */
+  save?: { state: WorkspaceSaveState; onSave: () => void | Promise<void> };
   /** Workspace-specific header buttons (previous work, delete, export). */
   actions?: ReactNode;
   onClose: () => void | Promise<void>;
@@ -100,8 +144,10 @@ export function WorkspaceShell({
         </span>
         <div className="flex-1 min-w-0">{title}</div>
         {status && (
-          <span className="text-[11px] text-muted-foreground shrink-0" role="status" data-testid="workspace-save-status">{status}</span>
+          // On a phone the Save button beside it carries the same state.
+          <span className={`text-[11px] text-muted-foreground shrink-0 ${save ? "hidden sm:inline" : ""}`} role="status" data-testid="workspace-save-status">{status}</span>
         )}
+        {save && <WorkspaceSaveButton state={save.state} onSave={save.onSave} />}
         {actions}
         <WorkspaceCloseButton onClose={onClose} />
       </header>
@@ -132,7 +178,7 @@ export function WorkspaceAiBar({
     setText("");
   };
   return (
-    <div className="border-t border-border bg-card px-3 py-2 shrink-0" style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)" }}>
+    <div className="border-t border-border bg-card px-3 py-2 shrink-0" data-workspace-secondary style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)" }}>
       {suggestions.length > 0 && (
         <div className="flex gap-1.5 overflow-x-auto pb-1.5">
           {suggestions.map((s) => (

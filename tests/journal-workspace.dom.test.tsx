@@ -131,6 +131,22 @@ describe("Journal workspace", () => {
     expect(writes()[1].body).toEqual({ autoTitle: true });
   });
 
+  it("the Save button saves at once and titles the entry, without leaving", async () => {
+    mount();
+    const save = screen.getByTestId("button-workspace-save") as HTMLButtonElement;
+    expect(save.textContent).toBe("Save");
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save); // nothing written: nothing saved
+    await new Promise((r) => setTimeout(r, 50));
+    expect(writes()).toEqual([]);
+    write("Remember this evening.");
+    fireEvent.click(save);
+    await waitFor(() => expect(save.textContent).toBe("Saved"));
+    expect(writes().map((c) => `${c.method} ${c.url}`)).toEqual(["POST /api/journal", "PATCH /api/journal/j-new"]);
+    expect(writes()[1].body).toEqual({ autoTitle: true });
+    expect(navigated).toEqual([]);
+  });
+
   it("opening an old untitled entry and leaving writes nothing", async () => {
     entries = [{ id: "j1", date: "2026-11-20", mood: "good", title: "", content: "An older day.", tags: ["family", "photo:d1"], linkedProfiles: ["p1"], createdAt: "2026-11-20T10:00:00Z" }];
     mount();

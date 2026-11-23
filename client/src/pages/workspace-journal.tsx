@@ -164,6 +164,18 @@ export default function JournalWorkspacePage() {
 
   useEffect(() => () => { if (dirty.current) void saveNow(true); }, [saveNow]);
 
+  /** The Save button: save now (titling the entry), and always answer the tap. */
+  const saveAsked = async () => {
+    if (!latest.current.text.trim()) {
+      toast({ title: "Nothing to save yet", description: "Write the entry first, then tap Save." });
+      return;
+    }
+    const wasDirty = dirty.current;
+    await saveNow(true);
+    if (dirty.current) toast({ title: "Couldn't save the entry", description: "Check your connection and tap Save again. Your words are still here.", variant: "destructive" });
+    else if (!wasDirty) toast({ title: "Already saved", description: "This entry is in your Journal." });
+  };
+
   const open = async (e: JournalEntry | null) => {
     await saveNow(true);
     setEntryId(e?.id ?? null);
@@ -345,10 +357,11 @@ export default function JournalWorkspacePage() {
     <WorkspaceShell
       kind="journal"
       status={STATUS[state]}
+      save={{ state, onSave: saveAsked }}
       title={<span className="text-base font-semibold truncate block">{longDay(entryDate)}</span>}
       actions={
         <>
-          <button type="button" onClick={() => setRailOpen((v) => !v)} className="md:hidden h-9 px-2.5 rounded-md border border-border text-xs" data-testid="button-journal-rail">
+          <button type="button" onClick={() => setRailOpen((v) => !v)} className="md:hidden h-9 px-2.5 shrink-0 rounded-md border border-border text-xs" data-testid="button-journal-rail">
             {railOpen ? "Write" : `Entries (${entries.length})`}
           </button>
           {entryId && (
@@ -373,10 +386,10 @@ export default function JournalWorkspacePage() {
                   <p className="micro-label" style={{ color: `hsl(${ACCENT})` }}>{entryId ? "Journal entry" : "New entry"}</p>
                   <h1 className="text-2xl md:text-3xl font-bold tracking-tight mt-0.5">{longDay(entryDate)}</h1>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap max-w-full min-w-0">
                   {!entryId && writers.length > 1 && (
                     <select value={forProfileId} onChange={(e) => setForProfileId(e.target.value)} aria-label="Whose journal this entry is for"
-                      className="h-8 rounded-full border border-border bg-background px-2 text-xs" data-testid="select-journal-for">
+                      className="h-8 min-w-0 max-w-full rounded-full border border-border bg-background px-2 text-xs" data-testid="select-journal-for">
                       {writers.map((p) => <option key={p.id} value={p.type === "self" ? "" : p.id}>{p.type === "self" ? "My journal" : `${p.name}'s journal`}</option>)}
                     </select>
                   )}

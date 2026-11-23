@@ -67,6 +67,8 @@ const SheetContent = React.forwardRef<
     <SheetOverlay />
     <SheetPrimitive.Content
       ref={ref}
+      // Kept above the keyboard (index.css, "Keyboard-aware surfaces").
+      data-surface={side === "bottom" ? "sheet-bottom" : side === "top" ? undefined : "sheet-side"}
       className={cn(sheetVariants({ side }), className)}
       {...props}
     >

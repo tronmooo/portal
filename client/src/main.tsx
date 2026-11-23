@@ -16,6 +16,7 @@ import { hydrateQueryCache } from "./lib/queryClient";
 import { warmup } from "./lib/warmup";
 import { installStaleChunkHandlers } from "./components/ErrorBoundary";
 import { perfMark, perfMeasure } from "./lib/perf-marks";
+import { installVisualViewportVars } from "./lib/visual-viewport";
 
 // PERF Phase 0: how long did the network+parse of the entry bundle take?
 perfMark("bundle-evaluated");
@@ -85,5 +86,8 @@ hydrateQueryCache();
 })();
 
 perfMark("react-mount-start");
+// Keep dialogs, sheets and workspaces above the on-screen keyboard.
+installVisualViewportVars();
+
 createRoot(document.getElementById("root")!).render(<App />);
 perfMeasure("boot:bundle-to-mount", "bundle-evaluated");

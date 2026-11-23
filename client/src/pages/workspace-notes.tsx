@@ -116,25 +116,31 @@ export default function NotesWorkspacePage() {
   const latest = useRef({ noteId, title, titleTyped, content, tags, category, profileId });
   latest.current = { noteId, title, titleTyped, content, tags, category, profileId };
   const dirty = useRef(false);
+  const duplicateOf = useRef<string | null>(null);
   const chain = useRef<Promise<void>>(Promise.resolve());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const saveNow = useCallback((): Promise<void> => {
+  // `asked`: the Save button. A title with no text yet is then saved as a note
+  // whose text is its title (the rule the profile's New note form has); the
+  // autosave still waits for text.
+  const saveNow = useCallback((asked = false): Promise<void> => {
     if (timer.current) { clearTimeout(timer.current); timer.current = null; }
     chain.current = chain.current.then(async () => {
       if (!dirty.current) return;
       const v = latest.current;
-      if (!v.content.trim()) return; // a note is its text; nothing to save yet
+      const typedTitle = v.titleTyped ? v.title.trim() : "";
+      const text = v.content.trim() ? v.content : asked && !v.noteId ? typedTitle : "";
+      if (!text.trim()) return; // a note is its text; nothing to save yet
       dirty.current = false;
       setState("saving");
       const tagList = noteTagsFor(v.tags.split(","), v.category);
-      const noteTitle = (v.titleTyped ? v.title.trim() : "") || noteTitleFromText(v.content) || "Note";
+      const noteTitle = typedTitle || noteTitleFromText(text) || "Note";
       try {
         if (v.noteId) {
           await apiRequest("PATCH", `/api/notes/${v.noteId}`, { title: noteTitle, content: v.content, tags: tagList });
         } else {
           const r = await apiRequest("POST", "/api/notes", {
-            title: noteTitle, content: v.content, tags: tagList, ...(v.profileId ? { profileId: v.profileId } : {}),
+            title: noteTitle, content: text, tags: tagList, ...(v.profileId ? { profileId: v.profileId } : {}),
           });
           const row = await r.json();
           // The same text already exists as another note: that note stays
@@ -142,6 +148,10 @@ export default function NotesWorkspacePage() {
           if (row?.id && !row.deduped) {
             setNoteId(row.id);
             latest.current = { ...latest.current, noteId: row.id };
+          } else if (row?.deduped) {
+            // Nothing new was stored: say so instead of "Saved".
+            duplicateOf.current = String(row.title || "another note");
+            dirty.current = true;
           }
         }
         refreshNotes();
@@ -160,6 +170,27 @@ export default function NotesWorkspacePage() {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { void saveNow(); }, NOTE_AUTOSAVE_MS);
   }, [saveNow]);
+
+  /** The Save button: save now, and always answer the tap. */
+  const saveAsked = async () => {
+    duplicateOf.current = null;
+    const v = latest.current;
+    if (!v.content.trim() && !(v.titleTyped && v.title.trim())) {
+      toast({ title: "Nothing to save yet", description: "Write the note first, then tap Save." });
+      return;
+    }
+    const wasDirty = dirty.current;
+    await saveNow(true);
+    if (duplicateOf.current) {
+      toast({ title: "You already have this note", description: `"${duplicateOf.current}" has the same text, so it was not saved twice.` });
+    } else if (dirty.current) {
+      toast({ title: "Couldn't save the note", description: "Check your connection and tap Save again. Your text is still here.", variant: "destructive" });
+    } else if (!wasDirty) {
+      // A fresh save is answered by the button itself ("Saved"); a toast
+      // would sit on top of it. A tap with nothing new still gets an answer.
+      toast({ title: "Already saved", description: "This note is in Notes & Artifacts." });
+    }
+  };
 
   // Leaving by any road saves what is pending.
   useEffect(() => () => { if (dirty.current) void saveNow(); }, [saveNow]);
@@ -418,6 +449,7 @@ export default function NotesWorkspacePage() {
     <WorkspaceShell
       kind="notes"
       status={STATUS[state]}
+      save={{ state: state === "new" ? "empty" : state, onSave: saveAsked }}
       onClose={async () => { await saveNow(); leaveWorkspace(); }}
       title={
         <input
@@ -431,14 +463,15 @@ export default function NotesWorkspacePage() {
       }
       actions={
         <>
-          <button type="button" onClick={() => setListOpen((v) => !v)} className="md:hidden h-9 px-2.5 rounded-md border border-border text-xs" data-testid="button-notes-list">
+          <button type="button" onClick={() => setListOpen((v) => !v)} className="md:hidden h-9 px-2.5 shrink-0 rounded-md border border-border text-xs" data-testid="button-notes-list">
             {listOpen ? "Editor" : `Notes (${notes.length})`}
           </button>
           {noteId && (
             <button
               type="button"
               onClick={() => confirm("delete", () => void removeNote())}
-              className={`h-9 px-2.5 rounded-md border text-xs flex items-center gap-1 ${isArmed("delete") ? "border-destructive text-destructive" : "border-border text-muted-foreground"}`}
+              aria-label="Delete this note"
+              className={`h-9 px-2.5 shrink-0 rounded-md border text-xs flex items-center gap-1 ${isArmed("delete") ? "border-destructive text-destructive" : "border-border text-muted-foreground"}`}
               data-testid="button-note-delete"
             >
               <Trash2 className="h-3.5 w-3.5" /> {isArmed("delete") ? "Tap again to delete" : <span className="hidden sm:inline">Delete</span>}
@@ -451,8 +484,8 @@ export default function NotesWorkspacePage() {
         <aside className={`${listOpen ? "flex" : "hidden"} md:flex flex-col w-full md:w-80 border-r border-border bg-muted/30 min-h-0`}>{list}</aside>
         <div className={`${listOpen ? "hidden" : "flex"} md:flex flex-1 min-w-0 flex-col`}>
           {/* What the note IS: category, tags, who it is linked to. */}
-          <div className="flex items-center gap-2 px-4 py-2 border-b border-border flex-wrap shrink-0">
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 px-3 md:px-4 py-2 border-b border-border flex-wrap shrink-0" data-testid="note-meta">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground flex-1 min-w-0 md:flex-none">
               {category.trim() && <span className="h-2.5 w-2.5 rounded-full" style={dot(category.trim())} />}
               <input
                 list="note-categories"
@@ -460,7 +493,7 @@ export default function NotesWorkspacePage() {
                 onChange={(e) => { setCategory(e.target.value); touch(); }}
                 placeholder="Category"
                 aria-label="Category"
-                className="h-8 w-36 rounded-full border border-border bg-background px-3 text-xs text-foreground outline-none"
+                className="h-8 w-full min-w-0 md:w-36 rounded-full border border-border bg-background px-3 text-xs text-foreground outline-none"
                 data-testid="input-note-category"
               />
               <datalist id="note-categories">{categories.map(([name]) => <option key={name} value={name} />)}</datalist>
@@ -470,7 +503,7 @@ export default function NotesWorkspacePage() {
               onChange={(e) => { setTags(e.target.value); touch(); }}
               placeholder="Tags, comma separated"
               aria-label="Tags"
-              className="h-8 w-48 rounded-full border border-border bg-background px-3 text-xs outline-none"
+              className="h-8 flex-1 min-w-0 md:flex-none md:w-48 rounded-full border border-border bg-background px-3 text-xs outline-none"
               data-testid="input-note-tags"
             />
             {!noteId && profiles.length > 1 && (
@@ -479,21 +512,21 @@ export default function NotesWorkspacePage() {
                 onChange={(e) => setProfileId(e.target.value)}
                 aria-label="Link this note to a profile"
                 title="Link this note to a profile"
-                className="h-8 rounded-full border border-border bg-background px-2 text-xs"
+                className="h-8 w-full md:w-auto min-w-0 rounded-full border border-border bg-background px-2 text-xs"
                 data-testid="select-note-profile"
               >
                 <option value="">Not linked to a profile</option>
                 {profiles.map((p) => <option key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</option>)}
               </select>
             )}
-            <div className="flex-1" />
-            <button type="button" onClick={switchMode} className="h-8 px-3 rounded-full border border-border text-xs text-muted-foreground hover:text-foreground"
+            <div className="hidden md:block flex-1" />
+            <button type="button" onClick={switchMode} className="hidden md:block h-8 px-3 rounded-full border border-border text-xs text-muted-foreground hover:text-foreground"
               title={mode === "rich" ? "Edit the note as plain markdown text" : "Edit the note as formatted text"} data-testid="button-note-mode">
               {mode === "rich" ? "Markdown" : "Rich text"}
             </button>
           </div>
           {/* Formatting. */}
-          <div className="flex items-center gap-0.5 px-3 py-1 border-b border-border bg-muted/30 flex-wrap shrink-0" data-testid="note-toolbar">
+          <div className="flex items-center gap-0.5 px-3 py-1 border-b border-border bg-muted/30 flex-nowrap overflow-x-auto md:flex-wrap md:overflow-visible shrink-0 [&>*]:shrink-0" data-testid="note-toolbar">
             {mode === "rich" ? (
               <>
                 <button type="button" className={tool} aria-label="Bold" aria-pressed={on("bold")} onClick={() => editor?.chain().focus().toggleBold().run()} data-testid="button-note-bold"><Bold className="h-4 w-4" /></button>
@@ -529,10 +562,15 @@ export default function NotesWorkspacePage() {
             </button>
             <input ref={fileRef} type="file" accept={ATTACH_ACCEPT} className="hidden" onChange={(e) => void attach(e.target.files?.[0])} data-testid="input-note-attach" />
             <button type="button" onClick={() => void makeTask()} disabled={!content.trim() && !title.trim()} className="h-8 px-2 rounded-md text-xs flex items-center gap-1 hover:bg-muted disabled:opacity-40" data-testid="button-note-to-task"><CheckSquare className="h-4 w-4" /> Make a task</button>
+            {/* On a phone the editor switch lives here, at the end of the line. */}
+            <button type="button" onClick={switchMode} className="md:hidden h-8 px-2 rounded-md text-xs hover:bg-muted text-muted-foreground"
+              title={mode === "rich" ? "Edit the note as plain markdown text" : "Edit the note as formatted text"} data-testid="button-note-mode-phone">
+              {mode === "rich" ? "Markdown" : "Rich text"}
+            </button>
           </div>
           {/* The sheet. */}
           <div className="flex-1 min-h-0 overflow-y-auto bg-muted/20" onDragOver={(e) => e.preventDefault()} onDrop={(e) => void onDropFile(e)}>
-            <div className="bubble max-w-3xl my-4 mx-3 md:mx-auto px-5 md:px-10 py-6 md:py-8 min-h-[60vh]" data-testid="note-sheet">
+            <div className="bubble max-w-3xl my-3 md:my-4 mx-3 md:mx-auto px-4 md:px-10 py-4 md:py-8 min-h-[60vh]" data-testid="note-sheet">
               {mode === "rich" ? (
                 <div className="relative">
                   {!content.trim() && <p className="absolute top-0 left-0 text-muted-foreground/60 pointer-events-none">Start typing, paste, or drop a file here…</p>}

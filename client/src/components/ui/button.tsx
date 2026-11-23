@@ -27,7 +27,9 @@ const buttonVariants = cva(
       // but will expand to fit large amounts of content.
       size: {
         default: "min-h-9 px-4 py-2",
-        sm: "min-h-8 rounded-md px-3 text-xs",
+        // touch-hit: most small buttons are squeezed to 28px (h-7) by their
+        // callers; a finger still gets a ≥44px target (see index.css).
+        sm: "min-h-8 rounded-md px-3 text-xs touch-hit",
         lg: "min-h-10 rounded-md px-8",
         // touch-hit extends the tap target to ≥44px on coarse pointers only
         // (see index.css) without changing the 36px visual size.

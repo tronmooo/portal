@@ -1058,8 +1058,8 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
           title="Notes" icon={StickyNote} accent={INFO_TONE.notes}
           meta={!editingNotes && !addingNote ? (
             <span className="flex items-center gap-2">
-              <button onClick={() => setAddingNote(true)} className="text-xs font-medium text-primary hover:underline" data-testid="info-notes-new">+ New note</button>
-              <button onClick={() => setEditingNotes(true)} className="text-muted-foreground hover:text-foreground" aria-label="Edit notes" title="Edit this profile's memo"><Pencil className="h-3.5 w-3.5" /></button>
+              <button onClick={() => setAddingNote(true)} className="text-xs font-medium text-primary hover:underline min-h-9 px-2 -my-2" data-testid="info-notes-new">+ New note</button>
+              <button onClick={() => setEditingNotes(true)} className="text-muted-foreground hover:text-foreground h-9 w-9 -my-2 -mr-2 flex items-center justify-center" aria-label="Edit notes" title="Edit this profile's memo"><Pencil className="h-3.5 w-3.5" /></button>
             </span>
           ) : undefined}
         />
@@ -1076,8 +1076,8 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
             <p className="text-[11px] text-muted-foreground">Profile memo — stays on this profile. For a note you want under Notes & Artifacts, use New note.</p>
             <Textarea value={draft} onChange={e => setDraft(e.target.value)} rows={3} className="text-xs" placeholder="Add notes…" data-testid="info-notes-input" />
             <div className="flex gap-2">
-              <Button size="sm" className="h-7 text-xs" onClick={() => { onSaveNotes(draft); setEditingNotes(false); }}>Save</Button>
-              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setDraft(notes); setEditingNotes(false); }}>Cancel</Button>
+              <Button size="sm" className="h-10 px-4 text-sm md:h-8 md:text-xs" onClick={() => { onSaveNotes(draft); setEditingNotes(false); }} data-testid="info-notes-save">Save</Button>
+              <Button size="sm" variant="ghost" className="h-10 px-4 text-sm md:h-8 md:text-xs" onClick={() => { setDraft(notes); setEditingNotes(false); }}>Cancel</Button>
             </div>
           </div>
         ) : (

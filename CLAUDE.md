@@ -491,6 +491,19 @@ and a fixed box inside it does not reach the window's edges. While one is open
 `useFullScreenWorkspace` marks `<html>`/`<body>`, which hides the floating
 chrome (`data-app-floating`) and releases the desktop scrollbar gutters. Stay
 at `z-40`: menus and dialogs opened inside a workspace portal at `z-50`.
+**W1a. Every writing workspace has a Save button, and a phone can see it.**
+(Owner, 2026-11-23: "I'm trying to make a note … there's no save button there
+needs to be a save button. I need to be able to see it.") Notes and Journal
+pass `save` to `WorkspaceShell` (`WorkspaceSaveButton`); the document editor
+has `button-mobile-save` / `button-editor-save`, with the word Save at every
+width. It is the SAME save the workspace does on its own (W3), on demand: it
+saves now, reads Save → Saving… → Saved (Retry save after a failure), and is
+never disabled for having nothing to do — an empty tap says "Nothing to save
+yet", a duplicate (W4) says so and is never reported as saved. In Notes a
+title with no text yet is a note when Save is tapped. Never hide a workspace's
+Save in a menu or behind an icon alone.
+*Guards:* `tests/workspace-save-button.dom.test.tsx`, `tests/journal-workspace.dom.test.tsx`,
+`tests/keyboard-aware-surfaces.test.ts`.
 **W2. The X saves, then leaves; it never asks and never discards.** Each
 workspace hands `WorkspaceCloseButton` a function that flushes what is pending
 and then goes to `/chat`. A failed save keeps the workspace open. The
@@ -550,6 +563,43 @@ appended if the model dropped it (`picturesToMarkers` / `markersToPictures`).
 and page breaks in the editor; table and picture buttons on the phone toolbar;
 pictures inside notes; Word and spreadsheet forms, and online (browser) form
 filling, in Fill In; a Computer mode.
+
+## Phone rules (what a form needs is on the screen, keyboard up or not)
+
+Owner, 2026-11-23: "there's no save button … I need to be able to see it.
+There's just stuff like that throughout my entire app."
+*Guard:* `tests/keyboard-aware-surfaces.test.ts`.
+
+**M1. Fixed surfaces live inside what the phone shows.** The on-screen keyboard
+shrinks the VISUAL viewport, not the layout one (`dvh` does not follow it), so
+a `position: fixed` dialog, sheet or workspace kept its full height: its footer
+and Save sat under the keyboard and its header was pushed off the top.
+`client/src/lib/visual-viewport.ts` is the ONE listener; it publishes `--vvh`,
+`--vv-top`, `--kb` and `data-keyboard` on `<html>`, and index.css
+("Keyboard-aware surfaces") places `.workspace-surface` and every
+`data-surface` (`dialog`, `sheet-bottom`, `sheet-side`: set by the shared
+`ui/dialog`, `alert-dialog`, `sheet`, `drawer`) inside that area. A new fixed
+surface uses those variables — never its own listener, and a `DialogContent`
+never sets its own top/bottom. With the keyboard up a workspace's secondary
+bar (`data-workspace-secondary`, the Ask AI box) steps aside unless it is the
+thing being typed in.
+**M2. A row that cannot fit scrolls or wraps; it never runs off the edge.**
+On a 375px phone a toolbar is one line with `overflow-x-auto` (the note and
+document formatting rows), and a field shares or takes a line (`min-w-0`,
+`max-w-full`). A bar's height is `minHeight` plus the safe-area padding, never
+a fixed `height` the padding eats.
+**M3. The main action is a button a thumb can hit, with its name on it.** At
+least 36px tall on a phone (the profile's Save note is 40px); a label is never
+`hidden sm:inline` on a Save. The shared `Button` `size="sm"` carries
+`touch-hit` (a ≥44px target at the same visual size). A Save is not disabled
+for being empty: the tap answers.
+*How to check a screen:* drive the local client at 375×667 against the
+deployed API (`SMOKE_UI_BASE=http://localhost:5199 LIVE_API_ORIGIN=https://portol.me`)
+and look for controls past the right edge, clipped, or under 24px.
+*Not done (2026-11-23):* small text-button tap targets that are not the shared
+`Button` (dashboard quiet-row chips, list filter chips, breadcrumb links); the
+spreadsheet editor's phone layout; the keyboard rules are verified by
+emulating the viewport, not yet on a physical iPhone.
 
 ## Auto Pay rules (routine payments record themselves; the books stay honest)
 
