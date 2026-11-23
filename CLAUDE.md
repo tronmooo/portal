@@ -892,6 +892,81 @@ a task are edited in the sheet; a bill, a profile's birthday and a document
 date open their source. The edit form has a Save button (owner's design); it
 writes nothing on open (Rule 3) and sends only what changed.
 
+## Wellness tab rules (a customizable dashboard over a time range; the same system as Executive)
+
+Owner, 2026-11-23: "Executive manages your life; Wellness helps you understand
+your health … the same underlying customization system used by your Executive
+tab, rather than building two different widget systems." Read these before
+touching `client/src/pages/wellness.tsx`, `client/src/components/wellness/*`,
+`shared/dashboard-engine.ts`, `shared/wellness-period.ts`, `shared/wellness-cards.ts`,
+`shared/wellness-widgets.ts`, `shared/wellness-dashboards.ts` or
+`server/wellness-widget-builder.ts`.
+*Guards:* `tests/dashboard-engine.test.ts`, `tests/wellness-period.test.ts`,
+`tests/wellness-cards.test.ts`, `tests/wellness-widgets.test.ts`,
+`tests/wellness-dashboards.test.ts`, `tests/wellness-widget-builder.test.ts`,
+`tests/wellness-dashboard.dom.test.tsx`, `tests/wellness-customize-dialog.dom.test.tsx`.
+*Live check (deployed app, smoke account, phone touch browser):* `npx tsx tests/live-wellness-dashboard-check.ts`.
+
+**H1. One dashboard engine.** Ordering, sizes, the lonely-half-card rule,
+several dashboards and "a card built on one dashboard starts hidden on the
+rest; removing it removes it everywhere" live in `shared/dashboard-engine.ts`.
+Executive (`shared/exec-card-prefs`, `shared/exec-dashboards`) and Wellness
+(`shared/wellness-dashboards`) are instances of it. Change such a rule in the
+engine, never in one tab. A third customizable tab is a third instance.
+**H2. One row, on the account.** The Wellness layout — dashboards, hidden /
+order / sizes, the user's widgets, the display options — is the preference
+`wellness_card_prefs` (`serializeWellnessBoards`). No tables, no browser
+storage. A widget stores a DESCRIPTION, never a health value.
+**H3. A period is computed once.** Every tile, trend row, widget and insight
+reads a series through `summarize` (`shared/wellness-period.ts`): an additive
+measure (water, steps, sessions, dollars) is a day's total, a reading (weight,
+blood pressure, sleep) the day's last. Never average or count in a component.
+A move is judged against the metric's healthy range (`moveIsGood`); weight is
+never judged.
+**H4. A range is a filter (Rule 4).** A range with no reading names the last
+one ("Last: Oct 21"), never "no data"; a latest-reading tile (weight, blood
+pressure) still shows that reading, dated. Something never recorded is "not
+tracked", never a zero. The on-screen range tabs change the VIEW and are not
+saved; the stored default is a display option set in Customize.
+**H5. Nothing hidden reads as missing.** A card the layout switches off is
+named under the grid and opens in place; a card with nothing ever recorded
+folds into a named quiet row (only once the data has loaded, and the row says
+when a profile filter may be why); a dashboard with every section off says
+nothing was deleted.
+**H6. Customize is a draft.** `WellnessCustomizeDialog` opens from the tab's
+Customize button, writes nothing on open (Rule 3), Save Changes writes the one
+row, Cancel drops it. Removing a card or a dashboard takes two taps (Rule 8)
+and never the last dashboard. Reset keeps the cards the user built. The
+dashboard chips on the tab only SWITCH the active dashboard (and say so).
+**H7. Three ways to make a card, one shape.** A Widget Idea, the manual
+builder (`WellnessWidgetForm`) and the AI Builder all produce a
+`WellnessWidget` that passes `sanitizeWellnessWidget`: METRIC (a source, a
+calculation, a display), COMPARE (days split by one source, the other
+averaged on each side) or SCORE (weighted parts against targets, a part with
+no data left out — never scored zero). There is no free-form formula. Add a
+new kind of widget by adding a source or a calculation in
+`shared/wellness-widgets.ts`.
+**H8. The AI only chooses.** `GET /api/wellness-widgets/suggest` writes
+nothing; the model is told tracker names and which measurements have data,
+never a reading; its answer passes the validator or the fixed rules answer
+(`inferWellnessWidgetFromText`). The dialog shows a proposal with a live
+preview and Add / Discard (W5). Never let the model emit a query, a formula
+or markup.
+**H9. A comparison is a pattern, not a diagnosis.** Every COMPARE card shows
+`COMPARE_CAVEAT` and how it was worked out; under `MIN_COMPARE_DAYS` paired
+days it says so instead of stating a pattern. Insights name an out-of-range
+reading with its number and never advise treatment.
+**H10. One subject.** The tab reads exactly one person (`resolveWellnessSubject`,
+`belongsToSubject`); journal, expenses and goals a card reads are filtered to
+that person too. Health data never blends two people.
+**H11. A failed list is an error with a retry (Rule 7)** — the tracker list
+for the whole tab, journal / expenses / goals for the cards that read them.
+`buildWellnessWidgetView` returns null while a list it needs is not loaded.
+*Not built (2026-11-23):* drag-to-reorder on the tab itself (it is in
+Customize); per-widget colors; widgets over documents or the calendar; a
+custom score replacing the header's Wellness chip; an AI-generated whole
+dashboard (templates exist).
+
 ## Touch rules (the app is used on a phone; a mouse click proves nothing about a finger)
 
 **T1. A drag on a control never navigates.** The shell turns a quick sideways

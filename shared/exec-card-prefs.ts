@@ -11,6 +11,9 @@
 // tap away, never gone: the dashboard names what is hidden (Rule 4).
 
 import { sanitizeWidget, type ExecWidget } from "./exec-widgets";
+// Ordering, sizing and the phone-grid rule are the shared dashboard engine's
+// (shared/dashboard-engine) — the Wellness tab uses the same functions.
+import * as engine from "./dashboard-engine";
 
 export const EXEC_CARD_IDS = ["attention", "tasks", "schedule", "money", "habits", "documents", "wellness", "activity"] as const;
 /** A built-in card. */
@@ -135,9 +138,7 @@ export function hiddenExecCards(prefs: ExecCardPrefs): ExecCardId[] {
 
 /** Every card in the user's order; cards they never placed keep the built-in order after it. */
 export function orderedExecCards(prefs: ExecCardPrefs): ExecCardId[] {
-  const all = allExecCardIds(prefs);
-  const placed = prefs.order.filter((id) => all.includes(id));
-  return [...placed, ...all.filter((id) => !placed.includes(id))];
+  return engine.orderedCards(allExecCardIds(prefs), prefs.order);
 }
 
 /** A card's position (1-based), or null when the user never reordered (built-in layout applies). */
@@ -150,14 +151,8 @@ export function execCardPosition(prefs: ExecCardPrefs, id: ExecCardId): number |
 
 /** Put a card at a given index (drag and drop). */
 export function placeExecCard(prefs: ExecCardPrefs, id: ExecCardId, toIndex: number): ExecCardPrefs {
-  const order = orderedExecCards(prefs);
-  const at = order.indexOf(id);
-  if (at < 0) return prefs;
-  const to = Math.max(0, Math.min(order.length - 1, toIndex));
-  if (to === at) return prefs;
-  order.splice(at, 1);
-  order.splice(to, 0, id);
-  return { ...prefs, order };
+  const order = engine.placeCard(allExecCardIds(prefs), prefs.order, id, toIndex);
+  return order ? { ...prefs, order } : prefs;
 }
 
 export function setExecCardSize(prefs: ExecCardPrefs, id: ExecCardId, size: ExecCardSize): ExecCardPrefs {
@@ -191,12 +186,8 @@ export function resetExecCardLayout(prefs: ExecCardPrefs): ExecCardPrefs {
 
 /** Move a card one place earlier (-1) or later (+1). */
 export function moveExecCard(prefs: ExecCardPrefs, id: ExecCardId, dir: -1 | 1): ExecCardPrefs {
-  const order = orderedExecCards(prefs);
-  const at = order.indexOf(id);
-  const to = at + dir;
-  if (at < 0 || to < 0 || to >= order.length) return prefs;
-  [order[at], order[to]] = [order[to], order[at]];
-  return { ...prefs, order };
+  const order = engine.moveCard(allExecCardIds(prefs), prefs.order, id, dir);
+  return order ? { ...prefs, order } : prefs;
 }
 
 /**
@@ -212,25 +203,5 @@ export function setExecCardVisible(prefs: ExecCardPrefs, id: ExecCardId, visible
   return { ...prefs, quiet: false, hidden };
 }
 
-/**
- * Medium cards with no partner on a two-column (phone) grid: a medium card
- * followed by a large one, or left over at the end, would hold half a row
- * with nothing beside it. The dashboard lets such a card take the whole row
- * on a phone instead. `cards` is what is on screen, in order.
- */
-export function lonelyMediumCards(cards: ReadonlyArray<{ id: string; size: ExecCardSize }>): Set<string> {
-  const lonely = new Set<string>();
-  let open: string | null = null; // a medium card waiting for a partner
-  for (const c of cards) {
-    if (c.size === "large") {
-      if (open) lonely.add(open);
-      open = null;
-    } else if (open) {
-      open = null; // paired
-    } else {
-      open = c.id;
-    }
-  }
-  if (open) lonely.add(open);
-  return lonely;
-}
+/** Medium cards with no partner on a phone's two-column grid (shared/dashboard-engine). */
+export const lonelyMediumCards: (cards: ReadonlyArray<{ id: string; size: ExecCardSize }>) => Set<string> = engine.lonelyMediumCards;

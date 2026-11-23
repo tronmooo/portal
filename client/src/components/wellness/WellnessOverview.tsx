@@ -47,7 +47,7 @@ export interface WellnessAppt { id: string; date: string; time?: string; title: 
 export interface WellnessDoc { id: string; name: string; date?: string; type?: string; }
 export interface WellnessListItem { id: string; name: string; note?: string; }
 
-const T = {
+export const T = {
   green: "155 65% 45%", teal: "173 60% 44%", blue: "213 90% 62%", cyan: "199 89% 60%",
   purple: "262 70% 62%", pink: "330 75% 62%", amber: "38 96% 54%", orange: "25 90% 58%",
   red: "0 72% 58%", indigo: "240 60% 65%",
@@ -72,7 +72,7 @@ function SignalTrend({ series, color }: { series: number[]; color: string }) {
 
 const Empty = ({ text }: { text: string }) => <p className="text-xs text-muted-foreground">{text}</p>;
 
-function Section({ title, icon, tone, meta, children, testId }: {
+export function Section({ title, icon, tone, meta, children, testId }: {
   title: string; icon: any; tone: string; meta?: string; children: React.ReactNode; testId: string;
 }) {
   return (
@@ -155,7 +155,7 @@ const SCORE_RING_HS: Record<WellnessScore["components"][number]["key"], string> 
 };
 const SCORE_TOTAL_HS = "350 82%";
 
-function ScoreCard({ score, connected }: { score: WellnessScore; connected: boolean }) {
+export function ScoreCard({ score, connected }: { score: WellnessScore; connected: boolean }) {
   const live = score.components.filter((c) => c.score != null);
   // Outer ring is the score itself; one inner ring per component that counted.
   // A component with no data gets no ring (an empty ring would read as a 0).
@@ -320,7 +320,7 @@ function LabRowView({ row }: { row: LabRow }) {
 
 // ── 5. Activity history ──────────────────────────────────────────────────────
 
-function WorkoutRow({ w }: { w: WorkoutGroup }) {
+export function WorkoutRow({ w }: { w: WorkoutGroup }) {
   const bits = [
     `${w.sessions} session${w.sessions === 1 ? "" : "s"}`,
     // `≈` marks a sum that includes an estimated session (Rule 26): an
@@ -340,88 +340,15 @@ function WorkoutRow({ w }: { w: WorkoutGroup }) {
   );
 }
 
-// ── Props ────────────────────────────────────────────────────────────────────
+// ── Sections as cards ────────────────────────────────────────────────────────
+// Each is one card of the customizable Wellness tab (shared/wellness-dashboards)
+// and one section of the classic overview below — the same component, so the
+// two can never draw a lab row or a medication differently.
 
-export interface WellnessOverviewProps {
-  /** Whose data this is. The tab reads ONE person — health data never blends. */
-  subjectName?: string | null;
-  score: WellnessScore;
-  signals: TodaySignal[];
-  /** Deterministic sentences about data that exists. */
-  brief: string[];
-  /** The AI rewrite of the brief, when the user asked for one. */
-  aiNarrative?: string | null;
-  onAiBrief?: () => void;
-  aiBriefLoading?: boolean;
-  panels: LabPanel[];
-  /** Weight, BMI, body fat, blood pressure, temperature — same row shape. */
-  body: LabPanel[];
-  medications: WellnessMed[];
-  appointments: WellnessAppt[];
-  documents: WellnessDoc[];
-  allergies: WellnessListItem[];
-  conditions: WellnessListItem[];
-  workouts: WorkoutGroup[];
-  sources: SourceState;
-  /** Metrics that were logged into more than one tracker and got merged. */
-  duplicates?: Array<{ label: string; sources: string[] }>;
-}
-
-export function WellnessOverview(p: WellnessOverviewProps) {
-  const connected = p.score.connected ?? anySourceConnected(p.sources);
-  const labCount = p.panels.reduce((a, s) => a + s.rows.length, 0);
-  const flagged = p.panels.reduce((a, s) => a + s.outOfRange, 0);
+export function WellnessBodySection(p: { body: LabPanel[]; title?: string }) {
   const bodyCount = p.body.reduce((a, s) => a + s.rows.length, 0);
-  const care = p.medications.length + p.appointments.length + p.documents.length + p.allergies.length + p.conditions.length;
-
   return (
-    // td-scope + accentScope: the tracker-detail primitives used here (RingStack)
-    // take their lightness and accent from the scope, so they read on both themes.
-    <div className="space-y-4 td-scope" style={accentScope("350 82%", "15 88%")} data-testid="wellness-overview">
-      {p.subjectName && (
-        <div className="text-[11px] text-muted-foreground" data-testid="wellness-subject">
-          Showing {p.subjectName}'s health data
-        </div>
-      )}
-
-      {/* ── 1. Today ─────────────────────────────────────────────────────── */}
-      <div>
-        <h2 className="micro-label text-muted-foreground mb-2">Today</h2>
-        <div className="flex flex-wrap gap-3">
-          {p.signals.map((s) => <SignalTile key={s.key} signal={s} />)}
-          <div className="basis-full min-w-0 lg:basis-auto lg:flex-1 lg:min-w-[18rem]"><ScoreCard score={p.score} connected={connected} /></div>
-        </div>
-      </div>
-
-      {/* ── 2. This week ─────────────────────────────────────────────────── */}
-      <Section title="This week" icon={Sparkles} tone={T.purple} testId="wellness-brief">
-        {p.aiNarrative ? (
-          <p className="text-xs leading-relaxed" data-testid="wellness-brief-ai">{p.aiNarrative}</p>
-        ) : p.brief.length > 0 ? (
-          <ul className="space-y-1.5">
-            {p.brief.map((line, i) => (
-              <li key={i} className="text-xs leading-relaxed" data-testid={`wellness-brief-line-${i}`}>{line}</li>
-            ))}
-          </ul>
-        ) : connected ? (
-          <p className="text-xs text-muted-foreground" data-testid="wellness-brief-empty">
-            Nothing logged in the last week — log sleep, a walk or a weigh-in and this fills in. <LogLink />
-          </p>
-        ) : (
-          <Empty text="Nothing to report yet — connect a health source and a week of data will fill this in." />
-        )}
-        {p.onAiBrief && (p.brief.length > 0 || p.aiNarrative) && (
-          <Button variant="outline" size="sm" className="mt-3 h-7 text-[11px]"
-            onClick={p.onAiBrief} disabled={p.aiBriefLoading} data-testid="wellness-ai-brief">
-            {p.aiBriefLoading ? "Reading your data…" : "Ask AI to read this back"}
-          </Button>
-        )}
-      </Section>
-
-      {/* ── Body & vitals ────────────────────────────────────────────────
-          Not labs, but the same question: what is it, is it in range, which
-          way is it moving. */}
-      <Section title="Body & vitals" icon={HeartPulse} tone={T.teal} testId="wellness-body"
+      <Section title={p.title ?? "Body & vitals"} icon={HeartPulse} tone={T.teal} testId="wellness-body"
         meta={bodyCount > 0 ? `${bodyCount} measurement${bodyCount === 1 ? "" : "s"}` : undefined}>
         {p.body.length === 0 ? (
           <Empty text="No body measurements yet. A connected scale or health app fills these in." />
@@ -436,10 +363,15 @@ export function WellnessOverview(p: WellnessOverviewProps) {
           </div>
         )}
       </Section>
+  );
+}
 
-      {/* ── 3. Labs ──────────────────────────────────────────────────────── */}
+export function WellnessLabsSection(p: { panels: LabPanel[]; title?: string }) {
+  const labCount = p.panels.reduce((a, s) => a + s.rows.length, 0);
+  const flagged = p.panels.reduce((a, s) => a + s.outOfRange, 0);
+  return (
       <Section
-        title="Labs" icon={FlaskConical} tone={T.cyan} testId="wellness-labs"
+        title={p.title ?? "Labs"} icon={FlaskConical} tone={T.cyan} testId="wellness-labs"
         meta={labCount > 0 ? `${labCount} value${labCount === 1 ? "" : "s"}${flagged > 0 ? ` · ${flagged} out of range` : ""}` : undefined}
       >
         {p.panels.length === 0 ? (
@@ -460,9 +392,16 @@ export function WellnessOverview(p: WellnessOverviewProps) {
           </div>
         )}
       </Section>
+  );
+}
 
-      {/* ── 4. Care ──────────────────────────────────────────────────────── */}
-      <Section title="Care" icon={Stethoscope} tone={T.red} testId="wellness-care"
+export function WellnessCareSection(p: {
+  medications: WellnessMed[]; appointments: WellnessAppt[]; documents: WellnessDoc[];
+  allergies: WellnessListItem[]; conditions: WellnessListItem[]; title?: string;
+}) {
+  const care = p.medications.length + p.appointments.length + p.documents.length + p.allergies.length + p.conditions.length;
+  return (
+      <Section title={p.title ?? "Care"} icon={Stethoscope} tone={T.red} testId="wellness-care"
         meta={care > 0 ? undefined : undefined}>
         {care === 0 ? (
           <Empty text="No medications, appointments or health documents on file." />
@@ -530,19 +469,12 @@ export function WellnessOverview(p: WellnessOverviewProps) {
           </div>
         )}
       </Section>
+  );
+}
 
-      {/* ── 5. Activity history ──────────────────────────────────────────── */}
-      <Section title="Activity" icon={Dumbbell} tone={T.amber} testId="wellness-activity"
-        meta={p.workouts.length > 0 ? `${p.workouts.length} type${p.workouts.length === 1 ? "" : "s"} · 90 days` : undefined}>
-        {p.workouts.length === 0 ? (
-          <Empty text="No workouts recorded. Connected Health workouts show up here grouped by type." />
-        ) : (
-          <div>{p.workouts.map((w) => <WorkoutRow key={w.trackerId} w={w} />)}</div>
-        )}
-      </Section>
-
-      {/* ── Sources ──────────────────────────────────────────────────────── */}
-      <Section title="Sources" icon={Link2} tone={T.blue} testId="wellness-sources">
+export function WellnessSourcesSection(p: { sources: SourceState; duplicates?: Array<{ label: string; sources: string[] }>; title?: string }) {
+  return (
+      <Section title={p.title ?? "Sources"} icon={Link2} tone={T.blue} testId="wellness-sources">
         <div className="flex flex-wrap gap-2">
           {([
             ["Sleep", p.sources.sleep], ["Activity", p.sources.activity],
@@ -562,6 +494,106 @@ export function WellnessOverview(p: WellnessOverviewProps) {
           </p>
         )}
       </Section>
+  );
+}
+
+// ── Props ────────────────────────────────────────────────────────────────────
+
+export interface WellnessOverviewProps {
+  /** Whose data this is. The tab reads ONE person — health data never blends. */
+  subjectName?: string | null;
+  score: WellnessScore;
+  signals: TodaySignal[];
+  /** Deterministic sentences about data that exists. */
+  brief: string[];
+  /** The AI rewrite of the brief, when the user asked for one. */
+  aiNarrative?: string | null;
+  onAiBrief?: () => void;
+  aiBriefLoading?: boolean;
+  panels: LabPanel[];
+  /** Weight, BMI, body fat, blood pressure, temperature — same row shape. */
+  body: LabPanel[];
+  medications: WellnessMed[];
+  appointments: WellnessAppt[];
+  documents: WellnessDoc[];
+  allergies: WellnessListItem[];
+  conditions: WellnessListItem[];
+  workouts: WorkoutGroup[];
+  sources: SourceState;
+  /** Metrics that were logged into more than one tracker and got merged. */
+  duplicates?: Array<{ label: string; sources: string[] }>;
+}
+
+export function WellnessOverview(p: WellnessOverviewProps) {
+  const connected = p.score.connected ?? anySourceConnected(p.sources);
+
+  return (
+    // td-scope + accentScope: the tracker-detail primitives used here (RingStack)
+    // take their lightness and accent from the scope, so they read on both themes.
+    <div className="space-y-4 td-scope" style={accentScope("350 82%", "15 88%")} data-testid="wellness-overview">
+      {p.subjectName && (
+        <div className="text-[11px] text-muted-foreground" data-testid="wellness-subject">
+          Showing {p.subjectName}'s health data
+        </div>
+      )}
+
+      {/* ── 1. Today ─────────────────────────────────────────────────────── */}
+      <div>
+        <h2 className="micro-label text-muted-foreground mb-2">Today</h2>
+        <div className="flex flex-wrap gap-3">
+          {p.signals.map((s) => <SignalTile key={s.key} signal={s} />)}
+          <div className="basis-full min-w-0 lg:basis-auto lg:flex-1 lg:min-w-[18rem]"><ScoreCard score={p.score} connected={connected} /></div>
+        </div>
+      </div>
+
+      {/* ── 2. This week ─────────────────────────────────────────────────── */}
+      <Section title="This week" icon={Sparkles} tone={T.purple} testId="wellness-brief">
+        {p.aiNarrative ? (
+          <p className="text-xs leading-relaxed" data-testid="wellness-brief-ai">{p.aiNarrative}</p>
+        ) : p.brief.length > 0 ? (
+          <ul className="space-y-1.5">
+            {p.brief.map((line, i) => (
+              <li key={i} className="text-xs leading-relaxed" data-testid={`wellness-brief-line-${i}`}>{line}</li>
+            ))}
+          </ul>
+        ) : connected ? (
+          <p className="text-xs text-muted-foreground" data-testid="wellness-brief-empty">
+            Nothing logged in the last week — log sleep, a walk or a weigh-in and this fills in. <LogLink />
+          </p>
+        ) : (
+          <Empty text="Nothing to report yet — connect a health source and a week of data will fill this in." />
+        )}
+        {p.onAiBrief && (p.brief.length > 0 || p.aiNarrative) && (
+          <Button variant="outline" size="sm" className="mt-3 h-7 text-[11px]"
+            onClick={p.onAiBrief} disabled={p.aiBriefLoading} data-testid="wellness-ai-brief">
+            {p.aiBriefLoading ? "Reading your data…" : "Ask AI to read this back"}
+          </Button>
+        )}
+      </Section>
+
+      {/* ── Body & vitals ────────────────────────────────────────────────
+          Not labs, but the same question: what is it, is it in range, which
+          way is it moving. */}
+      <WellnessBodySection body={p.body} />
+
+      {/* ── 3. Labs ──────────────────────────────────────────────────────── */}
+      <WellnessLabsSection panels={p.panels} />
+
+      {/* ── 4. Care ──────────────────────────────────────────────────────── */}
+      <WellnessCareSection medications={p.medications} appointments={p.appointments} documents={p.documents} allergies={p.allergies} conditions={p.conditions} />
+
+      {/* ── 5. Activity history ──────────────────────────────────────────── */}
+      <Section title="Activity" icon={Dumbbell} tone={T.amber} testId="wellness-activity"
+        meta={p.workouts.length > 0 ? `${p.workouts.length} type${p.workouts.length === 1 ? "" : "s"} · 90 days` : undefined}>
+        {p.workouts.length === 0 ? (
+          <Empty text="No workouts recorded. Connected Health workouts show up here grouped by type." />
+        ) : (
+          <div>{p.workouts.map((w) => <WorkoutRow key={w.trackerId} w={w} />)}</div>
+        )}
+      </Section>
+
+      {/* ── Sources ──────────────────────────────────────────────────────── */}
+      <WellnessSourcesSection sources={p.sources} duplicates={p.duplicates} />
     </div>
   );
 }

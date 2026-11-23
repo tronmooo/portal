@@ -20,6 +20,7 @@ import {
   DEFAULT_EXEC_CARD_PREFS, EXEC_CARD_IDS, parseExecCardPrefs, widgetCardId,
   type BuiltInCardId, type ExecCardId, type ExecCardPrefs, type ExecCardSize,
 } from "./exec-card-prefs";
+import * as engine from "./dashboard-engine";
 import { EXTRA_WIDGETS, WIDGET_TEMPLATES, newWidgetId, sanitizeWidget, type ExecWidget } from "./exec-widgets";
 
 export interface ExecDashboard {
@@ -39,7 +40,7 @@ export interface ExecDashboards {
   widgets: ExecWidget[];
 }
 
-export const MAX_DASHBOARDS = 8;
+export const MAX_DASHBOARDS = engine.MAX_DASHBOARDS;
 const MAIN: Pick<ExecDashboard, "id" | "name"> = { id: "main", name: "Main" };
 
 const layoutOf = (p: Pick<ExecCardPrefs, "quiet" | "hidden" | "order" | "sizes">): Omit<ExecDashboard, "id" | "name"> =>
@@ -49,8 +50,8 @@ export function defaultExecDashboards(): ExecDashboards {
   return { active: MAIN.id, dashboards: [{ ...MAIN, ...layoutOf(parseExecCardPrefs(null)) }], widgets: [] };
 }
 
-const cleanName = (raw: unknown) => String(raw ?? "").replace(/\s+/g, " ").trim().slice(0, 24);
-const cleanId = (raw: unknown) => String(raw ?? "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40);
+const cleanName = engine.cleanBoardName;
+const cleanId = engine.cleanBoardId;
 
 /**
  * Read the stored row. A row saved before there were several dashboards is a
@@ -85,7 +86,7 @@ export function serializeExecDashboards(b: ExecDashboards): string {
 }
 
 export function activeDashboard(b: ExecDashboards): ExecDashboard {
-  return b.dashboards.find((d) => d.id === b.active) ?? b.dashboards[0];
+  return engine.activeBoard(b);
 }
 
 /** The active dashboard as the layout the tab draws. */
@@ -103,38 +104,22 @@ export function activeExecPrefs(b: ExecDashboards): ExecCardPrefs {
  */
 export function withActiveExecPrefs(b: ExecDashboards, next: ExecCardPrefs): ExecDashboards {
   const cur = activeDashboard(b);
-  const before = new Set(b.widgets.map((w) => w.id));
-  const after = new Set(next.widgets.map((w) => w.id));
-  const added = next.widgets.filter((w) => !before.has(w.id)).map((w) => widgetCardId(w.id));
-  const gone = new Set(b.widgets.filter((w) => !after.has(w.id)).map((w) => widgetCardId(w.id)));
-  const dashboards = b.dashboards.map((d) => {
-    if (d.id === cur.id) return { ...d, ...layoutOf(next) };
-    const sizes = Object.fromEntries(Object.entries(d.sizes).filter(([id]) => !gone.has(id as any)));
-    return {
-      ...d,
-      hidden: Array.from(new Set<ExecCardId>([...d.hidden.filter((id) => !gone.has(id)), ...added])),
-      order: d.order.filter((id) => !gone.has(id)),
-      sizes,
-    };
-  });
+  const { added, gone } = engine.widgetDiff(b.widgets, next.widgets);
+  const dashboards = b.dashboards.map((d) => (d.id === cur.id ? { ...d, ...layoutOf(next) } : engine.carryWidgetChange(d, added, gone)));
   return { ...b, dashboards, widgets: next.widgets };
 }
 
 export function setActiveDashboard(b: ExecDashboards, id: string): ExecDashboards {
-  return b.dashboards.some((d) => d.id === id) ? { ...b, active: id } : b;
+  return engine.setActiveBoard(b, id);
 }
 
 export function renameDashboard(b: ExecDashboards, id: string, name: string): ExecDashboards {
-  const clean = cleanName(name);
-  if (!clean) return b;
-  return { ...b, dashboards: b.dashboards.map((d) => (d.id === id ? { ...d, name: clean } : d)) };
+  return engine.renameBoard(b, id, name);
 }
 
 /** Delete a dashboard (never the last one). Cards the user built are kept. */
 export function removeDashboard(b: ExecDashboards, id: string): ExecDashboards {
-  if (b.dashboards.length <= 1 || !b.dashboards.some((d) => d.id === id)) return b;
-  const dashboards = b.dashboards.filter((d) => d.id !== id);
-  return { ...b, dashboards, active: b.active === id ? dashboards[0].id : b.active };
+  return engine.removeBoard(b, id);
 }
 
 // ── Starting points ──────────────────────────────────────────────────────────
@@ -170,8 +155,7 @@ export function addDashboard(b: ExecDashboards, name: string, templateKey = "sta
   if (b.dashboards.length >= MAX_DASHBOARDS) return b;
   const t = DASHBOARD_TEMPLATES.find((x) => x.key === templateKey) ?? DASHBOARD_TEMPLATES[0];
   const clean = cleanName(name) || t.name;
-  let id = clean.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "dashboard";
-  for (let n = 2; b.dashboards.some((d) => d.id === id); n++) id = `${id.replace(/-\d+$/, "")}-${n}`;
+  const id = engine.newBoardId(b.dashboards, clean);
 
   let widgets = b.widgets;
   const created: ExecCardId[] = [];

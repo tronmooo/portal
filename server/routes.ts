@@ -198,6 +198,7 @@ import { withAssetSummaryShape, ASSET_SUMMARY_TYPES, ASSET_SUMMARY_FAST_MODEL, A
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { shownOccurrenceToPay, rollBillsForward } from "@shared/bills-timeline";
 import { buildWidgetFromPrompt } from "./exec-widget-builder";
+import { buildWellnessWidgetFromPrompt } from "./wellness-widget-builder";
 import { buildNotifications, mergeDismissedNotifications, restoreDismissedNotifications, listDismissedAlerts } from "./notification-service";
 import {
   createNote, updateNote, deleteNote, listNotes,
@@ -11827,6 +11828,26 @@ No emojis. No prose outside the JSON.`,
       trackerNames: uniq((trackers as any[]).map((t) => t?.name)),
       expenseCategories: uniq((expenses as any[]).map((e) => e?.category)),
       profileTypes: uniq((profiles as any[]).map((p) => p?.type)).filter((t) => t !== "self"),
+    });
+    res.json(built);
+  }));
+
+  // ---- Wellness tab: build a custom widget from a sentence ----
+  // The AI Builder in Customize Wellness. A read: it answers with a widget
+  // description and writes nothing; the widget is stored with the Wellness
+  // preferences only when the user saves the dialog. The model is told which
+  // trackers and measurements exist, never a reading.
+  app.get("/api/wellness-widgets/suggest", asyncHandler(async (req, res) => {
+    const prompt = String(req.query.prompt ?? "").trim();
+    if (prompt.length < 3) return res.status(400).json({ error: "Describe what the card should show" });
+    if (prompt.length > 300) return res.status(400).json({ error: "Keep the description under 300 characters" });
+    const trackers = await storage.getTrackers().catch(() => [] as any[]);
+    const uniq = (xs: unknown[]) => Array.from(new Set(xs.map((x) => String(x ?? "").trim()).filter(Boolean)));
+    let metricIds: string[] = [];
+    try { metricIds = [...collectMetrics(trackers as any[]).keys()]; } catch { /* less specific, never a failure */ }
+    const built = await buildWellnessWidgetFromPrompt(prompt, {
+      trackerNames: uniq((trackers as any[]).map((t) => t?.name)),
+      metricIds,
     });
     res.json(built);
   }));

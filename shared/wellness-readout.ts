@@ -704,6 +704,20 @@ export interface WorkoutGroup {
   minutesEstimated: boolean;
 }
 
+/**
+ * Is this tracker a kind of workout (a row of the activity history)? ONE
+ * answer, shared by the history and by every card that counts sessions.
+ */
+export function isWorkoutTracker(t: Tracker | null | undefined): boolean {
+  if (!t) return false;
+  const hay = `${t.name || ""} ${(t as any).category || ""}`;
+  const shaped = (t.fields || []).some((f: any) => DISTANCE_FIELD.test(f?.name || ""));
+  if (!ACTIVITY_NAME.test(hay) && !shaped) return false;
+  // A tracker that IS a canonical metric is a SIGNAL, not a workout type:
+  // "Steps" belongs in Today, not in the list of things you trained at.
+  return !resolveCanonicalMetric(t.name, (t as any).category);
+}
+
 export function activityHistory(
   trackers: Tracker[] | undefined | null,
   opts: { now?: Date; days?: number } = {},
@@ -713,7 +727,6 @@ export function activityHistory(
   const groups: WorkoutGroup[] = [];
   for (const t of trackers || []) {
     if (!t) continue;
-    const hay = `${t.name || ""} ${(t as any).category || ""}`;
     // A name that reads like a workout, or a tracker shaped like one.
     //
     // A DURATION field deliberately does not qualify on its own: "Guitar
@@ -721,11 +734,7 @@ export function activityHistory(
     // rebuilt tab found them filed as workouts — with the weekly brief then
     // reporting "you trained 9 times this week — mostly steps and guitar
     // practice". A distance field is a real movement signal; minutes are not.
-    const shaped = (t.fields || []).some((f: any) => DISTANCE_FIELD.test(f?.name || ""));
-    if (!ACTIVITY_NAME.test(hay) && !shaped) continue;
-    // A tracker that IS a canonical metric is a SIGNAL, not a workout type:
-    // "Steps" belongs in Today, not in the list of things you trained at.
-    if (resolveCanonicalMetric(t.name, (t as any).category)) continue;
+    if (!isWorkoutTracker(t)) continue;
     let sessions = 0, minutes = 0, distance = 0, reps = 0, sets = 0;
     let sawMin = false, sawDist = false, sawReps = false, sawSets = false;
     let minEst = false, distEst = false;

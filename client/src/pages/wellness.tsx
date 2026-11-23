@@ -21,7 +21,7 @@
 //
 // Reads still ride the SAME shared TanStack Query keys as the Trackers grid and
 // the dashboard, so anything logged anywhere still shows up here.
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useHubChrome } from "@/components/hub/hub-context";
@@ -37,13 +37,12 @@ import { isMedicationTracker } from "@shared/medication-doses";
 import { trackerNamesMatch } from "@shared/tracker-identity";
 import { readField } from "@/lib/profile-fields";
 import {
-  collectMetrics, todaySignals, labPanels, activityHistory, wellnessScore,
-  weeklyBrief, sourceState, mergedDuplicates, resolveWellnessSubject, belongsToSubject, bodyVitals,
+  collectMetrics, labPanels, wellnessScore,
+  sourceState, mergedDuplicates, resolveWellnessSubject, belongsToSubject, bodyVitals,
 } from "@shared/wellness-readout";
-import {
-  WellnessOverview,
-  type WellnessMed, type WellnessAppt, type WellnessDoc, type WellnessListItem,
-} from "@/components/wellness/WellnessOverview";
+import { getUserToday } from "@shared/timezone";
+import type { WellnessMed, WellnessAppt, WellnessDoc, WellnessListItem } from "@/components/wellness/WellnessOverview";
+import { WellnessDashboard } from "@/components/wellness/WellnessDashboard";
 
 // Split a "Vitamin D 2000IU" style string into name + dose (best-effort).
 function splitDose(name: string): { name: string; dose?: string } {
@@ -64,10 +63,11 @@ export default function WellnessPage() {
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
 
   // ── Shared queries (identical keys everywhere → connected views) ──
-  const { data: trackers = [] } = useQuery<Tracker[]>({
+  const trackersQuery = useQuery<Tracker[]>({
     queryKey: ["/api/trackers", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/trackers${profileParam}`).then((r) => r.json()),
   });
+  const trackers = trackersQuery.data ?? [];
   const { data: obligations = [] } = useQuery<Obligation[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", withFullLimit(`/api/obligations${profileParam}`)).then((r) => r.json()),
@@ -90,30 +90,32 @@ export default function WellnessPage() {
     (Array.isArray(profiles) ? profiles : []) as any[],
     filterMode === "selected" ? filterIds : [],
   );
-  const ownedBySubject = (linked?: string[] | null) => belongsToSubject(linked, subject, subjectIsSelf);
+  const subjectId = subject?.id ?? null;
+  // Stable per subject, so the dashboard's memoised cards do not recompute on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const ownedBySubject = useMemo(() => (linked?: string[] | null) => belongsToSubject(linked, subject, subjectIsSelf), [subjectId, subjectIsSelf]);
 
-  const myTrackers = (Array.isArray(trackers) ? trackers : []).filter((t: any) => ownedBySubject(t.linkedProfiles));
+  const myTrackers = useMemo(() => (Array.isArray(trackers) ? trackers : []).filter((t: any) => ownedBySubject(t.linkedProfiles)), [trackers, ownedBySubject]);
   const myObligations = (Array.isArray(obligations) ? obligations : []).filter((o: any) => ownedBySubject(o.linkedProfiles));
-  const myDocuments = (Array.isArray(documents) ? documents : []).filter((d: any) => ownedBySubject(d.linkedProfiles));
+  const myDocuments = useMemo(() => (Array.isArray(documents) ? documents : []).filter((d: any) => ownedBySubject(d.linkedProfiles)), [documents, ownedBySubject]);
 
   // ── The readout ──────────────────────────────────────────────────────────
-  // "Today" is the browser's day: the readout's freshness windows (today /
-  // last night) must agree with the clock the person is looking at.
+  // "Today" is the browser's day: every range on the tab ends on the day the
+  // person is looking at.
   //
   // Documents feed it too: a lab report's values live on the document's
   // extractedData, and Labs said "No lab values" beside an uploaded Vitamin D
   // result because only trackers were read. The readout resolves those values
   // through the same canon and dedupes them against any tracker entry the
   // extraction also logged (shared/wellness-readout collectDocumentMetrics).
-  const metrics = collectMetrics(myTrackers, { timezone: BROWSER_TIMEZONE, documents: myDocuments });
-  const signals = todaySignals(metrics);
-  const panels = labPanels(metrics);
-  const body = bodyVitals(metrics);
-  const workouts = activityHistory(myTrackers);
-  const score = wellnessScore(metrics);
-  const brief = weeklyBrief({ metrics, workouts, labs: panels });
-  const sources = sourceState(metrics);
-  const duplicates = mergedDuplicates(metrics);
+  const todayISO = getUserToday(BROWSER_TIMEZONE);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const metrics = useMemo(() => collectMetrics(myTrackers, { timezone: BROWSER_TIMEZONE, documents: myDocuments as any }), [myTrackers, myDocuments, todayISO]);
+  const panels = useMemo(() => labPanels(metrics), [metrics]);
+  const body = useMemo(() => bodyVitals(metrics), [metrics]);
+  const score = useMemo(() => wellnessScore(metrics), [metrics]);
+  const sources = useMemo(() => sourceState(metrics), [metrics]);
+  const duplicates = useMemo(() => mergedDuplicates(metrics), [metrics]);
 
   // ── Care ─────────────────────────────────────────────────────────────────
   // Medications show WHEN THEY RUN OUT, not a daily checkbox. Knowing a refill
@@ -215,20 +217,25 @@ export default function WellnessPage() {
         <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
           <div>
             <h1 className="text-xl font-bold flex items-center gap-2"><HeartPulse className="w-5 h-5 text-red-500" /> Wellness</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Read back from your health data — nothing to log</p>
+            <p className="text-sm text-muted-foreground mt-0.5">How you are doing over time, read back from your records</p>
           </div>
           <MultiProfileFilter onChange={() => {}} compact />
         </div>
       )}
 
-      <WellnessOverview
+      <WellnessDashboard
         subjectName={subject && !subjectIsSelf ? subject.name : null}
+        metrics={metrics}
+        trackers={myTrackers}
+        loaded={trackersQuery.data !== undefined}
+        failed={trackersQuery.isError && trackersQuery.data === undefined}
+        onRetry={() => { trackersQuery.refetch(); }}
+        timezone={BROWSER_TIMEZONE}
+        todayISO={todayISO}
+        mode={filterMode}
+        ids={filterIds}
+        owned={ownedBySubject}
         score={score}
-        signals={signals}
-        brief={brief}
-        aiNarrative={aiNarrative}
-        onAiBrief={() => aiBrief.mutate()}
-        aiBriefLoading={aiBrief.isPending}
         panels={panels}
         body={body}
         medications={medications}
@@ -236,9 +243,11 @@ export default function WellnessPage() {
         documents={healthDocs}
         allergies={allergies}
         conditions={conditions}
-        workouts={workouts}
         sources={sources}
         duplicates={duplicates}
+        aiNarrative={aiNarrative}
+        onAiBrief={() => aiBrief.mutate()}
+        aiBriefLoading={aiBrief.isPending}
       />
     </div>
   );

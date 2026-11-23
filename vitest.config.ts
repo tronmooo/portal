@@ -296,6 +296,16 @@ export default defineConfig({
       'tests/exec-widgets.test.ts',
       'tests/exec-dashboards.test.ts',
       'tests/exec-customize-dialog.dom.test.tsx',
+      // Wellness tab redesign (2026-11-23): the shared dashboard engine, period
+      // maths, cards, custom widgets, dashboards and the rendered tab + dialog.
+      'tests/dashboard-engine.test.ts',
+      'tests/wellness-period.test.ts',
+      'tests/wellness-cards.test.ts',
+      'tests/wellness-widgets.test.ts',
+      'tests/wellness-dashboards.test.ts',
+      'tests/wellness-widget-builder.test.ts',
+      'tests/wellness-dashboard.dom.test.tsx',
+      'tests/wellness-customize-dialog.dom.test.tsx',
       // Dynamic asset & liability Overview composition (2026-08-26).
       'tests/overview-compose.test.ts',
       'tests/overview-engine.test.ts',
