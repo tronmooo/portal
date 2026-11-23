@@ -54,15 +54,18 @@ beforeEach(() => {
     if (path.endsWith("/schedule")) return json(SCHEDULE);
     if (path.endsWith("/assets")) return json([{ id: "l1", liabilityProfileId: ID, assetProfileId: CAR.id, ownershipPercentage: 100, role: "collateral" }]);
     if (path.endsWith("/documents")) return documentsFail ? json({ error: "boom" }, 500) : json([{ id: "d1", name: "Loan agreement" }, { id: "d2", name: "Payment schedule" }]);
+    if (path.includes("/details")) return json({ rows: [], definitions: [] });
     return json([]);
   }));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-function renderPage() {
+let navigated: string[] = [];
+function renderPage(profile: any = LOAN) {
+  navigated = [];
   return render(
     <QueryClientProvider client={queryClient}>
-      <Router hook={(() => [`/profiles/${ID}`, () => {}]) as any}><LiabilityProfilePage profile={LOAN as any} /></Router>
+      <Router hook={(() => [`/profiles/${ID}`, (to: string) => { navigated.push(to); }]) as any}><LiabilityProfilePage profile={profile} /></Router>
     </QueryClientProvider>,
   );
 }
@@ -163,5 +166,67 @@ describe("liability profile: the owner's design", () => {
     expect(screen.queryByTestId("add-field-form")).toBeNull();
     fireEvent.click(screen.getByTestId("profile-action-add-field"));
     expect(await screen.findByTestId("add-field-form")).toBeTruthy();
+  });
+
+  it("every figure in the balance card opens the form that edits it", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("kpi-apr"));
+    expect(((await screen.findByTestId("input-terms-rate")) as HTMLInputElement).value).toBe("5.49");
+    expect(screen.getByTestId("terms-edit-dialog")).toBeTruthy();
+    // The form opened over the Overview: the page did not change tab.
+    expect(screen.getByTestId("tab-overview").getAttribute("data-state")).toBe("active");
+    expect(writes()).toEqual([]);
+  });
+
+  it("the type can be changed, and it is the type_key column that is written (L4)", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("detail-row-type"));
+    expect(await screen.findByTestId("dialog-change-type")).toBeTruthy();
+    // Nothing chosen yet: Save is not offered for the type it already has.
+    expect((screen.getByTestId("button-save-type") as HTMLButtonElement).disabled).toBe(true);
+    expect(writes()).toEqual([]);
+  });
+
+  it("the name opens the name & notes form", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("liability-title"));
+    expect(((await screen.findByTestId("input-edit-name")) as HTMLInputElement).value).toBe("Honda CR-V Auto Loan");
+  });
+
+  it("'Ask Portol about this' opens chat with the liability named", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("profile-action-ask"));
+    expect(sessionStorage.getItem("portol_chat_prefill")).toBe("About my Honda CR-V Auto Loan: ");
+    expect(navigated).toEqual(["/chat"]);
+    sessionStorage.removeItem("portol_chat_prefill");
+  });
+
+  describe("a debt with only a balance", () => {
+    const BARE = { id: ID, name: "Loan from Dad", type: "liability", type_key: "personal_loan", notes: "", fields: { balance: 4000 } };
+
+    it("offers to add what is missing instead of leaving a blank or a guess", async () => {
+      renderPage(BARE);
+      for (const key of ["lender", "original", "payment", "rate", "start", "payoff", "notes"]) {
+        expect(text(`detail-row-${key}`), key).toContain("Add");
+      }
+      // No stored payment and no term: the 360-month guess is not this loan's payment.
+      expect(screen.getByTestId("kpi-monthly").textContent).toBe("+ Add");
+      expect(screen.getByTestId("liability-profile-page").textContent).not.toContain("$11.11");
+      expect(screen.queryByTestId("payoff-overview")).toBeNull();
+    });
+
+    it("an empty row opens the form to fill it in", async () => {
+      renderPage(BARE);
+      fireEvent.click(screen.getByTestId("detail-row-lender"));
+      expect(((await screen.findByTestId("input-terms-lender")) as HTMLInputElement).value).toBe("");
+      expect(((screen.getByTestId("input-terms-balance")) as HTMLInputElement).value).toBe("4000");
+    });
+
+    it("'Upcoming payments' with nothing scheduled opens the form that schedules one", async () => {
+      renderPage(BARE);
+      await waitFor(() => expect(text("upcoming-payments-card")).toContain("No payment is scheduled"));
+      fireEvent.click(screen.getByTestId("upcoming-payments-card"));
+      expect(await screen.findByTestId("input-terms-due-day")).toBeTruthy();
+    });
   });
 });

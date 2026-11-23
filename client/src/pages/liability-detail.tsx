@@ -198,6 +198,16 @@ const SUBTYPE_LABELS: Record<string, string> = {
   custom: "Other liability",
 };
 
+// What "Change type" offers: the debt kinds this page has a layout for, then
+// the common recurring bills (shared/liability-types classifies each).
+const LIABILITY_TYPE_CHOICES: Record<string, string> = {
+  mortgage: "Mortgage", auto_loan: "Auto loan", student_loan: "Student loan", personal_loan: "Personal loan",
+  business_loan: "Business loan", credit_card: "Credit card", line_of_credit: "Line of credit",
+  medical_debt: "Medical debt", tax_debt: "Tax debt",
+  subscription: "Subscription", utility: "Utility", phone_plan: "Phone plan", internet: "Internet",
+  insurance: "Insurance", rent: "Rent", bill: "Bill",
+};
+
 // The glyph beside the type under the title (owner's design, 2026-11-22: a car
 // for an auto loan). A subtype with none falls back by family.
 const SUBTYPE_ICONS: Record<string, LucideIcon> = {
@@ -864,7 +874,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     profile.fields?.liabilityType ||
     ""
   ).toString();
-  const subtypeLabel = SUBTYPE_LABELS[subtypeRaw] || "Liability";
+  const subtypeLabel = SUBTYPE_LABELS[subtypeRaw] || LIABILITY_TYPE_CHOICES[subtypeRaw] || "Liability";
   // Behavioral family drives which cards/calcs the page shows. A phone bill is
   // NOT amortized over 360 months (that produced the $0.17/mo bug); only real
   // loans + credit cards run the payoff schedule.
@@ -1134,8 +1144,37 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     enabled: !!profile.id,
   });
   const [addFieldSignal, setAddFieldSignal] = useState(0);
+  // One-shot signals to a section that lives in another tab: "open the asset
+  // picker", "open the file chooser". The section clears it once it has acted.
+  const [linkAssetSignal, setLinkAssetSignal] = useState(0);
+  const [uploadSignal, setUploadSignal] = useState(0);
+  const [showTypeDialog, setShowTypeDialog] = useState(false);
+  const [typeDraft, setTypeDraft] = useState("");
+  // The type decides how the page behaves (a loan amortizes, a card revolves,
+  // a bill recurs), so it is the stored `type_key` column that changes (L4).
+  const changeTypeMutation = useMutation({
+    mutationFn: async (typeKey: string) => { await apiRequest("PATCH", `/api/profiles/${profile.id}`, { type_key: typeKey }); },
+    onSuccess: (_d, typeKey) => {
+      qc.setQueryData(["/api/profiles", profile.id, "detail"], (old: any) => (old && typeof old === "object" ? { ...old, type_key: typeKey } : old));
+      qc.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "schedule"] });
+      invalidateDomains("liabilities", "events");
+      setShowTypeDialog(false);
+      toast({ title: "Type changed" });
+    },
+    onError: (err: Error) => toast({ title: "Couldn't change the type", description: formatApiError(err), variant: "destructive" }),
+  });
+  // Chat edits this same record (update_liability, record payment, Auto Pay):
+  // hand it the liability by name so the user only types what they want.
+  const askPortol = () => {
+    try { sessionStorage.setItem("portol_chat_prefill", `About my ${profile.name || subtypeLabel}: `); } catch { /* the chat simply opens empty */ }
+    navigate("/chat");
+  };
   const addFieldRef = useRef<HTMLDivElement>(null);
 
+  // Every figure on the Overview opens the form that edits it, in place.
+  const editTerms = () => openTermsEditor();
+  const editBill = () => openBillEditor();
+  const editFacts = recurringBill ? editBill : editTerms;
   const TypeIcon: LucideIcon = SUBTYPE_ICONS[subtypeRaw] || (recurringBill ? Receipt : Landmark);
   const paidOff = !recurringBill && terms.originalBalance > 0 && terms.currentBalance <= 0;
   const autopayOn = schedule ? schedule.autopay === true : isAutoPayOn(f2);
@@ -1177,7 +1216,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     ? Number(schedule?.amount ?? billMonthly) || 0
     : family === "revolving"
       ? terms.minimumPayment || summary.monthlyPayment || 0
-      : terms.monthlyPayment || (amortize ? summary.monthlyPayment : 0) || 0;
+      // The stored payment, or the one the stored TERM implies. With neither,
+      // the engine's figure assumes 360 months: a guess, never shown as the
+      // loan's payment ("$11.11" on a $4,000 loan with nothing else filled in).
+      : terms.monthlyPayment || (amortize && payoffMissing.length === 0 ? summary.monthlyPayment : 0) || 0;
   const cadence = recurringBill ? String(billFrequencyLabel || "monthly").toLowerCase() : "monthly";
   // The day the payment repeats on is the SCHEDULE's day, not the next date's:
   // a bill due on the 31st falls on Feb 28 and is still "every 31st".
@@ -1203,7 +1245,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     hint: "How much of the original amount has been paid off",
     testId: "liability-progress",
   } : null;
-  const notSet = <span className="font-normal text-muted-foreground">Not set</span>;
+  const notSet = <span className="text-cyan-400">+ Add</span>;
   const nextDueStat: BalanceStat = {
     icon: CalendarIcon,
     label: "Next due date",
@@ -1211,6 +1253,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     sub: nextDueISO && nextDueDays != null ? dayLabel(nextDueDays) : undefined,
     tone: nextDueISO ? nextDueTone : undefined,
     testId: recurringBill ? "kpi-bill-due" : "kpi-next-due",
+    onClick: editFacts,
+    actionLabel: recurringBill ? "Edit payment date" : "Edit due day",
   };
 
   const balanceCard = recurringBill ? (
@@ -1218,6 +1262,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       label="Amount"
       value={fmtUSDShort(payAmount)}
       valueTestId="kpi-bill-monthly"
+      onValueClick={editBill}
+      valueActionLabel="Edit amount"
       caption={<>
         {cap(cadence)}
         {schedule?.annualTotal != null ? ` · ${fmtUSDShort(schedule.annualTotal)} a year` : ""}
@@ -1234,7 +1280,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         testId: "bill-term-progress",
       } : null}
       stats={[
-        { icon: RefreshCw, label: "Frequency", value: cap(cadence) },
+        { icon: RefreshCw, label: "Frequency", value: cap(cadence), onClick: editBill, actionLabel: "Edit frequency" },
         nextDueStat,
         {
           icon: TrendingDown,
@@ -1242,6 +1288,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           value: billRemainingTerm != null ? `${billRemainingTerm} of ${billTotalTerm}` : "Ongoing",
           sub: billRemainingTerm != null ? "payments" : "no end date",
           testId: "kpi-bill-remaining",
+          onClick: editBill, actionLabel: "Edit term",
         },
         {
           icon: ActivityIcon,
@@ -1249,6 +1296,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           value: seriesComplete ? "Complete" : billHeldLabel ?? BILL_STATUS_META[billStatusEff].label,
           sub: `${payments.length} paid`,
           testId: "kpi-bill-status",
+          onClick: () => setTab("payments"), actionLabel: "Open payments",
         },
       ]}
       autopay={{
@@ -1265,6 +1313,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       label={family === "one_time" ? "Amount owed" : "Current balance"}
       value={fmtUSDShort(summary.currentBalance)}
       valueTestId="kpi-balance"
+      onValueClick={editTerms}
+      valueActionLabel="Edit balance"
       caption={family === "revolving" && creditLimit > 0
         ? `Credit limit: ${fmtUSDShort(creditLimit)}`
         : summary.originalBalance > 0 ? `Original amount: ${fmtUSDShort(summary.originalBalance)}` : undefined}
@@ -1278,13 +1328,14 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         testId: "kpi-utilization",
       } : payoffProgress}
       stats={[
-        { icon: Percent, label: "APR (Interest rate)", value: summary.annualRate > 0 ? fmtPct(summary.annualRate) : notSet, testId: "kpi-apr" },
-        { icon: Landmark, label: "Lender", value: terms.lender || notSet },
+        { icon: Percent, label: "APR (Interest rate)", value: summary.annualRate > 0 ? fmtPct(summary.annualRate) : notSet, testId: "kpi-apr", onClick: editTerms, actionLabel: "Edit interest rate" },
+        { icon: Landmark, label: "Lender", value: terms.lender || notSet, onClick: editTerms, actionLabel: "Edit lender" },
         {
           icon: CalendarIcon,
           label: family === "revolving" ? "Minimum payment" : "Monthly payment",
           value: payAmount > 0 ? fmtUSD(payAmount) : notSet,
           testId: family === "revolving" ? "kpi-min-payment" : "kpi-monthly",
+          onClick: editTerms, actionLabel: "Edit payment",
         },
         nextDueStat,
       ]}
@@ -1300,8 +1351,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   );
 
   // ── "Liability details": each fact once, each a tap from its editor ───────
-  const editTerms = () => { openTermsEditor(); setTab("details"); };
-  const editBill = () => { openBillEditor(); setTab("details"); };
   const editNameAndNotes = () => {
     setEditName(profile.name || "");
     setEditNotes((profile as any).notes || "");
@@ -1319,9 +1368,14 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       : !assetLinksQuery.data ? "Loading…"
       : linkedAssets.length === 0 ? "None linked"
       : `${linkedAssets[0].name}${linkedAssets[0].type ? ` (${cap(String(linkedAssets[0].type).replace(/_/g, " "))})` : ""}${linkedAssets.length > 1 ? ` +${linkedAssets.length - 1}` : ""}`,
-    empty: !assetLinksQuery.data || linkedAssets.length === 0,
-    onClick: () => setTab("details"),
-    actionLabel: "Manage linked assets",
+    empty: !!assetLinksQuery.data && linkedAssets.length === 0,
+    // Linked already: the Details tab lists them. None yet: straight to the picker.
+    onClick: () => { if (assetLinksQuery.data && linkedAssets.length === 0) setLinkAssetSignal((n) => n + 1); setTab("details"); },
+    actionLabel: linkedAssets.length === 0 ? "Link an asset" : "Manage linked assets",
+  };
+  const typeRow: DetailRow = {
+    key: "type", icon: TypeIcon, label: "Type", value: subtypeLabel,
+    onClick: () => { setTypeDraft(subtypeRaw); setShowTypeDialog(true); }, actionLabel: "Change type",
   };
   const profileNotes = String((profile as any).notes || "").trim();
   const notesRow: DetailRow = {
@@ -1331,7 +1385,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   };
   const detailRows: DetailRow[] = recurringBill
     ? [
-        ...(subtypeLabel !== "Liability" ? [{ key: "type", icon: TypeIcon, label: "Type", value: subtypeLabel }] : []),
+        typeRow,
         { key: "amount", icon: Wallet, label: "Recurring amount", value: fmtUSD(payAmount), onClick: editBill, actionLabel: "Edit amount" },
         { key: "frequency", icon: RefreshCw, label: "Frequency", value: cap(cadence), onClick: editBill, actionLabel: "Edit frequency" },
         { key: "next-due", icon: CalendarIcon, label: "Next due date", value: nextDueISO ? fmtDate(nextDueISO) : seriesComplete ? "Complete" : billHeldLabel ?? "Not set", empty: !nextDueISO, onClick: editBill, actionLabel: "Edit payment date" },
@@ -1347,6 +1401,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         notesRow,
       ]
     : [
+        typeRow,
         { key: "lender", icon: Landmark, label: "Lender", value: terms.lender || "Not set", empty: !terms.lender, onClick: editTerms, actionLabel: "Edit lender" },
         { key: "original", icon: Layers, label: "Original amount", value: terms.originalBalance > 0 ? fmtUSDShort(terms.originalBalance) : "Not set", empty: !(terms.originalBalance > 0), onClick: editTerms, actionLabel: "Edit original amount" },
         { key: "balance", icon: Wallet, label: "Current balance", value: fmtUSDShort(terms.currentBalance), onClick: editTerms, actionLabel: "Edit current balance" },
@@ -1356,7 +1411,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         {
           // Calculated from today's balance at the stored payment — it opens
           // the payoff calculator, not a field.
-          key: "payoff", icon: Flag, label: "Payoff date", onClick: () => setTab("payments"), actionLabel: "See the payoff schedule",
+          key: "payoff", icon: Flag, label: "Payoff date",
+          // Nothing to project yet: the missing terms are what there is to add.
+          onClick: () => (paidOff || (amortize && payoffMissing.length === 0) ? setTab("payments") : editTerms()),
+          actionLabel: "See the payoff schedule",
           value: paidOff ? "Paid off"
             : !amortize || payoffMissing.length > 0 ? "Not enough to project"
             : summary.neverAmortizes ? "Never at this payment"
@@ -1399,6 +1457,11 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       onClick: () => setTab("payments"),
     },
     {
+      key: "ask", icon: Sparkles, label: "Ask Portol about this",
+      hint: "Update it, record a payment, or ask a question in chat",
+      onClick: askPortol,
+    },
+    {
       key: "autopay", icon: RefreshCw, label: "Manage autopay",
       hint: "Update autopay, payment method, or schedule",
       onClick: () => setTab("payments"),
@@ -1421,7 +1484,11 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           accent={profileVisual("liability").accent}
           icon={TypeIcon}
           typeIcon={TypeIcon}
-          title={<span data-testid="liability-title">{profile.name || subtypeLabel}</span>}
+          title={
+            <button type="button" onClick={editNameAndNotes} className="text-left" title="Edit name" data-testid="liability-title">
+              {profile.name || subtypeLabel}
+            </button>
+          }
           typeLabel={subtypeLabel}
           subtitle={terms.lender && terms.accountNumberLast4 ? `${terms.lender} · ····${terms.accountNumberLast4}` : undefined}
           badges={<>
@@ -1458,6 +1525,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <DropdownMenuContent align="end" className="min-w-[200px]">
                 <DropdownMenuItem onSelect={() => openPaymentDialog(recurringBill ? "custom" : "minimum")} data-testid="quick-pay-min">
                   <Plus className="h-4 w-4 mr-2" /> Record a payment
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={askPortol} data-testid="menu-ask-portol">
+                  <Sparkles className="h-4 w-4 mr-2" /> Ask Portol about this
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={editNameAndNotes} data-testid="button-header-edit-profile">
                   <Edit className="h-4 w-4 mr-2" /> Edit name &amp; notes
@@ -1505,19 +1575,23 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               The payment schedule, the payoff chart and calculator live under
               Payments; owners, linked records and the AI summary under
               Details. */}
-          <TabsContent value="overview" className="mt-3 space-y-5">
+          <TabsContent value="overview" className="mt-3 space-y-3">
             {balanceCard}
 
             <section data-testid="liability-details-section">
-              <SectionTitle>Liability details</SectionTitle>
+              <SectionTitle action={
+                <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg" onClick={() => setAddFieldSignal((n) => n + 1)} data-testid="add-field-button">
+                  <Plus className="h-3.5 w-3.5" /> Add field
+                </Button>
+              }>Liability details</SectionTitle>
               <DetailRowGrid rows={detailRows} />
               {/* Add field — the same Field | Value | Add as a person's Info
                   page, for anything the loan/bill screens don't have a box
                   for; what was added is listed with the rows above it. */}
               <div ref={addFieldRef} className="mt-2">
-                <AddFieldPanel profileId={profile.id} fields={profile.fields} showFields openSignal={addFieldSignal} />
+                <AddFieldPanel profileId={profile.id} fields={profile.fields} showFields hideHeader rows openSignal={addFieldSignal} />
               </div>
-              <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2" />
+              <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 gap-2 mt-2 empty:hidden" />
             </section>
 
             {!recurringBill && summary.originalBalance > 0 && (
@@ -1538,8 +1612,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             <RowCard
               icon={CalendarIcon}
               title="Upcoming payments"
-              onClick={() => setTab("payments")}
-              actionLabel="Open the payment schedule"
+              onClick={() => (nextDueISO || paidOff || seriesComplete || billHeldLabel ? setTab("payments") : editFacts())}
+              actionLabel={nextDueISO ? "Open the payment schedule" : "Set up payments"}
               trailing={autopayOn && nextDueISO ? <AutopayChip /> : undefined}
               testId="upcoming-payments-card"
             >
@@ -1575,7 +1649,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   ? documentList.slice(0, 3).map((d: any) => String(d?.name || "Document")).join(", ")
                   : "Loan agreement, statements, payment schedule"}
                 action={
-                  <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg" onClick={() => setTab("documents")} data-testid="button-add-document">
+                  <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg" onClick={() => { setUploadSignal((n) => n + 1); setTab("documents"); }} data-testid="button-add-document">
                     <Plus className="h-3.5 w-3.5" /> Add document
                   </Button>
                 }
@@ -1589,7 +1663,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   : "No alerts"}
                 detail={reminderLine}
                 action={
-                  <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg" onClick={() => setTab("payments")} data-testid="button-manage-alerts">
+                  <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg" onClick={() => (alertCount === 0 && recurringBill ? editBill() : setTab("payments"))} data-testid="button-manage-alerts">
                     {alertCount > 0 ? "Review payments" : "Manage reminders"}
                   </Button>
                 }
@@ -1636,83 +1710,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
           {/* DETAILS */}
           <TabsContent value="details" className="mt-4 space-y-4">
-            {recurringBill && editingBill ? (
-              <Card data-testid="bill-details-edit-card">
-                <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                  <CardTitle className="text-base">Edit bill details</CardTitle>
-                  <Button size="sm" variant="ghost" onClick={closeBillEditor} data-testid="button-cancel-bill-edit">
-                    Done
-                  </Button>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="grid md:grid-cols-2 gap-3">
-                    <div>
-                      <Label className="text-xs">Recurring amount ($)</Label>
-                      <Input type="number" inputMode="decimal" step="0.01" min="0" value={bAmount}
-                        onChange={(e) => setBAmount(e.target.value)} placeholder="e.g. 14.99" data-testid="input-bill-amount" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Frequency</Label>
-                      {/* Only cadences the recurrence engine actually understands
-                          (shared/recurrence freqToUnit). An unsupported token
-                          silently collapses the series to a single occurrence,
-                          so it must not be offered — except the bill's own
-                          current value, which stays selectable so opening the
-                          editor can never rewrite a cadence by itself. */}
-                      <Select value={bFrequency} onValueChange={setBFrequency}>
-                        <SelectTrigger data-testid="select-bill-frequency"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {Array.from(new Set([...BILL_FREQUENCIES, bFrequency].filter(Boolean))).map((fr) => (
-                            <SelectItem key={fr} value={fr} className="capitalize">{cap(fr)}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label className="text-xs">Payment date</Label>
-                      <Input type="date" value={bDueDate} onChange={(e) => setBDueDate(e.target.value)} data-testid="input-bill-due-date" />
-                      <p className="text-[11px] text-muted-foreground mt-1">
-                        Moves the whole series. To move one payment only, use the pencil on that date in Payments.
-                      </p>
-                    </div>
-                    <div>
-                      <Label className="text-xs">Number of payments</Label>
-                      <Input type="number" inputMode="numeric" min={1} value={bCount}
-                        onChange={(e) => setBCount(e.target.value)} placeholder="Blank = ongoing" data-testid="input-bill-count" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Ends on</Label>
-                      <Input type="date" value={bEnd} onChange={(e) => setBEnd(e.target.value)} data-testid="input-bill-end" />
-                      <p className="text-[11px] text-muted-foreground mt-1">Blank = no end date.</p>
-                    </div>
-                    <div>
-                      <Label className="text-xs">Reminder (days before)</Label>
-                      <Input type="number" inputMode="numeric" min={0} value={bReminder}
-                        onChange={(e) => setBReminder(e.target.value)} placeholder="Blank = none" data-testid="input-bill-reminder" />
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg border px-3 py-2">
-                    <div>
-                      <Label className="text-xs">Auto Pay</Label>
-                      <p className="text-[11px] text-muted-foreground">Record each payment on its due date. No reminders.</p>
-                    </div>
-                    <Switch checked={bAutopay} onCheckedChange={setBAutopay} data-testid="switch-bill-autopay" />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" onClick={closeBillEditor} data-testid="button-save-bill">
-                      Done
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={undoBillEdits} disabled={!billAutosave.changedSinceOpen}
-                      title="Put every field back to what it was when you opened this form" data-testid="button-undo-bill-edits">
-                      Undo changes
-                    </Button>
-                    <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="bill-autosave-status">
-                      {autosaveStatusLabel(billAutosave.status)}
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
-            ) : recurringBill ? (
+            {recurringBill ? (
               <Card data-testid="bill-details-card">
                 <CardHeader className="pb-2 flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Bill details</CardTitle>
@@ -1745,66 +1743,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   <Row label="Annual total" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : "—"} />
                   <Row label="Reminder" value={billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : "None"} />
                   <Row label="Auto Pay" value={isAutoPayOn(f2) ? "On" : "Off"} />
-                </CardContent>
-              </Card>
-            ) : editingTerms ? (
-              <Card>
-                <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                  <CardTitle className="text-base">Edit loan terms</CardTitle>
-                  <Button size="sm" variant="ghost" onClick={closeTermsEditor} data-testid="button-cancel-terms-edit">
-                    Done
-                  </Button>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="grid md:grid-cols-2 gap-3">
-                    <div>
-                      <Label className="text-xs">Lender / creditor</Label>
-                      <Input value={tLender} onChange={(e) => setTLender(e.target.value)} placeholder="e.g. Chase Auto" data-testid="input-terms-lender" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Current balance ($)</Label>
-                      <Input type="number" inputMode="decimal" step="0.01" value={tBalance} onChange={(e) => setTBalance(e.target.value)} placeholder="e.g. 25000" data-testid="input-terms-balance" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Original balance ($)</Label>
-                      <Input type="number" inputMode="decimal" step="0.01" value={tOriginal} onChange={(e) => setTOriginal(e.target.value)} placeholder="e.g. 35000" data-testid="input-terms-original" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Annual interest rate (%)</Label>
-                      <Input type="number" inputMode="decimal" step="0.01" value={tRate} onChange={(e) => setTRate(e.target.value)} placeholder="e.g. 6.5" data-testid="input-terms-rate" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Monthly payment ($)</Label>
-                      <Input type="number" inputMode="decimal" step="0.01" value={tMonthly} onChange={(e) => setTMonthly(e.target.value)} placeholder="e.g. 1000" data-testid="input-terms-monthly" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Loan term (months)</Label>
-                      <Input type="number" inputMode="numeric" value={tTerm} onChange={(e) => setTTerm(e.target.value)} placeholder="e.g. 60" data-testid="input-terms-term" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Due day of month (1–31)</Label>
-                      <Input type="number" inputMode="numeric" min={1} max={31} value={tDueDay} onChange={(e) => setTDueDay(e.target.value)} placeholder="e.g. 15" data-testid="input-terms-due-day" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">First payment date</Label>
-                      <Input type="date" value={tFirstPayment} onChange={(e) => setTFirstPayment(e.target.value)} data-testid="input-terms-first-payment" />
-                    </div>
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    A monthly payment and a due day put this loan's payment on your calendar each month.
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" onClick={closeTermsEditor} data-testid="button-save-terms">
-                      Done
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={undoTermsEdits} disabled={!termsAutosave.changedSinceOpen}
-                      title="Put every field back to what it was when you opened this form" data-testid="button-undo-terms-edits">
-                      Undo changes
-                    </Button>
-                    <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="terms-autosave-status">
-                      {autosaveStatusLabel(termsAutosave.status)}
-                    </span>
-                  </div>
                 </CardContent>
               </Card>
             ) : (
@@ -1852,7 +1790,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
             <section data-testid="overview-linked-assets">
               <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked assets</p>
-              <LinkedAssetsCard liabilityId={profile.id} />
+              <LinkedAssetsCard liabilityId={profile.id} openSignal={linkAssetSignal} onOpened={() => setLinkAssetSignal(0)} />
             </section>
 
             {/* Ownership — fractional owner shares, atomic + validated
@@ -2064,7 +2002,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
           {/* DOCUMENTS */}
           <TabsContent value="documents" className="mt-4">
-            <LiabilityDocumentsCard liabilityId={profile.id} liabilityName={profile.name} />
+            <LiabilityDocumentsCard liabilityId={profile.id} liabilityName={profile.name} openSignal={uploadSignal} onOpened={() => setUploadSignal(0)} />
           </TabsContent>
 
           {/* ACTIVITY */}
@@ -2081,6 +2019,169 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* The edit forms open over whichever tab the user is on (owner,
+          2026-11-22: every figure on the Overview opens its editor in place).
+          They still save themselves (L7): closing, by Done, the X or Escape,
+          awaits the pending save first. */}
+      <Dialog open={editingBill} onOpenChange={(o) => { if (!o) void closeBillEditor(); }}>
+        <DialogContent className="max-h-[88dvh] overflow-y-auto" data-testid="bill-details-edit-card">
+          <DialogHeader>
+            <DialogTitle>Edit bill details</DialogTitle>
+            <DialogDescription>Changes save as you make them.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Recurring amount ($)</Label>
+                      <Input type="number" inputMode="decimal" step="0.01" min="0" value={bAmount}
+                        onChange={(e) => setBAmount(e.target.value)} placeholder="e.g. 14.99" data-testid="input-bill-amount" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Frequency</Label>
+                      {/* Only cadences the recurrence engine actually understands
+                          (shared/recurrence freqToUnit). An unsupported token
+                          silently collapses the series to a single occurrence,
+                          so it must not be offered — except the bill's own
+                          current value, which stays selectable so opening the
+                          editor can never rewrite a cadence by itself. */}
+                      <Select value={bFrequency} onValueChange={setBFrequency}>
+                        <SelectTrigger data-testid="select-bill-frequency"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {Array.from(new Set([...BILL_FREQUENCIES, bFrequency].filter(Boolean))).map((fr) => (
+                            <SelectItem key={fr} value={fr} className="capitalize">{cap(fr)}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Payment date</Label>
+                      <Input type="date" value={bDueDate} onChange={(e) => setBDueDate(e.target.value)} data-testid="input-bill-due-date" />
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        Moves the whole series. To move one payment only, use the pencil on that date in Payments.
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Number of payments</Label>
+                      <Input type="number" inputMode="numeric" min={1} value={bCount}
+                        onChange={(e) => setBCount(e.target.value)} placeholder="Blank = ongoing" data-testid="input-bill-count" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Ends on</Label>
+                      <Input type="date" value={bEnd} onChange={(e) => setBEnd(e.target.value)} data-testid="input-bill-end" />
+                      <p className="text-[11px] text-muted-foreground mt-1">Blank = no end date.</p>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Reminder (days before)</Label>
+                      <Input type="number" inputMode="numeric" min={0} value={bReminder}
+                        onChange={(e) => setBReminder(e.target.value)} placeholder="Blank = none" data-testid="input-bill-reminder" />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border px-3 py-2">
+                    <div>
+                      <Label className="text-xs">Auto Pay</Label>
+                      <p className="text-[11px] text-muted-foreground">Record each payment on its due date. No reminders.</p>
+                    </div>
+                    <Switch checked={bAutopay} onCheckedChange={setBAutopay} data-testid="switch-bill-autopay" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" onClick={closeBillEditor} data-testid="button-save-bill">
+                      Done
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={undoBillEdits} disabled={!billAutosave.changedSinceOpen}
+                      title="Put every field back to what it was when you opened this form" data-testid="button-undo-bill-edits">
+                      Undo changes
+                    </Button>
+                    <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="bill-autosave-status">
+                      {autosaveStatusLabel(billAutosave.status)}
+                    </span>
+                  </div>
+                </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editingTerms} onOpenChange={(o) => { if (!o) void closeTermsEditor(); }}>
+        <DialogContent className="max-h-[88dvh] overflow-y-auto" data-testid="terms-edit-dialog">
+          <DialogHeader>
+            <DialogTitle>Edit loan terms</DialogTitle>
+            <DialogDescription>Changes save as you make them.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Lender / creditor</Label>
+                      <Input value={tLender} onChange={(e) => setTLender(e.target.value)} placeholder="e.g. Chase Auto" data-testid="input-terms-lender" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Current balance ($)</Label>
+                      <Input type="number" inputMode="decimal" step="0.01" value={tBalance} onChange={(e) => setTBalance(e.target.value)} placeholder="e.g. 25000" data-testid="input-terms-balance" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Original balance ($)</Label>
+                      <Input type="number" inputMode="decimal" step="0.01" value={tOriginal} onChange={(e) => setTOriginal(e.target.value)} placeholder="e.g. 35000" data-testid="input-terms-original" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Annual interest rate (%)</Label>
+                      <Input type="number" inputMode="decimal" step="0.01" value={tRate} onChange={(e) => setTRate(e.target.value)} placeholder="e.g. 6.5" data-testid="input-terms-rate" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Monthly payment ($)</Label>
+                      <Input type="number" inputMode="decimal" step="0.01" value={tMonthly} onChange={(e) => setTMonthly(e.target.value)} placeholder="e.g. 1000" data-testid="input-terms-monthly" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Loan term (months)</Label>
+                      <Input type="number" inputMode="numeric" value={tTerm} onChange={(e) => setTTerm(e.target.value)} placeholder="e.g. 60" data-testid="input-terms-term" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Due day of month (1–31)</Label>
+                      <Input type="number" inputMode="numeric" min={1} max={31} value={tDueDay} onChange={(e) => setTDueDay(e.target.value)} placeholder="e.g. 15" data-testid="input-terms-due-day" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">First payment date</Label>
+                      <Input type="date" value={tFirstPayment} onChange={(e) => setTFirstPayment(e.target.value)} data-testid="input-terms-first-payment" />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    A monthly payment and a due day put this loan's payment on your calendar each month.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" onClick={closeTermsEditor} data-testid="button-save-terms">
+                      Done
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={undoTermsEdits} disabled={!termsAutosave.changedSinceOpen}
+                      title="Put every field back to what it was when you opened this form" data-testid="button-undo-terms-edits">
+                      Undo changes
+                    </Button>
+                    <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="terms-autosave-status">
+                      {autosaveStatusLabel(termsAutosave.status)}
+                    </span>
+                  </div>
+                </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showTypeDialog} onOpenChange={setShowTypeDialog}>
+        <DialogContent data-testid="dialog-change-type">
+          <DialogHeader>
+            <DialogTitle>Change type</DialogTitle>
+            <DialogDescription>The type decides what this page tracks: a loan has a payoff, a card a limit, a bill a schedule.</DialogDescription>
+          </DialogHeader>
+          <Select value={typeDraft} onValueChange={setTypeDraft}>
+            <SelectTrigger data-testid="select-liability-type"><SelectValue placeholder="Choose a type" /></SelectTrigger>
+            <SelectContent>
+              {Array.from(new Set([...Object.keys(LIABILITY_TYPE_CHOICES), ...(subtypeRaw ? [subtypeRaw] : [])])).map((k) => (
+                <SelectItem key={k} value={k}>{LIABILITY_TYPE_CHOICES[k] || SUBTYPE_LABELS[k] || cap(k.replace(/_/g, " "))}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowTypeDialog(false)}>Cancel</Button>
+            <Button onClick={() => changeTypeMutation.mutate(typeDraft)} disabled={changeTypeMutation.isPending || !typeDraft || typeDraft === subtypeRaw} data-testid="button-save-type">
+              {changeTypeMutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Quick payment dialog */}
       {/* U3: when the dialog closes, reset state to defaults so the next open
@@ -2446,7 +2547,7 @@ function PayoffCalculator({
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div>
               <Label htmlFor="calc-extra">Extra principal per month</Label>
               <Input
@@ -2502,7 +2603,7 @@ function PayoffCalculator({
       </div>
 
       {/* Side-by-side schedule */}
-      <div className="grid md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm text-muted-foreground">Current pace</CardTitle>
@@ -2724,10 +2825,12 @@ interface LiabilityAssetLinkRow {
   notes?: string | null;
 }
 
-function LinkedAssetsCard({ liabilityId }: { liabilityId: string }) {
+function LinkedAssetsCard({ liabilityId, openSignal, onOpened }: { liabilityId: string; openSignal?: number; onOpened?: () => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [pickerOpen, setPickerOpen] = useState(false);
+  // The Overview's "Linked asset: Add" row asks for the picker.
+  useEffect(() => { if (openSignal) { setPickerOpen(true); onOpened?.(); } }, [openSignal]); // eslint-disable-line react-hooks/exhaustive-deps
   const [selectedAssetId, setSelectedAssetId] = useState<string>("");
   const [selectedRole, setSelectedRole] = useState<string>("collateral");
 
@@ -3448,10 +3551,12 @@ interface LiabilityDocument {
   extractedData?: any;
 }
 
-function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: string; liabilityName: string }) {
+function LiabilityDocumentsCard({ liabilityId, liabilityName, openSignal, onOpened }: { liabilityId: string; liabilityName: string; openSignal?: number; onOpened?: () => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // The Overview's "Add document" button asks for the file chooser.
+  useEffect(() => { if (openSignal) { fileInputRef.current?.click(); onOpened?.(); } }, [openSignal]); // eslint-disable-line react-hooks/exhaustive-deps
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
   const [viewingDocId, setViewingDocId] = useState<string | null>(null);
 

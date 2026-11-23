@@ -98,8 +98,12 @@ function useProfileFieldWrites(profileId: string) {
 }
 
 export function AddFieldPanel({
-  profileId, fields, showFields = false, title, openSignal,
+  profileId, fields, showFields = false, title, openSignal, hideHeader = false, rows: rowLayout = false,
 }: {
+  /** The page draws its own heading and Add button (it bumps `openSignal`). */
+  hideHeader?: boolean;
+  /** List the fields as two-column rows, matching a page's detail rows. */
+  rows?: boolean;
   /** Bump to open the Field | Value form from outside (a page's "Add custom field" action). */
   openSignal?: number;
   profileId: string;
@@ -126,13 +130,13 @@ export function AddFieldPanel({
   };
 
   return (
-    <div className="space-y-2" data-testid="add-field-panel">
-      <div className="flex items-center justify-between gap-2">
+    <div className={hideHeader && !adding && rows.length === 0 ? "hidden" : "space-y-2"} data-testid="add-field-panel">
+      {!hideHeader && <div className="flex items-center justify-between gap-2">
         <p className="micro-label text-muted-foreground px-0.5">{title || ""}</p>
         <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAdding((a) => !a)} data-testid="add-field-button">
           <Plus className="h-3.5 w-3.5" /> Add field
         </Button>
-      </div>
+      </div>}
 
       {adding && (
         <Card className="p-3 flex flex-wrap items-end gap-2" data-testid="add-field-form">
@@ -148,13 +152,16 @@ export function AddFieldPanel({
           <Button size="sm" className="h-8 text-xs" disabled={saving || !newKey.trim() || !newVal.trim()} onClick={() => void add()} data-testid="add-field-save">
             {saving ? "…" : "Add"}
           </Button>
+          <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => { setAdding(false); setNewKey(""); setNewVal(""); }} data-testid="add-field-cancel">
+            Cancel
+          </Button>
         </Card>
       )}
 
       {rows.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2" data-testid="add-field-list">
+        <div className={rowLayout ? "grid grid-cols-2 gap-2" : "grid grid-cols-2 sm:grid-cols-3 gap-2"} data-testid="add-field-list">
           {rows.map(([k, v]) => (
-            <FieldCard key={k} fieldKey={k} label={humanizeFieldName(k)} value={v} onSave={(nv) => save(k, nv)} onRemove={() => remove(k)} />
+            <FieldCard key={k} row={rowLayout} wide={rowLayout && rows.length % 2 === 1 && k === rows[rows.length - 1][0]} fieldKey={k} label={humanizeFieldName(k)} value={v} onSave={(nv) => save(k, nv)} onRemove={() => remove(k)} />
           ))}
         </div>
       )}
@@ -162,8 +169,10 @@ export function AddFieldPanel({
   );
 }
 
-function FieldCard({ fieldKey, label, value, onSave, onRemove }: {
-  fieldKey: string; label: string; value: string;
+function FieldCard({ fieldKey, label, value, onSave, onRemove, wide = false, row = false }: {
+  fieldKey: string; label: string; value: string; wide?: boolean;
+  /** Drawn as one of a page's detail rows (same surface, same type sizes). */
+  row?: boolean;
   onSave: (v: string) => Promise<boolean>; onRemove: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -177,7 +186,7 @@ function FieldCard({ fieldKey, label, value, onSave, onRemove }: {
   };
   if (editing) {
     return (
-      <Card className="p-2.5">
+      <Card className={`p-2.5 ${wide ? "col-span-2" : ""}`}>
         <label className="micro-label text-muted-foreground">{label}</label>
         <div className="flex items-center gap-1 mt-1">
           <Input value={draft} onChange={(e) => setDraft(e.target.value)} className="h-7 text-xs" autoFocus
@@ -189,16 +198,36 @@ function FieldCard({ fieldKey, label, value, onSave, onRemove }: {
       </Card>
     );
   }
+  const remove = (
+    <button
+      onClick={(e) => { e.stopPropagation(); confirm(armKey, onRemove); }}
+      className={`${row ? "shrink-0" : "absolute top-0.5 right-0.5"} h-6 min-w-6 px-1 grid place-items-center rounded-md text-[11px] transition-colors ${isArmed(armKey) ? "bg-destructive text-destructive-foreground" : "text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10"}`}
+      aria-label={isArmed(armKey) ? `Tap again to remove ${label}` : `Remove ${label}`}
+      data-testid={`add-field-remove-${fieldKey}`}
+    >{isArmed(armKey) ? "Remove?" : <X className="h-3.5 w-3.5" />}</button>
+  );
+  if (row) {
+    return (
+      <div
+        role="button" tabIndex={0}
+        className={`bubble bubble-interactive !rounded-2xl flex items-center gap-2 px-3.5 py-2.5 min-h-[56px] min-w-0 cursor-pointer ${wide ? "col-span-2" : ""}`}
+        onClick={() => { setDraft(value); setEditing(true); }}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setDraft(value); setEditing(true); } }}
+        data-testid={`add-field-cell-${fieldKey}`}
+      >
+        <span className="flex-1 min-w-0">
+          <span className="block text-[12px] text-muted-foreground leading-tight truncate">{label}</span>
+          <span className="block text-[14px] font-semibold leading-snug line-clamp-2 break-words">{value}</span>
+        </span>
+        {remove}
+      </div>
+    );
+  }
   return (
-    <Card className="p-2.5 relative cursor-pointer hover:border-primary/50" onClick={() => { setDraft(value); setEditing(true); }} data-testid={`add-field-cell-${fieldKey}`}>
+    <Card className={`p-2.5 relative cursor-pointer hover:border-primary/50 ${wide ? "col-span-2" : ""}`} onClick={() => { setDraft(value); setEditing(true); }} data-testid={`add-field-cell-${fieldKey}`}>
       <div className="micro-label text-muted-foreground pr-6 truncate">{label}</div>
       <div className="text-sm font-medium truncate mt-0.5">{value}</div>
-      <button
-        onClick={(e) => { e.stopPropagation(); confirm(armKey, onRemove); }}
-        className={`absolute top-0.5 right-0.5 h-6 min-w-6 px-1 grid place-items-center rounded-md text-[11px] transition-colors ${isArmed(armKey) ? "bg-destructive text-destructive-foreground" : "text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10"}`}
-        aria-label={isArmed(armKey) ? `Tap again to remove ${label}` : `Remove ${label}`}
-        data-testid={`add-field-remove-${fieldKey}`}
-      >{isArmed(armKey) ? "Remove?" : <X className="h-3.5 w-3.5" />}</button>
+      {remove}
     </Card>
   );
 }

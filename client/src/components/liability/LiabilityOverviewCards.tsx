@@ -8,7 +8,7 @@
 // fetches, or writes. A control that does something is handed its handler.
 
 import * as React from "react";
-import { ChevronRight, Info, Layers, RefreshCw, type LucideIcon } from "lucide-react";
+import { ChevronRight, Info, Layers, Plus, RefreshCw, type LucideIcon } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +24,9 @@ export interface BalanceStat {
   /** A due date that needs attention: red (overdue) or amber (today). */
   tone?: "danger" | "warn";
   testId?: string;
+  /** Opens the editor of this fact. */
+  onClick?: () => void;
+  actionLabel?: string;
 }
 
 export interface BalanceProgress {
@@ -42,8 +45,11 @@ export interface BalanceProgress {
 }
 
 export function BalanceCard({
-  label, value, valueTestId, caption, progress, stats, autopay, testId = "liability-hero",
+  label, value, valueTestId, caption, progress, stats, autopay, testId = "liability-hero", onValueClick, valueActionLabel,
 }: {
+  /** Opens the editor of the headline figure. */
+  onValueClick?: () => void;
+  valueActionLabel?: string;
   label: string;
   value: React.ReactNode;
   valueTestId?: string;
@@ -60,7 +66,12 @@ export function BalanceCard({
           <p className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
             <Layers className="h-4 w-4 text-cyan-400" /> {label}
           </p>
-          <p className="mt-1 text-[38px] font-bold leading-none tracking-tight tabular-nums" data-testid={valueTestId}>{value}</p>
+          {onValueClick ? (
+            <button type="button" onClick={onValueClick} aria-label={valueActionLabel} title={valueActionLabel}
+              className="pressable mt-1 block text-left text-[38px] font-bold leading-none tracking-tight tabular-nums" data-testid={valueTestId}>{value}</button>
+          ) : (
+            <p className="mt-1 text-[38px] font-bold leading-none tracking-tight tabular-nums" data-testid={valueTestId}>{value}</p>
+          )}
           {caption && <p className="mt-1.5 text-[14px] text-muted-foreground">{caption}</p>}
         </div>
 
@@ -89,22 +100,30 @@ export function BalanceCard({
 
       {stats.length > 0 && (
         <div className="mt-4 grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-4 sm:divide-x sm:divide-foreground/10">
-          {stats.map((s, i) => (
-            <div key={s.label} className={cn("flex items-start gap-2.5 min-w-0", i > 0 && "sm:pl-3")}>
-              <s.icon className="h-5 w-5 mt-0.5 shrink-0 text-muted-foreground" strokeWidth={1.8} />
-              <div className="min-w-0">
-                <p className="text-[12px] text-muted-foreground leading-tight">{s.label}</p>
-                <p
-                  className={cn(
-                    "text-[15px] font-semibold leading-snug break-words tabular-nums",
-                    s.tone === "danger" && "text-red-500", s.tone === "warn" && "text-amber-500",
-                  )}
-                  data-testid={s.testId}
-                >{s.value}</p>
-                {s.sub && <p className="text-[11px] text-muted-foreground leading-tight">{s.sub}</p>}
-              </div>
-            </div>
-          ))}
+          {stats.map((s, i) => {
+            const inner = (
+              <>
+                <s.icon className="h-5 w-5 mt-0.5 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+                <span className="min-w-0 block text-left">
+                  <span className="block text-[12px] text-muted-foreground leading-tight">{s.label}</span>
+                  <span
+                    className={cn(
+                      "block text-[15px] font-semibold leading-snug break-words tabular-nums",
+                      s.tone === "danger" && "text-red-500", s.tone === "warn" && "text-amber-500",
+                    )}
+                    data-testid={s.testId}
+                  >{s.value}</span>
+                  {s.sub && <span className="block text-[11px] text-muted-foreground leading-tight">{s.sub}</span>}
+                </span>
+              </>
+            );
+            const cls = cn("flex items-start gap-2.5 min-w-0", i > 0 && "sm:pl-3");
+            return s.onClick ? (
+              <button key={s.label} type="button" onClick={s.onClick} aria-label={s.actionLabel} title={s.actionLabel} className={cn(cls, "pressable")}>{inner}</button>
+            ) : (
+              <div key={s.label} className={cls}>{inner}</div>
+            );
+          })}
         </div>
       )}
 
@@ -133,7 +152,7 @@ export function BalanceCard({
 
 export function SectionTitle({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-2 px-1 mb-2">
+    <div className="flex items-center justify-between gap-2 px-1 mb-2 min-h-8">
       <h2 className="text-[16px] font-semibold tracking-tight">{children}</h2>
       {action}
     </div>
@@ -147,7 +166,7 @@ export interface DetailRow {
   icon: LucideIcon;
   label: string;
   value: React.ReactNode;
-  /** Shown instead of a value the record does not have ("Not set"). */
+  /** The record has no value here. With `onClick` the row reads "Add". */
   empty?: boolean;
   /** Takes the whole row (Notes). */
   wide?: boolean;
@@ -158,20 +177,31 @@ export interface DetailRow {
 }
 
 export function DetailRowGrid({ rows, testId = "liability-detail-rows" }: { rows: DetailRow[]; testId?: string }) {
+  // Two columns with no hole: when the half-width rows come to an odd number,
+  // the last of them takes the full line instead of sitting beside a blank.
+  const halves = rows.filter((r) => !r.wide);
+  const stretch = halves.length % 2 === 1 ? halves[halves.length - 1].key : null;
   return (
     <div className="grid grid-cols-2 gap-2" data-testid={testId}>
       {rows.map((r) => {
+        const addable = !!r.empty && !!r.onClick;
         const body = (
           <>
             <r.icon className="h-5 w-5 shrink-0 text-muted-foreground" strokeWidth={1.8} />
             <span className="flex-1 min-w-0 text-left">
               <span className="block text-[12px] text-muted-foreground leading-tight">{r.label}</span>
-              <span className={cn("block text-[14px] font-semibold leading-snug line-clamp-2 break-words", r.empty && "font-normal text-muted-foreground")}>{r.value}</span>
+              {addable ? (
+                <span className="flex items-center gap-1 text-[14px] font-semibold leading-snug text-cyan-400">
+                  <Plus className="h-3.5 w-3.5" /> Add
+                </span>
+              ) : (
+                <span className={cn("block text-[14px] font-semibold leading-snug line-clamp-2 break-words", r.empty && "font-normal text-muted-foreground")}>{r.value}</span>
+              )}
             </span>
             {r.onClick && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
           </>
         );
-        const cls = cn("bubble !rounded-2xl flex items-center gap-3 px-3.5 py-2.5 min-h-[56px] min-w-0", r.wide && "col-span-2");
+        const cls = cn("bubble !rounded-2xl flex items-center gap-3 px-3.5 py-2.5 min-h-[56px] min-w-0", (r.wide || r.key === stretch) && "col-span-2");
         return r.onClick ? (
           <button key={r.key} type="button" onClick={r.onClick} className={cn(cls, "bubble-interactive pressable")}
             aria-label={r.actionLabel} data-testid={r.testId || `detail-row-${r.key}`}>

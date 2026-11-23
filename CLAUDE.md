@@ -251,6 +251,15 @@ date, the Autopay switch), "Liability details" as rows that each open their
 editor, the payoff ring, Upcoming payments, Documents, Alerts, Calendar &
 reminders and Profile actions (`components/liability/LiabilityOverviewCards.tsx`,
 presentation only: every figure is one the page already derives, Rule 1).
+Nothing on it is a dead end or a blank (owner, 2026-11-22: "no empty spaces,
+everything editable, everything able to be added"): every figure in the card
+and every row opens the form that edits it IN PLACE (the loan-terms and
+bill-details forms are dialogs over whichever tab is showing; they still save
+themselves, L7); a fact the record lacks reads "+ Add"; the type is changed by
+writing `type_key` (L4); the rows fill two columns with no hole (an odd row
+takes the line); custom fields are rows of the same grid. A payment the record
+does not store is never printed from the engine's 360-month assumption. "Ask
+Portol about this" opens chat with the liability named (`portol_chat_prefill`).
 Payment quick actions, the payoff chart and the cost of borrowing live under
 Payments; owners, linked records, nested debts and the AI summary under
 Details. Do not put them back on the Overview. A count from a failed request
