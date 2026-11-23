@@ -593,16 +593,12 @@ export function AssetOverviewBody({
   };
 
   // The whole Overview (owner, 2026-11-23: "we're gonna simplify this
-  // completely"): the value, three sentences, and one list. Quick Info, linked
+  // completely"; later that day the order: "asset details, AI valuation, then
+  // AI summary"): one list, the value, three sentences. Quick Info, linked
   // sections, trackers and recent activity are not here — they are the other
   // tabs' (Financials, Contained, History).
   return (
     <>
-      <div className={`grid grid-cols-1 gap-2.5 ${summarySlot ? "lg:grid-cols-2" : ""}`}>
-        <ValueCard profile={profile} spent={spent} />
-        {summarySlot && <div className="min-w-0 [&>*]:h-full" data-testid="asset-summary-slot">{summarySlot}</div>}
-      </div>
-
       <section className={PANEL} data-testid="asset-details">
         <h2 className="text-[15px] font-semibold tracking-tight mb-0.5">Asset details</h2>
         {/* One column on a phone; two on a wide screen, so a line's value is
@@ -632,6 +628,11 @@ export function AssetOverviewBody({
           </button>
         )}
       </section>
+
+      <div className={`grid grid-cols-1 gap-2.5 ${summarySlot ? "lg:grid-cols-2" : ""}`}>
+        <ValueCard profile={profile} spent={spent} />
+        {summarySlot && <div className="min-w-0 [&>*]:h-full" data-testid="asset-summary-slot">{summarySlot}</div>}
+      </div>
 
       {tailSlot}
     </>

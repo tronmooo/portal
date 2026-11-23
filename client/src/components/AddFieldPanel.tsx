@@ -11,7 +11,7 @@
 // they have their own editors (L2/L3 — a rate typed as text would lose its
 // unit marker).
 import { useEffect, useState, type ReactNode } from "react";
-import { Check, Pencil, Plus, X } from "lucide-react";
+import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -122,7 +122,7 @@ function useProfileFieldWrites(profileId: string) {
 }
 
 export function AddFieldPanel({
-  profileId, fields, showFields = false, title, openSignal, hideHeader = false, rows: rowLayout = false, list = false, leading, emptyHint,
+  profileId, fields, showFields = false, title, openSignal, hideHeader = false, rows: rowLayout = false, list = false, leading, trailing, emptyHint,
   inline = false, onAdded,
 }: {
   /** The form itself, always open, with no "Add field" button of its own —
@@ -133,10 +133,15 @@ export function AddFieldPanel({
   hideHeader?: boolean;
   /** List the fields as two-column rows, matching a page's detail rows. */
   rows?: boolean;
-  /** List the fields as label | value | pencil | X lines (a "Characteristics" card). */
+  /** List the fields as the lines of the page's own details list (label left,
+   *  value right, a pencil; the remove button is in the edit, two taps). The
+   *  panel then adds no box of its own: its lines join the caller's list, and
+   *  the Field | Value form opens under them. */
   list?: boolean;
   /** Rows the page puts at the top of the list (a linked record, say). */
   leading?: ReactNode;
+  /** Rows the page puts after the listed fields (its notes line). */
+  trailing?: ReactNode;
   /** Shown in the list layout when there is nothing to list. */
   emptyHint?: string;
   /** Bump to open the Field | Value form from outside (a page's "Add custom field" action). */
@@ -164,16 +169,7 @@ export function AddFieldPanel({
     if (ok) { setNewKey(""); setNewVal(""); setAdding(false); onAdded?.(); }
   };
 
-  return (
-    <div className={hideHeader && !list && !adding && rows.length === 0 ? "hidden" : "space-y-2"} data-testid="add-field-panel">
-      {!hideHeader && !inline && <div className="flex items-center justify-between gap-2">
-        <p className="micro-label text-muted-foreground px-0.5">{title || ""}</p>
-        <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAdding((a) => !a)} data-testid="add-field-button">
-          <Plus className="h-3.5 w-3.5" /> Add field
-        </Button>
-      </div>}
-
-      {(adding || inline) && (
+  const form = (adding || inline) && (
         <Card className="p-3 flex flex-wrap items-end gap-2" data-testid="add-field-form">
           <div className="flex-1 min-w-[120px]">
             <label className="micro-label text-muted-foreground" htmlFor={`add-field-key-${profileId}`}>Field</label>
@@ -193,10 +189,21 @@ export function AddFieldPanel({
             </Button>
           )}
         </Card>
-      )}
+      );
+
+  return (
+    <div className={list ? "contents" : hideHeader && !adding && rows.length === 0 ? "hidden" : "space-y-2"} data-testid="add-field-panel">
+      {!hideHeader && !inline && <div className="flex items-center justify-between gap-2">
+        <p className="micro-label text-muted-foreground px-0.5">{title || ""}</p>
+        <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAdding((a) => !a)} data-testid="add-field-button">
+          <Plus className="h-3.5 w-3.5" /> Add field
+        </Button>
+      </div>}
+
+{!list && form}
 
       {list && (
-        <div className="divide-y divide-foreground/10" data-testid="add-field-list">
+        <div className="contents" data-testid="add-field-list">
           {leading}
           {rows.map(([k, v]) => (
             <FieldLine key={k} fieldKey={k} label={humanizeFieldName(k)} value={v} onSave={(nv) => save(k, nv)} onRemove={() => remove(k)} />
@@ -204,6 +211,8 @@ export function AddFieldPanel({
           {rows.length === 0 && !leading && emptyHint && !adding && (
             <p className="py-2 text-[13px] text-muted-foreground" data-testid="add-field-empty">{emptyHint}</p>
           )}
+          {trailing}
+          {form && <div className="pt-2 lg:col-span-2">{form}</div>}
         </div>
       )}
 
@@ -218,7 +227,12 @@ export function AddFieldPanel({
   );
 }
 
-/** One characteristic: label | value | pencil | X (two taps, Rule 8). */
+/**
+ * One characteristic, drawn as a line of the Asset details list (the owner's
+ * design): label left, value right, a pencil. The pencil turns the value into
+ * an input; the check saves it and the remove button (two taps, Rule 8) is
+ * beside it.
+ */
 function FieldLine({ fieldKey, label, value, onSave, onRemove }: {
   fieldKey: string; label: string; value: string;
   onSave: (v: string) => Promise<boolean>; onRemove: () => void;
@@ -232,33 +246,36 @@ function FieldLine({ fieldKey, label, value, onSave, onRemove }: {
     if (!t || t === value) { setEditing(false); return; }
     if (await onSave(t)) setEditing(false);
   };
-  return (
-    <div className="flex items-center gap-2 py-1.5 min-w-0" data-testid={`add-field-cell-${fieldKey}`}>
-      <span className="w-[38%] shrink-0 text-[13px] text-muted-foreground leading-tight break-words">{label}</span>
-      {editing ? (
-        <>
-          <Input value={draft} onChange={(e) => setDraft(e.target.value)} className="h-8 text-[13px] flex-1 min-w-0" autoFocus
+  const row = "flex items-center gap-3 min-h-[40px] py-1.5 border-b border-border/30 min-w-0";
+  if (editing) {
+    return (
+      <div className={`${row} flex-wrap`} data-testid={`add-field-cell-${fieldKey}`}>
+        <span className="text-[13px] text-muted-foreground shrink-0">{label}</span>
+        <div className="flex-1 min-w-[160px] flex items-center justify-end gap-1">
+          <Input value={draft} onChange={(e) => setDraft(e.target.value)} className="h-8 text-[13px] flex-1 min-w-0 text-right" autoFocus aria-label={label}
             onKeyDown={(e) => { if (e.key === "Enter") void commit(); if (e.key === "Escape") { setDraft(value); setEditing(false); } }}
             data-testid={`add-field-edit-${fieldKey}`} />
-          <button onClick={() => void commit()} className="grid h-7 w-7 shrink-0 place-items-center text-emerald-500" aria-label="Save"><Check className="h-4 w-4" /></button>
-          <button onClick={() => { setDraft(value); setEditing(false); }} className="grid h-7 w-7 shrink-0 place-items-center text-muted-foreground" aria-label="Cancel"><X className="h-4 w-4" /></button>
-        </>
-      ) : (
-        <>
-          <button type="button" className="flex-1 min-w-0 text-left text-[14px] font-medium break-words" onClick={() => { setDraft(value); setEditing(true); }} title={`Edit ${label}`}>{value}</button>
-          <button type="button" onClick={() => { setDraft(value); setEditing(true); }} aria-label={`Edit ${label}`}
-            className="pressable grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/5" data-testid={`add-field-pencil-${fieldKey}`}>
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
+          <button type="button" onClick={() => void commit()} className="grid h-8 w-8 shrink-0 place-items-center text-emerald-400" aria-label="Save"><Check className="h-4 w-4" /></button>
           <button
+            type="button"
             onClick={() => confirm(armKey, onRemove)}
-            className={`h-7 min-w-7 px-1 shrink-0 grid place-items-center rounded-md text-[11px] transition-colors ${isArmed(armKey) ? "bg-destructive text-destructive-foreground" : "text-muted-foreground hover:text-destructive hover:bg-destructive/10"}`}
+            className={`h-8 min-w-8 px-1 shrink-0 grid place-items-center rounded text-[11px] ${isArmed(armKey) ? "bg-destructive text-destructive-foreground" : "text-muted-foreground hover:text-destructive"}`}
             aria-label={isArmed(armKey) ? `Tap again to remove ${label}` : `Remove ${label}`}
             data-testid={`add-field-remove-${fieldKey}`}
-          >{isArmed(armKey) ? "Remove?" : <X className="h-3.5 w-3.5" />}</button>
-        </>
-      )}
-    </div>
+          >{isArmed(armKey) ? "Remove?" : <Trash2 className="h-3.5 w-3.5" />}</button>
+          <button type="button" onClick={() => { setDraft(value); setEditing(false); }} className="grid h-8 w-8 shrink-0 place-items-center text-muted-foreground" aria-label="Cancel"><X className="h-4 w-4" /></button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <button type="button" className={`${row} w-full text-left`} onClick={() => { setDraft(value); setEditing(true); }} title={`Edit ${label}`}
+      aria-label={`Edit ${label}`} data-testid={`add-field-cell-${fieldKey}`}>
+      <span className="text-[13px] text-muted-foreground shrink-0">{label}</span>
+      <span className="flex-1" />
+      <span className="min-w-0 truncate text-right text-[14px] font-semibold tabular-nums">{value}</span>
+      <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" data-testid={`add-field-pencil-${fieldKey}`} />
+    </button>
   );
 }
 

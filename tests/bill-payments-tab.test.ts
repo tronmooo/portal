@@ -69,10 +69,11 @@ describe("the payment schedule has its own tab", () => {
 describe("bill details are editable", () => {
   const src = code(LIABILITY);
 
-  it("the Bill details card carries an Edit affordance", () => {
+  it("the Bill details list opens for editing and carries Save", () => {
     // One Liability Details card serves loans and bills, so the ids are
     // chosen in code; tests/liability-profile-design.dom.test.tsx clicks them.
-    expect(src).toContain('"button-edit-bill"');
+    // A tap on any line starts the edit (the owner's list has no Edit button).
+    expect(src).toContain('onClick={startEditing} actionLabel="Edit amount" testId="detail-amount"');
     expect(src).toContain('"bill-details-edit-card"');
     expect(src).toContain('"button-save-bill"');
   });

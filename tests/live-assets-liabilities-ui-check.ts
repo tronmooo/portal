@@ -153,7 +153,7 @@ async function main() {
 
     const hasTermRows = (await appears("Term (months)", 10000)) && (await appears("Remaining Term", 5000));
     check(hasTermRows, "#27 the entered term and the calculated remaining term are two labelled figures");
-    await page.locator('[data-testid="button-edit-terms"]').click({ timeout: 10000 });
+    await page.locator('[data-testid="detail-balance"]').click({ timeout: 10000 });
     const rateBox = page.locator('[data-testid="input-terms-rate"]');
     await rateBox.waitFor({ timeout: 10000 });
     check((await rateBox.inputValue()) === "6.25", `#24 the loan-terms form shows the rate as a percent (${await rateBox.inputValue()})`);

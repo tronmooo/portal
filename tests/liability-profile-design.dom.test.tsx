@@ -2,9 +2,11 @@
 //
 // The liability profile, to the owner's design (2026-11-23, "let's make it
 // look more like this"): one header card with the four headline figures, six
-// tabs with the quick-add buttons, and an Overview of Liability Details (a
-// form that edits in place), Characteristics, Quick Info, and the AI Summary
-// beside Balance & Payoff. The page it replaced opened on two cards reading
+// tabs with the quick-add buttons, and an Overview that is the asset's (owner,
+// later that day, with a picture of the Asset details list: "make the
+// liabilities look exactly like this"): ONE Liability details list (label,
+// value, pencil) holding the characteristics, then Balance & Payoff, then the
+// AI Summary. The page it replaced opened on two cards reading
 // "SOURCE obligation" and "OBLIGATION ID 2b6ad3c2-…".
 //
 // Renders the real page over stubbed requests, so what is asserted is what
@@ -129,19 +131,43 @@ describe("liability profile: the Overview", () => {
     expect(text("detail-payoff")).toMatch(/20\d\d$/);
   });
 
-  it("Quick Info and Balance & Payoff are worked out from the same terms", () => {
+  it("the Overview is one details list, then Balance & Payoff; no Edit button, no Quick Info or Characteristics card", () => {
     renderPage();
-    expect(text("quick-remaining-term")).toMatch(/Remaining Term\d+ months/);
-    expect(text("quick-interest")).toMatch(/Interest Left \(Est\.\)\$[\d,]+/);
+    const list = screen.getByTestId("liability-details-card");
+    const payoff = screen.getByTestId("balance-payoff-card");
+    expect(!!(list.compareDocumentPosition(payoff) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(list.querySelector("h2")?.textContent).toBe("Liability details");
+    // The characteristic and the notes are lines of the same list.
+    expect(within(list).getByTestId("add-field-cell-nickname")).toBeTruthy();
+    expect(within(list).getByTestId("detail-notes")).toBeTruthy();
+    expect(within(list).getByTestId("add-field-button").textContent).toContain("Add characteristic");
+    for (const gone of ["button-edit-terms", "quick-info-card", "characteristics-card"]) expect(screen.queryByTestId(gone), gone).toBeNull();
+  });
+
+  it("a characteristic is changed from its line and removed with two taps (Rule 8)", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("add-field-cell-nickname"));
+    expect(value("add-field-edit-nickname")).toBe("The Honda");
+    fireEvent.click(screen.getByTestId("add-field-remove-nickname"));
+    expect(writes()).toEqual([]);
+    fireEvent.click(screen.getByTestId("add-field-remove-nickname"));
+    await waitFor(() => expect(writes().length).toBe(1));
+    expect(writes()[0].body).toEqual({ fieldsToDelete: ["nickname"] });
+  });
+
+  it("Balance & Payoff figures are worked out from the same terms", () => {
+    renderPage();
+    expect(text("quick-remaining-term")).toMatch(/^\d+ months$/);
+    expect(text("quick-interest")).toMatch(/^\$[\d,]+$/);
     expect(text("balance-payoff-card")).toContain("Current Balance$18,420");
     expect(text("paid-down")).toBe("$9,580 · 34.2%");
     expect(screen.getByTestId("payoff-line")).toBeTruthy();
     expect(text("payoff-est")).toBe(text("detail-payoff"));
   });
 
-  it("Characteristics lists what the user added, never the app's own bookkeeping", async () => {
+  it("the list holds what the user added, never the app's own bookkeeping", async () => {
     renderPage();
-    const card = within(screen.getByTestId("characteristics-card"));
+    const card = within(screen.getByTestId("liability-details-card"));
     expect(card.getByTestId("add-field-cell-nickname").textContent).toContain("The Honda");   // the reader works
     expect(card.queryByTestId("add-field-cell-source")).toBeNull();
     expect(card.queryByTestId("add-field-cell-obligationId")).toBeNull();
@@ -168,8 +194,8 @@ describe("liability profile: everything edits in place", () => {
   it("Edit turns the card into inputs holding the stored values, and writes nothing by itself", () => {
     renderPage();
     expect(screen.queryByTestId("input-terms-rate")).toBeNull();
-    expect((screen.getByTestId("button-save-terms") as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByTestId("button-edit-terms"));
+    expect(screen.queryByTestId("button-save-terms")).toBeNull();   // Save and Undo exist only while editing
+    fireEvent.click(screen.getByTestId("detail-name"));
     expect(value("input-edit-name")).toBe("Honda CR-V Auto Loan");
     expect(value("input-terms-lender")).toBe("Honda Financial Services");
     expect(value("input-terms-rate")).toBe("5.49");
@@ -194,7 +220,7 @@ describe("liability profile: everything edits in place", () => {
 
   it("the name and notes are written once, and Save closes the form", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("button-edit-terms"));
+    fireEvent.click(screen.getByTestId("detail-balance"));
     const notes = screen.getByTestId("input-edit-notes");
     fireEvent.change(notes, { target: { value: "CR-V loan through the dealer." } });
     fireEvent.blur(notes);                                    // leaving the box…
@@ -205,7 +231,7 @@ describe("liability profile: everything edits in place", () => {
 
   it("a changed term saves itself, under its own field only (L7)", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("button-edit-terms"));
+    fireEvent.click(screen.getByTestId("detail-balance"));
     fireEvent.change(screen.getByTestId("input-terms-rate"), { target: { value: "4.9" } });
     await waitFor(() => expect(writes().length).toBe(1), { timeout: 5000 });
     // Only what changed: the rate, as the percent that was typed (L3).
@@ -268,7 +294,7 @@ describe("a debt with only a balance", () => {
   it("offers to add what is missing instead of a blank or a guess", () => {
     renderPage(BARE);
     for (const id of ["detail-lender", "detail-original", "detail-rate", "detail-term", "detail-payment", "detail-due-day", "detail-start", "detail-payoff", "detail-notes"]) {
-      expect(text(id), id).toBe("Add");
+      expect(text(id), id).toBe("Not set");
     }
     // No stored payment and no term: the 360-month guess is not this loan's payment.
     expect(screen.getByTestId("kpi-monthly").textContent).toBe("+ Add");
@@ -302,7 +328,7 @@ describe("a recurring bill", () => {
   it("Edit opens the bill's own fields", async () => {
     renderPage(BILL);
     await waitFor(() => expect(text("detail-reminder")).toBe("3 days before"));
-    fireEvent.click(screen.getByTestId("button-edit-bill"));
+    fireEvent.click(screen.getByTestId("detail-amount"));
     expect(value("input-bill-amount")).toBe("22.99");
     expect(value("input-bill-reminder")).toBe("3");
     expect(screen.getByTestId("bill-details-edit-card")).toBeTruthy();
