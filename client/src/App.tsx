@@ -1,4 +1,5 @@
 import { Switch, Route, Router, useLocation } from "wouter";
+import { touchOwnsHorizontalDrag } from "@/lib/swipe-guard";
 import { useHashLocation } from "wouter/use-hash-location";
 import { parse as parseRoutePattern } from "regexparam";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
@@ -333,9 +334,10 @@ function SwipeNav() {
   const TAB_ORDER = ['/', '/dashboard', '/calendar', '/artifacts'];
 
   const handleTouchStart = useCallback((e: TouchEvent) => {
-    // Don't intercept if touch started on an interactive element
-    const target = e.target as HTMLElement;
-    if (target.closest('button, a, input, textarea, select, [role="button"], [data-radix-dialog-content]')) return;
+    // A touch on a control, a slider or a row that scrolls sideways is that
+    // thing's own drag, never a page swipe. Forget any earlier start too, or a
+    // stale one would be finished by this touch's end.
+    if (touchOwnsHorizontalDrag(e.target, e.currentTarget as Element | null)) { startX.current = null; return; }
     startX.current = e.touches[0].clientX;
     startY.current = e.touches[0].clientY;
     startTime.current = Date.now();

@@ -157,3 +157,31 @@ describe("the page's Overview read never waits for the layout model", () => {
     }
   });
 });
+
+describe("a layout call that fails is not repeated on every open", () => {
+  // Owner's asset, 2026-11-23: the answer was cut off mid-JSON, nothing was
+  // cached, and each open of the profile paid ~10 s for the same failure.
+  it("remembers the failure for this shape, and gives room for a field-rich record", async () => {
+    const { SCHEMA_MAX_TOKENS, SCHEMA_RETRY_MS } = await import("../server/overview-engine");
+    expect(SCHEMA_MAX_TOKENS).toBeGreaterThanOrEqual(4000);
+    expect(SCHEMA_RETRY_MS).toBeGreaterThanOrEqual(30 * 60_000);
+    const storage = fakeStorage();
+    const input = (await buildOverviewInput(storage, "house"))!;
+    const signature = overviewSignature({
+      type: input.entity.type, typeKey: input.entity.type_key, fieldKeys: Object.keys(input.entity.fields || {}),
+      relationKinds: (input.related || []).map((r: any) => r.relation), hasDocuments: (input.documents || []).length > 0,
+    });
+    await storage.setPreference("overview_schema_house", JSON.stringify({ signature, hints: null, generatedAt: new Date().toISOString(), failed: true }));
+    const had = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "test-key-not-used";
+    try {
+      const writesBefore = storage.setPreference.mock.calls.length;
+      // With a key set, anything but the remembered failure would call the
+      // model here (and throw on the fake key, writing a new failure marker).
+      expect(await getSchemaHints(storage, "house", input)).toEqual({}); // no advice, no call
+      expect(storage.setPreference.mock.calls.length).toBe(writesBefore);
+    } finally {
+      if (had === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = had;
+    }
+  });
+});

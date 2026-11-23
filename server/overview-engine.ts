@@ -50,7 +50,14 @@ interface CachedSchema {
   signature: string;
   hints: OverviewSchemaHints;
   generatedAt: string;
+  /** The model call for this signature failed; `hints` are the last good ones (or none). */
+  failed?: boolean;
 }
+
+/** A failed layout call is not repeated for this long (it cost ~10 s on every open). */
+export const SCHEMA_RETRY_MS = 60 * 60_000;
+/** Room for a field-rich record's answer: 1200 cut a 30-field asset's JSON mid-string. */
+export const SCHEMA_MAX_TOKENS = 4000;
 
 /** Insurance / warranty-ish links read as coverage; a loan against the thing
  *  reads as financing. Everything else is a plain link. */
@@ -340,7 +347,11 @@ export async function getSchemaHints(
         const age = Date.now() - new Date(cached.generatedAt).getTime();
         // Signature mismatch = the entity's SHAPE changed. The layout is stale
         // even though the numbers are always fresh, so re-reason it.
-        if (cached.signature === signature && age < SCHEMA_MAX_AGE_MS) {
+        if (cached.signature === signature && cached.failed) {
+          // The last attempt for this exact shape failed: compose without the
+          // advice and try again later, not on every open.
+          if (age < SCHEMA_RETRY_MS) return staleHints;
+        } else if (cached.signature === signature && age < SCHEMA_MAX_AGE_MS) {
           return normalizeSchemaHints(cached.hints, Object.keys(input.entity.fields || {}));
         }
       }
@@ -368,7 +379,7 @@ export async function getSchemaHints(
       spec,
       system: SCHEMA_SYSTEM_PROMPT,
       user: buildSchemaPrompt(input),
-      maxTokens: 1200,
+      maxTokens: SCHEMA_MAX_TOKENS,
       anthropicClient: spec.provider === "anthropic" ? getAnthropicClient("standard") : undefined,
     });
     let jsonStr = text.trim();
@@ -381,7 +392,9 @@ export async function getSchemaHints(
     return hints;
   } catch (err: any) {
     logger.warn("overview", `schema generation failed for ${profileId}: ${err?.message || err}`);
-    return null;
+    const failed = { signature, hints: staleHints, generatedAt: new Date().toISOString(), failed: true };
+    await storage.setPreference(cacheKey, JSON.stringify(failed)).catch(() => {});
+    return staleHints;
   }
 }
 

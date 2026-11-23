@@ -11,6 +11,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
+      'tests/swipe-guard.dom.test.tsx',
       'tests/recurring-occurrence-actions.test.ts',
       'tests/calendar-detail-redesign.dom.test.tsx',
       'tests/record-details.test.ts',
