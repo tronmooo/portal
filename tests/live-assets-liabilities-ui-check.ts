@@ -183,7 +183,8 @@ async function main() {
 
     await page.locator('[data-testid="tab-history"]').click();
     const payRow = await appears(/Payment \$2,155/);
-    t = await text();
+    // The History tab's own text: the header card also reads "Payment $2,155/mo".
+    t = (await page.locator('[role="tabpanel"][data-state="active"]').innerText()).replace(/\s+/g, " ");
     const payAround = t.slice(Math.max(0, t.search(/Payment \$2,155/)), t.search(/Payment \$2,155/) + 200);
     check(payRow && payAround.includes(dayLabel(today)) && !payAround.includes(dayLabel(yesterday)), `#21 the loan's Activity tab shows the payment on ${dayLabel(today)}, not ${dayLabel(yesterday)} ("${payAround.trim().slice(0, 110)}")`);
     await shot("loan-activity");
