@@ -75,6 +75,9 @@ describe("L6 — a profile reopened after a write made elsewhere shows it", () =
     expect(at).toBeGreaterThan(-1);
     const query = detail.slice(at, at + 6000);
     expect(query).not.toMatch(/refetchOnMount: false/);
+    // …and a cached copy older than the stale window is refetched too: a change
+    // made on another device or by Auto Pay invalidates nothing in this browser.
+    expect(query).toMatch(/refetchOnMount: \(query\) => query\.state\.isInvalidated \|\| Date\.now\(\) - query\.state\.dataUpdatedAt > PROFILE_DETAIL_STALE_MS/);
   });
 });
 

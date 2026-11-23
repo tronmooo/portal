@@ -537,6 +537,14 @@ export interface PayBillInput {
    * or a document went through.
    */
   verification?: PaymentVerification | null;
+  /**
+   * The caller named no occurrence: `occurrenceDate` is the one the lists
+   * SHOW for a plain "Pay" (`shownOccurrenceToPay`). It is still an implicit
+   * "pay what's due", so a repeat of the same tap is folded like one. Without
+   * this a double tap on a bill with a stale stored date paid the shown month
+   * and then the next (live check, 2026-11-23: two expenses for one Pay).
+   */
+  implicitOccurrence?: boolean;
   source: PayBillSource;
 }
 
@@ -917,12 +925,21 @@ export async function payBillOccurrence(
   // covered one instance; this is the same rule, cross-instance, keyed on
   // the stamp the winner just wrote. Only implicit pays (no occurrenceDate)
   // are folded — an explicit occurrence is an explicit intent.
-  if (!input.occurrenceDate && !extraOnly) {
+  const implicit = !input.occurrenceDate || input.implicitOccurrence === true;
+  // The shown occurrence moves on after the first tap, and with no payment
+  // date named each tap's date defaults to its own occurrence — so the repeat
+  // of a plain Pay is told by money and time, not by the day.
+  const sameShownTap = (stamp: any) => {
+    if (input.implicitOccurrence !== true || input.paymentDate) return false;
+    const ageMs = stamp && typeof stamp.postedAt === "string" ? Date.now() - Date.parse(stamp.postedAt) : NaN;
+    return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 8000 && Math.abs(Number(stamp.amount) - amount) < 0.005;
+  };
+  if (implicit && !extraOnly) {
     const stamps = Object.values((f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {}) as any[];
     const latest = stamps
       .filter((o) => o && o.status === "paid" && typeof o.postedAt === "string" && o.paymentId)
       .sort((a, b) => String(b.postedAt).localeCompare(String(a.postedAt)))[0];
-    if (latest && (sameTap(latest) || chatRepeat(latest))) {
+    if (latest && (sameTap(latest) || chatRepeat(latest) || sameShownTap(latest))) {
       const winner = await findPaymentWithRetry(storage, liabilityId, latest.paymentId);
       return {
         ok: true, deduped: true, payment: winner, liability, occurrenceDate: curDue || occurrenceDate,

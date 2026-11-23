@@ -92,7 +92,10 @@ async function main() {
     let notes = await notifications(tag);
     check(!notes.some((n) => n.title.includes("Scenario Tomorrow")), "no due-soon alert for the Auto Pay bill due tomorrow");
     check(notes.some((n) => n.title.includes("Scenario Manual Tomorrow")), "the manual bill due tomorrow still raises its due-soon alert");
-    check(notes.some((n) => /Overdue bill/.test(n.title) && n.title.includes("Scenario Late")), "the bill that was already overdue still shows as overdue (an exception)");
+    // A7 (owner, 2026-11-22): a recurring bill's elapsed date is assumed paid on
+    // every list and in the bell — it reads at its next date, never "overdue".
+    // (This line asserted the opposite until then and had been red since.)
+    check(!notes.some((n) => /Overdue bill/.test(n.title) && n.title.includes("Scenario Late")), "the bill whose date elapsed before the switch raises no Overdue alert (A7)");
     await post(`/liabilities/${soon}/autopay`, { reminders: true });
     notes = await notifications(tag);
     check(notes.some((n) => n.title.includes("Scenario Tomorrow")), "\"Remind me anyway\" brings its due-soon alert back");

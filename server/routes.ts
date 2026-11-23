@@ -9000,6 +9000,7 @@ Rules:
         // second request (same money, seconds later) into the first, so
         // catching up two months paid one (D276).
         occurrenceDate: namedOccurrence ?? shownOccurrence,
+        implicitOccurrence: !namedOccurrence && !!shownOccurrence,
         // Pay-from-account: the occurrence route honoured accountId, this one
         // silently dropped it, so the source account's balance never moved.
         accountId: accountId || null,

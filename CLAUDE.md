@@ -363,7 +363,9 @@ $2,671.64" for a payment that was never written).
 recorded in chat can only mark the closed profile's query stale; the detail
 query must refetch an invalidated cache on mount (never `refetchOnMount:
 false`), or the header keeps the old balance beside a Payments tab that
-shows the new one. A bare `YYYY-MM-DD` is a calendar day in the user's zone:
+shows the new one. A cached copy older than the stale window is refetched on
+reopen too (`PROFILE_DETAIL_STALE_MS`): a change made on another device or by
+Auto Pay invalidates nothing in this browser. A bare `YYYY-MM-DD` is a calendar day in the user's zone:
 parse it with `parseLocalDate` (`client/src/lib/format.ts`), never
 `new Date("2026-11-18")` (Activity said Nov 17).
 *Guards:* `tests/liability-rules-guards.test.ts`, `tests/format-full-date.test.ts`.
@@ -634,7 +636,10 @@ The walk steps over an occurrence already paid, skipped or marked missed
 stored date does not move when a LATER date is the one settled. A plain "Pay"
 (no date named) on a bill whose stored date is stale settles the date the lists
 show (`shownOccurrenceToPay`, in the pay route) — never an old month with the
-row left in place. An edit form writes a due date only when the user changed
+row left in place. That shown date is still an implicit "pay what's due"
+(`implicitOccurrence`): a repeat of the same tap is folded across server
+instances, or a double tap pays the shown month and then the next
+(2026-11-23: one Pay, two expenses). An edit form writes a due date only when the user changed
 it. The Liabilities list (`nextBillDateForFields`), the bill page header, the
 calendar (a recurring bill's past date is not "late") and the AI advice count
 read the same next date. Generated bill tasks are retired on the first read of
@@ -874,6 +879,14 @@ runs in a touch context (`hasTouch`, `isMobile`, `tap()`, real touch drags)
 at phone width, not only with a desktop mouse.
 *Guard:* `tests/swipe-guard.dom.test.tsx`.
 *Live check (phone, real touch events, smoke account):* `npx tsx tests/live-touch-gestures-check.ts`.
+**T3. Every manual form is added through, by touch, before "it works" is
+said.** `npx tsx tests/live-manual-entry-audit.ts` opens each screen on a
+phone, taps the add control, fills the form, taps save, reads the record back
+and times it (18 kinds: task, expense, income, paycheck, bill, subscription,
+habit, event, goal, journal entry, note, account, asset, liability, asset
+characteristic, asset date, liability payment, tracker entry). A new manual
+form is added to it. No manual form exists for a person, a pet, a new tracker,
+a reminder or a first budget: those are chat only.
 
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.

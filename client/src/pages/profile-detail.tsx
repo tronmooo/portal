@@ -3263,6 +3263,9 @@ function formatFieldDisplayValue(fieldKey: string, raw: string): string {
  */
 /** An owned thing drawn to the asset mock-up (2026-11-22). An account is an
  *  asset too, but its page is its balance — it keeps AccountOverview. */
+/** A cached profile older than this is refetched when its page is reopened. */
+const PROFILE_DETAIL_STALE_MS = 30 * 1000;
+
 function usesAssetLayout(profile: any): boolean {
   return !!profile && isAssetTabProfile(profile) && !isAccountProfile(profile);
 }
@@ -13135,14 +13138,19 @@ export default function ProfileDetailPage() {
     // every visit. Mutations here invalidate this key explicitly, so a short
     // staleTime never serves stale data after an edit; it just avoids the
     // redundant cold refetch when navigating back to a profile you just saw.
-    staleTime: 30 * 1000,
+    staleTime: PROFILE_DETAIL_STALE_MS,
     gcTime: 10 * 60 * 1000,
     // Re-opening renders from cache — UNLESS a write invalidated this profile
     // while its page was closed. `false` ignored that too: a payment made
     // from the Bills popup, the dashboard or the chat marked the detail stale,
     // nothing was mounted to refetch it, and the reopened header still showed
     // the pre-payment balance ($3,200 beside a list that said $2,766.64).
-    refetchOnMount: (query) => query.state.isInvalidated,
+    // …and when what is cached is older than the stale window: a change made
+    // where this browser could not see it (another device, the Auto Pay run, a
+    // script) invalidates nothing here, and the reopened header kept the old
+    // balance for the whole ten minutes the cache lives (live check #20,
+    // 2026-11-23). The cached page still paints first; the refetch is behind it.
+    refetchOnMount: (query) => query.state.isInvalidated || Date.now() - query.state.dataUpdatedAt > PROFILE_DETAIL_STALE_MS,
   });
 
   // Page-level all-profiles — powers the new breadcrumb + summary + tree.

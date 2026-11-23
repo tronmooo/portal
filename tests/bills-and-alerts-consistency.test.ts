@@ -89,6 +89,20 @@ describe("a plain Pay on a rolled row settles the occurrence shown, once", () =>
     // name December, never an old month.
     expect(nextBillDate(asObligation(), TODAY)).toBe("2026-12-25");
     expect(shownOccurrenceToPay(asObligation(), TODAY)).toBe("2026-12-25");
+
+    // A second tap seconds later lands on another server instance, where the
+    // shown date is already December. It is the same tap: nothing more is
+    // recorded (live check, 2026-11-23: one Pay, two expenses).
+    const again = await payBillOccurrence(storage, "b1", { amount: null, paymentDate: null, occurrenceDate: shownOccurrenceToPay(asObligation(), TODAY), implicitOccurrence: true, source: "route" } as any, "UTC");
+    expect(again.ok).toBe(true);
+    expect(again.deduped).toBe(true);
+    expect(rows).toHaveLength(1);
+    expect(Object.keys(profile.fields.occurrences)).toEqual(["2026-11-25"]);
+    // An occurrence the caller NAMED is a payment of its own.
+    const named = await payBillOccurrence(storage, "b1", { amount: null, paymentDate: null, occurrenceDate: "2026-12-25", source: "route" } as any, "UTC");
+    expect(named.ok).toBe(true);
+    expect(named.deduped).not.toBe(true);
+    expect(rows).toHaveLength(2);
   });
 
   it("the route applies it only when the caller named no occurrence", () => {
@@ -98,6 +112,7 @@ describe("a plain Pay on a rolled row settles the occurrence shown, once", () =>
     expect(i).toBeGreaterThan(-1);
     expect(block).toContain("const shownOccurrence = namedOccurrence ? null");
     expect(block).toContain("occurrenceDate: namedOccurrence ?? shownOccurrence,");
+    expect(block).toContain("implicitOccurrence: !namedOccurrence && !!shownOccurrence,");
   });
 
   it("the bills editor writes a due date only when the user changed it", () => {
