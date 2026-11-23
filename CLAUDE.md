@@ -967,7 +967,9 @@ valid answer, the fixed rules answer (`inferWellnessWidgetsFromText`). The
 dialog shows each proposal with a live preview and Add / Discard, plus "Add
 all" and "Make a new dashboard" (`addWellnessDashboardWithWidgets`) — W5: it
 proposes, the user applies. Never let the model emit a query, a formula or
-markup.
+markup. The box ("Create a widget in your own words") is the FIRST panel of
+Customize and always open — never behind a toggle (owner, 2026-11-23, who did
+not find it under Build Your Own).
 **H8a. Offers come from the records.** "From your trackers"
 (`suggestWellnessWidgets`) lists a card only for a tracker or measurement that
 has entries, so every offer shows real figures the moment it is added; an

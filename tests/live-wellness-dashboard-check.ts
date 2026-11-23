@@ -180,8 +180,8 @@ async function main() {
     check((await text("wellness-widget-value-new-widget")).trim() === "3 entries", `the manual builder previews the account's own records (${(await text("wellness-widget-value-new-widget")).trim()})`);
     await tap("wellness-builder-add");
 
-    // Described to the AI, in the dialog.
-    await tap("wellness-customize-builder-ai");
+    // In the user's own words: the box at the top of the dialog.
+    check((await page.locator('[data-testid="wellness-customize-scroll"] > :first-child').getAttribute("data-testid")) === "wellness-builder-ai", "the \"in your own words\" box is the first thing in Customize");
     await T("wellness-ai-prompt").fill("Do I exercise more after sleeping 8 hours?");
     await tap("wellness-ai-build");
     await T("wellness-ai-proposal-0").waitFor({ timeout: 30000 });

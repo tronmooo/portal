@@ -88,7 +88,10 @@ export async function buildWellnessWidgetsFromPrompt(prompt: string, ctx: Wellne
   const result = (widgets: WellnessWidget[], by: "ai" | "rules", name?: string): WellnessBuildResult =>
     ({ widgets, widget: widgets[0], by, ...(name ? { name } : {}) });
   const byRules = (): WellnessBuildResult => {
-    const inferred = inferWellnessWidgetsFromText(said, { trackerNames: outlines.map((o) => o.name) });
+    const inferred = inferWellnessWidgetsFromText(said, {
+      trackerNames: outlines.map((o) => o.name),
+      trackerFields: Object.fromEntries(outlines.map((o) => [o.name, o.fields.map((f) => f.name)])),
+    });
     const grounded = inferred.map((w) => groundWellnessWidget(w, rows)).filter(Boolean) as WellnessWidget[];
     return result(grounded.length ? grounded : inferred.slice(0, 1), "rules");
   };

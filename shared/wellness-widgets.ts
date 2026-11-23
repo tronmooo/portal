@@ -628,7 +628,11 @@ const SOURCE_WORDS: Array<{ re: RegExp; ref: SeriesRef; title: string }> = [
   { re: /work ?outs?|exercis|train(ing|ed)?\b|\bgym\b|\bruns?\b|running|\bran\b|lift|session|activ/i, ref: { kind: "workouts" }, title: "Workouts" },
 ];
 
-export interface WellnessInferContext { trackerNames?: string[] }
+export interface WellnessInferContext {
+  trackerNames?: string[];
+  /** Each tracker's number fields, by tracker name — so "running distance" reads the field. */
+  trackerFields?: Record<string, string[]>;
+}
 const NUMBER_WORDS: Record<string, number> = { five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 
 function sourcesIn(text: string, ctx: WellnessInferContext): Array<{ at: number; ref: SeriesRef; title: string }> {
@@ -701,7 +705,20 @@ export function inferWellnessWidgetFromText(text: string, ctx: WellnessInferCont
       lag: /\b(after|next day|following)\b/i.test(said) && by.ref.key !== "sleep_hours" ? 1 : 0,
     });
   }
-  const one = found[0] ?? { ref: { kind: "workouts" } as SeriesRef, title: "Workouts" };
+  let one = found[0] ?? { ref: { kind: "workouts" } as SeriesRef, title: "Workouts" };
+  // "running distance", "guitar minutes": a number field of the tracker that was named.
+  if (one.ref.kind === "tracker") {
+    const low = said.toLowerCase();
+    const field = (ctx.trackerFields?.[one.ref.key || ""] || []).find((f) => f.length >= 3 && low.includes(f.toLowerCase()));
+    if (field) {
+      const level = /severity|level|rating|score|intensity|pain|mood|rate|bpm|temp|pace|speed/i.test(field);
+      const calc: WellnessCalc = /\b(average|avg|typical)\b/i.test(said) || level ? "average" : /\b(latest|current|last)\b/i.test(said) ? "latest" : "total";
+      return done({
+        title: clip(`${one.title} ${field[0].toUpperCase()}${field.slice(1)}`, 40), icon: "chart", kind: "metric",
+        source: { kind: "tracker", key: one.ref.key, field }, calc, display: calc === "total" ? "bar" : "line",
+      });
+    }
+  }
   const additive = one.ref.kind !== "mood" && (one.ref.kind !== "metric" || ADDITIVE_METRICS.has(one.ref.key || ""));
   const calc: WellnessCalc =
     /\b(how (many|often)|count|times|frequency|consisten)/i.test(said) ? "count"

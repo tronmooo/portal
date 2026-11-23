@@ -41,6 +41,8 @@ import { CANONICAL_METRICS } from "@shared/wellness-canon";
 import { CardError, WidgetViewBody, type ListState } from "./WellnessCards";
 
 const QUERY_KEY = [`/api/preferences/${WELLNESS_PREFS_KEY}`];
+/** Starters for the "in your own words" box: a tap fills the box, it does not build. */
+const WORDS_EXAMPLES = ["My weekly sleep average", "How often I work out", "Do I exercise more after sleeping 8 hours?", "My weight trend and my water per day"];
 const PURPLE = "265 85% 66%";
 
 /** The Wellness layout, on the account. The screen follows a change at once; the save follows behind it. */
@@ -322,7 +324,7 @@ export function WellnessCustomizeDialog({ open, onClose, data, lists, range, tod
   const [expanded, setExpanded] = useState<string | null>(null);
   const [armed, setArmed] = useState<string | null>(null);
   const [newBoardOpen, setNewBoardOpen] = useState(false);
-  const [builder, setBuilder] = useState<null | "manual" | "ai">(null);
+  const [builder, setBuilder] = useState<null | "manual">(null);
   const [building, setBuilding] = useState<WellnessWidget | null>(null);
   const [formKey, setFormKey] = useState(0);
   const [prompt, setPrompt] = useState("");
@@ -532,6 +534,75 @@ export function WellnessCustomizeDialog({ open, onClose, data, lists, range, tod
             style={{ background: `hsl(${PURPLE})` }} data-testid="wellness-customize-save">{saving ? "Saving…" : "Save Changes"}</button>
         </div>
       }>
+      {/* In your own words: always in view, first thing in the dialog (owner, 2026-11-23:
+          "a way where I can type something … create my own widget using my own words"). */}
+      <div className="rounded-xl border px-3 py-2.5 space-y-2" style={{ borderColor: `hsl(${PURPLE} / 0.6)`, background: `hsl(${PURPLE} / 0.08)` }} data-testid="wellness-builder-ai">
+        <p className="text-[15px] font-bold leading-tight flex items-center gap-1.5">
+          <Sparkles className="h-4 w-4" style={{ color: `hsl(${PURPLE})` }} aria-hidden="true" /> Create a widget in your own words
+        </p>
+              <label className="block text-[12px] text-muted-foreground" htmlFor="wellness-ai-prompt">
+          Type what you want to see — one card, or several. Portol builds it from your own trackers and shows it to you before anything is added.
+        </label>
+        <textarea id="wellness-ai-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} maxLength={400} rows={3}
+          placeholder="My running distance, weekly sleep average, weight trend, and whether I exercise more after sleeping eight hours"
+          className="w-full rounded-lg border border-border bg-background/60 px-2 py-1.5 text-[13px]" data-testid="wellness-ai-prompt" />
+        <button type="button" disabled={prompt.trim().length < 3 || suggest.isPending} onClick={() => { setProposal(null); suggest.mutate(prompt.trim()); }}
+          className="rounded-xl px-3.5 py-2 text-[13px] font-bold text-white disabled:opacity-50" style={{ background: `hsl(${PURPLE})` }}
+          data-testid="wellness-ai-build">{suggest.isPending ? "Building…" : "Create widget"}</button>
+        {suggest.isError && !suggest.isPending && <p className="text-[12px] text-destructive" data-testid="wellness-ai-error">Couldn't build that from your data. Try again, or build it yourself above.</p>}
+        {proposal && (
+          <div className="space-y-2" data-testid="wellness-ai-proposals">
+            <p className="text-[12px] text-muted-foreground" data-testid="wellness-ai-summary">
+              {proposal.by === "ai" ? "Proposed by AI" : "Read by fixed rules"} · {proposal.widgets.length} card{proposal.widgets.length === 1 ? "" : "s"}, drawn from your records. Nothing is added until you say so.
+              {proposal.dropped > 0 ? ` ${proposal.dropped} could not be built: you have no tracker for ${proposal.dropped === 1 ? "it" : "them"}.` : ""}
+            </p>
+            {proposal.widgets.map((w, i) => (
+              <div key={w.id} className="rounded-lg border border-border/60 p-2 space-y-2" data-testid={`wellness-ai-proposal-${i}`}>
+                <p className="text-[13px] font-semibold">{w.title}</p>
+                <WellnessWidgetCardBody widget={w} data={data} lists={lists} range={range} todayISO={todayISO} />
+                <div className="flex gap-1.5">
+                  <button type="button" onClick={() => { if (add(w)) dropProposal(w.id); }}
+                    className="rounded-full px-3 py-1 text-[12px] font-bold text-white" style={{ background: `hsl(${PURPLE})` }} data-testid={`wellness-ai-use-${i}`}>Add this widget</button>
+                  <button type="button" onClick={() => dropProposal(w.id)} className="rounded-full border border-border px-3 py-1 text-[12px] font-semibold hover:bg-muted"
+                    data-testid={`wellness-ai-discard-${i}`}>Discard</button>
+                </div>
+              </div>
+            ))}
+            {proposal.widgets.length > 1 && (
+              <div className="flex flex-wrap gap-1.5" data-testid="wellness-ai-bulk">
+                <button type="button"
+                  onClick={() => {
+                    let next = draft; let n = 0;
+                    for (const w of proposal.widgets) { const r = addWellnessWidget(next, w); if (r.widget) { next = r.boards; n++; } }
+                    if (n) { edit(next); setProposal(null); setPrompt(""); toast({ title: `${n} cards added to ${board.name}`, description: "Press Save Changes to keep them." }); }
+                  }}
+                  className="rounded-full px-3 py-1.5 text-[12px] font-bold text-white" style={{ background: `hsl(${PURPLE})` }} data-testid="wellness-ai-add-all">
+                  Add all to {board.name}
+                </button>
+                {draft.dashboards.length < MAX_DASHBOARDS && (
+                  <button type="button"
+                    onClick={() => {
+                      const next = addWellnessDashboardWithWidgets(draft, proposal.name || "My Dashboard", proposal.widgets);
+                      if (next !== draft) { edit(next); setExpanded(null); setProposal(null); setPrompt(""); toast({ title: "New dashboard made from these cards", description: "Press Save Changes to keep it." }); }
+                    }}
+                    className="rounded-full border border-border px-3 py-1.5 text-[12px] font-semibold hover:bg-muted" data-testid="wellness-ai-new-dashboard">
+                    Make a new dashboard{proposal.name ? `: ${proposal.name}` : ""}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {!proposal && !suggest.isPending && (
+          <div className="flex flex-wrap gap-1.5" data-testid="wellness-ai-examples">
+            {WORDS_EXAMPLES.map((ex) => (
+              <button key={ex} type="button" onClick={() => setPrompt(ex)}
+                className="rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-muted text-left">{ex}</button>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Dashboards: each is its own layout over the same cards. */}
       <div className="rounded-xl border border-border/70 px-3 py-2.5 space-y-2" data-testid="wellness-customize-boards">
         <div className="flex items-center gap-2">
@@ -621,10 +692,6 @@ export function WellnessCustomizeDialog({ open, onClose, data, lists, range, tod
           <div className="flex flex-wrap gap-1.5">
             <button type="button" aria-expanded={builder === "manual"} onClick={() => { setBuilder(builder === "manual" ? null : "manual"); setBuilding(null); setFormKey((k) => k + 1); }}
               className={chip(builder === "manual")} style={chipStyle(builder === "manual")} data-testid="wellness-customize-builder-manual">Build one yourself</button>
-            <button type="button" aria-expanded={builder === "ai"} onClick={() => setBuilder(builder === "ai" ? null : "ai")}
-              className={chip(builder === "ai")} style={chipStyle(builder === "ai")} data-testid="wellness-customize-builder-ai">
-              <Sparkles className="inline h-3.5 w-3.5 mr-1" aria-hidden="true" />Describe it to AI
-            </button>
           </div>
 
           {builder === "manual" && (
@@ -643,63 +710,6 @@ export function WellnessCustomizeDialog({ open, onClose, data, lists, range, tod
             </div>
           )}
 
-          {builder === "ai" && (
-            <div className="rounded-lg border border-border/60 p-2.5 space-y-2" data-testid="wellness-builder-ai">
-              <label className="block text-[12px] text-muted-foreground" htmlFor="wellness-ai-prompt">
-                Say what you want to see — one card, or a whole dashboard. Portol builds it from your own trackers and the data it can draw; it never writes its own queries.
-              </label>
-              <textarea id="wellness-ai-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} maxLength={400} rows={3}
-                placeholder="My running distance, weekly sleep average, weight trend, and whether I exercise more after sleeping eight hours"
-                className="w-full rounded-lg border border-border bg-background/60 px-2 py-1.5 text-[13px]" data-testid="wellness-ai-prompt" />
-              <button type="button" disabled={prompt.trim().length < 3 || suggest.isPending} onClick={() => { setProposal(null); suggest.mutate(prompt.trim()); }}
-                className="rounded-xl px-3.5 py-2 text-[13px] font-bold text-white disabled:opacity-50" style={{ background: `hsl(${PURPLE})` }}
-                data-testid="wellness-ai-build">{suggest.isPending ? "Building…" : "Build with AI"}</button>
-              {suggest.isError && !suggest.isPending && <p className="text-[12px] text-destructive" data-testid="wellness-ai-error">Couldn't build that from your data. Try again, or build it yourself above.</p>}
-              {proposal && (
-                <div className="space-y-2" data-testid="wellness-ai-proposals">
-                  <p className="text-[12px] text-muted-foreground" data-testid="wellness-ai-summary">
-                    {proposal.by === "ai" ? "Proposed by AI" : "Read by fixed rules"} · {proposal.widgets.length} card{proposal.widgets.length === 1 ? "" : "s"}, drawn from your records. Nothing is added until you say so.
-                    {proposal.dropped > 0 ? ` ${proposal.dropped} could not be built: you have no tracker for ${proposal.dropped === 1 ? "it" : "them"}.` : ""}
-                  </p>
-                  {proposal.widgets.map((w, i) => (
-                    <div key={w.id} className="rounded-lg border border-border/60 p-2 space-y-2" data-testid={`wellness-ai-proposal-${i}`}>
-                      <p className="text-[13px] font-semibold">{w.title}</p>
-                      <WellnessWidgetCardBody widget={w} data={data} lists={lists} range={range} todayISO={todayISO} />
-                      <div className="flex gap-1.5">
-                        <button type="button" onClick={() => { if (add(w)) dropProposal(w.id); }}
-                          className="rounded-full px-3 py-1 text-[12px] font-bold text-white" style={{ background: `hsl(${PURPLE})` }} data-testid={`wellness-ai-use-${i}`}>Add this widget</button>
-                        <button type="button" onClick={() => dropProposal(w.id)} className="rounded-full border border-border px-3 py-1 text-[12px] font-semibold hover:bg-muted"
-                          data-testid={`wellness-ai-discard-${i}`}>Discard</button>
-                      </div>
-                    </div>
-                  ))}
-                  {proposal.widgets.length > 1 && (
-                    <div className="flex flex-wrap gap-1.5" data-testid="wellness-ai-bulk">
-                      <button type="button"
-                        onClick={() => {
-                          let next = draft; let n = 0;
-                          for (const w of proposal.widgets) { const r = addWellnessWidget(next, w); if (r.widget) { next = r.boards; n++; } }
-                          if (n) { edit(next); setProposal(null); setPrompt(""); toast({ title: `${n} cards added to ${board.name}`, description: "Press Save Changes to keep them." }); }
-                        }}
-                        className="rounded-full px-3 py-1.5 text-[12px] font-bold text-white" style={{ background: `hsl(${PURPLE})` }} data-testid="wellness-ai-add-all">
-                        Add all to {board.name}
-                      </button>
-                      {draft.dashboards.length < MAX_DASHBOARDS && (
-                        <button type="button"
-                          onClick={() => {
-                            const next = addWellnessDashboardWithWidgets(draft, proposal.name || "My Dashboard", proposal.widgets);
-                            if (next !== draft) { edit(next); setExpanded(null); setProposal(null); setPrompt(""); toast({ title: "New dashboard made from these cards", description: "Press Save Changes to keep it." }); }
-                          }}
-                          className="rounded-full border border-border px-3 py-1.5 text-[12px] font-semibold hover:bg-muted" data-testid="wellness-ai-new-dashboard">
-                          Make a new dashboard{proposal.name ? `: ${proposal.name}` : ""}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       ), "wellness-customize-build-panel")}
 

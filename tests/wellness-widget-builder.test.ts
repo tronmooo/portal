@@ -117,6 +117,15 @@ describe("without a model", () => {
     expect(r).toMatchObject({ by: "rules", widget: { source: { kind: "tracker", key: "Guitar practice" }, calc: "count" } });
   });
 
+  it("a tracker's number is read off its field: \"running distance\" totals the distance", async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const r = await buildWellnessWidgetsFromPrompt("my running distance and my average headache severity", ctx);
+    expect(r.widgets.map((w) => [w.title, w.source, w.calc])).toEqual([
+      ["Running Distance", { kind: "tracker", key: "Running", field: "distance" }, "total"],
+      ["Headache Severity", { kind: "tracker", key: "Headache", field: "severity" }, "average"],
+    ]);
+  });
+
   it("reads several cards out of one description", async () => {
     delete process.env.ANTHROPIC_API_KEY;
     const r = await buildWellnessWidgetsFromPrompt("my weekly sleep average, weight trend, and whether I exercise more after sleeping eight hours", ctx);

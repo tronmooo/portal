@@ -212,10 +212,34 @@ describe("building a card by hand (no AI)", () => {
   });
 });
 
+describe("a widget in your own words", () => {
+  it("the box is the first thing in the dialog, in view without opening anything", async () => {
+    await open();
+    const scroll = screen.getByTestId("wellness-customize-scroll");
+    expect(scroll.firstElementChild!.getAttribute("data-testid")).toBe("wellness-builder-ai");
+    expect(text("wellness-builder-ai")).toContain("Create a widget in your own words");
+    expect(screen.getByTestId("wellness-ai-prompt")).toBeTruthy();
+    expect((screen.getByTestId("wellness-ai-build") as HTMLButtonElement).disabled).toBe(true); // nothing typed yet
+    expect(screen.queryByTestId("wellness-customize-builder-ai")).toBeNull(); // no toggle to find first
+  });
+
+  it("an example fills the box and builds nothing until asked", async () => {
+    let asked = 0;
+    const was = suggest; suggest = (p) => { asked++; return was(p); };
+    await open();
+    fireEvent.click(within(screen.getByTestId("wellness-ai-examples")).getByText("How often I work out"));
+    expect((screen.getByTestId("wellness-ai-prompt") as HTMLTextAreaElement).value).toBe("How often I work out");
+    expect(asked).toBe(0);
+    expect(writes).toEqual([]);
+    fireEvent.click(screen.getByTestId("wellness-ai-build"));
+    await screen.findByTestId("wellness-ai-proposal-0");
+    expect(asked).toBe(1);
+  });
+});
+
 describe("the AI Builder proposes; the user adds", () => {
   it("a sentence becomes a proposal with a live preview; nothing is kept until Add and Save", async () => {
     await open();
-    fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
     fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: "Do I exercise more after sleeping eight hours?" } });
     fireEvent.click(screen.getByTestId("wellness-ai-build"));
     await screen.findByTestId("wellness-ai-proposal-0");
@@ -232,7 +256,6 @@ describe("the AI Builder proposes; the user adds", () => {
 
   it("Discard drops the proposal", async () => {
     await open();
-    fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
     fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: "sleep and workouts" } });
     fireEvent.click(screen.getByTestId("wellness-ai-build"));
     await screen.findByTestId("wellness-ai-proposal-0");
@@ -244,7 +267,6 @@ describe("the AI Builder proposes; the user adds", () => {
   it("an answer the tab cannot draw is refused, not shown", async () => {
     suggest = () => ({ status: 200, body: { by: "ai", widgets: [{ id: "w", title: "All my data", kind: "metric", source: { kind: "sql", key: "select *" } }] } });
     await open();
-    fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
     fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: "show me everything" } });
     fireEvent.click(screen.getByTestId("wellness-ai-build"));
     await screen.findByTestId("wellness-ai-error");
@@ -254,7 +276,6 @@ describe("the AI Builder proposes; the user adds", () => {
   it("says when the fixed rules, not the model, read the sentence", async () => {
     suggest = () => ({ status: 200, body: { by: "rules", widget: { id: "w", title: "Sleep", kind: "metric", source: { kind: "metric", key: "sleep_hours" }, calc: "average", display: "line" } } });
     await open();
-    fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
     fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: "my sleep average" } });
     fireEvent.click(screen.getByTestId("wellness-ai-build"));
     await screen.findByTestId("wellness-ai-proposal-0");
@@ -270,7 +291,6 @@ describe("a whole dashboard from one description", () => {
     { id: "widget-3", title: "Cycling Distance", kind: "metric", source: { kind: "tracker", key: "Cycling" }, calc: "total", display: "bar", by: "ai" },
   ] } });
   const build = async (said: string) => {
-    fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
     fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: said } });
     fireEvent.click(screen.getByTestId("wellness-ai-build"));
     await screen.findByTestId("wellness-ai-proposals");
@@ -320,7 +340,6 @@ describe("a whole dashboard from one description", () => {
   it("when nothing it proposed can be drawn from the person's trackers, it says so instead of offering it", async () => {
     suggest = () => ({ status: 200, body: { by: "ai", widgets: [{ id: "w", title: "Cycling Distance", kind: "metric", source: { kind: "tracker", key: "Cycling" }, calc: "total", display: "bar" }] } });
     await open();
-    fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
     fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: "my cycling distance" } });
     fireEvent.click(screen.getByTestId("wellness-ai-build"));
     await screen.findByTestId("wellness-ai-error");
