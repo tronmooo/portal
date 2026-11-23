@@ -19,6 +19,16 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import Underline from "@tiptap/extension-underline";
+import { TableKit } from "@tiptap/extension-table";
+import TiptapImage from "@tiptap/extension-image";
+import TextAlign from "@tiptap/extension-text-align";
+import { cleanDocHtml, imageFileToDataUrl } from "@/lib/doc-html";
+import { markersToPictures, picturesToMarkers } from "@shared/workspace-document";
+import {
+  DEFAULT_PAGE_SETUP, PAGE_MARGINS, PAGE_SIZES, pageBox, parsePageSetup, serializePageSetup,
+  type PageSetup,
+} from "@shared/page-setup";
+import { FileCog, ImagePlus, Table as TableIcon } from "lucide-react";
 import { AllSelection } from "prosemirror-state";
 import Spreadsheet, { createFormulaParser as defaultCreateFormulaParser } from "react-spreadsheet";
 import { useSheetSnapshot, buildSheetFunctions } from "@/lib/sheet-functions";
@@ -231,6 +241,11 @@ export default function EditorPage() {
   const [title, setTitle] = useState<string>("");
   const [savedId, setSavedId] = useState<string | undefined>(existingId);
   const [dirty, setDirty] = useState(false);
+  // Paper size, orientation and margins (shared/page-setup.ts).
+  const [pageSetup, setPageSetup] = useState<PageSetup>({ ...DEFAULT_PAGE_SETUP });
+  const page = pageBox(pageSetup);
+  const changePageSetup = (patch: Partial<PageSetup>) => { setPageSetup((p) => ({ ...p, ...patch })); setDirty(true); };
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   // Sheet active cell + formula bar state.
   const [activeCell, setActiveCell] = useState<{ row: number; column: number } | null>(null);
@@ -278,6 +293,7 @@ export default function EditorPage() {
       setTitle(existing.title || "");
       if (existing.type === "doc") {
         setDocHtml(existing.content || "<p></p>");
+        setPageSetup(parsePageSetup(existing.language));
       } else if (existing.type === "sheet") {
         const sd = existing.sheetData;
         setSheet(sd && sd.rows > 0 && sd.cols > 0 ? sd : emptySheet());
@@ -327,6 +343,9 @@ export default function EditorPage() {
       StarterKit,
       Underline,
       Link.configure({ openOnClick: false, HTMLAttributes: { class: "text-primary underline" } }),
+      TableKit.configure({ table: { resizable: false } }),
+      TiptapImage.configure({ allowBase64: true, inline: false }),
+      TextAlign.configure({ types: ["heading", "paragraph"] }),
     ],
     content: docHtml || "<p></p>",
     onFocus: () => setDocFocused(true),
@@ -559,11 +578,8 @@ export default function EditorPage() {
       ? [...filter.selectedIds]
       : undefined;
     if (type === "doc") {
-      const cleanHtml = DOMPurify.sanitize(docHtml || "", {
-        ALLOWED_TAGS: ["p", "br", "strong", "em", "u", "s", "code", "pre", "h1", "h2", "h3", "h4", "ul", "ol", "li", "a", "blockquote", "hr"],
-        ALLOWED_ATTR: ["href", "target", "rel"],
-      });
-      return { type: "doc" as const, title: t, content: cleanHtml, source: fromChat ? "chat" : "manual", ...(linkedProfiles ? { linkedProfiles } : {}) };
+      const cleanHtml = cleanDocHtml(docHtml || "");
+      return { type: "doc" as const, title: t, content: cleanHtml, language: serializePageSetup(pageSetup), source: fromChat ? "chat" : "manual", ...(linkedProfiles ? { linkedProfiles } : {}) };
     }
     // Sheet: cap dimensions so the zod max ceilings hold.
     const safe: SheetData = {
@@ -639,11 +655,13 @@ export default function EditorPage() {
   const askDocumentAi = async (instruction: string) => {
     setAssistBusy(true);
     try {
-      const r = await apiRequest("POST", "/api/workspace/document/assist", { instruction, html: docHtml, title });
+      // Pictures do not go to the model: each is a marker there and back.
+      const sent = picturesToMarkers(cleanDocHtml(docHtml || ""));
+      const r = await apiRequest("POST", "/api/workspace/document/assist", { instruction, html: sent.html, title });
       const j = await r.json();
       if (typeof j?.html !== "string" || !j.html.trim()) throw new Error("The AI returned nothing.");
       setAiProposal({
-        html: j.html, title: typeof j.title === "string" ? j.title : null,
+        html: j.revised ? markersToPictures(j.html, sent.pictures) : j.html, title: typeof j.title === "string" ? j.title : null,
         blanks: Array.isArray(j.blanks) ? j.blanks.map(String) : [],
         sources: Array.isArray(j.sources) ? j.sources.map(String) : [],
         revised: !!j.revised,
@@ -652,6 +670,15 @@ export default function EditorPage() {
       toast({ title: "AI couldn't do that", description: aiErrorText(err), variant: "destructive" });
     } finally {
       setAssistBusy(false);
+    }
+  };
+  const insertImageFile = async (file: File | undefined | null) => {
+    if (!file || !editor) return;
+    try {
+      const src = await imageFileToDataUrl(file);
+      editor.chain().focus().setImage({ src, alt: file.name.replace(/\.[^.]+$/, "") }).run();
+    } catch (err: any) {
+      toast({ title: "Couldn't add that picture", description: err?.message || String(err), variant: "destructive" });
     }
   };
   const applyAiProposal = (how: "replace" | "append") => {
@@ -672,10 +699,11 @@ export default function EditorPage() {
     // A new document saves itself once there is something in it (an empty
     // one creates no row); a new sheet still waits for its first Save.
     if (!savedId && !(type === "doc" && hasUnsavedWork())) return;
-    const t = setTimeout(() => { quietSaveRef.current = !savedId; saveMut.mutate(); }, savedId ? 5000 : 2500);
+    // Every autosave is quiet: only the Save button may move the URL.
+    const t = setTimeout(() => { quietSaveRef.current = true; saveMut.mutate(); }, savedId ? 5000 : 2500);
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dirty, docHtml, sheet, title, savedId]);
+  }, [dirty, docHtml, sheet, title, savedId, pageSetup]);
 
   // Warn on close if dirty.
   useEffect(() => {
@@ -792,22 +820,19 @@ export default function EditorPage() {
 
   // ── Download (.docx / .xlsx) ────────────────────────────────────────────────
   const downloadDoc = async () => {
-    const { Document, Packer, Paragraph, HeadingLevel, TextRun } = await import("docx");
-    // Convert HTML → Paragraph[]. Lightweight: split on block tags and strip remaining tags.
-    // Parse into an inert document rather than a live <div>: assigning
-    // innerHTML would fire <img onerror> handlers in the document's HTML.
-    const tmp = new DOMParser().parseFromString(docHtml || "", "text/html").body;
-    const paragraphs: any[] = [];
-    tmp.querySelectorAll("h1,h2,h3,p,li,pre,blockquote").forEach((el) => {
-      const text = el.textContent || "";
-      let level: any = undefined;
-      if (el.tagName === "H1") level = HeadingLevel.HEADING_1;
-      else if (el.tagName === "H2") level = HeadingLevel.HEADING_2;
-      else if (el.tagName === "H3") level = HeadingLevel.HEADING_3;
-      paragraphs.push(new Paragraph({ heading: level, children: [new TextRun(text)] }));
+    const { Document, Packer } = await import("docx");
+    const { htmlToDocxBlocks } = await import("@/lib/doc-docx");
+    const children = await htmlToDocxBlocks(cleanDocHtml(docHtml || ""), page.widthPx - 2 * page.paddingPx);
+    // 1 CSS px = 15 twips (1440 twips per inch at 96 dpi).
+    const doc = new Document({
+      sections: [{
+        properties: { page: {
+          size: { width: Math.round(PAGE_SIZES[pageSetup.size].widthPx * 15), height: Math.round(PAGE_SIZES[pageSetup.size].heightPx * 15), orientation: pageSetup.orientation as any },
+          margin: { top: page.paddingPx * 15, bottom: page.paddingPx * 15, left: page.paddingPx * 15, right: page.paddingPx * 15 },
+        } },
+        children,
+      }],
     });
-    if (paragraphs.length === 0) paragraphs.push(new Paragraph({ children: [new TextRun(tmp.textContent || "")] }));
-    const doc = new Document({ sections: [{ children: paragraphs }] });
     const blob = await Packer.toBlob(doc);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -830,8 +855,8 @@ export default function EditorPage() {
     wrap.style.position = "fixed";
     wrap.style.left = "-10000px";
     wrap.style.top = "0";
-    wrap.style.width = "794px";
-    wrap.style.padding = "48px 56px";
+    wrap.style.width = `${page.widthPx}px`;
+    wrap.style.padding = `${page.paddingPx}px`;
     wrap.style.background = "#ffffff";
     wrap.style.color = "#111111";
     wrap.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
@@ -844,7 +869,10 @@ export default function EditorPage() {
     const body = document.createElement("div");
     body.className = "prose prose-sm max-w-none";
     // Sanitize the HTML again before injecting into the DOM tree we'll rasterize.
-    body.innerHTML = DOMPurify.sanitize(docHtml || "", { ADD_ATTR: ["target", "rel"] });
+    body.innerHTML = cleanDocHtml(docHtml || "");
+    body.querySelectorAll("table").forEach((t) => { (t as HTMLElement).style.borderCollapse = "collapse"; (t as HTMLElement).style.width = "100%"; });
+    body.querySelectorAll("td,th").forEach((c) => { (c as HTMLElement).style.border = "1px solid #999"; (c as HTMLElement).style.padding = "6px 8px"; });
+    body.querySelectorAll("img").forEach((im) => { (im as HTMLElement).style.maxWidth = "100%"; });
     wrap.appendChild(body);
     document.body.appendChild(wrap);
     try {
@@ -854,7 +882,7 @@ export default function EditorPage() {
         useCORS: true,
         logging: false,
       });
-      const pdf = new jsPDF({ unit: "pt", format: "a4" });
+      const pdf = new jsPDF({ unit: "pt", format: [page.widthPt, page.heightPt], orientation: pageSetup.orientation });
       const pageW = pdf.internal.pageSize.getWidth();
       const pageH = pdf.internal.pageSize.getHeight();
       const imgW = pageW;
@@ -1528,6 +1556,53 @@ export default function EditorPage() {
               if (url) editor?.chain().focus().setLink({ href: url }).run();
             }} aria-label="Insert link" data-testid="button-doc-link"><LinkIcon className="h-4 w-4" /></Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleCodeBlock().run()} aria-label="Code block" data-testid="button-doc-code"><Code className="h-4 w-4" /></Button>
+            <div className="w-px h-5 bg-border mx-1" />
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().setTextAlign("left").run()} aria-label="Align left" data-testid="button-doc-align-left"><AlignLeft className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().setTextAlign("center").run()} aria-label="Align center" data-testid="button-doc-align-center"><AlignCenter className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().setTextAlign("right").run()} aria-label="Align right" data-testid="button-doc-align-right"><AlignRight className="h-4 w-4" /></Button>
+            <div className="w-px h-5 bg-border mx-1" />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-8 px-2 gap-1" data-testid="button-doc-table"><TableIcon className="h-4 w-4" /> Table</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} data-testid="menu-table-insert">Insert 3 × 3 table</DropdownMenuItem>
+                {editor?.isActive("table") && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => editor.chain().focus().addRowAfter().run()} data-testid="menu-table-add-row">Add row below</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => editor.chain().focus().addColumnAfter().run()} data-testid="menu-table-add-col">Add column to the right</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeaderRow().run()}>Header row on / off</DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => editor.chain().focus().deleteRow().run()}>Delete this row</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => editor.chain().focus().deleteColumn().run()}>Delete this column</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => editor.chain().focus().deleteTable().run()} data-testid="menu-table-delete">Delete the table</DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button variant="ghost" size="sm" className="h-8 px-2 gap-1" onClick={() => { const el = imageInputRef.current; if (el) { el.value = ""; el.click(); } }} data-testid="button-doc-image"><ImagePlus className="h-4 w-4" /> Picture</Button>
+            <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => void insertImageFile(e.target.files?.[0])} data-testid="input-doc-image" />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-8 px-2 gap-1" data-testid="button-doc-page-setup"><FileCog className="h-4 w-4" /> Page</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                <p className="micro-label text-muted-foreground px-2 pt-1.5 pb-1">Paper</p>
+                {(Object.keys(PAGE_SIZES) as Array<keyof typeof PAGE_SIZES>).map((k) => (
+                  <DropdownMenuItem key={k} onClick={() => changePageSetup({ size: k })} data-testid={`menu-page-size-${k}`}>{pageSetup.size === k ? "✓ " : ""}{PAGE_SIZES[k].label}</DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <p className="micro-label text-muted-foreground px-2 pt-1.5 pb-1">Orientation</p>
+                <DropdownMenuItem onClick={() => changePageSetup({ orientation: "portrait" })} data-testid="menu-page-portrait">{pageSetup.orientation === "portrait" ? "✓ " : ""}Portrait</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => changePageSetup({ orientation: "landscape" })} data-testid="menu-page-landscape">{pageSetup.orientation === "landscape" ? "✓ " : ""}Landscape</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <p className="micro-label text-muted-foreground px-2 pt-1.5 pb-1">Margins</p>
+                {(Object.keys(PAGE_MARGINS) as Array<keyof typeof PAGE_MARGINS>).map((k) => (
+                  <DropdownMenuItem key={k} onClick={() => changePageSetup({ margins: k })} data-testid={`menu-page-margins-${k}`}>{pageSetup.margins === k ? "✓ " : ""}{PAGE_MARGINS[k].label}</DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
           {/* Tiptap content — on mobile we apply doc-mobile-black so the canvas
               renders as pure black like IMG_0420. Desktop keeps the standard
@@ -1535,6 +1610,15 @@ export default function EditorPage() {
           <div className="flex-1 overflow-auto doc-page-desk">
             <div
               className="doc-page relative px-4 py-4 doc-mobile-black md:!text-foreground min-h-full"
+              style={{ "--page-w": `${page.widthPx}px`, "--page-h": `${page.heightPx}px`, "--page-pad": `${page.paddingPx}px` } as CSSProperties}
+              data-page-setup={serializePageSetup(pageSetup)}
+              onDragOver={(e) => { if (Array.from(e.dataTransfer?.types || []).includes("Files")) e.preventDefault(); }}
+              onDrop={(e) => {
+                const img = Array.from(e.dataTransfer?.files || []).find((f) => f.type.startsWith("image/"));
+                if (!img) return;
+                e.preventDefault();
+                void insertImageFile(img);
+              }}
               data-testid="doc-editor-canvas"
             >
               {!(editor?.getText() || "").trim() && !docFocused && (
@@ -1559,7 +1643,7 @@ export default function EditorPage() {
               </p>
               <div
                 className="prose prose-sm max-w-none rounded-md border bg-background p-3"
-                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(aiProposal.html, { ALLOWED_TAGS: ["p", "br", "strong", "b", "em", "i", "u", "s", "code", "pre", "h1", "h2", "h3", "ul", "ol", "li", "a", "blockquote", "hr"], ALLOWED_ATTR: ["href"] }) }}
+                dangerouslySetInnerHTML={{ __html: cleanDocHtml(aiProposal.html) }}
               />
               <div className="flex flex-wrap gap-2 mt-2">
                 <Button size="sm" onClick={() => applyAiProposal("replace")} data-testid="button-doc-ai-replace">

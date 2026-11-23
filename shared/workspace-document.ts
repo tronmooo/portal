@@ -31,6 +31,7 @@ export function documentBlanks(html: string): string[] {
 const KEEP_TAGS = new Set([
   "p", "h1", "h2", "h3", "ul", "ol", "li", "strong", "b", "em", "i", "u", "s",
   "a", "br", "hr", "blockquote", "code", "pre",
+  "table", "thead", "tbody", "tr", "th", "td",
 ]);
 const VOID_TAGS = new Set(["br", "hr"]);
 /** Elements whose CONTENT goes too, not only the tag. */
@@ -61,7 +62,7 @@ export function sanitizeDocumentHtml(input: string): string {
     return `<${name}>`;
   });
   // A stray "<" that opened no kept tag must not open one later.
-  return html.replace(/<(?!\/?(?:p|h[1-3]|ul|ol|li|strong|b|em|i|u|s|a|br|hr|blockquote|code|pre)\b)/gi, "&lt;").trim();
+  return html.replace(/<(?!\/?(?:p|h[1-3]|ul|ol|li|strong|b|em|i|u|s|a|br|hr|blockquote|code|pre|table|thead|tbody|tr|th|td)\b)/gi, "&lt;").trim();
 }
 
 /** The draft's text without its tags, for a preview line. */
@@ -97,4 +98,30 @@ export function parseDraftReply(raw: string): ParsedDraft | null {
   const html = sanitizeDocumentHtml(text);
   if (documentPlainText(html).length < 20) return null;
   return { title, html };
+}
+
+// ── Pictures stay out of the model's hands ──────────────────────────────────
+// A picture in a document is megabytes of base64. Before a document goes to
+// the model each one is swapped for a marker, and put back in what returns.
+
+export function picturesToMarkers(html: string): { html: string; pictures: string[] } {
+  const pictures: string[] = [];
+  const out = String(html ?? "").replace(/<img\b[^>]*>/gi, (tag) => {
+    pictures.push(tag);
+    return `<p>[[PICTURE ${pictures.length}]]</p>`;
+  });
+  return { html: out, pictures };
+}
+
+/** Put the pictures back. One the model dropped is appended, never lost. */
+export function markersToPictures(html: string, pictures: string[]): string {
+  const used = new Set<number>();
+  let out = String(html ?? "").replace(/(?:<p>\s*)?\[\[PICTURE (\d+)\]\](?:\s*<\/p>)?/gi, (_m, n) => {
+    const i = Number(n) - 1;
+    if (!pictures[i] || used.has(i)) return "";
+    used.add(i);
+    return pictures[i];
+  });
+  pictures.forEach((tag, i) => { if (!used.has(i)) out += tag; });
+  return out;
 }
