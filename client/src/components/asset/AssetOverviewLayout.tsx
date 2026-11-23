@@ -57,9 +57,9 @@ export interface AssetLayoutProfile {
   fields?: Record<string, any> | null;
 }
 
-const PANEL = "bubble p-4";
+const PANEL = "bubble px-3.5 py-3";
 /** A row of a panel: label on the left, value beside it, a pencil to change it. */
-const ROW = "w-full flex items-center gap-3 min-h-[44px] py-2 text-left border-b border-border/30";
+const ROW = "w-full flex items-center gap-2.5 min-h-[36px] py-1.5 text-left border-b border-border/30 last:border-b-0";
 /** The editor a row opens into. */
 const TILE_BOX = "rounded-xl bg-muted/30 px-3 py-2.5";
 const PURCHASE_PRICE_KEYS = ["purchasePrice", "originalPrice", "costBasis"];
@@ -86,15 +86,6 @@ const isDateKey = (key: string) => fieldSemantics(key, "2026-01-01").role === "d
 const shortDate = (iso: string) =>
   parseLocalDate(iso)?.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) ?? iso;
 
-function SectionTitle({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-2 px-0.5">
-      <h2 className="text-[15px] font-semibold tracking-tight">{children}</h2>
-      {action}
-    </div>
-  );
-}
-
 function Panel({ title, action, children, testId, grow }: {
   title: string; action?: React.ReactNode; children: React.ReactNode; testId?: string;
   /** Takes the height left in its column, so two columns end on the same line. */
@@ -102,8 +93,8 @@ function Panel({ title, action, children, testId, grow }: {
 }) {
   return (
     <section className={`${PANEL} ${grow ? "flex-1" : ""}`} data-testid={testId}>
-      <div className="flex items-center justify-between gap-2 mb-1">
-        <h2 className="text-[17px] font-semibold tracking-tight">{title}</h2>
+      <div className="flex items-center justify-between gap-2 min-h-[32px]">
+        <h2 className="text-[16px] font-semibold tracking-tight">{title}</h2>
         {action && <div className="flex items-center gap-1.5 shrink-0">{action}</div>}
       </div>
       {children}
@@ -324,9 +315,9 @@ const signedPct = (n: number) => `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(1
 export function AssetHeroStats({ profile }: { profile: AssetLayoutProfile }) {
   const v = useValuePosition(profile);
   const cell = (label: string, value: React.ReactNode, tone: string, testId: string) => (
-    <div className="px-3 py-2 min-w-0 text-center" data-testid={testId}>
-      <p className="text-[12px] text-muted-foreground whitespace-nowrap">{label}</p>
-      <p className={`text-[18px] font-bold tabular-nums leading-tight whitespace-nowrap ${tone}`}>{value}</p>
+    <div className="px-3 py-1.5 min-w-0 text-center" data-testid={testId}>
+      <p className="text-[11px] text-muted-foreground whitespace-nowrap">{label}</p>
+      <p className={`text-[17px] font-bold tabular-nums leading-tight whitespace-nowrap ${tone}`}>{value}</p>
     </div>
   );
   const none = <span className="text-[14px] font-medium text-muted-foreground/70">Not set</span>;
@@ -377,8 +368,8 @@ function ValueCard({ profile }: { profile: AssetLayoutProfile }) {
 
   return (
     <section className={PANEL} data-testid="asset-value-card">
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <h2 className="text-[17px] font-semibold tracking-tight">{up ? "Value & Appreciation" : "Value & Depreciation"}</h2>
+      <div className="flex items-center justify-between gap-2 min-h-[32px]">
+        <h2 className="text-[16px] font-semibold tracking-tight">{up ? "Value & Appreciation" : "Value & Depreciation"}</h2>
         {v.auto && v.supported && (
           <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={() => { void v.refresh(); }} disabled={v.refreshing} data-testid="asset-value-refresh">
             <RefreshCw className={`h-3.5 w-3.5 ${v.refreshing ? "animate-spin" : ""}`} />
@@ -386,9 +377,9 @@ function ValueCard({ profile }: { profile: AssetLayoutProfile }) {
           </Button>
         )}
       </div>
-      <div className={`grid gap-4 items-center ${xy.length >= 2 ? "grid-cols-1 min-[420px]:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]" : "grid-cols-1"}`}>
+      <div className={`grid gap-3 items-center ${xy.length >= 2 ? "grid-cols-1 min-[420px]:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]" : "grid-cols-1"}`}>
         {xy.length >= 2 && (
-          <svg viewBox="0 0 200 80" className="w-full h-auto" role="img" aria-label={`Value from ${formatMoneyCompact(points[0])} to ${formatMoneyCompact(points[points.length - 1])}`}>
+          <svg viewBox="0 0 200 80" className="w-full h-auto max-h-[110px]" preserveAspectRatio="none" role="img" aria-label={`Value from ${formatMoneyCompact(points[0])} to ${formatMoneyCompact(points[points.length - 1])}`}>
             <defs>
               <linearGradient id={`val-fill-${profile.id}`} x1="0" x2="0" y1="0" y2="1">
                 <stop offset="0" stopColor="#8b5cf6" stopOpacity="0.38" /><stop offset="1" stopColor="#8b5cf6" stopOpacity="0.03" />
@@ -401,7 +392,7 @@ function ValueCard({ profile }: { profile: AssetLayoutProfile }) {
         )}
         <div className="min-w-0">
           {rows.map(([label, value, cls]) => (
-            <div key={label} className="flex items-center justify-between gap-3 py-1.5" data-testid={`asset-value-row-${label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>
+            <div key={label} className="flex items-center justify-between gap-3 py-1" data-testid={`asset-value-row-${label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>
               <span className="text-[13px] text-muted-foreground">{label}</span>
               <span className={`text-[14px] font-semibold tabular-nums ${cls}`}>{value}</span>
             </div>
@@ -659,6 +650,37 @@ export function AssetOverviewBody({
     : "";
   const nextAlert = alerts.find((a) => !a.cleared);
   const hasQuick = !!age || worked.length > 0 || !!nextAlert;
+  // Quick Info sits under whichever column is shorter, so neither card is
+  // left holding a blank area to reach the other's height.
+  const quickLines = hasQuick ? 1 + (age ? 1 : 0) + worked.length + (nextAlert ? 1 : 0) : 0;
+  const charLines = 1 + Math.max(charRows.length, 1);
+  const pairedLines = 4 + Math.ceil(detailRows.length / 2);   // title, Name, Notes, add-date + the pairs
+  const singleLines = 4 + detailRows.length;
+  const quickOnLeft = hasQuick && pairedLines + quickLines <= charLines;
+  // Asset Details pairs its rows two to a line — unless the column beside it
+  // is taller, when one row per line fills the card instead of leaving it
+  // half empty.
+  // A second card in the column costs about a line of padding and gap.
+  const rightLines = charLines + (quickOnLeft || !hasQuick ? 0 : quickLines + 1);
+  const pairRows = quickOnLeft || Math.abs(pairedLines - rightLines) <= Math.abs(singleLines - rightLines);
+  const quickInfo = hasQuick ? (
+    <Panel title="Quick Info" testId="asset-quick-info" grow>
+      {age && (
+        <div className={ROW} data-testid="asset-quick-age"><RowBody icon={Calendar} label="Age" value={age} /></div>
+      )}
+      {worked.map((m) => (
+        <div key={m.semanticKey} className={ROW} data-testid={`overview-metric-${m.semanticKey}`}>
+          <RowBody icon={iconFor(m.semanticKey)} label={m.label}
+            value={<span className={toneClass(m.tone)}>{formatValue(m)}</span>} trailing={<ProvenanceMark value={m} />} />
+        </div>
+      ))}
+      {nextAlert && (
+        <div className={ROW} data-testid="asset-alert-row">
+          <RowBody icon={Bell} label={nextAlert.title} value={nextAlert.when} />
+        </div>
+      )}
+    </Panel>
+  ) : null;
 
   const sectionsOf = (...components: string[]) =>
     spec.sections.filter((s) => components.includes(s.component)).map((s) => renderSection(s, profile.id));
@@ -667,11 +689,13 @@ export function AssetOverviewBody({
     <>
       <AttentionStrip spec={spec} />
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)] gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)] gap-3">
+        <div className="flex flex-col gap-3 min-w-0">
         {/* ── Asset Details ── */}
         <Panel
           title="Asset Details"
           testId="asset-details"
+          grow={!quickOnLeft}
           action={<>
             {valueLookupKey && <FindValueButton profileId={profile.id} fieldKey={valueLookupKey} />}
             <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={onEdit} data-testid="asset-details-edit">
@@ -679,29 +703,31 @@ export function AssetOverviewBody({
             </Button>
           </>}
         >
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
             <RecordTextRow profileId={profile.id} prop="name" label="Name" value={profile.name || ""} icon={Type}
               placeholder="Name this asset" testId="asset-detail-name" />
-            {detailRows.map((r, i) => r(detailRows.length % 2 === 1 && i === detailRows.length - 1))}
+            {detailRows.map((r, i) => r(!pairRows || (detailRows.length % 2 === 1 && i === detailRows.length - 1)))}
             <RecordTextRow profileId={profile.id} prop="notes" label="Notes" value={profile.notes || ""} icon={StickyNote}
               placeholder="No notes yet" testId="asset-detail-notes" />
           </div>
           {addingDate ? (
             <div className="mt-2"><AddDateForm profileId={profile.id} options={dateOptions} onDone={() => setAddingDate(false)} /></div>
           ) : (
-            <button type="button" className="mt-2 text-[12px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+            <button type="button" className="mt-1.5 text-[12px] text-muted-foreground hover:text-foreground flex items-center gap-1"
               onClick={() => setAddingDate(true)} data-testid="asset-add-date">
               <CalendarPlus className="h-3.5 w-3.5" /> Add a date (warranty, renewal, expiration)
             </button>
           )}
         </Panel>
+        {quickOnLeft && quickInfo}
+        </div>
 
-        <div className="flex flex-col gap-4 min-w-0">
+        <div className="flex flex-col gap-3 min-w-0">
           {/* ── Characteristics ── */}
           <Panel
             title="Characteristics"
             testId="asset-characteristics"
-            grow={!hasQuick}
+            grow={quickOnLeft || !hasQuick}
             action={
               <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => setAddingField((a) => !a)} data-testid="asset-add-characteristic">
                 <Plus className="h-3.5 w-3.5" /> Add Characteristic
@@ -718,32 +744,14 @@ export function AssetOverviewBody({
             {addingField && <div className="mt-2"><AddFieldPanel profileId={profile.id} inline onAdded={() => setAddingField(false)} /></div>}
           </Panel>
 
-          {/* ── Quick Info: what the app worked out ── */}
-          {hasQuick && (
-            <Panel title="Quick Info" testId="asset-quick-info" grow>
-              {age && (
-                <div className={ROW} data-testid="asset-quick-age"><RowBody icon={Calendar} label="Age" value={age} /></div>
-              )}
-              {worked.map((m) => (
-                <div key={m.semanticKey} className={ROW} data-testid={`overview-metric-${m.semanticKey}`}>
-                  <RowBody icon={iconFor(m.semanticKey)} label={m.label}
-                    value={<span className={toneClass(m.tone)}>{formatValue(m)}</span>} trailing={<ProvenanceMark value={m} />} />
-                </div>
-              ))}
-              {nextAlert && (
-                <div className={ROW} data-testid="asset-alert-row">
-                  <RowBody icon={Bell} label={nextAlert.title} value={nextAlert.when} />
-                </div>
-              )}
-            </Panel>
-          )}
+          {!quickOnLeft && quickInfo}
         </div>
       </div>
 
       {sectionsOf("progressIndicator", "relationshipSummary", "ownershipSummary", "maintenanceSummary", "miniTimeline", "aiInsight")}
 
       {/* ── AI Summary | Value & Depreciation ── */}
-      <div className={`grid grid-cols-1 gap-4 ${summarySlot ? "lg:grid-cols-2" : ""}`}>
+      <div className={`grid grid-cols-1 gap-3 ${summarySlot ? "lg:grid-cols-2" : ""}`}>
         {summarySlot && <div className="min-w-0 [&>*]:h-full">{summarySlot}</div>}
         <ValueCard profile={profile} />
       </div>
@@ -840,76 +848,45 @@ export function AssetQuickAdd({ profileId, onOpenDocuments, onEdit }: {
   );
 }
 
-// ── Profile actions ──────────────────────────────────────────────────────────
-
-function ActionRow({ icon: Icon, title, detail, onClick, danger, disabled, testId }: {
-  icon: any; title: string; detail: string; onClick: () => void; danger?: boolean; disabled?: boolean; testId?: string;
-}) {
-  return (
-    <button type="button" disabled={disabled} onClick={onClick} data-testid={testId}
-      className="w-full flex items-center gap-3 px-4 py-3 text-left disabled:opacity-50 hover:bg-muted/20 transition-colors">
-      <Icon className={`h-[18px] w-[18px] shrink-0 ${danger ? "text-red-500" : "text-muted-foreground"}`} strokeWidth={1.8} />
-      <span className="flex-1 min-w-0">
-        <span className={`block text-[14px] font-semibold ${danger ? "text-red-500" : ""}`}>{title}</span>
-        <span className="block text-[12px] text-muted-foreground">{detail}</span>
-      </span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
-    </button>
-  );
-}
+// ── Alert actions for the header's ⋯ menu ────────────────────────────────────
 
 /**
- * What you do TO the record: edit it, add a field, silence its alerts, delete
- * it. Clearing dismisses this record's dated alerts into the server's dismiss
- * list (the one the bell and the dashboard read), so it follows the user
- * across devices and Restore brings every one of them back.
+ * "Clear alerts" / "Restore alerts" as menu items. Clearing dismisses this
+ * record's dated alerts into the server's dismiss list (the one the bell and
+ * the dashboard read), so it follows the user across devices and Restore
+ * brings every one of them back.
  */
-export function AssetProfileActions({ profileId, noun = "asset", onEdit, onDelete }: {
-  profileId: string;
-  noun?: string;
-  onEdit: () => void;
-  /** Opens the delete confirmation — this never deletes on its own (Rule 8). */
-  onDelete: () => void;
-}) {
+export function AssetAlertMenuItems({ profileId }: { profileId: string }) {
   const { toast } = useToast();
   const { alerts, dismiss, restore } = useRecordAlerts(profileId);
   const live = alerts.filter((a) => !a.cleared);
   const cleared = alerts.filter((a) => a.cleared);
   const busy = dismiss.isPending || restore.isPending;
-
-  const clear = () => dismiss.mutate(live.map((a) => a.id), {
-    onSuccess: () => toast({
-      title: `Cleared ${live.length} alert${live.length === 1 ? "" : "s"}`,
-      description: "The dates stay on the records. Restore brings the alerts back.",
-    }),
-  });
-  const bringBack = () => restore.mutate(cleared.map((a) => a.id), {
-    onSuccess: () => toast({ title: "Alerts restored" }),
-  });
-
   return (
-    <div className="mt-6 space-y-2" data-testid="profile-alerts-section">
-      <SectionTitle>Profile actions</SectionTitle>
-      <div className="bubble overflow-hidden divide-y divide-border/40">
-        <ActionRow icon={Pencil} title={`Edit all ${noun} details`} detail="Every field in one form" onClick={onEdit} testId="action-edit-profile" />
-        <ActionRow
-          icon={BellOff}
-          title="Clear document alerts"
-          detail={alerts.length === 0
-            ? "No dates on this record are raising alerts"
-            : live.length === 0
-              ? "All of this record's alerts are cleared"
-              : `Hide ${live.length} alert${live.length === 1 ? "" : "s"} from this record and its documents`}
-          onClick={clear}
-          disabled={live.length === 0 || busy}
-          testId="button-clear-document-alerts"
-        />
-        {cleared.length > 0 && (
-          <ActionRow icon={Bell} title="Restore alerts" detail={`Bring back ${cleared.length} cleared alert${cleared.length === 1 ? "" : "s"}`}
-            onClick={bringBack} disabled={busy} testId="button-restore-document-alerts" />
-        )}
-        <ActionRow icon={Trash2} title={`Delete this ${noun}`} detail={`Permanently remove this ${noun} and all its data`} onClick={onDelete} danger testId="button-delete-profile-info-tab" />
-      </div>
-    </div>
+    <>
+      <DropdownMenuItem
+        disabled={live.length === 0 || busy}
+        data-testid="button-clear-document-alerts"
+        onSelect={() => dismiss.mutate(live.map((a) => a.id), {
+          onSuccess: () => toast({
+            title: `Cleared ${live.length} alert${live.length === 1 ? "" : "s"}`,
+            description: "The dates stay on the records. Restore brings the alerts back.",
+          }),
+        })}
+      >
+        <BellOff className="h-4 w-4 mr-2" />
+        {live.length > 0 ? `Clear ${live.length} alert${live.length === 1 ? "" : "s"}` : "No alerts to clear"}
+      </DropdownMenuItem>
+      {cleared.length > 0 && (
+        <DropdownMenuItem
+          disabled={busy}
+          data-testid="button-restore-document-alerts"
+          onSelect={() => restore.mutate(cleared.map((a) => a.id), { onSuccess: () => toast({ title: "Alerts restored" }) })}
+        >
+          <Bell className="h-4 w-4 mr-2" />
+          Restore {cleared.length} cleared alert{cleared.length === 1 ? "" : "s"}
+        </DropdownMenuItem>
+      )}
+    </>
   );
 }

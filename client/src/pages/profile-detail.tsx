@@ -1,7 +1,7 @@
 import { NewNoteForm } from "@/components/notes/NewNoteForm";
 import { DetailValueCells } from "@/components/details/DetailValueCells";
 import { AddFieldPanel } from "@/components/AddFieldPanel";
-import { AssetOverviewBody, AssetProfileActions, AssetHeroStats, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
+import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroStats, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { OverviewSpec } from "@shared/overview-spec";
 import { changedFieldsOnly } from "@shared/field-patch";
@@ -13438,6 +13438,12 @@ export default function ProfileDetailPage() {
     : heroStatus?.tone === "warning" ? "warn" : "neutral";
   const assetBadges = (
     <>
+      <span data-testid="hero-entity-label">
+        <Pill tone="neutral" className="capitalize">
+          <visual.icon className="h-3 w-3" />
+          {heroSpec?.identity?.entityLabel || String(profile.type).replace(/_/g, " ")}
+        </Pill>
+      </span>
       {hasTab("contained") ? (
         <button type="button" onClick={() => openTab("contained")} title="Open ownership" data-testid="hero-owner-pill">
           <Pill tone="ai"><User className="h-3 w-3" />{ownerPillLabel}</Pill>
@@ -13465,12 +13471,6 @@ export default function ProfileDetailPage() {
           icon={visual.icon}
           title={<span data-testid="text-profile-detail-name">{profile.name}</span>}
           pageTitle={assetLayout ? "Asset Profile" : undefined}
-          subtitle={assetLayout ? (
-            <span className="inline-flex items-center gap-1.5 capitalize" data-testid="hero-entity-label">
-              <visual.icon className="h-3.5 w-3.5" />
-              {heroSpec?.identity?.entityLabel || String(profile.type).replace(/_/g, " ")}
-            </span>
-          ) : undefined}
           typeLabel={assetLayout ? undefined : isAccountProfile(profile) ? accountKindMeta(accountKindOf(profile)).label : profile.type}
           badges={assetLayout ? assetBadges : tagPills}
           breadcrumb={
@@ -13522,6 +13522,7 @@ export default function ProfileDetailPage() {
                     <FileText className="h-4 w-4 mr-2" /> Documents
                   </DropdownMenuItem>
                 )}
+                <AssetAlertMenuItems profileId={profile.id} />
                 <DropdownMenuItem onSelect={() => setShowDeleteDialog(true)} className="text-destructive focus:text-destructive" data-testid="button-delete-profile">
                   <Trash2 className="h-4 w-4 mr-2" /> Delete this asset
                 </DropdownMenuItem>
@@ -13721,15 +13722,9 @@ export default function ProfileDetailPage() {
                       previously unreachable from here (clearing lived inside an
                       expanded row of a dashboard popup; Delete only in the page
                       header). User report 2026-08-26. */}
-                  {assetLayout ? (
-                    <>
-                      <AssetProfileActions
-                        profileId={profile.id}
-                        onEdit={() => setShowEditDialog(true)}
-                        onDelete={() => setShowDeleteDialog(true)}
-                      />
-                    </>
-                  ) : (
+                  {/* An asset's alert and delete actions are in the header's ⋯
+                      menu (owner's layout, 2026-11-23). */}
+                  {!assetLayout && (
                     <ProfileAlertsSection
                       profileId={profile.id}
                       profileType={profile.type}

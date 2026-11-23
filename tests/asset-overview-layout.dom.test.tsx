@@ -11,7 +11,6 @@
 //     the id the bell uses — never the browser-only snooze (Rule 8)
 //   · opening the page writes nothing (Rule 3)
 //   · + Task / + Expense create ordinary records linked to this asset
-//   · Delete only asks; it never deletes on its own (Rule 8)
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -37,7 +36,8 @@ vi.mock("@/lib/cache-bus", () => ({
 }));
 
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
-import { AssetOverviewBody, AssetProfileActions, AssetHeroStats, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
+import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroStats, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { __resetValuationRefreshState, valuationQueryKey } from "@/hooks/useAssetValuation";
 
 const ID = "zenbook";
@@ -100,7 +100,11 @@ function mount(over: { onEdit?: () => void; onDelete?: () => void; onOpenOwnersh
         />
         <AssetHeroStats profile={PROFILE} />
         <AssetQuickAdd profileId={ID} onEdit={over.onEdit ?? (() => {})} />
-        <AssetProfileActions profileId={ID} onEdit={over.onEdit ?? (() => {})} onDelete={over.onDelete ?? (() => {})} />
+        {/* The header's ⋯ menu, open, as the page renders it. */}
+        <DropdownMenu open>
+          <DropdownMenuTrigger>menu</DropdownMenuTrigger>
+          <DropdownMenuContent><AssetAlertMenuItems profileId={ID} /></DropdownMenuContent>
+        </DropdownMenu>
       </Router>
     </QueryClientProvider>,
   );
@@ -236,17 +240,14 @@ describe("asset profile layout", () => {
     expect(writes()[1]).toMatchObject({ method: "POST", url: "/api/expenses", body: { amount: 39.99, description: "Charger", date: "2026-11-20", linkedProfiles: [ID] } });
   });
 
-  it("Edit, ownership and delete open the page's own controls; nothing is deleted here", async () => {
-    const onEdit = vi.fn(), onDelete = vi.fn(), onOpenOwnership = vi.fn();
-    mount({ onEdit, onDelete, onOpenOwnership });
+  it("Edit and ownership open the page's own controls and write nothing", async () => {
+    const onEdit = vi.fn(), onOpenOwnership = vi.fn();
+    mount({ onEdit, onOpenOwnership });
     await screen.findByTestId("asset-details");
     fireEvent.click(screen.getByTestId("asset-details-edit"));
-    fireEvent.click(screen.getByTestId("action-edit-profile"));
-    expect(onEdit).toHaveBeenCalledTimes(2);
+    expect(onEdit).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId("asset-detail-ownership"));
     expect(onOpenOwnership).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByTestId("button-delete-profile-info-tab"));
-    expect(onDelete).toHaveBeenCalledTimes(1);
     expect(writes()).toEqual([]);
 
     // Add Characteristic is the same Field | Value | Add form as every profile.

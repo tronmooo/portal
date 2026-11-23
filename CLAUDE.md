@@ -537,7 +537,7 @@ dates as overdue (it is where one is recorded); chat's bill table and
 "I paid X" still read the stored date; on a person, pet or account page "Clear
 document alerts" still writes the browser-only 30-day snooze
 (`ProfileAlertsSection.tsx`) — an asset's dismisses into the server list
-(`AssetProfileActions`).
+(`AssetAlertMenuItems`).
 
 ## Record details rules (a characteristic is a typed, reportable value on any record)
 
@@ -609,10 +609,13 @@ current value is the one the AI estimates", "nothing loses connections",
 "no empty spaces", "everything should be editable". An owned thing's page
 (`usesAssetLayout`, `client/src/pages/profile-detail.tsx`; an account keeps
 `AccountOverview`) is built from `client/src/components/asset/AssetOverviewLayout.tsx`:
-`AssetHeroStats` in the `DetailHero` (`pageTitle`, `aside`), `AssetQuickAdd`
+`AssetHeroStats` in the `DetailHero` (`pageTitle`, `aside`: ONE header row —
+back, picture, name and chips, the four figures, the ⋯ menu), `AssetQuickAdd`
 beside the tabs, `AssetOverviewBody` (Asset Details | Characteristics + Quick
-Info, then AI Summary | Value & Depreciation) and `AssetProfileActions`.
-Read this before touching any of them.
+Info, then AI Summary | Value & Depreciation) and `AssetAlertMenuItems` in the
+⋯ menu. Nothing sits under the two card rows: Edit, Ownership, Documents,
+Clear / Restore alerts and Delete are the ⋯ menu ("remove all that space, make
+it look exactly like the photo"). Read this before touching any of them.
 *Guard:* `tests/asset-overview-layout.dom.test.tsx`.
 
 **P1. The layout owns no data.** Rows, dates and "Not set" suggestions are the
@@ -628,14 +631,17 @@ Portol tracks the value, the user's own number once tracking is off — against
 the purchase price. There is no separate value card at the top; how the
 estimate was made, Refresh and the "Track value automatically" switch are the
 `CurrentValueCard` under Value & Depreciation's disclosure.
-**P3. Alerts are the rule engine's.** Quick Info's alert row and "Clear
-document alerts" are `useRecordAlerts`: `rulesFromAll` over the UNFLATTENED
+**P3. Alerts are the rule engine's.** Quick Info's alert row and the menu's
+"Clear alerts" are `useRecordAlerts`: `rulesFromAll` over the UNFLATTENED
 profile row and its documents, filtered by `isAlertDateRule`, identified by
 `dateAlertId` (the bell's id), cleared and restored through
 `useDismissedAlerts` (Rule 8). Never the browser snooze.
-**P4. No empty halves, and what is shown is edited where it is shown.** The
-rows between Name and Notes are a list and an odd one out takes the row; the
-two columns stretch to the same height. Name and Notes (the record's own
+**P4. Dense, no empty halves, and what is shown is edited where it is shown.**
+Rows are 36px with tight card padding. The rows between Name and Notes are a
+list and an odd one out takes the row. The two columns end on the same line
+without a blank area inside a card: Quick Info goes under whichever column is
+shorter, and Asset Details shows one row per line instead of two when the
+column beside it is taller (`pairRows`). Name and Notes (the record's own
 `name` / `notes`), every field row and every date open an editor in place;
 money is stored as a number. Category is the composition's label and
 Ownership opens the Contained tab; only what the app calculated is read-only.

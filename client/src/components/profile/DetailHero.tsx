@@ -92,23 +92,14 @@ export function DetailHero({
   // kept as-is: "Autopay: Off" and "Status: Upcoming" mean something.
   const shown = stats.filter((s) => s.countTo == null || s.countTo > 0);
   const backClass = pageTitle
-    ? "inline-flex items-center justify-center h-9 w-9 -ml-2 rounded-full text-foreground hover:bg-muted/40 transition-colors"
+    ? "inline-flex items-center justify-center h-8 w-8 -ml-1.5 shrink-0 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
     : "inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors";
   const backInner = pageTitle
     ? <><ChevronLeft className="h-5 w-5" /><span className="sr-only">{backLabel}</span></>
     : <><ArrowLeft className="h-3.5 w-3.5" /> {backLabel}</>;
-  const avatarBox = pageTitle ? "w-[72px] h-[72px] !rounded-2xl" : "w-12 h-12";
-
-  return (
-    <div
-      className="bubble bubble-enter p-4 md:p-5"
-      style={{ ["--accent-hsl" as any]: accent }}
-      data-testid={testId}
-    >
-      {/* Back + actions */}
-      {(backHref || onBack || actions) && (
-        <div className={pageTitle ? "grid grid-cols-[1fr_auto_1fr] items-center gap-2 mb-3" : "flex items-center justify-between gap-2 mb-3"}>
-          {backHref && backHref.includes("?") ? (
+  const avatarBox = pageTitle ? "w-14 h-14 !rounded-2xl" : "w-12 h-12";
+  const backEl = (
+          backHref && backHref.includes("?") ? (
             // A query-carrying target ("/linked?tab=assets") must stay INSIDE
             // the hash: wouter's Link hoists the query out of it, and the
             // section param then rides on the document URL instead of the
@@ -138,15 +129,29 @@ export function DetailHero({
             >
               {backInner}
             </button>
-          ) : <span />}
-          {pageTitle && <p className="text-[15px] font-semibold text-center" data-testid="detail-hero-page-title">{pageTitle}</p>}
-          {actions ? <div className="flex items-center gap-1.5 shrink-0 justify-self-end">{actions}</div> : pageTitle ? <span /> : null}
+          ) : <span />
+  );
+
+  return (
+    <div
+      className={pageTitle ? "bubble bubble-enter p-3 md:p-3.5" : "bubble bubble-enter p-4 md:p-5"}
+      style={{ ["--accent-hsl" as any]: accent }}
+      data-testid={testId}
+    >
+      {/* Back + actions: their own row, except on a titled page, where the
+          whole header is ONE row (back · identity · figures · menu). */}
+      {!pageTitle && (backHref || onBack || actions) && (
+        <div className="flex items-center justify-between gap-2 mb-3">
+          {backEl}
+          {actions && <div className="flex items-center gap-1.5 shrink-0">{actions}</div>}
         </div>
       )}
 
       {/* Identity */}
-      <div className={aside ? "flex flex-col lg:flex-row lg:items-center gap-4" : "contents"}>
-      <div className={`${pageTitle ? "flex items-center gap-4" : "flex items-start gap-3"} ${aside ? "flex-1 min-w-0" : ""}`}>
+      <div className={pageTitle ? "flex items-start gap-1.5" : "contents"}>
+      {pageTitle && (backHref || onBack) && <div className="pt-3">{backEl}</div>}
+      <div className={aside ? "flex-1 min-w-0 flex flex-col lg:flex-row lg:items-center gap-3" : pageTitle ? "flex-1 min-w-0" : "contents"}>
+      <div className={`${pageTitle ? "flex items-center gap-3" : "flex items-start gap-3"} ${aside ? "flex-1 min-w-0" : ""}`}>
         {avatar ? (
           <>
             {avatar.inputRef && (
@@ -170,7 +175,7 @@ export function DetailHero({
             >
               {avatar.src
                 ? <img src={avatar.src} alt="" className="w-full h-full object-cover" />
-                : <Icon className={pageTitle ? "h-8 w-8" : "h-[22px] w-[22px]"} strokeWidth={2.1} />}
+                : <Icon className={pageTitle ? "h-7 w-7" : "h-[22px] w-[22px]"} strokeWidth={2.1} />}
               <span className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                 <Camera className="h-4 w-4 text-white" />
               </span>
@@ -186,8 +191,11 @@ export function DetailHero({
         )}
 
         <div className="flex-1 min-w-0">
+          {pageTitle && (
+            <p className="inline-block rounded bg-emerald-500/20 text-emerald-300 px-1.5 text-[11px] font-semibold leading-[18px]" data-testid="detail-hero-page-title">{pageTitle}</p>
+          )}
           <h1
-            className={`${pageTitle ? "text-2xl" : "text-xl"} font-bold tracking-tight leading-tight`}
+            className={`${pageTitle ? "text-[22px]" : "text-xl"} font-bold tracking-tight leading-tight`}
             data-testid="detail-hero-title"
           >
             {title}
@@ -197,7 +205,7 @@ export function DetailHero({
           )}
           {breadcrumb}
           {(typeLabel || badges) && (
-            <div className="flex flex-wrap items-center gap-1.5 mt-2">
+            <div className={`flex flex-wrap items-center gap-1.5 ${pageTitle ? "mt-1" : "mt-2"}`}>
               {/* `capitalize` because callers pass the raw stored type — the
                   chip read "asset", lowercase, next to a bold title. */}
               {typeLabel && <Pill accent={accent} className="capitalize">{typeLabel}</Pill>}
@@ -208,6 +216,8 @@ export function DetailHero({
       </div>
 
       {aside && <div className="lg:shrink-0">{aside}</div>}
+      </div>
+      {pageTitle && actions && <div className="flex items-center gap-1.5 shrink-0">{actions}</div>}
       </div>
 
       {notes && (
