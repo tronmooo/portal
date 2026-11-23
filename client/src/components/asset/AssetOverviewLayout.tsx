@@ -1,30 +1,31 @@
-// ─── Asset profile layout (owner's design, 2026-11-22) ──────────────────────
+// ─── Asset profile layout (owner's design, 2026-11-23) ──────────────────────
 //
-// The asset's Overview drawn to the owner's mock-up: Asset details as tiles,
-// Financial position, Documents beside Alerts, Calendar & reminders, and (at
-// the bottom of the tab) Profile actions.
+// The asset's Overview drawn to the owner's mock-up: the value stats in the
+// header, Asset Details as rows, Characteristics and Quick Info beside it, and
+// AI Summary next to Value & Depreciation underneath.
 //
 // Layout only. Every number and row here is read from a store another screen
 // already reads, so nothing on this page can disagree with the rest of the app:
 //
 //   details / dates / suggestions → the composed OverviewSpec (DynamicOverview)
-//   current value                 → currentAssetValue (Rule 1)
+//   current value                 → currentAssetValue (Rule 1): the estimate
+//                                   while Portol tracks the value
 //   alerts                        → the date-rule engine over this record and
 //                                   its documents (Rule 5), dismissed into the
 //                                   server's one dismiss list (Rule 8)
-//   documents                     → /api/profiles/:id/documents
 //
-// A tile writes one field with the same PATCH the old rows used.
+// A row writes one field with the same PATCH the chat's update_profile uses.
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
 import {
-  Bell, BellOff, Calendar, CalendarPlus, ChevronDown, ChevronRight, CircleDot, FileText, Hash,
-  MapPin, Package, Pencil, Plus, ShoppingCart, StickyNote, Tag, Trash2, TrendingDown, TrendingUp, X,
+  Bell, BellOff, Calendar, CalendarPlus, Check, ChevronDown, CircleDot, FileText, Hash,
+  MapPin, MoreHorizontal, Package, Pencil, Plus, RefreshCw, ShoppingCart, StickyNote, Tag, Type, Users, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { formatApiError } from "@/lib/formatError";
@@ -32,16 +33,17 @@ import { formatMoneyCompact, parseLocalDate } from "@/lib/format";
 import { localTodayISO } from "@/lib/dates";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
-import { useAssetValuation } from "@/hooks/useAssetValuation";
+import { useAssetValuation, useAssetValuationHistory } from "@/hooks/useAssetValuation";
 import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
 import { AddFieldPanel } from "@/components/AddFieldPanel";
-import { userEnteredAssetValue } from "@/components/asset/CurrentValueCard";
+import { NewNoteForm } from "@/components/notes/NewNoteForm";
+import { CurrentValueCard } from "@/components/asset/CurrentValueCard";
 import {
-  AttentionStrip, FindValueButton, ProvenanceMark, formatValue, renderSection, toneClass, useFieldWrite,
+  ProvenanceMark, formatValue, renderSection, toneClass, useFieldWrite,
 } from "@/components/overview/DynamicOverview";
 import { parseMoney, resolveAssetValue } from "@shared/asset-value";
 import { currentAssetValue, isAutoValuationEnabled } from "@shared/valuation/context";
-import { countdownLabel, isAlertDateRule, rulesFromAll, type DateRule } from "@shared/date-rules";
+import { calendarDelta, countdownLabel, isAlertDateRule, rulesFromAll, type DateRule } from "@shared/date-rules";
 import { dateAlertId } from "@shared/alert-ids";
 import { fieldSemantics } from "@shared/overview-semantics";
 import { humanizeFieldName } from "@shared/field-label";
@@ -53,13 +55,11 @@ export interface AssetLayoutProfile {
   type: string;
   notes?: string | null;
   fields?: Record<string, any> | null;
-  relatedEvents?: any[];
 }
 
-// The app's card surface at tile size.
-const TILE_BOX = "bubble !rounded-2xl px-3 py-2.5";
-const TILE = `${TILE_BOX} min-h-[58px] w-full flex items-center gap-3 text-left`;
-const PANEL = "bubble p-4";
+const PANEL = "bubble px-3.5 py-3";
+/** The editor a row opens into. */
+const TILE_BOX = "rounded-xl bg-muted/30 px-3 py-2.5";
 const PURCHASE_PRICE_KEYS = ["purchasePrice", "originalPrice", "costBasis"];
 const PURCHASE_DATE_RE = /^(purchase|purchased|acquisition|acquired|bought)[_ ]?(date|on)$|^date[_ ]?(of[_ ]?)?purchased?$/i;
 /** Sections with a shape of their own; everything else is a card of fields. */
@@ -72,7 +72,7 @@ function iconFor(key: string) {
   const k = key.toLowerCase();
   if (/purchase.*price|cost|paid/.test(k)) return ShoppingCart;
   if (/value|worth|price/.test(k)) return Tag;
-  if (/date|expir|renew|due/.test(k)) return Calendar;
+  if (/date|expir|renew|due|year/.test(k)) return Calendar;
   if (/location|address|city|room/.test(k)) return MapPin;
   if (/note|description/.test(k)) return StickyNote;
   if (/serial|vin|model|number|plate|identifier|sku/.test(k)) return Hash;
@@ -81,178 +81,208 @@ function iconFor(key: string) {
 }
 
 const isDateKey = (key: string) => fieldSemantics(key, "2026-01-01").role === "date";
-
-function SectionTitle({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
+function Panel({ title, action, children, testId, grow }: {
+  title: string; action?: React.ReactNode; children: React.ReactNode; testId?: string;
+  /** Takes the height left in its column, so two columns end on the same line. */
+  grow?: boolean;
+}) {
   return (
-    <div className="flex items-center justify-between gap-2 px-0.5">
-      <h2 className="text-[15px] font-semibold tracking-tight">{children}</h2>
-      {action}
-    </div>
+    <section className={`${PANEL} ${grow ? "flex-1" : ""}`} data-testid={testId}>
+      <div className="flex items-center justify-between gap-2 min-h-[32px]">
+        <h2 className="text-[16px] font-semibold tracking-tight">{title}</h2>
+        {action && <div className="flex items-center gap-1.5 shrink-0">{action}</div>}
+      </div>
+      {children}
+    </section>
   );
 }
 
-// ── One field as a tile ──────────────────────────────────────────────────────
+// ── Asset Details: one form, edited in line ─────────────────────────────────
 
-function FieldTile({
-  profileId, fieldKey, label, display, raw, kind = "text", reason, readOnly, testId, removeTestId, wide,
-  removable = true, iconKey,
-}: {
-  profileId: string;
-  fieldKey: string;
+const BOX = "h-8 w-full rounded-md border border-border/60 bg-background/40 px-2.5 text-[13px] flex items-center min-w-0";
+
+interface FormCell {
+  /** Draft key: "name", "notes", or the stored field key. */
+  key: string;
   label: string;
-  /** What the tile shows; null means the field is not set. */
-  display: React.ReactNode | null;
-  raw?: string;
-  kind?: "text" | "money" | "date";
-  /** Why this field is worth filling — shown while it is not set. */
-  reason?: string;
-  readOnly?: boolean;
+  icon?: any;
+  kind?: "text" | "money" | "date" | "long";
+  /** What is stored now, as the input shows it. */
+  original?: string;
+  placeholder?: string;
+  /** A cell that is not typed into: Category (the app's label), Ownership (opens its tab). */
+  fixed?: React.ReactNode;
   testId?: string;
-  removeTestId?: string;
-  wide?: boolean;
-  /** False for a value that can be changed but not removed (the value itself). */
-  removable?: boolean;
-  /** Picks the icon when the stored key does not say what the tile is. */
-  iconKey?: string;
+}
+
+/**
+ * Asset Details as the owner drew it: every value in its own box, typed into
+ * where it stands, and ONE Save for whatever changed. Opening writes nothing
+ * (Rule 3); Save sends only the changed values in a single PATCH — the same
+ * `name` / `notes` / `fields` the Edit dialog and the chat's update_profile
+ * write — and puts them in the page's cache at once.
+ */
+function AssetDetailsForm({ profileId, rows, onEdit }: {
+  profileId: string; rows: FormCell[][]; onEdit: () => void;
+}) {
+  const { toast } = useToast();
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const cells = rows.flat().filter((c) => !c.fixed);
+  const valueOf = (c: FormCell) => edits[c.key] ?? c.original ?? "";
+  const changed = cells.filter((c) => c.key in edits && edits[c.key].trim() !== (c.original ?? "").trim());
+  const set = (key: string, v: string) => setEdits((e) => ({ ...e, [key]: v }));
+
+  const save = async () => {
+    if (changed.length === 0) return;
+    const body: Record<string, any> = {};
+    const fields: Record<string, string | number> = {};
+    const remove: string[] = [];
+    for (const c of changed) {
+      const v = edits[c.key].trim();
+      if (c.key === "name") {
+        if (!v) { toast({ title: "A name can't be blank", variant: "destructive" }); return; }
+        body.name = v;
+      } else if (c.key === "notes") body.notes = v;
+      else if (!v) remove.push(c.key);
+      // Money is stored as a number, like every other amount the app writes.
+      else fields[c.key] = c.kind === "money" ? parseMoney(v) : v;
+    }
+    if (Object.keys(fields).length) body.fields = fields;
+    if (remove.length) body.fieldsToDelete = remove;
+    setSaving(true);
+    try {
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, body);
+      // The header and every row show the saved values now, not after a refetch.
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old) return old;
+        const nextFields = { ...(old.fields || {}), ...fields };
+        for (const k of remove) delete nextFields[k];
+        return { ...old, ...(body.name !== undefined ? { name: body.name } : {}), ...(body.notes !== undefined ? { notes: body.notes } : {}), fields: nextFields };
+      });
+      setEdits({});
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "overview"] });
+      void invalidateDomains("profiles");
+    } catch (err: any) {
+      toast({ title: "Couldn't save", description: formatApiError(err), variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const control = (c: FormCell) => {
+    if (c.fixed) return c.fixed;
+    const v = valueOf(c);
+    if (c.kind === "long") {
+      const limit = Math.max(500, (c.original ?? "").length);
+      return (
+        <span className="relative block w-full">
+          <Input value={v} maxLength={limit} placeholder={c.placeholder} onChange={(e) => set(c.key, e.target.value)}
+            className="h-8 text-[13px] pr-14" aria-label={c.label} data-testid={c.testId} />
+          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground tabular-nums">{v.length}/{limit}</span>
+        </span>
+      );
+    }
+    return (
+      <Input value={v} placeholder={c.placeholder ?? "Not set"} onChange={(e) => set(c.key, e.target.value)}
+        type={c.kind === "date" ? "date" : "text"} inputMode={c.kind === "money" ? "decimal" : undefined}
+        onKeyDown={(e) => { if (e.key === "Enter") void save(); }}
+        className="h-8 text-[13px] tabular-nums" aria-label={c.label} data-testid={c.testId} />
+    );
+  };
+
+  return (
+    <section className={`${PANEL} flex-1`} data-testid="asset-details">
+      <div className="flex items-center justify-between gap-2 min-h-[32px] mb-1">
+        <h2 className="text-[16px] font-semibold tracking-tight">Asset Details</h2>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {changed.length > 0 && (
+            <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setEdits({})} data-testid="asset-details-undo">Undo</Button>
+          )}
+          <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={onEdit} data-testid="asset-details-edit">
+            <Pencil className="h-3.5 w-3.5" /> Edit
+          </Button>
+          <Button size="sm" className="h-8 text-xs gap-1 bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-50"
+            disabled={saving || changed.length === 0} onClick={() => void save()} data-testid="asset-details-save">
+            <Check className="h-3.5 w-3.5" /> {saving ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </div>
+      <div>
+        {rows.map((row, i) => (
+          <div key={i} className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1 py-1 border-b border-border/30 last:border-b-0">
+            {row.map((c, j) => {
+              const Icon = c.icon;
+              return (
+                <div key={c.key} className={`flex items-center gap-2.5 min-w-0 ${j === 0 ? "flex-[1.25_1_0%]" : "flex-1"} basis-full sm:basis-0`}>
+                  {j === 0 && Icon && <Icon className="h-[17px] w-[17px] shrink-0 text-muted-foreground" strokeWidth={1.8} />}
+                  <span className={`shrink-0 text-[13px] truncate ${j === 0 ? "w-[108px]" : "sm:w-auto w-[135px] pl-[27px] sm:pl-0"}`}>{c.label}</span>
+                  <span className="flex-1 min-w-0">{control(c)}</span>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** One characteristic: label | value, a pencil to change it, an X to remove it (two taps). */
+function CharRow({ profileId, fieldKey, label, display, raw, kind = "text", reason, readOnly, testId, removeTestId }: {
+  profileId: string; fieldKey: string; label: string; display: React.ReactNode | null; raw?: string;
+  kind?: "text" | "money" | "date"; reason?: string; readOnly?: boolean; testId?: string; removeTestId?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const { confirm, isArmed } = useConfirmArm();
   const write = useFieldWrite(profileId);
-  const Icon = iconFor(iconKey || fieldKey);
+  const Icon = iconFor(fieldKey);
   const unset = display == null;
-
   const save = async () => {
     const text = draft.trim();
     if (!text) return;
-    // Money is stored as a number, like every other amount the app writes.
-    const value = kind === "money" ? parseMoney(text) : text;
     setSaving(true);
-    const ok = await write(fieldKey, value);
+    const ok = await write(fieldKey, kind === "money" ? parseMoney(text) : text);
     setSaving(false);
     if (ok) setEditing(false);
   };
-
-  if (editing) {
-    return (
-      <div className={`col-span-2 ${TILE_BOX} ring-1 ring-primary/40 space-y-1.5`}>
-        <label className="text-[12px] text-muted-foreground" htmlFor={`tile-${fieldKey}`}>{label}</label>
-        <div className="flex items-center gap-1.5">
-          <Input
-            id={`tile-${fieldKey}`}
-            className="h-9 text-[14px] flex-1 min-w-0"
-            type={kind === "date" ? "date" : "text"}
-            inputMode={kind === "money" ? "decimal" : undefined}
-            value={draft}
-            autoFocus
-            onChange={(e) => setDraft(e.target.value)}
+  return (
+    <div className="flex items-center gap-2.5 min-h-[32px] py-0.5 border-b border-border/30 last:border-b-0" title={unset ? reason : undefined}>
+      <Icon className="h-[17px] w-[17px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
+      <span className="w-[42%] max-w-[190px] shrink-0 text-[13px] truncate">{label}</span>
+      <span className="self-stretch w-px bg-border/40" />
+      {editing ? (
+        <>
+          <Input autoFocus value={draft} type={kind === "date" ? "date" : "text"} onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") setEditing(false); }}
-            data-testid={`overview-field-input-${fieldKey}`}
-          />
-          <Button size="sm" className="h-9 text-xs" disabled={saving || !draft.trim()} onClick={() => void save()}>
-            {saving ? "…" : "Save"}
-          </Button>
-          {!unset && removable && (
-            <Button
-              size="sm"
-              variant={isArmed("rm") ? "destructive" : "ghost"}
-              className="h-9 text-xs px-2"
-              disabled={saving}
-              aria-label={isArmed("rm") ? `Tap again to remove ${label}` : `Remove ${label}`}
-              data-testid={removeTestId}
-              onClick={() => confirm("rm", async () => {
-                setSaving(true);
-                const ok = await write(fieldKey, null);
-                setSaving(false);
-                if (ok) setEditing(false);
-              })}
-            >
-              {isArmed("rm") ? "Remove?" : <Trash2 className="h-3.5 w-3.5" />}
-            </Button>
+            className="h-7 text-[13px] flex-1 min-w-0" aria-label={label} data-testid={`overview-field-input-${fieldKey}`} />
+          <button type="button" className="h-7 w-7 grid place-items-center text-emerald-400 disabled:opacity-50" disabled={saving || !draft.trim()}
+            onClick={() => void save()} aria-label={`Save ${label}`} data-testid={`overview-field-save-${fieldKey}`}><Check className="h-4 w-4" /></button>
+          <button type="button" className="h-7 w-7 grid place-items-center text-muted-foreground" onClick={() => setEditing(false)} aria-label="Cancel"><X className="h-4 w-4" /></button>
+        </>
+      ) : (
+        <>
+          <span className={`flex-1 min-w-0 truncate text-[13px] ${unset ? "text-muted-foreground/70" : "tabular-nums"}`}>{unset ? "Not set" : display}</span>
+          {readOnly ? <span data-testid={testId} /> : (
+            <button type="button" className="h-7 w-7 grid place-items-center text-muted-foreground hover:text-foreground"
+              onClick={() => { setDraft(raw ?? ""); setEditing(true); }} aria-label={`Edit ${label}`} data-testid={testId}>
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
           )}
-          <Button size="sm" variant="ghost" className="h-9 px-2" aria-label="Cancel" onClick={() => setEditing(false)}>
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-        {unset && reason && <p className="text-[11px] text-muted-foreground">{reason}</p>}
-      </div>
-    );
-  }
-
-  const body = (
-    <>
-      <Icon className="h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
-      <span className="flex-1 min-w-0">
-        <span className="block text-[12px] text-muted-foreground truncate">{label}</span>
-        <span className={`block truncate ${unset ? "text-[14px] text-muted-foreground/70" : "text-[15px] font-semibold tabular-nums"}`}>
-          {unset ? "Not set" : display}
-        </span>
-      </span>
-    </>
-  );
-  if (readOnly) return <div className={`${TILE} ${wide ? "col-span-2" : ""}`} data-testid={testId}>{body}</div>;
-  return (
-    <button
-      type="button"
-      className={`${TILE} ${wide ? "col-span-2" : ""}`}
-      title={unset ? reason : undefined}
-      onClick={() => { setDraft(raw ?? ""); setEditing(true); }}
-      data-testid={testId}
-    >
-      {body}
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
-    </button>
-  );
-}
-
-/** The record's notes, edited where they are shown (the same `notes` the Edit
- *  dialog and the chat's update_profile write). */
-function NotesTile({ profileId, notes }: { profileId: string; notes: string }) {
-  const { toast } = useToast();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-  const save = async () => {
-    setSaving(true);
-    try {
-      await apiRequest("PATCH", `/api/profiles/${profileId}`, { notes: draft.trim() });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      void invalidateDomains("profiles");
-      setEditing(false);
-    } catch (err: any) {
-      toast({ title: "Failed to save notes", description: formatApiError(err), variant: "destructive" });
-    } finally {
-      setSaving(false);
-    }
-  };
-  if (editing) {
-    return (
-      <div className={`col-span-2 ${TILE_BOX} ring-1 ring-primary/40 space-y-1.5`}>
-        <label className="text-[12px] text-muted-foreground" htmlFor={`notes-${profileId}`}>Notes</label>
-        <textarea id={`notes-${profileId}`} rows={3} autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
-          className="w-full rounded-md border border-input bg-background px-2.5 py-2 text-[14px]"
-          placeholder="Anything worth remembering about this asset" data-testid="asset-notes-input" />
-        <div className="flex justify-end gap-1.5">
-          <Button size="sm" variant="ghost" className="h-9 text-xs" onClick={() => setEditing(false)}>Cancel</Button>
-          <Button size="sm" className="h-9 text-xs" disabled={saving || draft.trim() === notes.trim()} onClick={() => void save()} data-testid="asset-notes-save">
-            {saving ? "…" : "Save"}
-          </Button>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <button type="button" className={`${TILE} col-span-2`} onClick={() => { setDraft(notes); setEditing(true); }} data-testid="asset-detail-notes">
-      <StickyNote className="h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
-      <span className="flex-1 min-w-0">
-        <span className="block text-[12px] text-muted-foreground">Notes</span>
-        <span className={`block text-[14px] ${notes.trim() ? "line-clamp-3 whitespace-pre-line" : "text-muted-foreground/70"}`}>
-          {notes.trim() || "No notes yet"}
-        </span>
-      </span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
-    </button>
+          {!readOnly && !unset && (
+            <button type="button" disabled={saving}
+              className={`h-7 min-w-7 px-1 grid place-items-center rounded text-[11px] ${isArmed("rm") ? "bg-destructive text-destructive-foreground" : "text-muted-foreground hover:text-destructive"}`}
+              aria-label={isArmed("rm") ? `Tap again to remove ${label}` : `Remove ${label}`} data-testid={removeTestId}
+              onClick={() => confirm("rm", async () => { setSaving(true); await write(fieldKey, null); setSaving(false); })}>
+              {isArmed("rm") ? "Remove?" : <X className="h-4 w-4" />}
+            </button>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -267,122 +297,134 @@ function rawOf(v: OverviewValue): string {
 const kindOf = (v: OverviewValue): "text" | "money" | "date" =>
   v.displayType === "money" ? "money" : v.displayType === "date" ? "date" : "text";
 
-// ── Financial position ───────────────────────────────────────────────────────
+// ── Value: one answer, shown in the header and in Value & Depreciation ───────
 
-function ValueChangeCard({ profile, extra }: {
-  profile: AssetLayoutProfile;
-  /** The composition's own financial facts (net worth impact, equity, cost),
-   *  shown under the chart so the page has ONE "Financial position". */
-  extra: OverviewValue[];
-}) {
+/**
+ * What the asset is worth now against what was paid for it. "Now" is
+ * currentAssetValue — the estimate while Portol tracks the value, the user's
+ * own number once tracking is off — the same answer the Assets list and net
+ * worth give (Rule 1).
+ */
+export function useValuePosition(profile: AssetLayoutProfile) {
   const fields = profile.fields || {};
-  const { snapshot } = useAssetValuation(profile.id);
+  const { snapshot, refresh, refreshing } = useAssetValuation(profile.id);
   const auto = snapshot?.mode ? snapshot.mode === "auto" : isAutoValuationEnabled(fields);
+  const record = snapshot?.record ?? null;
   const priceKey = PURCHASE_PRICE_KEYS.find((k) => parseMoney(fields[k]) > 0);
-  const entered = userEnteredAssetValue(fields);
-  const start = priceKey
-    ? { value: parseMoney(fields[priceKey]), label: "Purchase price", point: "Purchased" }
-    : entered > 0 ? { value: entered, label: "You entered", point: "You entered" } : null;
-  // The same answer the value card, the Assets list and net worth give (Rule 1).
-  const now = auto ? currentAssetValue(fields, snapshot?.record, resolveAssetValue).value : resolveAssetValue(fields);
-  // The user's own number against itself is not a change.
-  const hasChange = !!start && !!now && now > 0 && (!!priceKey || start.value !== now);
-  if (!hasChange || !start || !now) {
-    if (extra.length === 0) return null;
-    return (
-      <div className={PANEL} data-testid="asset-financial-position">
-        <h2 className="text-[15px] font-semibold tracking-tight">Financial position</h2>
-        <ExtraFacts values={extra} bare />
-      </div>
-    );
-  }
+  const paid = priceKey ? parseMoney(fields[priceKey]) : 0;
+  const now = (auto ? currentAssetValue(fields, record, resolveAssetValue).value : resolveAssetValue(fields)) || 0;
+  const hasChange = paid > 0 && now > 0;
+  const delta = hasChange ? now - paid : 0;
+  const pct = hasChange ? (delta / paid) * 100 : 0;
+  const confidence = auto && record && record.confidenceLabel !== "none" ? Math.round(record.confidence * 100) : null;
+  return { auto, record, paid, now, hasChange, delta, pct, confidence, refresh, refreshing, supported: snapshot?.supported !== false };
+}
 
-  const delta = now - start.value;
-  const pct = start.value > 0 ? (delta / start.value) * 100 : 0;
-  const up = delta >= 0;
-  const hi = Math.max(start.value, now), lo = Math.min(start.value, now);
-  const y = (n: number) => (hi === lo ? 40 : 24 + (1 - (n - lo) / (hi - lo)) * 34);
-  const y0 = y(start.value), y1 = y(now);
-  const curve = `M 16 ${y0} C 86 ${y0}, 114 ${y1}, 184 ${y1}`;
-  const nowLabel = auto ? "Current estimate" : "Current value";
+const signed = (n: number) => `${n >= 0 ? "+" : "−"}${formatMoneyCompact(Math.abs(n))}`;
+const signedPct = (n: number) => `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(1)}%`;
 
+/** The four numbers in the header: Current Value, Purchase Price, the change, Confidence. */
+export function AssetHeroStats({ profile }: { profile: AssetLayoutProfile }) {
+  const v = useValuePosition(profile);
+  const cell = (label: string, value: React.ReactNode, tone: string, testId: string) => (
+    <div className="px-3 py-1.5 min-w-0 text-center" data-testid={testId}>
+      <p className="text-[11px] text-muted-foreground whitespace-nowrap">{label}</p>
+      <p className={`text-[17px] font-bold tabular-nums leading-tight whitespace-nowrap ${tone}`}>{value}</p>
+    </div>
+  );
+  const none = <span className="text-[14px] font-medium text-muted-foreground/70">Not set</span>;
   return (
-    <div className={PANEL} data-testid="asset-financial-position">
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] gap-3 items-center">
-        <div className="min-w-0">
-          <h2 className="text-[15px] font-semibold tracking-tight">Financial position</h2>
-          <p className="text-[12px] text-muted-foreground">How this asset's value has changed</p>
-          <div className="flex flex-wrap gap-x-4 gap-y-2 mt-3">
-            <div>
-              <p className="text-[12px] text-muted-foreground flex items-center gap-1.5 whitespace-nowrap">
-                <span className="h-2 w-2 rounded-full bg-violet-400 shrink-0" />{start.label}
-              </p>
-              <p className="text-[17px] font-bold tabular-nums" data-testid="asset-position-start">{formatMoneyCompact(start.value)}</p>
-            </div>
-            <div>
-              <p className="text-[12px] text-muted-foreground flex items-center gap-1.5 whitespace-nowrap">
-                <span className="h-2 w-2 rounded-full bg-cyan-400 shrink-0" />{nowLabel}
-              </p>
-              <p className="text-[17px] font-bold tabular-nums" data-testid="asset-position-now">{formatMoneyCompact(now)}</p>
-            </div>
-          </div>
-          <span
-            className={`inline-flex items-center gap-1 mt-2.5 rounded-full px-2.5 py-1 text-[12px] font-semibold tabular-nums ${up ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}
-            data-testid="asset-position-change"
-          >
-            {up ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
-            {up ? "+" : "−"}{Math.abs(pct).toFixed(1)}% ({up ? "+" : "−"}{formatMoneyCompact(Math.abs(delta))})
-          </span>
-        </div>
-        <svg viewBox="0 0 200 96" className="w-full h-auto" role="img" aria-label={`${start.label} ${formatMoneyCompact(start.value)}, ${nowLabel.toLowerCase()} ${formatMoneyCompact(now)}`}>
-          <defs>
-            <linearGradient id={`pos-line-${profile.id}`} x1="0" x2="1" y1="0" y2="0">
-              <stop offset="0" stopColor="#a78bfa" /><stop offset="1" stopColor="#22d3ee" />
-            </linearGradient>
-            <linearGradient id={`pos-fill-${profile.id}`} x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0" stopColor="#8b5cf6" stopOpacity="0.35" /><stop offset="1" stopColor="#22d3ee" stopOpacity="0.02" />
-            </linearGradient>
-          </defs>
-          <path d={`${curve} L 184 76 L 16 76 Z`} fill={`url(#pos-fill-${profile.id})`} />
-          <path d={curve} fill="none" stroke={`url(#pos-line-${profile.id})`} strokeWidth="2" strokeLinecap="round" />
-          <line x1="16" x2="16" y1={y0} y2="76" stroke="currentColor" strokeOpacity="0.15" />
-          <line x1="184" x2="184" y1={y1} y2="76" stroke="currentColor" strokeOpacity="0.15" />
-          <circle cx="16" cy={y0} r="4" fill="#a78bfa" stroke="white" strokeWidth="1.5" />
-          <circle cx="184" cy={y1} r="4" fill="#22d3ee" stroke="white" strokeWidth="1.5" />
-          <text x="16" y={y0 - 9} fontSize="10" fontWeight="600" fill="currentColor" textAnchor="start">{formatMoneyCompact(start.value)}</text>
-          <text x="184" y={y1 - 9} fontSize="10" fontWeight="600" fill="currentColor" textAnchor="end">{formatMoneyCompact(now)}</text>
-          <text x="16" y="90" fontSize="9" fill="currentColor" fillOpacity="0.6" textAnchor="start">{start.point}</text>
-          <text x="184" y="90" fontSize="9" fill="currentColor" fillOpacity="0.6" textAnchor="end">{auto ? "Est. today" : "Today"}</text>
-        </svg>
-      </div>
-      <ExtraFacts values={extra} />
+    <div className="bubble-row !rounded-2xl grid grid-cols-2 sm:grid-cols-4 divide-x divide-border/40" data-testid="asset-hero-stats">
+      {cell(v.auto ? "Current Value" : "Your Value", v.now > 0 ? formatMoneyCompact(v.now) : none, "text-emerald-400", "hero-stat-current-value")}
+      {cell("Purchase Price", v.paid > 0 ? formatMoneyCompact(v.paid) : none, "", "hero-stat-purchase-price")}
+      {cell(v.delta > 0 ? "Appreciation" : "Depreciation",
+        v.hasChange ? `${signed(v.delta)} (${Math.abs(v.pct).toFixed(0)}%)` : <span className="text-[14px] font-medium text-muted-foreground/70">—</span>,
+        v.delta > 0 ? "text-emerald-400" : "text-red-400", "hero-stat-change")}
+      {cell("Confidence", v.confidence != null ? `${v.confidence}%` : <span className="text-[14px] font-medium text-muted-foreground/70">—</span>,
+        v.confidence != null && v.confidence >= 70 ? "text-emerald-400" : v.confidence != null && v.confidence >= 45 ? "text-amber-400" : "", "hero-stat-confidence")}
     </div>
   );
 }
 
-function ExtraFacts({ values, bare }: { values: OverviewValue[]; bare?: boolean }) {
-  if (values.length === 0) return null;
-  const frame = bare ? "mt-2" : "mt-3 pt-3 border-t border-border/40";
-  // One fact takes the row (label left, number right) rather than a third of it.
-  if (values.length === 1) {
-    const v = values[0];
-    return (
-      <div className={`flex items-center justify-between gap-3 ${frame}`} data-testid={`overview-metric-${v.semanticKey}`}>
-        <p className="text-[13px] text-muted-foreground flex items-center gap-1.5 min-w-0">{v.label}<ProvenanceMark value={v} /></p>
-        <p className={`text-[16px] font-bold tabular-nums ${toneClass(v.tone)}`}>{formatValue(v)}</p>
-      </div>
-    );
-  }
+/** Value & Depreciation: the history as a line, the same four numbers as a
+ *  table, and — one tap away — how the estimate was made and its switch. */
+function ValueCard({ profile, inset }: { profile: AssetLayoutProfile; inset?: boolean }) {
+  const v = useValuePosition(profile);
+  const [details, setDetails] = useState(false);
+  const history = useAssetValuationHistory(profile.id, v.supported);
+  const points = useMemo(() => {
+    const past = (history.data || []).filter((h) => h.value != null && h.value > 0).map((h) => Number(h.value)).slice(-5);
+    const list = [...(v.paid > 0 ? [v.paid] : []), ...past];
+    if (v.now > 0 && list[list.length - 1] !== v.now) list.push(v.now);
+    return list;
+  }, [history.data, v.paid, v.now]);
+
+  const up = v.delta > 0;
+  const tone = up ? "text-emerald-400" : "text-red-400";
+  const hi = Math.max(...points, 1), lo = Math.min(...points, hi);
+  const xy = points.map((n, i) => {
+    const x = points.length === 1 ? 100 : 12 + (i * 176) / (points.length - 1);
+    const y = hi === lo ? 40 : 16 + (1 - (n - lo) / (hi - lo)) * 46;
+    return [x, y] as const;
+  });
+  const line = xy.map(([x, y], i) => `${i ? "L" : "M"} ${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+
+  const rows: Array<[string, React.ReactNode, string]> = [
+    ["Purchase Price", v.paid > 0 ? formatMoneyCompact(v.paid) : "Not set", v.paid > 0 ? "" : "text-muted-foreground/70 font-normal"],
+    [v.auto ? "Current Value" : "Your Value", v.now > 0 ? formatMoneyCompact(v.now) : "Not estimated yet", v.now > 0 ? "text-emerald-400" : "text-muted-foreground/70 font-normal"],
+    ...(v.hasChange ? [
+      [up ? "Appreciation" : "Depreciation", signed(v.delta), tone],
+      ["Change", signedPct(v.pct), tone],
+    ] as Array<[string, React.ReactNode, string]> : []),
+  ];
+
   return (
-    <div className={`grid grid-cols-2 gap-3 ${frame}`}>
-      {values.map((v, i) => (
-        <div key={v.semanticKey} className={`min-w-0 ${values.length % 2 === 1 && i === values.length - 1 ? "col-span-2" : ""}`} data-testid={`overview-metric-${v.semanticKey}`}>
-          <p className="text-[12px] text-muted-foreground flex items-center gap-1 truncate">{v.label}<ProvenanceMark value={v} /></p>
-          <p className={`text-[16px] font-bold tabular-nums leading-tight ${toneClass(v.tone)}`}>{formatValue(v)}</p>
-          {v.note && <p className="text-[11px] text-muted-foreground/80 truncate">{v.note}</p>}
+    <section className={inset ? "rounded-xl ring-1 ring-border/50 bg-muted/20 px-3.5 py-3 min-w-0" : "min-w-0"} data-testid="asset-value-card">
+      <div className="flex items-center justify-between gap-2 min-h-[32px]">
+        <h2 className="text-[16px] font-semibold tracking-tight">{up ? "Value & Appreciation" : "Value & Depreciation"}</h2>
+        {v.auto && v.supported && (
+          <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={() => { void v.refresh(); }} disabled={v.refreshing} data-testid="asset-value-refresh">
+            <RefreshCw className={`h-3.5 w-3.5 ${v.refreshing ? "animate-spin" : ""}`} />
+            {v.refreshing ? "Refreshing…" : "Refresh"}
+          </Button>
+        )}
+      </div>
+      <div className={`grid gap-3 items-center ${xy.length >= 2 ? "grid-cols-1 min-[420px]:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]" : "grid-cols-1"}`}>
+        {xy.length >= 2 && (
+          <svg viewBox="0 0 200 80" className="w-full h-auto max-h-[110px]" preserveAspectRatio="none" role="img" aria-label={`Value from ${formatMoneyCompact(points[0])} to ${formatMoneyCompact(points[points.length - 1])}`}>
+            <defs>
+              <linearGradient id={`val-fill-${profile.id}`} x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stopColor="#8b5cf6" stopOpacity="0.38" /><stop offset="1" stopColor="#8b5cf6" stopOpacity="0.03" />
+              </linearGradient>
+            </defs>
+            <path d={`${line} L ${xy[xy.length - 1][0]} 76 L ${xy[0][0]} 76 Z`} fill={`url(#val-fill-${profile.id})`} />
+            <path d={line} fill="none" stroke="#a78bfa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            {xy.map(([x, y], i) => <circle key={i} cx={x} cy={y} r="3" fill="#c4b5fd" />)}
+          </svg>
+        )}
+        <div className="min-w-0">
+          {rows.map(([label, value, cls]) => (
+            <div key={label} className="flex items-center justify-between gap-3 py-1" data-testid={`asset-value-row-${label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>
+              <span className="text-[13px] text-muted-foreground">{label}</span>
+              <span className={`text-[14px] font-semibold tabular-nums ${cls}`}>{value}</span>
+            </div>
+          ))}
+          {!v.hasChange && v.paid <= 0 && (
+            <p className="text-[12px] text-muted-foreground mt-1">Add a purchase price to see how the value has changed.</p>
+          )}
         </div>
-      ))}
-    </div>
+      </div>
+      {v.supported && (
+        <>
+          <button type="button" className="mt-2 text-[12px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+            onClick={() => setDetails((d) => !d)} data-testid="asset-value-details-toggle">
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${details ? "rotate-180" : ""}`} />
+            {v.auto ? "How this is estimated, and automatic tracking" : "Automatic tracking is off — your value, and the last estimate"}
+          </button>
+          {details && <CurrentValueCard profileId={profile.id} fields={profile.fields} showHistory className="mt-2" />}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -430,179 +472,6 @@ export function useRecordAlerts(profileId: string) {
   }, [row, documents, idSet]);
 
   return { alerts, documents, documentsQuery: docsQuery, dismiss, restore };
-}
-
-function DocumentsCard({ documents, loading, failed, onRetry, onAdd }: {
-  documents: any[]; loading: boolean; failed: boolean; onRetry: () => void; onAdd?: () => void;
-}) {
-  const [, navigate] = useLocation();
-  return (
-    <div className={`${PANEL} flex flex-col gap-2 min-w-0`} data-testid="asset-documents-card">
-      <div className="flex items-center gap-2">
-        <FileText className="h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
-        <h2 className="text-[15px] font-semibold tracking-tight">Documents</h2>
-      </div>
-      {failed ? (
-        // Rule 7: a failed load is not "no documents".
-        <div className="text-[12px] text-muted-foreground">
-          Couldn't load documents.{" "}
-          <button type="button" className="underline" onClick={onRetry}>Retry</button>
-        </div>
-      ) : loading ? (
-        <div className="h-9 rounded-lg bg-muted/40 animate-pulse" />
-      ) : documents.length === 0 ? (
-        <div>
-          <p className="text-[13px] font-medium">No documents yet</p>
-          <p className="text-[12px] text-muted-foreground leading-snug">Add receipts, warranties, or related files.</p>
-        </div>
-      ) : (
-        <div className="min-w-0">
-          <p className="text-[13px] font-medium">{documents.length} on file</p>
-          {documents.slice(0, 3).map((d) => (
-            <button
-              key={d.id}
-              type="button"
-              className="block w-full text-left text-[12px] text-muted-foreground hover:text-foreground truncate py-0.5"
-              onClick={() => navigate(`/documents/${d.id}`)}
-              data-testid={`asset-document-${d.id}`}
-            >
-              {d.title || d.name || "Document"}
-            </button>
-          ))}
-        </div>
-      )}
-      {onAdd && (
-        <Button variant="outline" size="sm" className="h-8 text-xs gap-1 self-start mt-auto" onClick={onAdd} data-testid="asset-add-document">
-          <Plus className="h-3.5 w-3.5" /> {documents.length > 0 ? "View all / add" : "Add document"}
-        </Button>
-      )}
-    </div>
-  );
-}
-
-function AlertsCard({ alerts, profileId, onAdd }: { alerts: RecordAlert[]; profileId: string; onAdd: () => void }) {
-  const [, navigate] = useLocation();
-  const live = alerts.filter((a) => !a.cleared);
-  const cleared = alerts.length - live.length;
-  return (
-    <div className={`${PANEL} flex flex-col gap-2 min-w-0`} data-testid="asset-alerts-card">
-      <div className="flex items-center gap-2">
-        <Bell className="h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
-        <h2 className="text-[15px] font-semibold tracking-tight">Alerts</h2>
-      </div>
-      {alerts.length === 0 ? (
-        <div>
-          <p className="text-[13px] font-medium">No alerts set</p>
-          <p className="text-[12px] text-muted-foreground leading-snug">Add an expiration or renewal date and we'll remind you before it.</p>
-        </div>
-      ) : (
-        <div className="min-w-0">
-          {live.slice(0, 3).map((a) => (
-            a.rule.sourceEntityType === "document" ? (
-              // A document's date is changed on the document.
-              <button key={a.id} type="button" className="block w-full text-left py-0.5 min-w-0"
-                onClick={() => navigate(`/documents/${a.rule.sourceEntityId}`)} data-testid="asset-alert-row">
-                <span className="block text-[13px] font-medium truncate">{a.title}</span>
-                <span className="block text-[12px] text-muted-foreground truncate">{a.when}</span>
-              </button>
-            ) : (
-              <div key={a.id} data-testid="asset-alert-row">
-                <DateRow profileId={profileId} fieldKey={a.rule.sourcePath || a.rule.sourceField} label={a.title}
-                  iso={a.rule.date} note={a.when} compact testId={`asset-alert-edit-${a.rule.sourceField}`} />
-              </div>
-            )
-          ))}
-          {live.length > 3 && <p className="text-[12px] text-muted-foreground">+{live.length - 3} more</p>}
-          {cleared > 0 && (
-            <p className="text-[12px] text-muted-foreground" data-testid="asset-alerts-cleared">
-              {cleared} cleared — restore under Profile actions
-            </p>
-          )}
-        </div>
-      )}
-      <Button variant="outline" size="sm" className="h-8 text-xs gap-1 self-start mt-auto" onClick={onAdd} data-testid="asset-add-alert">
-        <Plus className="h-3.5 w-3.5" /> Add alert
-      </Button>
-    </div>
-  );
-}
-
-// ── Calendar & reminders ─────────────────────────────────────────────────────
-
-function DateBadge({ iso }: { iso: string | null }) {
-  const d = iso ? parseLocalDate(iso) : null;
-  if (!d) {
-    return (
-      <span className="h-11 w-11 shrink-0 rounded-xl border border-dashed border-border/70 grid place-items-center text-muted-foreground">
-        <CalendarPlus className="h-4 w-4" />
-      </span>
-    );
-  }
-  return (
-    <span className="h-11 w-11 shrink-0 rounded-xl bg-muted/50 ring-1 ring-border/60 flex flex-col items-center justify-center leading-none">
-      <span className="micro-label text-muted-foreground">{d.toLocaleDateString("en-US", { month: "short" })}</span>
-      <span className="text-[15px] font-bold tabular-nums mt-0.5">{d.getDate()}</span>
-    </span>
-  );
-}
-
-function DateRow({ profileId, fieldKey, label, iso, note, chip, reason, removeTestId, compact, testId }: {
-  profileId: string; fieldKey: string; label: string; iso: string | null;
-  note?: string; chip?: string; reason?: string; removeTestId?: string;
-  /** No date badge — a row inside a narrow card. */
-  compact?: boolean; testId?: string;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-  const { confirm, isArmed } = useConfirmArm();
-  const write = useFieldWrite(profileId);
-  const save = async () => {
-    if (!draft) return;
-    setSaving(true);
-    const ok = await write(fieldKey, draft);
-    setSaving(false);
-    if (ok) setEditing(false);
-  };
-  if (editing) {
-    return (
-      <div className="py-2 space-y-1.5">
-        <label className="text-[12px] text-muted-foreground" htmlFor={`date-${fieldKey}`}>{label}</label>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Input id={`date-${fieldKey}`} type="date" className="h-9 text-[14px] flex-1 min-w-0" value={draft} autoFocus
-            onChange={(e) => setDraft(e.target.value)} data-testid={`asset-date-input-${fieldKey}`} />
-          <Button size="sm" className="h-9 text-xs" disabled={saving || !draft} onClick={() => void save()}>{saving ? "…" : "Save"}</Button>
-          {iso && (
-            <Button size="sm" variant={isArmed("rm") ? "destructive" : "ghost"} className="h-9 text-xs px-2" disabled={saving}
-              aria-label={isArmed("rm") ? `Tap again to remove ${label}` : `Remove ${label}`} data-testid={removeTestId}
-              onClick={() => confirm("rm", async () => {
-                setSaving(true);
-                const ok = await write(fieldKey, null);
-                setSaving(false);
-                if (ok) setEditing(false);
-              })}>
-              {isArmed("rm") ? "Remove?" : <Trash2 className="h-3.5 w-3.5" />}
-            </Button>
-          )}
-          <Button size="sm" variant="ghost" className="h-9 px-2" aria-label="Cancel" onClick={() => setEditing(false)}><X className="h-3.5 w-3.5" /></Button>
-        </div>
-        {!iso && reason && <p className="text-[11px] text-muted-foreground">{reason}</p>}
-      </div>
-    );
-  }
-  return (
-    <button type="button" className={`w-full flex items-center text-left ${compact ? "gap-1.5 py-0.5" : "gap-3 py-2"}`}
-      onClick={() => { setDraft(iso ? iso.slice(0, 10) : ""); setEditing(true); }}
-      data-testid={testId || `asset-date-row-${fieldKey}`}>
-      {!compact && <DateBadge iso={iso} />}
-      <span className="flex-1 min-w-0">
-        <span className={`block truncate ${compact ? "text-[13px] font-medium" : "text-[14px] font-semibold"}`}>{label}</span>
-        <span className="block text-[12px] text-muted-foreground truncate">{iso ? (note || "On your calendar") : (reason || "Not set")}</span>
-      </span>
-      {chip && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{chip}</span>}
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
-    </button>
-  );
 }
 
 const COMMON_DATES: Array<{ key: string; label: string }> = [
@@ -665,292 +534,323 @@ function AddDateForm({ profileId, options, onDone }: {
 // ── The layout ───────────────────────────────────────────────────────────────
 
 export function AssetOverviewBody({
-  spec, profile, autoValuation, onOpenDocuments,
+  spec, profile, autoValuation, ownerLabel, onOpenOwnership, onEdit, summarySlot,
 }: {
   spec: OverviewSpec;
   profile: AssetLayoutProfile;
   autoValuation: boolean;
-  /** Opens the tab where documents are listed and uploaded. */
-  onOpenDocuments?: () => void;
+  /** "You own this" / "Owned by …" — from the owner links, which the page holds. */
+  ownerLabel: string;
+  /** Opens the tab where ownership is changed. */
+  onOpenOwnership?: () => void;
+  /** Opens the profile's Edit dialog (every field at once). */
+  onEdit: () => void;
+  /** The AI summary card — the page owns it. */
+  summarySlot?: React.ReactNode;
 }) {
-  const [, navigate] = useLocation();
-  const [showMore, setShowMore] = useState(false);
-  const [addingDate, setAddingDate] = useState(false);
+  const [addingField, setAddingField] = useState(false);
   const fields = profile.fields || {};
-  const { alerts, documents, documentsQuery } = useRecordAlerts(profile.id);
+  const { alerts } = useRecordAlerts(profile.id);
 
   const priceKey = PURCHASE_PRICE_KEYS.find((k) => parseMoney(fields[k]) > 0) || "purchasePrice";
   const price = parseMoney(fields[priceKey]);
   const purchaseDateKey = Object.keys(fields).find((k) => PURCHASE_DATE_RE.test(k) && fields[k]) || "purchaseDate";
   const purchaseDate = fields[purchaseDateKey] ? String(fields[purchaseDateKey]) : "";
-  // Drawn by this layout itself, so the composition's copy is not repeated.
-  const staple = new Set([priceKey, purchaseDateKey, "purchasePrice", "purchaseDate", "userEnteredValue", "location"]);
   const location = typeof fields.location === "string" ? fields.location.trim() : "";
-  const entered = userEnteredAssetValue(fields);
+  // Drawn by this layout itself, so the composition's copy is not repeated.
+  const staple = new Set([priceKey, purchaseDateKey, "purchasePrice", "purchaseDate", "userEnteredValue", "location", "ownershipPercentage"]);
 
-  const fieldSections = spec.sections.filter((s) => !SPECIAL.has(s.component));
   const keyOf = (v: OverviewValue) => v.editable?.fieldKey || v.semanticKey;
-  const valuesOf = (list: OverviewSection[]) => list.flatMap((s) => s.values || []).filter((v) => !staple.has(keyOf(v)));
-  const shown = valuesOf(fieldSections.filter((s) => !s.collapsed));
-  const more = valuesOf(fieldSections.filter((s) => s.collapsed));
+  const fieldSections: OverviewSection[] = spec.sections.filter((s) => !SPECIAL.has(s.component));
+  const summary = spec.summaryMetrics.filter((m) => m.semanticKey !== spec.identity.headline?.semanticKey
+    // Appreciation / depreciation is the header's and the value card's.
+    && !/^(appreciation|depreciation)$/.test(m.semanticKey) && !staple.has(keyOf(m)));
+  // A summary metric that is simply one of the record's fields (a brand, a
+  // model) is a characteristic; what is left is what the app worked out.
+  const fieldMetrics = summary.filter((m) => m.sourceReference?.kind === "field");
+  const worked = [
+    ...summary.filter((m) => m.sourceReference?.kind !== "field"),
+    ...spec.sections.filter((s) => s.component === "financialSummary").flatMap((s) => s.values || []),
+  ].filter((m, i, all) => all.findIndex((x) => x.semanticKey === m.semanticKey) === i);
+  const characteristics = [
+    ...fieldMetrics,
+    ...fieldSections.flatMap((s) => s.values || []).filter((v) => !staple.has(keyOf(v))),
+  ].filter((v, i, all) => all.findIndex((x) => x.semanticKey === v.semanticKey) === i);
 
   const dateValues = spec.sections.filter((s) => s.component === "dateCard").flatMap((s) => s.values || [])
     .filter((v) => !staple.has(keyOf(v)));
   const missingDates = spec.missingInformation.filter((m) => isDateKey(m.fieldKey) && !staple.has(m.fieldKey));
   const missingFields = spec.missingInformation.filter((m) => !isDateKey(m.fieldKey) && !staple.has(m.fieldKey)
-    // The value card above is where a missing current value is set.
+    // A missing current value is set from Value & Depreciation.
     && m.semanticKey !== "currentValue");
+  const isoOrBlank = (v: string) => !v || /^\d{4}-\d{2}-\d{2}/.test(v);
+  // A date typed as something other than a calendar day ("2024") stays a text
+  // box, so opening the form can never lose it.
+  const dateCell = (key: string, label: string, stored: string, icon?: any): FormCell => ({
+    key, label, icon, original: isoOrBlank(stored) ? stored.slice(0, 10) : stored,
+    kind: isoOrBlank(stored) ? "date" : "text", testId: `overview-field-input-${key}`,
+  });
+  const fixedBox = (children: React.ReactNode) => <span className={BOX}>{children}</span>;
+  const extraCells: FormCell[] = [
+    { key: "location", label: "Location", icon: MapPin, original: location, testId: "overview-field-input-location" },
+    ...dateValues.filter((v) => v.editable).map((v) => dateCell(v.editable!.fieldKey, v.label, v.value == null ? "" : String(v.value), Calendar)),
+    ...missingDates.map((m) => dateCell(m.fieldKey, m.label, "", Calendar)),
+  ];
+  const formRows: FormCell[][] = [
+    [{ key: "name", label: "Name", icon: Type, original: profile.name || "", placeholder: "Name this asset", testId: "asset-name-input" }],
+    [
+      { key: "category", label: "Category", icon: Package, fixed: fixedBox(<span className="capitalize truncate" data-testid="asset-detail-category">{spec.identity.entityLabel || profile.type}</span>) },
+      {
+        key: "ownership", label: "Ownership", icon: Users,
+        fixed: onOpenOwnership ? (
+          <button type="button" className={`${BOX} justify-between gap-2 hover:border-primary/50`} onClick={onOpenOwnership} data-testid="asset-detail-ownership">
+            <span className="truncate">{ownerLabel}</span><ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          </button>
+        ) : fixedBox(<span className="truncate" data-testid="asset-detail-ownership">{ownerLabel}</span>),
+      },
+    ],
+    [
+      { key: priceKey, label: "Purchase Price", icon: ShoppingCart, kind: "money", original: price > 0 ? String(price) : "", testId: "overview-field-input-purchasePrice" },
+      dateCell(purchaseDateKey, "Purchase Date", purchaseDate),
+    ],
+    // What is left, two to a line; an odd one out takes the line.
+    ...Array.from({ length: Math.ceil(extraCells.length / 2) }, (_, i) => extraCells.slice(i * 2, i * 2 + 2)),
+    [{ key: "notes", label: "Notes", icon: StickyNote, kind: "long", original: profile.notes || "", placeholder: "No notes yet", testId: "asset-notes-input" }],
+  ];
+  // A second cell on a line carries no icon of its own, like the owner's drawing.
+  for (const row of formRows) if (row[1]) row[1] = { ...row[1], icon: undefined };
 
-  const today = localTodayISO();
-  const events = (profile.relatedEvents || [])
-    .filter((e: any) => typeof e?.date === "string" && e.date.slice(0, 10) >= today)
-    .sort((a: any, b: any) => String(a.date).localeCompare(String(b.date)))
-    .slice(0, 3);
-
-  const dateOptions = [
-    ...missingDates.map((m) => ({ key: m.fieldKey, label: m.label })),
-    ...COMMON_DATES,
-  ].filter((o, i, all) => !fields[o.key] && all.findIndex((x) => x.key === o.key) === i);
-
-  const headlineValueKey = spec.identity.headline?.editable && /value$/i.test(spec.identity.headline.semanticKey)
-    ? spec.identity.headline.editable.fieldKey : null;
-  const missingValueKey = spec.missingInformation.find((m) => m.semanticKey === "currentValue")?.fieldKey || null;
-  const valueLookupKey = autoValuation ? (headlineValueKey || missingValueKey) : null;
-  // A summary metric that is simply one of the record's fields (a brand, a
-  // model) is a detail; what is left is what the app worked out.
-  const summary = spec.summaryMetrics.filter((m) => m.semanticKey !== spec.identity.headline?.semanticKey
-    // Appreciation / depreciation is the Financial position card's change pill.
-    && !/^(appreciation|depreciation)$/.test(m.semanticKey) && !staple.has(keyOf(m)));
-  const fieldMetrics = summary.filter((m) => m.sourceReference?.kind === "field");
-  const metrics = summary.filter((m) => m.sourceReference?.kind !== "field");
-  const financial = spec.sections.filter((s) => s.component === "financialSummary").flatMap((s) => s.values || []);
-
-  const tile = (v: OverviewValue) => (wide: boolean) => v.editable ? (
-    <FieldTile key={v.semanticKey} profileId={profile.id} fieldKey={v.editable.fieldKey} label={v.label} wide={wide}
-      display={formatValue(v)} raw={rawOf(v)} kind={kindOf(v)}
-      testId={`overview-field-${v.semanticKey}`} removeTestId={`overview-field-remove-${v.semanticKey}`} />
-  ) : (
-    <FieldTile key={v.semanticKey} profileId={profile.id} fieldKey={v.semanticKey} label={v.label} wide={wide}
-      display={formatValue(v)} readOnly testId={`overview-field-${v.semanticKey}`} />
-  );
-
-  // The grid as a list, so an odd tile out takes the row instead of leaving
-  // half of it empty.
-  const tiles: Array<(wide: boolean) => React.ReactNode> = [
-    // The user's own number. Changing it is the same write as typing a value
-    // anywhere else: `currentValue`, which the server stamps as the user's.
-    ...(autoValuation && entered > 0 ? [(wide: boolean) => (
-      <FieldTile key="entered" profileId={profile.id} fieldKey="currentValue" label="Your entered value" kind="money" wide={wide}
-        display={formatMoneyCompact(entered)} raw={String(entered)} removable={false} testId="asset-detail-entered-value" />
-    )] : []),
-    (wide) => (
-      <FieldTile key="price" profileId={profile.id} fieldKey={priceKey} iconKey="purchasePrice" label="Purchase price" kind="money" wide={wide}
-        display={price > 0 ? formatMoneyCompact(price) : null} raw={price > 0 ? String(price) : ""}
-        reason="Unlocks appreciation since you bought it"
-        testId="overview-missing-purchasePrice" removeTestId="overview-field-remove-purchasePrice" />
-    ),
-    (wide) => (
-      <FieldTile key="pdate" profileId={profile.id} fieldKey={purchaseDateKey} iconKey="purchaseDate" label="Purchase date" kind="date" wide={wide}
-        display={purchaseDate ? (parseLocalDate(purchaseDate)?.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) ?? purchaseDate) : null}
-        raw={/^\d{4}-\d{2}-\d{2}/.test(purchaseDate) ? purchaseDate.slice(0, 10) : ""}
-        reason="Dates how long you have owned it"
-        testId="asset-detail-purchase-date" removeTestId="overview-field-remove-purchaseDate" />
-    ),
-    (wide) => (
-      <FieldTile key="location" profileId={profile.id} fieldKey="location" label="Location" wide={wide}
-        display={location || null} raw={location} reason="Where it is kept — a room, a garage, a safe"
-        testId="asset-detail-location" removeTestId="overview-field-remove-location" />
-    ),
-    ...fieldMetrics.map(tile),
-    ...shown.filter((v) => !fieldMetrics.some((m) => m.semanticKey === v.semanticKey)).map(tile),
-    ...missingFields.map((m) => (wide: boolean) => (
-      <FieldTile key={m.semanticKey} profileId={profile.id} fieldKey={m.fieldKey} label={m.label} wide={wide}
+  const charRows = [
+    ...characteristics.map((v) => v.editable ? (
+      <CharRow key={v.semanticKey} profileId={profile.id} fieldKey={v.editable.fieldKey} label={v.label}
+        display={formatValue(v)} raw={rawOf(v)} kind={kindOf(v)}
+        testId={`overview-field-${v.semanticKey}`} removeTestId={`overview-field-remove-${v.semanticKey}`} />
+    ) : (
+      <CharRow key={v.semanticKey} profileId={profile.id} fieldKey={v.semanticKey} label={v.label}
+        display={formatValue(v)} readOnly testId={`overview-field-${v.semanticKey}`} />
+    )),
+    ...missingFields.map((m) => (
+      <CharRow key={m.semanticKey} profileId={profile.id} fieldKey={m.fieldKey} label={m.label}
         display={null} reason={m.reason} testId={`overview-missing-${m.semanticKey}`} />
     )),
-    ...(showMore ? more.map(tile) : []),
   ];
+
+  const today = localTodayISO();
+  const ownedFor = /^\d{4}-\d{2}-\d{2}/.test(purchaseDate) && purchaseDate.slice(0, 10) <= today
+    ? calendarDelta(purchaseDate.slice(0, 10), today) : null;
+  const age = ownedFor
+    ? [ownedFor.years ? `${ownedFor.years} yr${ownedFor.years === 1 ? "" : "s"}` : "", ownedFor.months ? `${ownedFor.months} mo` : "",
+       !ownedFor.years && !ownedFor.months ? `${ownedFor.totalDays} day${ownedFor.totalDays === 1 ? "" : "s"}` : ""].filter(Boolean).join(" ")
+    : "";
+  const nextAlert = alerts.find((a) => !a.cleared);
+  const hasQuick = !!age || worked.length > 0 || !!nextAlert;
+  const quickRow = (icon: any, label: string, value: React.ReactNode, testId: string, trailing?: React.ReactNode) => {
+    const Icon = icon;
+    return (
+      <div key={testId} className="flex items-center gap-2.5 min-h-[32px] py-0.5 border-b border-border/30 last:border-b-0" data-testid={testId}>
+        <Icon className="h-[17px] w-[17px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
+        <span className="w-[42%] max-w-[190px] shrink-0 text-[13px] truncate">{label}</span>
+        <span className="self-stretch w-px bg-border/40" />
+        <span className="flex-1 min-w-0 truncate text-[13px] tabular-nums">{value}</span>
+        {trailing}
+      </div>
+    );
+  };
 
   const sectionsOf = (...components: string[]) =>
     spec.sections.filter((s) => components.includes(s.component)).map((s) => renderSection(s, profile.id));
 
   return (
     <>
-      <AttentionStrip spec={spec} />
-
-      {/* ── Asset details ── */}
-      <div className="space-y-2" data-testid="asset-details">
-        <SectionTitle action={valueLookupKey ? <FindValueButton profileId={profile.id} fieldKey={valueLookupKey} /> : undefined}>
-          Asset details
-        </SectionTitle>
-        <div className="grid grid-cols-2 gap-2">
-          {tiles.map((t, i) => t(tiles.length % 2 === 1 && i === tiles.length - 1))}
-          <NotesTile profileId={profile.id} notes={profile.notes || ""} />
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] gap-3">
+        <div className="flex flex-col min-w-0">
+          <AssetDetailsForm profileId={profile.id} rows={formRows} onEdit={onEdit} />
         </div>
-        {more.length > 0 && (
-          <button type="button" className="text-[12px] text-muted-foreground hover:text-foreground flex items-center gap-1 px-0.5"
-            onClick={() => setShowMore((s) => !s)} data-testid="asset-details-more">
-            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showMore ? "rotate-180" : ""}`} />
-            {showMore ? "Show fewer details" : `Show ${more.length} more detail${more.length === 1 ? "" : "s"}`}
-          </button>
-        )}
+
+        <div className="flex flex-col gap-3 min-w-0">
+          {/* ── Characteristics ── */}
+          <Panel
+            title="Characteristics"
+            testId="asset-characteristics"
+            grow={!hasQuick}
+            action={
+              <Button variant="outline" size="sm" className="h-8 text-xs gap-1 border-emerald-500/50" onClick={() => setAddingField((a) => !a)} data-testid="asset-add-characteristic">
+                <Plus className="h-3.5 w-3.5 text-emerald-400" /> Add Characteristic
+              </Button>
+            }
+          >
+            {charRows.length > 0
+              ? <div>{charRows}</div>
+              : !addingField && (
+                <p className="py-1.5 text-[13px] text-muted-foreground" data-testid="asset-characteristics-empty">
+                  Nothing here yet. Add a colour, a model, a serial number, a condition.
+                </p>
+              )}
+            {addingField && <div className="mt-2"><AddFieldPanel profileId={profile.id} inline onAdded={() => setAddingField(false)} /></div>}
+          </Panel>
+
+          {/* ── Quick Info: what the app worked out ── */}
+          {hasQuick && (
+            <Panel title="Quick Info" testId="asset-quick-info" grow>
+              {age && quickRow(Calendar, "Age", age, "asset-quick-age")}
+              {worked.map((m) => quickRow(iconFor(m.semanticKey), m.label, <span className={toneClass(m.tone)}>{formatValue(m)}</span>,
+                `overview-metric-${m.semanticKey}`, <ProvenanceMark value={m} />))}
+              {nextAlert && quickRow(Bell, nextAlert.title, nextAlert.when, "asset-alert-row")}
+            </Panel>
+          )}
+        </div>
       </div>
 
-      {metrics.length > 0 && (
-        <div className={`grid gap-2 ${metrics.length >= 3 ? "grid-cols-3" : "grid-cols-2"}`} data-testid="overview-summary-metrics">
-          {metrics.map((m, i) => (
-            <div key={m.semanticKey} className={`${TILE_BOX} min-w-0 ${metrics.length % (metrics.length >= 3 ? 3 : 2) !== 0 && i === metrics.length - 1 ? "col-span-full" : ""}`} data-testid={`overview-summary-${m.semanticKey}`}>
-              <p className="text-[12px] text-muted-foreground flex items-center gap-1 truncate">{m.label}<ProvenanceMark value={m} /></p>
-              <p className={`text-[16px] font-bold tabular-nums leading-tight ${toneClass(m.tone)}`}>{formatValue(m)}</p>
-              {m.note && <p className="text-[11px] text-muted-foreground/80 truncate">{m.note}</p>}
-            </div>
-          ))}
-        </div>
-      )}
+      {sectionsOf("progressIndicator", "relationshipSummary", "ownershipSummary", "maintenanceSummary", "miniTimeline", "aiInsight")}
 
-      <ValueChangeCard profile={profile} extra={financial} />
-      {sectionsOf("progressIndicator", "relationshipSummary", "ownershipSummary")}
-
-      {/* ── Documents | Alerts ── */}
-      <div className="grid grid-cols-2 gap-2">
-        <DocumentsCard documents={documents} loading={documentsQuery.isLoading} failed={documentsQuery.isError}
-          onRetry={() => void documentsQuery.refetch()} onAdd={onOpenDocuments} />
-        <AlertsCard alerts={alerts} profileId={profile.id} onAdd={() => setAddingDate(true)} />
-      </div>
-
-      {/* ── Calendar & reminders ── */}
-      <div className={PANEL} data-testid="asset-calendar-card">
-        <div className="flex items-start gap-2.5">
-          <Calendar className="h-[18px] w-[18px] shrink-0 text-muted-foreground mt-0.5" strokeWidth={1.8} />
-          <div className="flex-1 min-w-0">
-            <h2 className="text-[15px] font-semibold tracking-tight">Calendar &amp; reminders</h2>
-            <p className="text-[12px] text-muted-foreground">Key dates and related reminders for this asset</p>
+      {/* ── AI Summary and Value & Depreciation: one card ── */}
+      <section className={`${PANEL} grid grid-cols-1 gap-3 items-stretch ${summarySlot ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" : ""}`} data-testid="asset-summary-and-value">
+        {summarySlot && (
+          <div className="min-w-0 [&>*]:!border-0 [&>*]:!bg-transparent [&>*]:!shadow-none [&>*>.h-1]:hidden" data-testid="asset-summary-slot">
+            {summarySlot}
           </div>
-          {!addingDate && (
-            <Button variant="outline" size="sm" className="h-8 text-xs gap-1 shrink-0" onClick={() => setAddingDate(true)} data-testid="asset-add-date">
-              <Plus className="h-3.5 w-3.5" /> Add date
-            </Button>
-          )}
-        </div>
-        <div className="mt-2 divide-y divide-border/40">
-          {dateValues.map((v) => v.editable ? (
-            <DateRow key={v.semanticKey} profileId={profile.id} fieldKey={v.editable.fieldKey} label={v.label}
-              iso={v.value == null ? null : String(v.value)} note={v.note}
-              removeTestId={`overview-field-remove-${v.semanticKey}`} />
-          ) : (
-            <div key={v.semanticKey} className="flex items-center gap-3 py-2">
-              <DateBadge iso={v.value == null ? null : String(v.value)} />
-              <span className="flex-1 min-w-0">
-                <span className="block text-[14px] font-semibold truncate">{v.label}</span>
-                {v.note && <span className="block text-[12px] text-muted-foreground truncate">{v.note}</span>}
-              </span>
-            </div>
-          ))}
-          {events.map((e: any) => (
-            <button key={e.id} type="button" className="w-full flex items-center gap-3 py-2 text-left"
-              onClick={() => navigate("/calendar")} data-testid={`asset-event-row-${e.id}`}>
-              <DateBadge iso={String(e.date)} />
-              <span className="flex-1 min-w-0">
-                <span className="block text-[14px] font-semibold truncate">{e.title || "Event"}</span>
-                <span className="block text-[12px] text-muted-foreground truncate">Opens your calendar</span>
-              </span>
-              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">Event</span>
-              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
-            </button>
-          ))}
-          {missingDates.map((m) => (
-            <DateRow key={m.semanticKey} profileId={profile.id} fieldKey={m.fieldKey} label={m.label} iso={null} reason={m.reason} />
-          ))}
-          {dateValues.length + events.length + missingDates.length === 0 && !addingDate && (
-            <p className="py-2 text-[13px] text-muted-foreground" data-testid="asset-calendar-empty">
-              No dates on this asset yet. Add one and it shows on your calendar.
-            </p>
-          )}
-        </div>
-        {addingDate && <div className="mt-2"><AddDateForm profileId={profile.id} options={dateOptions} onDone={() => setAddingDate(false)} /></div>}
-      </div>
-
-      {sectionsOf("maintenanceSummary", "miniTimeline", "aiInsight")}
+        )}
+        <ValueCard profile={profile} inset={!!summarySlot} />
+      </section>
     </>
   );
 }
 
-// ── Profile actions ──────────────────────────────────────────────────────────
+// ── Quick add: the buttons beside the tabs ───────────────────────────────────
 
-function ActionRow({ icon: Icon, title, detail, onClick, danger, disabled, testId }: {
-  icon: any; title: string; detail: string; onClick: () => void; danger?: boolean; disabled?: boolean; testId?: string;
+/**
+ * + Task, + Expense, + Note and More. Each creates an ordinary record linked
+ * to this asset through the route every other screen uses, so it shows on the
+ * Tasks page, in Finance and under Notes as well as on this profile.
+ */
+export function AssetQuickAdd({ profileId, fields, onOpenDocuments, onEdit }: {
+  profileId: string;
+  /** The record's fields, so "Add a date" does not offer one it already has. */
+  fields?: Record<string, any> | null;
+  onOpenDocuments?: () => void; onEdit: () => void;
 }) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState<null | "task" | "expense" | "note" | "date">(null);
+  const [title, setTitle] = useState("");
+  const [due, setDue] = useState("");
+  const [amount, setAmount] = useState("");
+  const [what, setWhat] = useState("");
+  const [day, setDay] = useState("");
+  const [saving, setSaving] = useState(false);
+  const close = () => { setOpen(null); setTitle(""); setDue(""); setAmount(""); setWhat(""); setDay(""); };
+
+  const post = async (url: string, body: Record<string, unknown>, done: string, ...domains: Array<"tasks" | "expenses" | "profiles">) => {
+    setSaving(true);
+    try {
+      await apiRequest("POST", url, body);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      void invalidateDomains(...domains);
+      toast({ title: done });
+      close();
+    } catch (err: any) {
+      toast({ title: "Couldn't save", description: formatApiError(err), variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+  const amt = parseMoney(amount);
+  const btn = "h-8 text-xs gap-1 shrink-0";
+
   return (
-    <button type="button" disabled={disabled} onClick={onClick} data-testid={testId}
-      className="w-full flex items-center gap-3 px-4 py-3 text-left disabled:opacity-50 hover:bg-muted/20 transition-colors">
-      <Icon className={`h-[18px] w-[18px] shrink-0 ${danger ? "text-red-500" : "text-muted-foreground"}`} strokeWidth={1.8} />
-      <span className="flex-1 min-w-0">
-        <span className={`block text-[14px] font-semibold ${danger ? "text-red-500" : ""}`}>{title}</span>
-        <span className="block text-[12px] text-muted-foreground">{detail}</span>
-      </span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
-    </button>
+    <div className="flex items-center gap-1.5" data-testid="asset-quick-add">
+      <Button variant="outline" size="sm" className={btn} onClick={() => setOpen("task")} data-testid="quick-add-task"><Plus className="h-3.5 w-3.5 text-emerald-400" /> Task</Button>
+      <Button variant="outline" size="sm" className={btn} onClick={() => setOpen("expense")} data-testid="quick-add-expense"><Plus className="h-3.5 w-3.5 text-emerald-400" /> Expense</Button>
+      <Button variant="outline" size="sm" className={btn} onClick={() => setOpen("note")} data-testid="quick-add-note"><Plus className="h-3.5 w-3.5 text-emerald-400" /> Note</Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="sm" className={btn} data-testid="quick-add-more"><MoreHorizontal className="h-3.5 w-3.5" /> More</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-[180px]">
+          <DropdownMenuItem onSelect={() => setOpen("date")} data-testid="asset-add-date"><CalendarPlus className="h-4 w-4 mr-2" /> Add a date</DropdownMenuItem>
+          {onOpenDocuments && (
+            <DropdownMenuItem onSelect={onOpenDocuments} data-testid="quick-add-document"><FileText className="h-4 w-4 mr-2" /> Add a document</DropdownMenuItem>
+          )}
+          <DropdownMenuItem onSelect={onEdit} data-testid="quick-edit-details"><Pencil className="h-4 w-4 mr-2" /> Edit all details</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <Dialog open={open !== null} onOpenChange={(o) => { if (!o) close(); }}>
+        <DialogContent className="max-w-sm" data-testid="quick-add-dialog">
+          <DialogHeader>
+            <DialogTitle>{open === "task" ? "New task for this asset" : open === "expense" ? "New expense for this asset" : open === "date" ? "Add a date to this asset" : "New note for this asset"}</DialogTitle>
+          </DialogHeader>
+          {open === "task" && (
+            <div className="space-y-2">
+              <Input autoFocus placeholder="What needs doing?" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} data-testid="quick-task-title" />
+              <label className="text-[12px] text-muted-foreground block" htmlFor="quick-task-due">Due (optional)</label>
+              <Input id="quick-task-due" type="date" value={due} onChange={(e) => setDue(e.target.value)} data-testid="quick-task-due" />
+              <Button className="w-full" disabled={saving || !title.trim()} data-testid="quick-task-save"
+                onClick={() => void post("/api/tasks", { title: title.trim(), ...(due ? { dueDate: due } : {}), linkedProfiles: [profileId] }, "Task added", "tasks", "profiles")}>
+                {saving ? "Saving…" : "Add task"}
+              </Button>
+            </div>
+          )}
+          {open === "expense" && (
+            <div className="space-y-2">
+              <Input autoFocus inputMode="decimal" placeholder="Amount" value={amount} onChange={(e) => setAmount(e.target.value)} data-testid="quick-expense-amount" />
+              <Input placeholder="What was it for?" value={what} onChange={(e) => setWhat(e.target.value)} maxLength={200} data-testid="quick-expense-what" />
+              <label className="text-[12px] text-muted-foreground block" htmlFor="quick-expense-day">Date (today if blank)</label>
+              <Input id="quick-expense-day" type="date" value={day} onChange={(e) => setDay(e.target.value)} data-testid="quick-expense-day" />
+              <Button className="w-full" disabled={saving || !(amt > 0) || !what.trim()} data-testid="quick-expense-save"
+                onClick={() => void post("/api/expenses", { amount: amt, description: what.trim(), date: day || localTodayISO(), linkedProfiles: [profileId] }, "Expense added", "expenses", "profiles")}>
+                {saving ? "Saving…" : "Add expense"}
+              </Button>
+            </div>
+          )}
+          {open === "note" && <NewNoteForm profileId={profileId} onDone={close} />}
+          {open === "date" && (
+            <AddDateForm profileId={profileId} options={COMMON_DATES.filter((o) => !fields?.[o.key])} onDone={close} />
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 
+// ── Alert actions for the header's ⋯ menu ────────────────────────────────────
+
 /**
- * What you do TO the record: edit it, add a field, silence its alerts, delete
- * it. Clearing dismisses this record's dated alerts into the server's dismiss
- * list (the one the bell and the dashboard read), so it follows the user
- * across devices and Restore brings every one of them back.
+ * "Clear alerts" / "Restore alerts" as menu items. Clearing dismisses this
+ * record's dated alerts into the server's dismiss list (the one the bell and
+ * the dashboard read), so it follows the user across devices and Restore
+ * brings every one of them back.
  */
-export function AssetProfileActions({ profileId, noun = "asset", onEdit, onDelete }: {
-  profileId: string;
-  noun?: string;
-  onEdit: () => void;
-  /** Opens the delete confirmation — this never deletes on its own (Rule 8). */
-  onDelete: () => void;
-}) {
+export function AssetAlertMenuItems({ profileId }: { profileId: string }) {
   const { toast } = useToast();
-  const [adding, setAdding] = useState(false);
   const { alerts, dismiss, restore } = useRecordAlerts(profileId);
   const live = alerts.filter((a) => !a.cleared);
   const cleared = alerts.filter((a) => a.cleared);
   const busy = dismiss.isPending || restore.isPending;
-
-  const clear = () => dismiss.mutate(live.map((a) => a.id), {
-    onSuccess: () => toast({
-      title: `Cleared ${live.length} alert${live.length === 1 ? "" : "s"}`,
-      description: "The dates stay on the records. Restore brings the alerts back.",
-    }),
-  });
-  const bringBack = () => restore.mutate(cleared.map((a) => a.id), {
-    onSuccess: () => toast({ title: "Alerts restored" }),
-  });
-
   return (
-    <div className="mt-6 space-y-2" data-testid="profile-alerts-section">
-      <SectionTitle>Profile actions</SectionTitle>
-      <div className="bubble overflow-hidden divide-y divide-border/40">
-        <ActionRow icon={Pencil} title={`Edit ${noun} details`} detail="Update name, values, dates, location, and notes" onClick={onEdit} testId="action-edit-profile" />
-        <ActionRow icon={Plus} title="Add custom field" detail="Track additional details (e.g., serial number, condition)" onClick={() => setAdding((a) => !a)} testId="action-add-field" />
-        {adding && (
-          <div className="px-4 py-3">
-            <AddFieldPanel profileId={profileId} inline onAdded={() => setAdding(false)} />
-          </div>
-        )}
-        <ActionRow
-          icon={BellOff}
-          title="Clear document alerts"
-          detail={alerts.length === 0
-            ? "No dates on this record are raising alerts"
-            : live.length === 0
-              ? "All of this record's alerts are cleared"
-              : `Hide ${live.length} alert${live.length === 1 ? "" : "s"} from this record and its documents`}
-          onClick={clear}
-          disabled={live.length === 0 || busy}
-          testId="button-clear-document-alerts"
-        />
-        {cleared.length > 0 && (
-          <ActionRow icon={Bell} title="Restore alerts" detail={`Bring back ${cleared.length} cleared alert${cleared.length === 1 ? "" : "s"}`}
-            onClick={bringBack} disabled={busy} testId="button-restore-document-alerts" />
-        )}
-        <ActionRow icon={Trash2} title={`Delete this ${noun}`} detail={`Permanently remove this ${noun} and all its data`} onClick={onDelete} danger testId="button-delete-profile-info-tab" />
-      </div>
-    </div>
+    <>
+      <DropdownMenuItem
+        disabled={live.length === 0 || busy}
+        data-testid="button-clear-document-alerts"
+        onSelect={() => dismiss.mutate(live.map((a) => a.id), {
+          onSuccess: () => toast({
+            title: `Cleared ${live.length} alert${live.length === 1 ? "" : "s"}`,
+            description: "The dates stay on the records. Restore brings the alerts back.",
+          }),
+        })}
+      >
+        <BellOff className="h-4 w-4 mr-2" />
+        {live.length > 0 ? `Clear ${live.length} alert${live.length === 1 ? "" : "s"}` : "No alerts to clear"}
+      </DropdownMenuItem>
+      {cleared.length > 0 && (
+        <DropdownMenuItem
+          disabled={busy}
+          data-testid="button-restore-document-alerts"
+          onSelect={() => restore.mutate(cleared.map((a) => a.id), { onSuccess: () => toast({ title: "Alerts restored" }) })}
+        >
+          <Bell className="h-4 w-4 mr-2" />
+          Restore {cleared.length} cleared alert{cleared.length === 1 ? "" : "s"}
+        </DropdownMenuItem>
+      )}
+    </>
   );
 }

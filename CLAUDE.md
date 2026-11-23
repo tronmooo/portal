@@ -601,7 +601,7 @@ dates as overdue (it is where one is recorded); chat's bill table and
 "I paid X" still read the stored date; on a person, pet or account page "Clear
 document alerts" still writes the browser-only 30-day snooze
 (`ProfileAlertsSection.tsx`) — an asset's dismisses into the server list
-(`AssetProfileActions`).
+(`AssetAlertMenuItems`).
 
 ## Record details rules (a characteristic is a typed, reportable value on any record)
 
@@ -667,39 +667,61 @@ and schedule fields are never listed there as text (L2/L3).
 
 ## Asset profile layout (the owner's mock-up; a drawing of stores other screens read)
 
-Owner, 2026-11-22: "make it look more like the second photo and connect
-everything so nothing loses connections". An owned thing's Overview
+Owner, 2026-11-23 (second mock-up, replacing the tile layout of 2026-11-22):
+"this is simpler and this is how I want the entire overview page", "the
+current value is the one the AI estimates", "nothing loses connections",
+"no empty spaces", "everything should be editable". An owned thing's page
 (`usesAssetLayout`, `client/src/pages/profile-detail.tsx`; an account keeps
-`AccountOverview`) is `AssetOverviewBody` + `AssetProfileActions`
-(`client/src/components/asset/AssetOverviewLayout.tsx`), under the restyled
-`CurrentValueCard` and a `DetailHero` with `pageTitle`. Read this before
-touching either.
+`AccountOverview`) is built from `client/src/components/asset/AssetOverviewLayout.tsx`:
+`AssetHeroStats` in the `DetailHero` (`pageTitle`, `aside`: ONE header row —
+back, picture, name and chips, the four figures, the ⋯ menu), `AssetQuickAdd`
+beside the tabs, `AssetOverviewBody` (Asset Details | Characteristics + Quick
+Info, then AI Summary | Value & Depreciation) and `AssetAlertMenuItems` in the
+⋯ menu. Nothing sits under the two card rows: Edit, Ownership, Documents,
+Clear / Restore alerts and Delete are the ⋯ menu ("remove all that space, make
+it look exactly like the photo"). Read this before touching any of them.
 *Guard:* `tests/asset-overview-layout.dom.test.tsx`.
 
-**P1. The layout owns no data.** Details, dates and "Not set" suggestions are
-the composed `OverviewSpec` (passed through `DynamicOverview`'s `renderBody`,
-which keeps the loading state and the fallback); Financial position is the
-purchase price (else the user's typed value, `userEnteredAssetValue`) against
-`currentAssetValue` (Rule 1); a tile writes ONE field with the page's PATCH.
-Add a section by reading a store that exists, never by storing a copy.
-**P2. Alerts are the rule engine's.** The Alerts card and "Clear document
-alerts" are `useRecordAlerts`: `rulesFromAll` over the UNFLATTENED profile row
-and its documents, filtered by `isAlertDateRule`, identified by `dateAlertId`
-(the bell's id), cleared and restored through `useDismissedAlerts` (Rule 8).
-Never the browser snooze.
-**P4. No empty halves, and everything shown is edited where it is shown.**
-The details grid is built as a list and an odd tile out takes the row; a single
-financial fact takes its row. Location, Notes (the record's `notes`), the
-user's entered value (written as `currentValue`, a number; it has no remove),
-every field tile and every alert date open an editor in place — the same
-fields the chat's `update_profile` writes, so a chat edit and a tile edit are
-the same write. Only what the app calculated is read-only.
-**P3. Nothing is reachable from one place only.** Edit and Delete are in the
-header's ⋯ menu and in Profile actions; Add field is a Profile action
-(`AddFieldPanel inline`); documents open the Documents tab; the owner pill
-opens Contained. Delete only opens the page's confirmation (Rule 8). Opening
-the page writes nothing (Rule 3); a failed documents load is not "No documents
-yet" (Rule 7).
+**P1. The layout owns no data.** Rows, dates and "Not set" suggestions are the
+composed `OverviewSpec` (through `DynamicOverview`'s `renderBody`, which keeps
+the loading state and the fallback). A row writes ONE field with the page's
+PATCH — the same field the chat's `update_profile` writes. Add a section by
+reading a store that exists, never by storing a copy. Quick Info is only what
+the app worked out (age from the purchase date, the composition's calculated
+metrics, the next alert): never invent a figure such as a "useful life".
+**P2. One current value.** The header, Value & Depreciation and the AI summary
+all show `useValuePosition`: `currentAssetValue` (Rule 1) — the estimate while
+Portol tracks the value, the user's own number once tracking is off — against
+the purchase price. There is no separate value card at the top; how the
+estimate was made, Refresh and the "Track value automatically" switch are the
+`CurrentValueCard` under Value & Depreciation's disclosure.
+**P3. Alerts are the rule engine's.** Quick Info's alert row and the menu's
+"Clear alerts" are `useRecordAlerts`: `rulesFromAll` over the UNFLATTENED
+profile row and its documents, filtered by `isAlertDateRule`, identified by
+`dateAlertId` (the bell's id), cleared and restored through
+`useDismissedAlerts` (Rule 8). Never the browser snooze.
+**P4. Asset Details is one form, edited in line.** Owner, 2026-11-23: "make
+it look exactly like this … everything's inline edit". Every value sits in its
+own box and is typed into where it stands (`AssetDetailsForm`): Name, Purchase
+Price and Date, Location, each date, Notes; Category is the composition's
+label and Ownership opens the Contained tab. ONE **Save** (the owner's design,
+as O6) sends only what changed in a single PATCH — a cleared box removes that
+field, money is stored as a number — and writes it into the page's cache at
+once; **Undo** puts back what was there; typing and opening write nothing
+(Rule 3). **Edit** opens the full dialog. A date stored as something other
+than a calendar day ("2024") stays a text box, so the form cannot lose it. A
+characteristic (`CharRow`) has a pencil and an X (two taps, Rule 8). The page
+is dense (32px rows, tight cards) and AI Summary shares ONE card with Value &
+Depreciation. Only what the app calculated is read-only.
+**P5. Quick add creates ordinary records.** + Task, + Expense and + Note post
+to `/api/tasks`, `/api/expenses` and `/api/notes` with this asset linked, so
+they show on the Tasks page, in Finance and under Notes too; More holds "Add
+a date" and "Add a document". Delete only opens
+the page's confirmation (Rule 8); opening the page writes nothing (Rule 3).
+**P6. One finance tab.** Where a tab set has both, Money is merged into
+**Financials** (rollup, breakdown, linked liabilities, the loan, bills and
+expenses); a saved `/money` link opens Financials. Subscriptions and the other
+sets that never had Financials keep Money.
 
 ## Recurring occurrence rules (one date at a time; the series keeps its schedule)
 
