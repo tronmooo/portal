@@ -45,7 +45,10 @@ import {
   Edit,
   User,
   Camera,
-  MoreVertical,
+  MoreHorizontal,
+  Check,
+  Shield,
+  Info,
   Landmark,
   Layers,
   Flag,
@@ -66,10 +69,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  BalanceCard, SectionTitle, DetailRowGrid, PayoffOverviewCard, AutopayChip, RowCard, MiniCard,
-  DateTile, ProfileActionsList, type BalanceStat, type BalanceProgress, type DetailRow, type ProfileAction,
-} from "@/components/liability/LiabilityOverviewCards";
+import { Panel, FieldGrid, FieldRow, ReadValue, InfoRow, InfoList, PayoffLine, FigureRow } from "@/components/liability/LiabilityOverviewCards";
 import {
   Select,
   SelectContent,
@@ -85,7 +85,7 @@ import { BillScheduleSection } from "@/components/liability/BillScheduleSection"
 import { AutoPaySection, useAutoPaySave } from "@/components/liability/AutoPaySection";
 import { PaymentStatusBadge, PaymentStatusControls } from "@/components/liability/PaymentStatusControls";
 import { autoPaySettingPatch, isAutoPayOn, type OccurrencePaymentStatus } from "@shared/autopay";
-import { DetailHero } from "@/components/profile/DetailHero";
+import { DetailHero, type HeroStat } from "@/components/profile/DetailHero";
 import { Pill } from "@/components/dashboard/visuals";
 import { MetricCard } from "@/components/ui/metric-card";
 import type { LucideIcon } from "lucide-react";
@@ -431,10 +431,10 @@ interface LiabilityProfilePageProps {
 
 type TabKey =
   | "overview"
-  | "details"
   | "payments"
+  | "schedule"
+  | "cost"
   | "documents"
-  | "activity"
   | "history";
 
 const PROFILE_LINK_ROLES: { value: string; label: string }[] = [
@@ -458,7 +458,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const qc = useQueryClient();
 
   // ── Edit / delete / avatar — match asset profile parity ────────────────────
-  const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteProfileDialog, setShowDeleteProfileDialog] = useState(false);
   const [editName, setEditName] = useState<string>(profile.name || "");
   const [editNotes, setEditNotes] = useState<string>((profile as any).notes || "");
@@ -499,17 +498,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     };
     reader.readAsDataURL(file);
   };
-
-  const editProfileMutation = useMutation({
-    mutationFn: async (patch: { name: string; notes: string }) => {
-      await apiRequest("PATCH", `/api/profiles/${profile.id}`, patch);
-    },
-    onSuccess: () => {
-      toast({ title: "Profile updated" });
-      setShowEditDialog(false);
-    },
-    onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
-  });
 
   // ── Inline edit for loan terms (Details tab) ───────────────────────────────
   // Lets the user set monthlyPayment + dueDay + firstPaymentDate inline so the
@@ -1138,18 +1126,14 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     queryFn: async () => (await apiRequest("GET", `/api/liabilities/${profile.id}/assets`)).json(),
     enabled: !!profile.id,
   });
-  const documentsQuery = useQuery<any[]>({
-    queryKey: [`/api/profiles/${profile.id}/documents`],
-    queryFn: async () => (await apiRequest("GET", `/api/profiles/${profile.id}/documents`)).json(),
-    enabled: !!profile.id,
-  });
   const [addFieldSignal, setAddFieldSignal] = useState(0);
   // One-shot signals to a section that lives in another tab: "open the asset
   // picker", "open the file chooser". The section clears it once it has acted.
   const [linkAssetSignal, setLinkAssetSignal] = useState(0);
   const [uploadSignal, setUploadSignal] = useState(0);
-  const [showTypeDialog, setShowTypeDialog] = useState(false);
-  const [typeDraft, setTypeDraft] = useState("");
+  const [showLinks, setShowLinks] = useState(false);
+  const [expenseDialog, setExpenseDialog] = useState({ open: false, description: "", amount: "", date: "" });
+  const [taskDialog, setTaskDialog] = useState({ open: false, title: "", dueDate: "" });
   // The type decides how the page behaves (a loan amortizes, a card revolves,
   // a bill recurs), so it is the stored `type_key` column that changes (L4).
   const changeTypeMutation = useMutation({
@@ -1158,7 +1142,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       qc.setQueryData(["/api/profiles", profile.id, "detail"], (old: any) => (old && typeof old === "object" ? { ...old, type_key: typeKey } : old));
       qc.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "schedule"] });
       invalidateDomains("liabilities", "events");
-      setShowTypeDialog(false);
       toast({ title: "Type changed" });
     },
     onError: (err: Error) => toast({ title: "Couldn't change the type", description: formatApiError(err), variant: "destructive" }),
@@ -1169,12 +1152,90 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     try { sessionStorage.setItem("portol_chat_prefill", `About my ${profile.name || subtypeLabel}: `); } catch { /* the chat simply opens empty */ }
     navigate("/chat");
   };
-  const addFieldRef = useRef<HTMLDivElement>(null);
+  const typeChoices = Array.from(new Set([...Object.keys(LIABILITY_TYPE_CHOICES), ...(subtypeRaw ? [subtypeRaw] : [])]));
+  const typeLabelOf = (k: string) => LIABILITY_TYPE_CHOICES[k] || SUBTYPE_LABELS[k] || cap(k.replace(/_/g, " "));
 
-  // Every figure on the Overview opens the form that edits it, in place.
-  const editTerms = () => openTermsEditor();
-  const editBill = () => openBillEditor();
-  const editFacts = recurringBill ? editBill : editTerms;
+  // An expense or a task about this liability, filed under it in one go.
+  const addExpenseMutation = useMutation({
+    mutationFn: async (v: { description: string; amount: number; date: string }) => {
+      await apiRequest("POST", "/api/expenses", { description: v.description, amount: v.amount, date: v.date, category: "other", linkedProfiles: [profile.id] });
+    },
+    onSuccess: () => {
+      toast({ title: "Expense added" });
+      invalidateDomains("expenses", "profiles");
+      setExpenseDialog((d) => ({ ...d, open: false }));
+    },
+    onError: (err: Error) => toast({ title: "Couldn't add the expense", description: formatApiError(err), variant: "destructive" }),
+  });
+  const addTaskMutation = useMutation({
+    mutationFn: async (v: { title: string; dueDate: string }) => {
+      const res = await apiRequest("POST", "/api/tasks", { title: v.title, priority: "medium", dueDate: v.dueDate || undefined });
+      const task = await res.json();
+      await apiRequest("POST", `/api/profiles/${profile.id}/link`, { entityType: "task", entityId: task.id });
+    },
+    onSuccess: () => {
+      toast({ title: "Task added" });
+      invalidateDomains("tasks", "profiles");
+      setTaskDialog((d) => ({ ...d, open: false }));
+    },
+    onError: (err: Error) => toast({ title: "Couldn't add the task", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  // ── Liability Details edits in place ───────────────────────────────────────
+  // ONE edit mode for the whole card: the terms (or bill) form, which saves
+  // itself (L7), plus the name and notes, written when a field is left and
+  // again on Save. Starting never resets a form that is already open.
+  const detailsRef = useRef<HTMLElement>(null);
+  const editing = recurringBill ? editingBill : editingTerms;
+  const startEditing = () => {
+    if (!editing) {
+      sentNameNotes.current = null;
+      setEditName(profile.name || "");
+      setEditNotes(String((profile as any).notes || ""));
+      if (recurringBill) openBillEditor(); else openTermsEditor();
+    }
+    setTab("overview");
+    requestAnimationFrame(() => detailsRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }));
+  };
+  // What was last sent, so leaving the Notes box and pressing Save (two
+  // commits a moment apart) is one write, not two.
+  const sentNameNotes = useRef<{ name: string; notes: string } | null>(null);
+  const nameNotesWrite = useRef<Promise<void>>(Promise.resolve());
+  // Save waits for a write already on its way (L7: Done awaits the pending
+  // save), so the card never closes showing the value from before it.
+  const commitNameNotes = (): Promise<void> => {
+    const base = sentNameNotes.current ?? { name: profile.name || "", notes: String((profile as any).notes || "") };
+    const name = editName.trim();
+    const changed = (name && name !== base.name) || editNotes !== base.notes;
+    if (!changed) return nameNotesWrite.current;
+    nameNotesWrite.current = nameNotesWrite.current.then(writeNameNotes);
+    return nameNotesWrite.current;
+  };
+  const writeNameNotes = async () => {
+    const base = sentNameNotes.current ?? { name: profile.name || "", notes: String((profile as any).notes || "") };
+    const patch: Record<string, string> = {};
+    const name = editName.trim();
+    if (name && name !== base.name) patch.name = name;
+    if (editNotes !== base.notes) patch.notes = editNotes;
+    if (Object.keys(patch).length === 0) return;
+    sentNameNotes.current = { ...base, ...patch };
+    try {
+      await apiRequest("PATCH", `/api/profiles/${profile.id}`, patch);
+      qc.setQueryData(["/api/profiles", profile.id, "detail"], (old: any) => (old && typeof old === "object" ? { ...old, ...patch } : old));
+    } catch (err: any) {
+      sentNameNotes.current = base;
+      toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" });
+    }
+  };
+  const finishEditing = async () => {
+    await commitNameNotes();
+    if (recurringBill) await closeBillEditor(); else await closeTermsEditor();
+  };
+  const undoEditing = () => {
+    setEditName(profile.name || "");
+    setEditNotes(String((profile as any).notes || ""));
+    if (recurringBill) undoBillEdits(); else undoTermsEdits();
+  };
   const TypeIcon: LucideIcon = SUBTYPE_ICONS[subtypeRaw] || (recurringBill ? Receipt : Landmark);
   const paidOff = !recurringBill && terms.originalBalance > 0 && terms.currentBalance <= 0;
   const autopayOn = schedule ? schedule.autopay === true : isAutoPayOn(f2);
@@ -1210,7 +1271,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     const today = parseLocalDate(todayISO);
     return due && today ? Math.round((due.getTime() - today.getTime()) / 86400000) : null;
   })();
-  const nextDueTone: BalanceStat["tone"] = nextDueDays == null ? undefined : nextDueDays < 0 ? "danger" : nextDueDays === 0 ? "warn" : undefined;
   const repeats = recurringBill || amortize;
   const payAmount: number = recurringBill
     ? Number(schedule?.amount ?? billMonthly) || 0
@@ -1235,271 +1295,139 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     : cadence === "monthly" && repeatDay ? `Repeats monthly (on the ${ordinal(repeatDay)})` : `Repeats ${cadence}`;
 
   const paidDown = Math.max(0, summary.originalBalance - summary.currentBalance);
-  const payoffProgress: BalanceProgress | null = summary.originalBalance > 0 ? {
-    title: "Payoff progress",
-    pct: summary.payoffProgressPct,
-    pctLabel: `${summary.payoffProgressPct.toFixed(1)}%`,
-    pctCaption: "paid down",
-    left: `${fmtUSDShort(paidDown)} paid`,
-    right: `${fmtUSDShort(summary.currentBalance)} remaining`,
-    hint: "How much of the original amount has been paid off",
-    testId: "liability-progress",
-  } : null;
-  const notSet = <span className="text-cyan-400">+ Add</span>;
-  const nextDueStat: BalanceStat = {
-    icon: CalendarIcon,
-    label: "Next due date",
-    value: nextDueISO ? fmtDate(nextDueISO) : paidOff ? "Paid off" : seriesComplete ? "Complete" : billHeldLabel ?? notSet,
-    sub: nextDueISO && nextDueDays != null ? dayLabel(nextDueDays) : undefined,
-    tone: nextDueISO ? nextDueTone : undefined,
-    testId: recurringBill ? "kpi-bill-due" : "kpi-next-due",
-    onClick: editFacts,
-    actionLabel: recurringBill ? "Edit payment date" : "Edit due day",
-  };
+  const monthYear = (iso?: string | null) => parseLocalDate(iso)?.toLocaleDateString("en-US", { month: "short", year: "numeric" }) || "";
+  // When the balance reaches zero, from THIS page's one amortization. Empty
+  // when there is nothing honest to say (no rate or payment: the engine would
+  // assume 360 months).
+  const canProject = amortize && payoffMissing.length === 0 && !summary.neverAmortizes && summary.remainingMonths > 0;
+  const payoffText = paidOff ? "Paid off"
+    : amortize && payoffMissing.length === 0 && summary.neverAmortizes ? "Never at this payment"
+    : canProject ? fmtDate(summary.payoffDate) : "";
+  const profileNotes = String((profile as any).notes || "");
 
-  const balanceCard = recurringBill ? (
-    <BalanceCard
-      label="Amount"
-      value={fmtUSDShort(payAmount)}
-      valueTestId="kpi-bill-monthly"
-      onValueClick={editBill}
-      valueActionLabel="Edit amount"
-      caption={<>
-        {cap(cadence)}
-        {schedule?.annualTotal != null ? ` · ${fmtUSDShort(schedule.annualTotal)} a year` : ""}
-      </>}
-      // A finite-term bill shows progress toward completion (paid of total),
-      // never amortizing payoff. Open-ended bills omit it entirely.
-      progress={billTotalTerm != null && billTotalTerm > 0 ? {
-        title: "Term progress",
-        pct: billProgressPct,
-        pctLabel: `${billProgressPct}%`,
-        pctCaption: "of payments made",
-        left: `${billPaidCount} paid`,
-        right: `${billRemainingTerm ?? Math.max(0, billTotalTerm - billPaidCount)} remaining${missedCount > 0 ? ` · ${missedCount} not recorded` : ""}`,
-        testId: "bill-term-progress",
-      } : null}
-      stats={[
-        { icon: RefreshCw, label: "Frequency", value: cap(cadence), onClick: editBill, actionLabel: "Edit frequency" },
-        nextDueStat,
+  // ── Header figures: the four numbers the page is opened for ───────────────
+  const RED = "0 78% 62%";
+  const GREEN = "155 62% 50%";
+  const addValue = <span className="text-cyan-400">+ Add</span>;
+  const headerStats: HeroStat[] = recurringBill
+    ? [
+        { label: "Amount", value: fmtUSDShort(payAmount), accent: RED, testId: "kpi-bill-monthly", onClick: startEditing },
         {
-          icon: TrendingDown,
-          label: "Remaining",
-          value: billRemainingTerm != null ? `${billRemainingTerm} of ${billTotalTerm}` : "Ongoing",
-          sub: billRemainingTerm != null ? "payments" : "no end date",
-          testId: "kpi-bill-remaining",
-          onClick: editBill, actionLabel: "Edit term",
+          label: seriesComplete ? "Ended" : "Next due",
+          value: nextDueISO ? formatListDate(nextDueISO) || fmtDate(nextDueISO) : seriesComplete ? "Complete" : billHeldLabel ?? addValue,
+          accent: nextDueDays != null && nextDueDays < 0 ? RED : nextDueDays === 0 ? "43 96% 53%" : undefined,
+          testId: "kpi-bill-due", onClick: startEditing,
         },
+        { label: "Frequency", value: cap(cadence), testId: "kpi-bill-frequency", onClick: startEditing },
         {
-          icon: ActivityIcon,
           label: "Status",
           value: seriesComplete ? "Complete" : billHeldLabel ?? BILL_STATUS_META[billStatusEff].label,
-          sub: `${payments.length} paid`,
-          testId: "kpi-bill-status",
-          onClick: () => setTab("payments"), actionLabel: "Open payments",
+          accent: GREEN, testId: "kpi-bill-status", onClick: () => setTab("payments"),
         },
-      ]}
-      autopay={{
-        on: autopayOn,
-        busy: autoPaySave.isPending || !schedule,
-        onChange: (enabled) => autoPaySave.mutate({ enabled }),
-        note: autopayOn
-          ? "Portol records the payment automatically when due and reduces reminder noise."
-          : "You record each payment yourself and get a reminder when one is due.",
-      }}
-    />
-  ) : (
-    <BalanceCard
-      label={family === "one_time" ? "Amount owed" : "Current balance"}
-      value={fmtUSDShort(summary.currentBalance)}
-      valueTestId="kpi-balance"
-      onValueClick={editTerms}
-      valueActionLabel="Edit balance"
-      caption={family === "revolving" && creditLimit > 0
-        ? `Credit limit: ${fmtUSDShort(creditLimit)}`
-        : summary.originalBalance > 0 ? `Original amount: ${fmtUSDShort(summary.originalBalance)}` : undefined}
-      progress={family === "revolving" && creditLimit > 0 ? {
-        title: "Utilization",
-        pct: Math.min(100, utilizationPct),
-        pctLabel: `${utilizationPct}%`,
-        pctCaption: "of the limit used",
-        left: `${fmtUSDShort(summary.currentBalance)} used`,
-        right: `${fmtUSDShort(Math.max(0, creditLimit - summary.currentBalance))} available`,
-        testId: "kpi-utilization",
-      } : payoffProgress}
-      stats={[
-        { icon: Percent, label: "APR (Interest rate)", value: summary.annualRate > 0 ? fmtPct(summary.annualRate) : notSet, testId: "kpi-apr", onClick: editTerms, actionLabel: "Edit interest rate" },
-        { icon: Landmark, label: "Lender", value: terms.lender || notSet, onClick: editTerms, actionLabel: "Edit lender" },
+      ]
+    : [
+        { label: family === "one_time" ? "Owed" : "Balance", value: fmtUSDShort(summary.currentBalance), accent: RED, testId: "kpi-balance", onClick: startEditing },
         {
-          icon: CalendarIcon,
-          label: family === "revolving" ? "Minimum payment" : "Monthly payment",
-          value: payAmount > 0 ? fmtUSD(payAmount) : notSet,
-          testId: family === "revolving" ? "kpi-min-payment" : "kpi-monthly",
-          onClick: editTerms, actionLabel: "Edit payment",
+          label: family === "revolving" ? "Minimum" : "Payment",
+          value: payAmount > 0 ? <>{fmtUSDShort(payAmount)}<span className="text-[0.62em] font-medium opacity-80">/mo</span></> : addValue,
+          testId: family === "revolving" ? "kpi-min-payment" : "kpi-monthly", onClick: startEditing,
         },
-        nextDueStat,
-      ]}
-      autopay={{
-        on: autopayOn,
-        busy: autoPaySave.isPending || !schedule,
-        onChange: (enabled) => autoPaySave.mutate({ enabled }),
-        note: autopayOn
-          ? "Portol records the payment automatically when due and reduces reminder noise."
-          : "You record each payment yourself and get a reminder when one is due.",
-      }}
-    />
-  );
+        { label: "APR", value: summary.annualRate > 0 ? fmtPct(summary.annualRate) : addValue, testId: "kpi-apr", onClick: startEditing },
+        family === "revolving" && creditLimit > 0
+          ? { label: "Used", value: `${utilizationPct}%`, accent: utilizationPct >= 80 ? RED : GREEN, testId: "kpi-utilization", onClick: startEditing }
+          : amortize
+            ? {
+                label: "Payoff",
+                value: paidOff ? "Paid off" : canProject ? monthYear(summary.payoffDate) : payoffText || addValue,
+                accent: paidOff || canProject ? GREEN : undefined, testId: "kpi-payoff",
+                onClick: () => (canProject ? setTab("cost") : startEditing()),
+              }
+            : { label: "Next due", value: nextDueISO ? formatListDate(nextDueISO) || fmtDate(nextDueISO) : paidOff ? "Paid off" : addValue, testId: "kpi-next-due", onClick: startEditing },
+      ];
 
-  // ── "Liability details": each fact once, each a tap from its editor ───────
-  const editNameAndNotes = () => {
-    setEditName(profile.name || "");
-    setEditNotes((profile as any).notes || "");
-    setShowEditDialog(true);
-  };
   const linkedAssets = (assetLinksQuery.data || [])
     .map((l: any) => (ownerCandidates || []).find((p: any) => p.id === l.assetProfileId))
     .filter(Boolean) as any[];
-  const linkedAssetRow: DetailRow = {
-    key: "linked-asset",
-    icon: SUBTYPE_ICONS[subtypeRaw] === Car ? Car : Link2,
-    label: "Linked asset",
-    // A failed request is not "none linked" (Rule 7).
-    value: assetLinksQuery.isError ? "Couldn't load"
-      : !assetLinksQuery.data ? "Loading…"
-      : linkedAssets.length === 0 ? "None linked"
-      : `${linkedAssets[0].name}${linkedAssets[0].type ? ` (${cap(String(linkedAssets[0].type).replace(/_/g, " "))})` : ""}${linkedAssets.length > 1 ? ` +${linkedAssets.length - 1}` : ""}`,
-    empty: !!assetLinksQuery.data && linkedAssets.length === 0,
-    // Linked already: the Details tab lists them. None yet: straight to the picker.
-    onClick: () => { if (assetLinksQuery.data && linkedAssets.length === 0) setLinkAssetSignal((n) => n + 1); setTab("details"); },
-    actionLabel: linkedAssets.length === 0 ? "Link an asset" : "Manage linked assets",
-  };
-  const typeRow: DetailRow = {
-    key: "type", icon: TypeIcon, label: "Type", value: subtypeLabel,
-    onClick: () => { setTypeDraft(subtypeRaw); setShowTypeDialog(true); }, actionLabel: "Change type",
-  };
-  const profileNotes = String((profile as any).notes || "").trim();
-  const notesRow: DetailRow = {
-    key: "notes", icon: FileText, label: "Notes", wide: true,
-    value: profileNotes || "No notes yet", empty: !profileNotes,
-    onClick: editNameAndNotes, actionLabel: "Edit notes",
-  };
-  const detailRows: DetailRow[] = recurringBill
-    ? [
-        typeRow,
-        { key: "amount", icon: Wallet, label: "Recurring amount", value: fmtUSD(payAmount), onClick: editBill, actionLabel: "Edit amount" },
-        { key: "frequency", icon: RefreshCw, label: "Frequency", value: cap(cadence), onClick: editBill, actionLabel: "Edit frequency" },
-        { key: "next-due", icon: CalendarIcon, label: "Next due date", value: nextDueISO ? fmtDate(nextDueISO) : seriesComplete ? "Complete" : billHeldLabel ?? "Not set", empty: !nextDueISO, onClick: editBill, actionLabel: "Edit payment date" },
-        { key: "start", icon: Flag, label: "First payment", value: fmtDate(schedule?.firstPayment ?? terms.firstPaymentDate) || "Not set", empty: !(schedule?.firstPayment ?? terms.firstPaymentDate), onClick: editBill, actionLabel: "Edit first payment" },
-        {
-          key: "term", icon: Layers, label: "Term", onClick: editBill, actionLabel: "Edit term",
-          value: billTotalTerm != null
-            ? `${billRemainingTerm ?? billTotalTerm} of ${billTotalTerm} left`
-            : schedule?.recurrenceEnd ? `Until ${fmtDate(schedule.recurrenceEnd)}` : "Ongoing",
-        },
-        { key: "reminder", icon: Bell, label: "Reminder", value: billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : "None", empty: billReminderLead == null, onClick: editBill, actionLabel: "Edit reminder" },
-        linkedAssetRow,
-        notesRow,
-      ]
-    : [
-        typeRow,
-        { key: "lender", icon: Landmark, label: "Lender", value: terms.lender || "Not set", empty: !terms.lender, onClick: editTerms, actionLabel: "Edit lender" },
-        { key: "original", icon: Layers, label: "Original amount", value: terms.originalBalance > 0 ? fmtUSDShort(terms.originalBalance) : "Not set", empty: !(terms.originalBalance > 0), onClick: editTerms, actionLabel: "Edit original amount" },
-        { key: "balance", icon: Wallet, label: "Current balance", value: fmtUSDShort(terms.currentBalance), onClick: editTerms, actionLabel: "Edit current balance" },
-        { key: "payment", icon: CreditCard, label: family === "revolving" ? "Minimum payment" : "Monthly payment", value: payAmount > 0 ? fmtUSD(payAmount) : "Not set", empty: !(payAmount > 0), onClick: editTerms, actionLabel: "Edit payment" },
-        { key: "rate", icon: Percent, label: "Interest rate (APR)", value: summary.annualRate > 0 ? fmtPct(summary.annualRate) : "Not set", empty: !(summary.annualRate > 0), onClick: editTerms, actionLabel: "Edit interest rate" },
-        { key: "start", icon: CalendarIcon, label: "Start date", value: fmtDate(terms.firstPaymentDate) || "Not set", empty: !terms.firstPaymentDate, onClick: editTerms, actionLabel: "Edit start date" },
-        {
-          // Calculated from today's balance at the stored payment — it opens
-          // the payoff calculator, not a field.
-          key: "payoff", icon: Flag, label: "Payoff date",
-          // Nothing to project yet: the missing terms are what there is to add.
-          onClick: () => (paidOff || (amortize && payoffMissing.length === 0) ? setTab("payments") : editTerms()),
-          actionLabel: "See the payoff schedule",
-          value: paidOff ? "Paid off"
-            : !amortize || payoffMissing.length > 0 ? "Not enough to project"
-            : summary.neverAmortizes ? "Never at this payment"
-            : summary.remainingMonths > 0 ? fmtDate(summary.payoffDate) : "Not enough to project",
-          empty: !paidOff && (!amortize || payoffMissing.length > 0 || !(summary.remainingMonths > 0)),
-        },
-        linkedAssetRow,
-        notesRow,
-      ];
-
-  // ── Documents and alerts ───────────────────────────────────────────────────
-  const documentList: any[] | null = Array.isArray(documentsQuery.data) ? documentsQuery.data : null;
+  const openLinks = (pickAsset = false) => { if (pickAsset) setLinkAssetSignal((n) => n + 1); setShowLinks(true); };
   // A payment marked missed is the alert Auto Pay rules keep raised (A3/A6);
   // it is derived from the occurrence stamps, not stored here (Rule 5).
   const missedPayments = scheduleOccs.filter((o) => o.status === "missed").length;
-  const alertCount = missedPayments;
-  const reminderLine = autopayOn && schedule?.autopayReminders !== true
-    ? "Auto Pay is on, so due-date reminders stay quiet."
-    : billReminderLead != null
-      ? `You're reminded ${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before each payment.`
-      : "You're reminded when a payment is due.";
 
-  const profileActions: ProfileAction[] = [
-    {
-      key: "edit", icon: Pencil, label: "Edit liability details",
-      hint: recurringBill ? "Update amount, frequency, dates, reminder, and more" : "Update lender, balance, payment, dates, and more",
-      onClick: recurringBill ? editBill : editTerms,
-    },
-    {
-      key: "add-field", icon: Plus, label: "Add custom field",
-      hint: "Track additional details (e.g., loan number, vehicle VIN, insurance, etc.)",
-      onClick: () => {
-        setAddFieldSignal((n) => n + 1);
-        addFieldRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
-      },
-    },
-    {
-      key: "history", icon: BarChart3, label: "View payment history",
-      hint: recurringBill ? "See past and upcoming payments" : "See past payments, balances, and payoff progress",
-      onClick: () => setTab("payments"),
-    },
-    {
-      key: "ask", icon: Sparkles, label: "Ask Portol about this",
-      hint: "Update it, record a payment, or ask a question in chat",
-      onClick: askPortol,
-    },
-    {
-      key: "autopay", icon: RefreshCw, label: "Manage autopay",
-      hint: "Update autopay, payment method, or schedule",
-      onClick: () => setTab("payments"),
-    },
-    {
-      // Opens the confirmation below: deleting takes two taps (Rule 8).
-      key: "delete", icon: Trash2, label: "Delete this liability", destructive: true,
-      hint: "Permanently remove this liability and all its data",
-      onClick: () => setShowDeleteProfileDialog(true),
-      testId: "button-delete-profile",
-    },
-  ];
+  // The same actions behind the header's ⋯ and the "+ More" button.
+  const moreItems = (
+    <>
+      <DropdownMenuItem onSelect={() => { setUploadSignal((n) => n + 1); setTab("documents"); }} data-testid="menu-add-document">
+        <FileText className="h-4 w-4 mr-2" /> Add document
+      </DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => { setTab("overview"); setAddFieldSignal((n) => n + 1); }} data-testid="menu-add-characteristic">
+        <Plus className="h-4 w-4 mr-2" /> Add characteristic
+      </DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => openLinks(false)} data-testid="menu-links">
+        <Users className="h-4 w-4 mr-2" /> Owners &amp; linked records
+      </DropdownMenuItem>
+      <DropdownMenuItem onSelect={askPortol} data-testid="menu-ask-portol">
+        <Sparkles className="h-4 w-4 mr-2" /> Ask Portol about this
+      </DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => avatarInputRef.current?.click()}>
+        <Camera className="h-4 w-4 mr-2" /> Change picture
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      {/* Opens the confirmation: deleting takes two taps (Rule 8). */}
+      <DropdownMenuItem onSelect={() => setShowDeleteProfileDialog(true)} className="text-destructive focus:text-destructive" data-testid="button-delete-profile">
+        <Trash2 className="h-4 w-4 mr-2" /> Delete this liability
+      </DropdownMenuItem>
+    </>
+  );
+  const chipCls = "!text-[13px] !px-2.5 !py-1.5 !font-medium";
+  const actionBtn = "h-9 gap-1.5 rounded-lg text-[13px] shrink-0";
+  const tabCls = "text-[14px] px-3.5 h-9 rounded-lg whitespace-nowrap data-[state=active]:shadow-[inset_0_-2px_0_hsl(155_62%_50%)]";
+  const inputCls = "h-9 text-[14px]";
 
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="liability-profile-page">
-      <div className="px-4 md:px-6 pt-3 max-w-4xl mx-auto">
+      <div className="px-3 sm:px-4 md:px-6 pt-3 max-w-7xl mx-auto">
         <DetailHero
           testId="liability-header"
           pageTitle="Liability Profile"
           accent={profileVisual("liability").accent}
           icon={TypeIcon}
-          typeIcon={TypeIcon}
           title={
-            <button type="button" onClick={editNameAndNotes} className="text-left" title="Edit name" data-testid="liability-title">
+            <button type="button" onClick={startEditing} className="text-left" title="Edit name" data-testid="liability-title">
               {profile.name || subtypeLabel}
             </button>
           }
-          typeLabel={subtypeLabel}
-          subtitle={terms.lender && terms.accountNumberLast4 ? `${terms.lender} · ····${terms.accountNumberLast4}` : undefined}
+          stats={headerStats}
           badges={<>
-            <button type="button" onClick={() => setTab("details")} title="See who owns this debt" data-testid="chip-owner">
-              <Pill accent="262 83% 72%" className="!text-[12px] !px-2.5 !py-1"><User className="h-3.5 w-3.5" /> {ownerChipLabel}</Pill>
+            {/* The type is a menu: choosing one writes the type_key column (L4). */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" title="Change type" data-testid="chip-type">
+                  <Pill accent="225 30% 72%" className={chipCls}><TypeIcon className="h-4 w-4" /> {subtypeLabel} <ChevronDown className="h-3.5 w-3.5" /></Pill>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="max-h-[60dvh] overflow-y-auto">
+                {typeChoices.map((k) => (
+                  <DropdownMenuItem key={k} disabled={k === subtypeRaw || changeTypeMutation.isPending} onSelect={() => changeTypeMutation.mutate(k)} data-testid={`type-choice-${k}`}>
+                    {typeLabelOf(k)}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {terms.lender && (
+              <button type="button" onClick={startEditing} title="Edit lender" data-testid="chip-lender">
+                <Pill accent="225 30% 72%" className={chipCls}>{terms.lender}</Pill>
+              </button>
+            )}
+            <button type="button" onClick={() => openLinks(false)} title="See who owns this debt" data-testid="chip-owner">
+              <Pill accent="270 85% 74%" className={chipCls}><User className="h-4 w-4" /> {ownerChipLabel}</Pill>
             </button>
-            <span data-testid="chip-status">
-              <Pill accent={statusChip.accent} className="!text-[12px] !px-2.5 !py-1">
-                <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden /> {statusChip.label}
-              </Pill>
-            </span>
+            {statusChip.label !== "Active" && (
+              <span data-testid="chip-status">
+                <Pill accent={statusChip.accent} className={chipCls}>
+                  <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden /> {statusChip.label}
+                </Pill>
+              </span>
+            )}
           </>}
           avatar={{
             src: (profile as any).avatar,
@@ -1517,30 +1445,12 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           menu={
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button type="button" className="pressable grid h-10 w-10 place-items-center rounded-full hover:bg-foreground/5 transition-colors"
+                <button type="button" className="pressable grid h-9 w-9 place-items-center rounded-full hover:bg-foreground/5 transition-colors"
                   aria-label="More actions" data-testid="button-liability-menu">
-                  <MoreVertical className="h-5 w-5" />
+                  <MoreHorizontal className="h-5 w-5" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[200px]">
-                <DropdownMenuItem onSelect={() => openPaymentDialog(recurringBill ? "custom" : "minimum")} data-testid="quick-pay-min">
-                  <Plus className="h-4 w-4 mr-2" /> Record a payment
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={askPortol} data-testid="menu-ask-portol">
-                  <Sparkles className="h-4 w-4 mr-2" /> Ask Portol about this
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={editNameAndNotes} data-testid="button-header-edit-profile">
-                  <Edit className="h-4 w-4 mr-2" /> Edit name &amp; notes
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => avatarInputRef.current?.click()}>
-                  <Camera className="h-4 w-4 mr-2" /> Change picture
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                {/* Opens the confirmation: two taps (Rule 8). */}
-                <DropdownMenuItem onSelect={() => setShowDeleteProfileDialog(true)} className="text-destructive focus:text-destructive" data-testid="menu-delete-profile">
-                  <Trash2 className="h-4 w-4 mr-2" /> Delete this liability
-                </DropdownMenuItem>
-              </DropdownMenuContent>
+              <DropdownMenuContent align="end" className="min-w-[220px]">{moreItems}</DropdownMenuContent>
             </DropdownMenu>
           }
         />
@@ -1549,7 +1459,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           stored record; a row still holding two spellings of one fact with
           two values says so here instead of showing whichever won. */}
       {Array.isArray(schedule?.integrity?.warnings) && schedule.integrity.warnings.length > 0 && (
-        <div className="px-4 md:px-6 pt-2 max-w-4xl mx-auto" data-testid="liability-integrity-notice">
+        <div className="px-3 sm:px-4 md:px-6 pt-2 max-w-7xl mx-auto" data-testid="liability-integrity-notice">
           <p className="text-[12px] text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
             <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
             <span>These records conflict: {schedule.integrity.warnings.map((w: any) => w.message).join("; ")}. Showing the canonical value.</span>
@@ -1558,288 +1468,344 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       )}
 
       {/* Tabs */}
-      <div className="px-4 md:px-6 pt-4 max-w-4xl mx-auto">
+      <div className="px-3 sm:px-4 md:px-6 pt-3 max-w-7xl mx-auto">
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} data-testid="liability-tabs">
-          <div className="overflow-x-auto pb-1 -mx-1 px-1" style={{ WebkitOverflowScrolling: "touch" as any }}>
-            <TabsList className="inline-flex h-9 w-max gap-0.5 p-0.5 rounded-full bg-muted/50">
-              <TabsTrigger value="overview" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-overview">Overview</TabsTrigger>
-              <TabsTrigger value="details" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-details">Details</TabsTrigger>
-              <TabsTrigger value="payments" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-payments">Payments</TabsTrigger>
-              <TabsTrigger value="documents" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-documents">Docs</TabsTrigger>
-              <TabsTrigger value="activity" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-activity">Activity</TabsTrigger>
-              <TabsTrigger value="history" className="text-[13px] px-3.5 rounded-full whitespace-nowrap" data-testid="tab-history">History</TabsTrigger>
-            </TabsList>
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+            <div className="overflow-x-auto -mx-1 px-1" style={{ WebkitOverflowScrolling: "touch" as any }}>
+              <TabsList className="inline-flex h-auto w-max gap-0.5 p-0 bg-transparent">
+                <TabsTrigger value="overview" className={tabCls} data-testid="tab-overview">Overview</TabsTrigger>
+                <TabsTrigger value="payments" className={tabCls} data-testid="tab-payments">Payments</TabsTrigger>
+                <TabsTrigger value="schedule" className={tabCls} data-testid="tab-schedule">Schedule</TabsTrigger>
+                <TabsTrigger value="cost" className={tabCls} data-testid="tab-cost">Cost of Ownership</TabsTrigger>
+                <TabsTrigger value="documents" className={tabCls} data-testid="tab-documents">Documents</TabsTrigger>
+                <TabsTrigger value="history" className={tabCls} data-testid="tab-history">History</TabsTrigger>
+              </TabsList>
+            </div>
+            {/* What can be added to this liability, one tap each. */}
+            <div className="flex items-center gap-2 overflow-x-auto -mx-1 px-1 pb-0.5" data-testid="liability-quick-add">
+              <Button variant="outline" size="sm" className={actionBtn} onClick={() => openPaymentDialog(recurringBill ? "custom" : "minimum")} data-testid="quick-pay-min">
+                <Plus className="h-4 w-4 text-emerald-400" /> Payment
+              </Button>
+              <Button variant="outline" size="sm" className={actionBtn} onClick={() => setExpenseDialog({ open: true, description: "", amount: "", date: localTodayISO() })} data-testid="button-add-expense">
+                <Plus className="h-4 w-4 text-emerald-400" /> Expense
+              </Button>
+              <Button variant="outline" size="sm" className={actionBtn} onClick={() => setTaskDialog({ open: true, title: "", dueDate: "" })} data-testid="button-add-task">
+                <Plus className="h-4 w-4 text-emerald-400" /> Task
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className={actionBtn} data-testid="button-more-actions">
+                    <Plus className="h-4 w-4 text-emerald-400" /> More <ChevronDown className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[220px]">{moreItems}</DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
 
-          {/* OVERVIEW — the owner's design: the summary of this liability.
-              The payment schedule, the payoff chart and calculator live under
-              Payments; owners, linked records and the AI summary under
-              Details. */}
+          {/* OVERVIEW — the owner's design (2026-11-23): the details as a form
+              that edits in place, the characteristics the user added, the
+              quick figures, and the AI summary beside the balance falling to
+              zero. Payments, the schedule and the cost of the debt have their
+              own tabs. */}
           <TabsContent value="overview" className="mt-3 space-y-3">
-            {balanceCard}
-
-            <section data-testid="liability-details-section">
-              <SectionTitle action={
-                <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg" onClick={() => setAddFieldSignal((n) => n + 1)} data-testid="add-field-button">
-                  <Plus className="h-3.5 w-3.5" /> Add field
-                </Button>
-              }>Liability details</SectionTitle>
-              <DetailRowGrid rows={detailRows} />
-              {/* Add field — the same Field | Value | Add as a person's Info
-                  page, for anything the loan/bill screens don't have a box
-                  for; what was added is listed with the rows above it. */}
-              <div ref={addFieldRef} className="mt-2">
-                <AddFieldPanel profileId={profile.id} fields={profile.fields} showFields hideHeader rows openSignal={addFieldSignal} />
-              </div>
-              <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 gap-2 mt-2 empty:hidden" />
-            </section>
-
-            {!recurringBill && summary.originalBalance > 0 && (
-              <PayoffOverviewCard
-                title="Payoff overview"
-                subtitle={paidOff ? "This debt is paid off." : family === "revolving" ? "Progress toward paying off this balance." : "Progress toward paying off this loan."}
-                figures={[
-                  { label: "Original amount", value: fmtUSDShort(summary.originalBalance), dot: "hsl(262 83% 66%)" },
-                  { label: "Amount paid", value: fmtUSDShort(paidDown), dot: "hsl(187 85% 53%)" },
-                  { label: "Remaining balance", value: fmtUSDShort(summary.currentBalance), dot: "hsl(250 60% 72%)" },
-                ]}
-                pct={summary.payoffProgressPct}
-                pctLabel={`${summary.payoffProgressPct.toFixed(1)}%`}
-                pctCaption="paid down"
-              />
+            {missedPayments > 0 && (
+              <button type="button" onClick={() => setTab("schedule")} className="bubble w-full px-4 py-2.5 flex items-center gap-2 text-left text-[13px]" style={{ ["--accent-hsl" as any]: RED }} data-testid="missed-payments-notice">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-red-500" />
+                <span className="flex-1"><span className="font-semibold text-red-500">{missedPayments} missed payment{missedPayments === 1 ? "" : "s"}.</span> Review the schedule.</span>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              </button>
             )}
 
-            <RowCard
-              icon={CalendarIcon}
-              title="Upcoming payments"
-              onClick={() => (nextDueISO || paidOff || seriesComplete || billHeldLabel ? setTab("payments") : editFacts())}
-              actionLabel={nextDueISO ? "Open the payment schedule" : "Set up payments"}
-              trailing={autopayOn && nextDueISO ? <AutopayChip /> : undefined}
-              testId="upcoming-payments-card"
-            >
-              {nextDueISO ? (
-                <>
-                  <span className="block text-[14px] text-muted-foreground">
-                    Next payment: <span className="font-semibold text-foreground" data-testid="upcoming-next-date">{fmtDate(nextDueISO)}</span>
-                  </span>
-                  <span className="block text-[13px] text-muted-foreground tabular-nums">
-                    {payAmount > 0 ? `${fmtUSD(payAmount)} • ` : ""}{cadenceLabel}
-                  </span>
-                </>
-              ) : (
-                <span className="block text-[13px] text-muted-foreground">
-                  {paidOff ? "Nothing left to pay: this debt is paid off."
-                    : seriesComplete ? "Every payment in this series has been made."
-                    : billHeldLabel ? `${billHeldLabel}: no payment is scheduled.`
-                    : "No payment is scheduled. Add a payment amount and a due day."}
-                </span>
-              )}
-            </RowCard>
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+              {/* LIABILITY DETAILS — read as the fields they become; Edit (or a
+                  tap on any value) turns them into inputs that save themselves
+                  (L7). Save finishes: it waits for the pending save. */}
+              <section
+                ref={detailsRef}
+                className="bubble p-4 scroll-mt-3"
+                data-testid={recurringBill && editing ? "bill-details-edit-card" : "liability-details-card"}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3 min-h-8">
+                  <h2 className="text-[16px] font-semibold tracking-tight">Liability Details</h2>
+                  <div className="flex items-center gap-2">
+                    {editing && (
+                      <span className="text-[12px] text-muted-foreground" role="status" aria-live="polite" data-testid={recurringBill ? "bill-autosave-status" : "terms-autosave-status"}>
+                        {autosaveStatusLabel(recurringBill ? billAutosave.status : termsAutosave.status)}
+                      </span>
+                    )}
+                    {editing ? (
+                      <Button size="sm" variant="outline" className="h-8 gap-1 text-[13px] rounded-lg" onClick={undoEditing}
+                        disabled={!(recurringBill ? billAutosave.changedSinceOpen : termsAutosave.changedSinceOpen)}
+                        title="Put every field back to what it was when you started editing"
+                        data-testid={recurringBill ? "button-undo-bill-edits" : "button-undo-terms-edits"}>
+                        <RotateCcw className="h-3.5 w-3.5" /> Undo
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" className="h-8 gap-1 text-[13px] rounded-lg" onClick={startEditing} data-testid={recurringBill ? "button-edit-bill" : "button-edit-terms"}>
+                        <Pencil className="h-3.5 w-3.5" /> Edit
+                      </Button>
+                    )}
+                    <Button size="sm" className="h-8 gap-1 text-[13px] rounded-lg bg-emerald-500 text-white hover:bg-emerald-500/90 disabled:opacity-40"
+                      onClick={() => void finishEditing()} disabled={!editing} data-testid={recurringBill ? "button-save-bill" : "button-save-terms"}>
+                      <Check className="h-3.5 w-3.5" /> Save
+                    </Button>
+                  </div>
+                </div>
 
-            <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-3">
-              <MiniCard
-                icon={FileText}
-                title="Documents"
-                testId="documents-card"
-                // A failed request is not "0 documents" (Rule 7).
-                headline={documentsQuery.isError ? "Couldn't load documents"
-                  : !documentList ? "Loading…"
-                  : `${documentList.length} document${documentList.length === 1 ? "" : "s"}`}
-                detail={documentList && documentList.length > 0
-                  ? documentList.slice(0, 3).map((d: any) => String(d?.name || "Document")).join(", ")
-                  : "Loan agreement, statements, payment schedule"}
-                action={
-                  <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg" onClick={() => { setUploadSignal((n) => n + 1); setTab("documents"); }} data-testid="button-add-document">
-                    <Plus className="h-3.5 w-3.5" /> Add document
-                  </Button>
-                }
-              />
-              <MiniCard
-                icon={Bell}
-                title="Alerts"
-                testId="alerts-card"
-                headline={!schedule ? "Loading…" : alertCount > 0
-                  ? <span className="text-red-500">{alertCount} missed payment{alertCount === 1 ? "" : "s"}</span>
-                  : "No alerts"}
-                detail={reminderLine}
-                action={
-                  <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg" onClick={() => (alertCount === 0 && recurringBill ? editBill() : setTab("payments"))} data-testid="button-manage-alerts">
-                    {alertCount > 0 ? "Review payments" : "Manage reminders"}
-                  </Button>
-                }
-              />
+                <FieldGrid testId="liability-details-fields">
+                  <FieldRow icon={FileText} label="Name" wide htmlFor="liability-name">
+                    {editing
+                      ? <Input id="liability-name" className={inputCls} value={editName} onChange={(e) => setEditName(e.target.value)} onBlur={() => void commitNameNotes()} maxLength={120} data-testid="input-edit-name" />
+                      : <ReadValue value={profile.name} onClick={startEditing} actionLabel="Edit name" testId="detail-name" />}
+                  </FieldRow>
+                  <FieldRow icon={TypeIcon} label="Type" wide>
+                    <Select value={subtypeRaw || undefined} onValueChange={(k) => { if (k !== subtypeRaw) changeTypeMutation.mutate(k); }} disabled={changeTypeMutation.isPending}>
+                      <SelectTrigger className={inputCls} data-testid="select-liability-type"><SelectValue placeholder="Choose a type" /></SelectTrigger>
+                      <SelectContent>
+                        {typeChoices.map((k) => <SelectItem key={k} value={k}>{typeLabelOf(k)}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </FieldRow>
+
+                  {recurringBill ? (<>
+                    <FieldRow icon={Wallet} label="Amount" htmlFor="bill-amount">
+                      {editing
+                        ? <Input id="bill-amount" className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={bAmount} onChange={(e) => setBAmount(e.target.value)} placeholder="e.g. 14.99" data-testid="input-bill-amount" />
+                        : <ReadValue value={payAmount > 0 ? fmtUSD(payAmount) : ""} onClick={startEditing} actionLabel="Edit amount" testId="detail-amount" />}
+                    </FieldRow>
+                    <FieldRow icon={RefreshCw} label="Frequency">
+                      {editing ? (
+                        // Only cadences the recurrence engine understands
+                        // (shared/recurrence freqToUnit): an unsupported token
+                        // collapses the series to one occurrence. The bill's
+                        // own current value stays selectable so opening the
+                        // form can never rewrite a cadence by itself.
+                        <Select value={bFrequency} onValueChange={setBFrequency}>
+                          <SelectTrigger className={inputCls} data-testid="select-bill-frequency"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {Array.from(new Set([...BILL_FREQUENCIES, bFrequency].filter(Boolean))).map((fr) => (
+                              <SelectItem key={fr} value={fr} className="capitalize">{cap(fr)}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : <ReadValue value={cap(cadence)} onClick={startEditing} actionLabel="Edit frequency" testId="detail-frequency" />}
+                    </FieldRow>
+                    <FieldRow icon={CalendarIcon} label="Payment Date" htmlFor="bill-due">
+                      {editing
+                        // Moves the whole series. One payment only is moved on
+                        // its date in the Schedule tab.
+                        ? <Input id="bill-due" className={inputCls} type="date" value={bDueDate} onChange={(e) => setBDueDate(e.target.value)} title="Moves the whole series" data-testid="input-bill-due-date" />
+                        : <ReadValue value={nextDueISO ? fmtDate(nextDueISO) : seriesComplete ? "Complete" : billHeldLabel ?? ""} onClick={startEditing} actionLabel="Edit payment date" testId="detail-next-due" />}
+                    </FieldRow>
+                    <FieldRow icon={Layers} label="Term" htmlFor="bill-count">
+                      {editing
+                        ? <Input id="bill-count" className={inputCls} type="number" inputMode="numeric" min={1} value={bCount} onChange={(e) => setBCount(e.target.value)} placeholder="Blank = ongoing" data-testid="input-bill-count" />
+                        : <ReadValue value={billTotalTerm != null ? `${billRemainingTerm ?? billTotalTerm} of ${billTotalTerm} left` : "Ongoing"} onClick={startEditing} actionLabel="Edit number of payments" testId="detail-term" />}
+                    </FieldRow>
+                    <FieldRow icon={Flag} label="Ends On" htmlFor="bill-end">
+                      {editing
+                        ? <Input id="bill-end" className={inputCls} type="date" value={bEnd} onChange={(e) => setBEnd(e.target.value)} title="Blank = no end date" data-testid="input-bill-end" />
+                        : <ReadValue value={schedule?.recurrenceEnd ? fmtDate(schedule.recurrenceEnd) : "No end date"} onClick={startEditing} actionLabel="Edit end date" testId="detail-end" />}
+                    </FieldRow>
+                    <FieldRow icon={Bell} label="Reminder" htmlFor="bill-reminder">
+                      {editing
+                        ? <Input id="bill-reminder" className={inputCls} type="number" inputMode="numeric" min={0} value={bReminder} onChange={(e) => setBReminder(e.target.value)} placeholder="Days before" data-testid="input-bill-reminder" />
+                        : <ReadValue value={billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : ""} onClick={startEditing} actionLabel="Edit reminder" testId="detail-reminder" />}
+                    </FieldRow>
+                  </>) : (<>
+                    <FieldRow icon={Landmark} label="Lender" wide htmlFor="terms-lender">
+                      {editing
+                        ? <Input id="terms-lender" className={inputCls} value={tLender} onChange={(e) => setTLender(e.target.value)} placeholder="e.g. Chase Auto" data-testid="input-terms-lender" />
+                        : <ReadValue value={terms.lender} onClick={startEditing} actionLabel="Edit lender" testId="detail-lender" />}
+                    </FieldRow>
+                    <FieldRow icon={Layers} label="Original Amount" htmlFor="terms-original">
+                      {editing
+                        ? <Input id="terms-original" className={inputCls} type="number" inputMode="decimal" step="0.01" value={tOriginal} onChange={(e) => setTOriginal(e.target.value)} placeholder="e.g. 35000" data-testid="input-terms-original" />
+                        : <ReadValue value={terms.originalBalance > 0 ? fmtUSDShort(terms.originalBalance) : ""} onClick={startEditing} actionLabel="Edit original amount" testId="detail-original" />}
+                    </FieldRow>
+                    <FieldRow icon={Wallet} label="Current Balance" htmlFor="terms-balance">
+                      {editing
+                        ? <Input id="terms-balance" className={inputCls} type="number" inputMode="decimal" step="0.01" value={tBalance} onChange={(e) => setTBalance(e.target.value)} placeholder="e.g. 25000" data-testid="input-terms-balance" />
+                        : <ReadValue value={fmtUSDShort(terms.currentBalance)} onClick={startEditing} actionLabel="Edit current balance" testId="detail-balance" />}
+                    </FieldRow>
+                    <FieldRow icon={Percent} label="APR (Interest)" htmlFor="terms-rate">
+                      {editing
+                        ? <Input id="terms-rate" className={inputCls} type="number" inputMode="decimal" step="0.01" value={tRate} onChange={(e) => setTRate(e.target.value)} placeholder="% e.g. 6.5" data-testid="input-terms-rate" />
+                        : <ReadValue value={summary.annualRate > 0 ? fmtPct(summary.annualRate) : ""} onClick={startEditing} actionLabel="Edit interest rate" testId="detail-rate" />}
+                    </FieldRow>
+                    <FieldRow icon={Clock} label="Term (months)" htmlFor="terms-term">
+                      {editing
+                        ? <Input id="terms-term" className={inputCls} type="number" inputMode="numeric" value={tTerm} onChange={(e) => setTTerm(e.target.value)} placeholder="e.g. 60" data-testid="input-terms-term" />
+                        : <ReadValue value={terms.remainingTermMonths ? `${terms.remainingTermMonths} months` : ""} onClick={startEditing} actionLabel="Edit term" testId="detail-term" />}
+                    </FieldRow>
+                    <FieldRow icon={CreditCard} label={family === "revolving" ? "Min. Payment" : "Monthly Payment"} htmlFor="terms-monthly">
+                      {editing
+                        ? <Input id="terms-monthly" className={inputCls} type="number" inputMode="decimal" step="0.01" value={tMonthly} onChange={(e) => setTMonthly(e.target.value)} placeholder="e.g. 440" data-testid="input-terms-monthly" />
+                        : <ReadValue value={payAmount > 0 ? fmtUSD(payAmount) : ""} onClick={startEditing} actionLabel="Edit payment" testId="detail-payment" />}
+                    </FieldRow>
+                    <FieldRow icon={CalendarIcon} label="Due Day" htmlFor="terms-due-day">
+                      {editing
+                        // A day of the month and a payment put this loan on the calendar.
+                        ? <Input id="terms-due-day" className={inputCls} type="number" inputMode="numeric" min={1} max={31} value={tDueDay} onChange={(e) => setTDueDay(e.target.value)} placeholder="1–31" data-testid="input-terms-due-day" />
+                        : <ReadValue value={terms.dueDay ? ordinal(terms.dueDay) : ""} onClick={startEditing} actionLabel="Edit due day" testId="detail-due-day" />}
+                    </FieldRow>
+                    <FieldRow icon={CalendarIcon} label="Start Date" htmlFor="terms-first-payment">
+                      {editing
+                        ? <Input id="terms-first-payment" className={inputCls} type="date" value={tFirstPayment} onChange={(e) => setTFirstPayment(e.target.value)} data-testid="input-terms-first-payment" />
+                        : <ReadValue value={terms.firstPaymentDate ? fmtDate(terms.firstPaymentDate) : ""} onClick={startEditing} actionLabel="Edit start date" testId="detail-start" />}
+                    </FieldRow>
+                    <FieldRow icon={Flag} label="Payoff Date">
+                      {/* Calculated from the balance, rate and payment above —
+                          it changes when they do, so it has no input of its own. */}
+                      {payoffText
+                        ? <ReadValue value={payoffText} onClick={canProject ? () => setTab("cost") : undefined} actionLabel="See the payoff schedule" testId="detail-payoff" />
+                        : <ReadValue value="" onClick={startEditing} actionLabel="Add a rate and a payment to project the payoff" testId="detail-payoff" />}
+                    </FieldRow>
+                  </>)}
+
+                  <FieldRow icon={Shield} label="Autopay" wide>
+                    <div className="flex items-center gap-2.5 min-h-9">
+                      {recurringBill && editing ? (
+                        <Switch checked={bAutopay} onCheckedChange={setBAutopay} aria-label="Autopay" className="data-[state=checked]:bg-emerald-500" data-testid="switch-bill-autopay" />
+                      ) : (
+                        <Switch checked={autopayOn} disabled={autoPaySave.isPending || !schedule} onCheckedChange={(enabled) => autoPaySave.mutate({ enabled })}
+                          aria-label="Autopay" className="data-[state=checked]:bg-emerald-500" data-testid="switch-autopay-hero" />
+                      )}
+                      <span className="text-[13px] leading-snug" data-testid="hero-autopay-state">
+                        {(recurringBill && editing ? bAutopay : autopayOn)
+                          ? (recurringBill ? "Automatically record each payment" : "Automatically record payment & expense")
+                          : "Off: you record each payment yourself"}
+                      </span>
+                      <span title="When Autopay is on, Portol records the payment on its due date (shown as Assumed paid until confirmed) and stops due-date reminders." className="text-muted-foreground"><Info className="h-4 w-4" /></span>
+                    </div>
+                  </FieldRow>
+                  <FieldRow icon={FileText} label="Notes" wide alignTop htmlFor="liability-notes">
+                    {editing ? (
+                      <div className="relative">
+                        <Textarea id="liability-notes" value={editNotes} onChange={(e) => setEditNotes(e.target.value.slice(0, 500))} onBlur={() => void commitNameNotes()} rows={2} className="text-[14px] pr-14" data-testid="input-edit-notes" />
+                        <span className="absolute bottom-1.5 right-2 text-[11px] text-muted-foreground tabular-nums">{editNotes.length}/500</span>
+                      </div>
+                    ) : <ReadValue value={profileNotes.trim()} onClick={startEditing} actionLabel="Edit notes" testId="detail-notes" multiline />}
+                  </FieldRow>
+                </FieldGrid>
+              </section>
+
+              <div className="space-y-3 min-w-0">
+                {/* CHARACTERISTICS — anything the form has no box for. The same
+                    Field | Value | Add as every profile (D7/D8): each line can
+                    be changed (pencil) or removed (X, two taps). */}
+                <Panel
+                  title="Characteristics"
+                  testId="characteristics-card"
+                  actions={
+                    <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg border-emerald-500/60 text-emerald-400 hover:text-emerald-300" onClick={() => setAddFieldSignal((n) => n + 1)} data-testid="add-field-button">
+                      <Plus className="h-3.5 w-3.5" /> Add Characteristic
+                    </Button>
+                  }
+                >
+                  <AddFieldPanel
+                    profileId={profile.id} fields={profile.fields} showFields hideHeader list openSignal={addFieldSignal}
+                    leading={
+                      <InfoRow
+                        icon={SUBTYPE_ICONS[subtypeRaw] === Car ? Car : Link2}
+                        label="Linked asset"
+                        testId="detail-row-linked-asset"
+                        // A failed request is not "none linked" (Rule 7).
+                        value={assetLinksQuery.isError ? "Couldn't load"
+                          : !assetLinksQuery.data ? "Loading…"
+                          : linkedAssets.length === 0
+                            ? <button type="button" className="font-semibold text-cyan-400" onClick={() => openLinks(true)} data-testid="link-asset-add">+ Add</button>
+                            : linkedAssets.map((a) => a.name).join(", ")}
+                        onEdit={() => openLinks(!!assetLinksQuery.data && linkedAssets.length === 0)}
+                        editLabel={linkedAssets.length === 0 ? "Link an asset" : "Manage linked assets"}
+                      />
+                    }
+                  />
+                  <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 gap-2 mt-2" />
+                </Panel>
+
+                {/* QUICK INFO — figures the page works out; the pencil opens
+                    the terms they are worked out from. */}
+                <Panel title="Quick Info" testId="quick-info-card">
+                  <InfoList>
+                    <InfoRow
+                      icon={CalendarIcon} label="Next Due" testId="quick-next-due"
+                      value={nextDueISO ? `${fmtDate(nextDueISO)}${nextDueDays != null ? ` · ${dayLabel(nextDueDays)}` : ""}` : paidOff ? "Paid off" : seriesComplete ? "Complete" : billHeldLabel ?? addValue}
+                      tone={nextDueDays != null && nextDueDays < 0 ? "danger" : undefined}
+                      onEdit={startEditing} editLabel="Edit the payment day"
+                    />
+                    {recurringBill ? (<>
+                      <InfoRow icon={ActivityIcon} label="Payment Status" testId="quick-status"
+                        value={seriesComplete ? "Complete" : billHeldLabel ?? BILL_STATUS_META[billStatusEff].label}
+                        onEdit={() => setTab("schedule")} editLabel="Open the schedule" />
+                      <InfoRow icon={Check} label="Payments Made" testId="quick-paid" value={String(billPaidCount)} onEdit={() => setTab("payments")} editLabel="Open payments" />
+                      <InfoRow icon={Layers} label="Yearly Total" testId="quick-annual" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : schedule ? addValue : "Loading…"} onEdit={startEditing} editLabel="Edit the amount" />
+                    </>) : (<>
+                      <InfoRow icon={Clock} label="Remaining Term" testId="quick-remaining-term"
+                        value={paidOff ? "Paid off" : canProject ? `${summary.remainingMonths} month${summary.remainingMonths === 1 ? "" : "s"}` : payoffText || addValue}
+                        onEdit={startEditing} editLabel="Edit the terms" />
+                      <InfoRow icon={Percent} label="Interest Left (Est.)" testId="quick-interest"
+                        value={canProject ? fmtUSDShort(Math.round(summary.totalRemainingInterest)) : paidOff ? fmtUSDShort(0) : payoffText || addValue}
+                        onEdit={startEditing} editLabel="Edit the terms" />
+                      <InfoRow icon={Layers} label="Left to Pay (Est.)" testId="quick-total"
+                        value={canProject ? fmtUSDShort(Math.round(summary.currentBalance + summary.totalRemainingInterest)) : paidOff ? fmtUSDShort(0) : payoffText || addValue}
+                        onEdit={startEditing} editLabel="Edit the terms" />
+                    </>)}
+                  </InfoList>
+                </Panel>
+              </div>
             </div>
 
-            <section className="bubble p-4" data-testid="calendar-reminders-card">
-              <div className="flex items-start gap-2.5">
-                <CalendarIcon className="h-5 w-5 shrink-0 mt-0.5 text-muted-foreground" strokeWidth={1.8} />
-                <div className="min-w-0">
-                  <h2 className="text-[16px] font-semibold tracking-tight leading-tight">Calendar &amp; reminders</h2>
-                  <p className="text-[13px] text-muted-foreground">Key dates and related reminders for this liability.</p>
-                </div>
-              </div>
-              {nextDueISO ? (
-                <button type="button" onClick={() => navigate("/calendar")} aria-label="Open the calendar"
-                  className="pressable mt-3 flex w-full items-center gap-3 border-t border-foreground/10 pt-3 text-left" data-testid="calendar-next-date">
-                  <DateTile
-                    month={parseLocalDate(nextDueISO)?.toLocaleDateString("en-US", { month: "short" }) || ""}
-                    day={String(Number(nextDueISO.slice(8, 10)))}
-                  />
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-[14px] font-semibold">{!repeats ? "Payment due" : cadence === "monthly" ? "Monthly payment due" : `${cap(cadence)} payment due`}</span>
-                    <span className="block text-[13px] text-muted-foreground tabular-nums">
-                      {payAmount > 0 ? `${fmtUSD(payAmount)} • ` : ""}{repeatsLabel}
-                    </span>
-                    {autopayOn && <span className="mt-1.5 block sm:hidden"><AutopayChip /></span>}
-                  </span>
-                  {autopayOn && <span className="hidden sm:block shrink-0"><AutopayChip /></span>}
-                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                </button>
+            {/* The AI summary draws nothing until it has one; the card beside
+                it then takes the row (`only:`), so there is never a hole. */}
+            <div className="grid gap-3 lg:grid-cols-2 [&>*:only-child]:lg:col-span-2">
+              <AISummaryCard profileId={profile.id} valueFingerprint={profileValueFingerprint(profile)} />
+
+              {recurringBill ? (
+                <Panel title="Next Payment" testId="next-payment-card"
+                  actions={<Button variant="outline" size="sm" className="h-8 text-[13px] rounded-lg" onClick={() => setTab("schedule")} data-testid="button-open-schedule">Open schedule</Button>}>
+                  <FigureRow label="Date" value={nextDueISO ? fmtDate(nextDueISO) : seriesComplete ? "Complete" : billHeldLabel ?? "Not scheduled"} testId="next-payment-date" />
+                  <FigureRow label="Amount" value={payAmount > 0 ? fmtUSD(payAmount) : "Not set"} tone="danger" />
+                  <FigureRow label="Repeats" value={repeatsLabel.replace(/^Repeats /, "").replace(/^./, (c) => c.toUpperCase())} />
+                  <FigureRow label="Autopay" value={autopayOn ? "On" : "Off"} tone={autopayOn ? "good" : undefined} />
+                </Panel>
               ) : (
-                <p className="mt-3 border-t border-foreground/10 pt-3 text-[13px] text-muted-foreground">
-                  Nothing from this liability is on your calendar.
-                </p>
+                <Panel title="Balance & Payoff" testId="balance-payoff-card">
+                  <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] sm:items-center">
+                    {canProject ? (
+                      <PayoffLine
+                        balances={[summary.currentBalance, ...amortization.rows.map((r) => r.remainingBalance)]}
+                        label={`Balance falling from ${fmtUSDShort(summary.currentBalance)} to zero by ${fmtDate(summary.payoffDate)}`}
+                      />
+                    ) : (
+                      <div className="text-[13px] text-muted-foreground" data-testid="payoff-line-missing">
+                        {paidOff ? "This debt is paid off."
+                          : payoffText ? "The payment does not cover the monthly interest, so the balance never falls."
+                          : <>Add {payoffMissing.length > 0 ? payoffMissing.join(" and ") : "a rate and a payment"} to see the balance fall to zero.
+                            <button type="button" onClick={startEditing} className="ml-1 font-semibold text-cyan-400">+ Add</button></>}
+                      </div>
+                    )}
+                    <div>
+                      <FigureRow label="Current Balance" value={fmtUSDShort(summary.currentBalance)} tone="danger" />
+                      <FigureRow label="Original Amount" value={summary.originalBalance > 0 ? fmtUSDShort(summary.originalBalance) : "Not set"} />
+                      {summary.originalBalance > 0 && <FigureRow label="Paid Down" value={`${fmtUSDShort(paidDown)} · ${summary.payoffProgressPct.toFixed(1)}%`} testId="paid-down" />}
+                      <FigureRow label="Interest Left (Est.)" value={canProject ? fmtUSDShort(Math.round(summary.totalRemainingInterest)) : "Not projected"} />
+                      <FigureRow label="Payoff (Est.)" value={payoffText || "Not projected"} tone={paidOff || canProject ? "good" : undefined} testId="payoff-est" />
+                    </div>
+                  </div>
+                </Panel>
               )}
-            </section>
-
-            <section>
-              <SectionTitle>Profile actions</SectionTitle>
-              <ProfileActionsList actions={profileActions} />
-            </section>
+            </div>
           </TabsContent>
 
-          {/* DETAILS */}
-          <TabsContent value="details" className="mt-4 space-y-4">
-            {recurringBill ? (
-              <Card data-testid="bill-details-card">
-                <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                  <CardTitle className="text-base">Bill details</CardTitle>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={openBillEditor} data-testid="button-edit-bill">
-                    <Edit className="h-3 w-3" /> Edit
-                  </Button>
-                </CardHeader>
-                <CardContent className="grid md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                  <Row label="Type" value={subtypeLabel} />
-                  <Row label="Recurring amount" value={fmtUSD(schedule?.amount ?? billMonthly)} />
-                  <Row label="Frequency" value={cap(billFrequencyLabel)} />
-                  <Row label="Next scheduled due" value={seriesComplete ? "Complete" : fmtDate(billNextDueEff)} />
-                  <Row label="Payment status" value={seriesComplete ? "Complete" : billHeldLabel ?? BILL_STATUS_META[billStatusEff].label} />
-                  <Row label="First payment" value={fmtDate(schedule?.firstPayment ?? terms.firstPaymentDate)} />
-                  {/* ONE term row. This used to be three — "Total term: Ongoing
-                      (no end date)", "Remaining: Ongoing" and "Ends: No end
-                      date" — which on an open-ended bill is the same sentence
-                      written out three times in the same card. Recurring bills
-                      never show amortizing months / projected payoff. */}
-                  <Row
-                    label="Term"
-                    value={billTotalTerm != null
-                      ? `${billRemainingTerm ?? billTotalTerm} of ${billTotalTerm} payment${billTotalTerm === 1 ? "" : "s"} left`
-                      : schedule?.recurrenceEnd
-                        ? `Ongoing until ${fmtDate(schedule.recurrenceEnd)}`
-                        : "Ongoing — no end date"}
-                  />
-                  <Row label="Payments made" value={String(billPaidCount)} />
-                  {missedCount > 0 && <Row label="Not recorded" value={`${missedCount}`} />}
-                  <Row label="Annual total" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : "—"} />
-                  <Row label="Reminder" value={billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : "None"} />
-                  <Row label="Auto Pay" value={isAutoPayOn(f2) ? "On" : "Off"} />
-                </CardContent>
-              </Card>
-            ) : (
-              <Card>
-                <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                  <CardTitle className="text-base">Loan terms</CardTitle>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={openTermsEditor} data-testid="button-edit-terms">
-                    <Edit className="h-3 w-3" /> Edit
-                  </Button>
-                </CardHeader>
-                <CardContent className="grid md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                  <Row label="Subtype" value={subtypeLabel} />
-                  <Row label="Lender / creditor" value={terms.lender || "—"} />
-                  <Row label="Account ····" value={terms.accountNumberLast4 || "—"} />
-                  <Row label="Original balance" value={terms.originalBalance ? fmtUSD(terms.originalBalance) : "—"} />
-                  <Row label="Current balance" value={fmtUSD(terms.currentBalance)} />
-                  <Row label="Annual interest rate" value={fmtPct(terms.annualRate)} />
-                  <Row label="Monthly payment" value={fmtUSD(terms.monthlyPayment || summary.monthlyPayment)} />
-                  {/* BUG-L01: split the single "Remaining term" row into two
-                      labelled values so the user can tell which is the contract
-                      term they entered vs which is the calculated payoff. The
-                      old single row showed "50 mo" while the header KPI showed
-                      "58 mo" with no explanation. */}
-                  {/* The two numbers answer different questions and must say so:
-                      the term is what was typed into the form; the payoff is
-                      today's balance paid down at the stored payment. "360" beside
-                      "271" with no explanation read as a contradiction. */}
-                  <Row label="Loan term (as entered)"
-                    value={terms.remainingTermMonths ? `${terms.remainingTermMonths} mo` : "—"} />
-                  <Row label={(terms.monthlyPayment || summary.monthlyPayment) > 0
-                      ? `Payoff at ${fmtUSD(terms.monthlyPayment || summary.monthlyPayment)}/mo (calculated)`
-                      : "Projected payoff (calculated)"}
-                    value={summary.remainingMonths ? `${summary.remainingMonths} mo` : "—"} />
-                  <Row label="First payment date" value={fmtDate(terms.firstPaymentDate)} />
-                  <Row label="Due day of month"
-                    value={terms.dueDay ? `Day ${terms.dueDay}` : "—"} />
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Everything below sat on the Overview before the owner's design
-                (2026-11-22) made that page the summary: who is on this debt,
-                what secures it and what hangs under it are its details. */}
-            <AISummaryCard profileId={profile.id} valueFingerprint={profileValueFingerprint(profile)} />
-
-            <section data-testid="overview-linked-assets">
-              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked assets</p>
-              <LinkedAssetsCard liabilityId={profile.id} openSignal={linkAssetSignal} onOpened={() => setLinkAssetSignal(0)} />
-            </section>
-
-            {/* Ownership — fractional owner shares, atomic + validated
-                (PUT /api/profiles/:id/liability-owners replaces the whole set
-                and validates total=100). */}
-            <section data-testid="overview-ownership">
-              <OwnershipEditor
-                profile={profile as any}
-                allProfiles={(ownerCandidates || []) as any}
-                onSaved={() => { /* React Query invalidations handled inside OwnershipEditor */ }}
-                kind="liability"
-              />
-            </section>
-
-            {/* Linked people — non-owner roles (co_signer, guarantor, etc.). */}
-            <section data-testid="overview-linked-people">
-              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked people</p>
-              <LinkedPeopleTab
-                profileId={profile.id}
-                profileType={profile.type}
-                onChanged={() => { /* React Query invalidations handled inside */ }}
-              />
-            </section>
-
-            {/* Composed Overview — what this liability IS decides what shows
-                here (utilization, linked collateral, escrow, rate, dates). */}
-            <DynamicOverview profileId={profile.id} />
-
-            <section>
-              <p className="micro-label text-muted-foreground mb-2 px-0.5">Nested Liabilities</p>
-              <NestedLiabilitiesCard liabilityId={profile.id} />
-            </section>
-          </TabsContent>
-
-          {/* PAYMENTS — unified tab: upcoming schedule + payment history +
-              payoff calculator + amortization schedule. Every payment surface
-              for this liability, past and future, in one place. */}
-          <TabsContent value="payments" className="mt-4 space-y-6">
-            {/* Section 1: upcoming / scheduled payments. First, because the
-                question a bill's Payments tab answers is "what do I still owe
-                and when" — history is the record, the schedule is the plan.
-                No micro-label above it: the card carries its own title, and
-                stacking a second heading on top just says it twice. */}
+          {/* PAYMENTS — what has been paid, and recording one. Auto Pay is
+              the setting that records them by itself. */}
+          <TabsContent value="payments" className="mt-3 space-y-4">
             {/* Auto Pay: every liability has the setting. On = payments are
                 recorded on their due date (assumed until confirmed) and no
                 reminders are raised. */}
             <AutoPaySection liabilityId={profile.id} />
-
-            <BillScheduleSection liabilityId={profile.id} />
 
             {/* Payment mechanics belong to DEBT (amortizing / one-time), not
                 recurring bills: a bill pays through its schedule above. */}
@@ -1877,7 +1843,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               </Card>
             )}
 
-            {/* Section 2: Payment history */}
+            {/* Payment history */}
             <div className="space-y-3">
               <p className="micro-label text-muted-foreground px-0.5">Payment History</p>
               <div className="flex items-center justify-between">
@@ -1917,45 +1883,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 </CardContent>
               </Card>
             </div>
+          </TabsContent>
 
-            {/* Payoff outlook — the balance falling to zero and the
-                principal/interest split, drawn from THIS page's summary +
-                amortization (one schedule), so it can never disagree with the
-                balance card or the table. A record missing balance, rate or
-                payment gets a one-line note instead of a guess. */}
-            {amortize && !recurringBill && (
-              <PayoffOutlook summary={summary} amortization={amortization} todayISO={todayISO} missing={payoffMissing} />
-            )}
+          {/* SCHEDULE — what is still owed and when (owner's design,
+              2026-11-23: its own tab): every date with Pay / Skip /
+              Reschedule on it, then the amortization table for a loan. */}
+          <TabsContent value="schedule" className="mt-3 space-y-4">
+            <BillScheduleSection liabilityId={profile.id} />
 
-            {!recurringBill && (
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Cost of borrowing</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  <Row label="Remaining interest"
-                    value={summary.neverAmortizes ? "Never pays off at this payment" : fmtUSD(summary.totalRemainingInterest)} />
-                  <Row label="Interest paid (history)"
-                    value={fmtUSD(interestPaidToDate)} />
-                  <Row label="Total payments made"
-                    value={fmtUSD(paymentsTotal)} />
-                  <Row label="Original balance"
-                    value={summary.originalBalance ? fmtUSD(summary.originalBalance) : "—"} />
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Section 3: Payoff Calculator — only for amortizing/revolving debt.
-                Recurring bills + generic one-time debt don't have a payoff
-                schedule; showing one produced the $0.17/360-month nonsense. */}
-            {amortize && (
-            <div>
-              <p className="micro-label text-muted-foreground mb-3 px-0.5">Payoff Calculator</p>
-              <PayoffCalculator terms={terms} baseSummary={summary} />
-            </div>
-            )}
-
-            {/* Section 4: Amortization Schedule (amortizing debt only) */}
+            {/* Amortization Schedule (amortizing debt only) */}
             {amortize && (
             <div>
               <p className="micro-label text-muted-foreground mb-3 px-0.5">Amortization Schedule</p>
@@ -2000,184 +1936,177 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             )}
           </TabsContent>
 
+          {/* COST OF OWNERSHIP — what this debt costs: the payoff outlook, the
+              interest paid and left, and what paying extra would save. A
+              recurring bill has no payoff; it shows what it adds up to. */}
+          <TabsContent value="cost" className="mt-3 space-y-4">
+            {/* Payoff outlook — the balance falling to zero and the
+                principal/interest split, drawn from THIS page's summary +
+                amortization (one schedule), so it can never disagree with the
+                balance card or the table. A record missing balance, rate or
+                payment gets a one-line note instead of a guess. */}
+            {amortize && !recurringBill && (
+              <PayoffOutlook summary={summary} amortization={amortization} todayISO={todayISO} missing={payoffMissing} />
+            )}
+
+            {!recurringBill && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Cost of borrowing</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  <Row label="Remaining interest"
+                    value={summary.neverAmortizes ? "Never pays off at this payment" : fmtUSD(summary.totalRemainingInterest)} />
+                  <Row label="Interest paid (history)"
+                    value={fmtUSD(interestPaidToDate)} />
+                  <Row label="Total payments made"
+                    value={fmtUSD(paymentsTotal)} />
+                  <Row label="Original balance"
+                    value={summary.originalBalance ? fmtUSD(summary.originalBalance) : "—"} />
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Payoff Calculator — only for amortizing/revolving debt.
+                Recurring bills + generic one-time debt don't have a payoff
+                schedule; showing one produced the $0.17/360-month nonsense. */}
+            {amortize && (
+            <div>
+              <p className="micro-label text-muted-foreground mb-3 px-0.5">Payoff Calculator</p>
+              <PayoffCalculator terms={terms} baseSummary={summary} />
+            </div>
+            )}
+            {recurringBill && (
+              <Card data-testid="bill-cost-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">What this bill costs</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  <Row label="Each payment" value={fmtUSD(payAmount)} />
+                  <Row label="Per year" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : "Not set"} />
+                  <Row label="Paid so far" value={fmtUSD(paymentsTotal)} />
+                  <Row label="Payments made" value={String(billPaidCount)} />
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
           {/* DOCUMENTS */}
-          <TabsContent value="documents" className="mt-4">
+          <TabsContent value="documents" className="mt-3">
             <LiabilityDocumentsCard liabilityId={profile.id} liabilityName={profile.name} openSignal={uploadSignal} onOpened={() => setUploadSignal(0)} />
           </TabsContent>
 
-          {/* ACTIVITY */}
-          <TabsContent value="activity" className="mt-4">
+          {/* HISTORY — what happened to this liability (payments and events),
+              then every change made to the record. */}
+          <TabsContent value="history" className="mt-3 space-y-4 px-1 sm:px-0">
             <ActivityTimelineCard
               profileId={profile.id}
               payments={payments}
             />
-          </TabsContent>
-
-          {/* HISTORY */}
-          <TabsContent value="history" className="mt-4 px-1 sm:px-0">
             <HistoryTab profileId={profile.id} />
           </TabsContent>
         </Tabs>
       </div>
 
-      {/* The edit forms open over whichever tab the user is on (owner,
-          2026-11-22: every figure on the Overview opens its editor in place).
-          They still save themselves (L7): closing, by Done, the X or Escape,
-          awaits the pending save first. */}
-      <Dialog open={editingBill} onOpenChange={(o) => { if (!o) void closeBillEditor(); }}>
-        <DialogContent className="max-h-[88dvh] overflow-y-auto" data-testid="bill-details-edit-card">
+      {/* Owners, linked assets and people, nested debts and the composed
+          facts: reached from the owner chip and the More menu. */}
+      <Dialog open={showLinks} onOpenChange={setShowLinks}>
+        <DialogContent className="max-w-2xl max-h-[88dvh] overflow-y-auto" data-testid="dialog-links">
           <DialogHeader>
-            <DialogTitle>Edit bill details</DialogTitle>
-            <DialogDescription>Changes save as you make them.</DialogDescription>
+            <DialogTitle>Owners &amp; linked records</DialogTitle>
+            <DialogDescription>Who owes this, what secures it, and what is filed under it.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <Label className="text-xs">Recurring amount ($)</Label>
-                      <Input type="number" inputMode="decimal" step="0.01" min="0" value={bAmount}
-                        onChange={(e) => setBAmount(e.target.value)} placeholder="e.g. 14.99" data-testid="input-bill-amount" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Frequency</Label>
-                      {/* Only cadences the recurrence engine actually understands
-                          (shared/recurrence freqToUnit). An unsupported token
-                          silently collapses the series to a single occurrence,
-                          so it must not be offered — except the bill's own
-                          current value, which stays selectable so opening the
-                          editor can never rewrite a cadence by itself. */}
-                      <Select value={bFrequency} onValueChange={setBFrequency}>
-                        <SelectTrigger data-testid="select-bill-frequency"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {Array.from(new Set([...BILL_FREQUENCIES, bFrequency].filter(Boolean))).map((fr) => (
-                            <SelectItem key={fr} value={fr} className="capitalize">{cap(fr)}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label className="text-xs">Payment date</Label>
-                      <Input type="date" value={bDueDate} onChange={(e) => setBDueDate(e.target.value)} data-testid="input-bill-due-date" />
-                      <p className="text-[11px] text-muted-foreground mt-1">
-                        Moves the whole series. To move one payment only, use the pencil on that date in Payments.
-                      </p>
-                    </div>
-                    <div>
-                      <Label className="text-xs">Number of payments</Label>
-                      <Input type="number" inputMode="numeric" min={1} value={bCount}
-                        onChange={(e) => setBCount(e.target.value)} placeholder="Blank = ongoing" data-testid="input-bill-count" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Ends on</Label>
-                      <Input type="date" value={bEnd} onChange={(e) => setBEnd(e.target.value)} data-testid="input-bill-end" />
-                      <p className="text-[11px] text-muted-foreground mt-1">Blank = no end date.</p>
-                    </div>
-                    <div>
-                      <Label className="text-xs">Reminder (days before)</Label>
-                      <Input type="number" inputMode="numeric" min={0} value={bReminder}
-                        onChange={(e) => setBReminder(e.target.value)} placeholder="Blank = none" data-testid="input-bill-reminder" />
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg border px-3 py-2">
-                    <div>
-                      <Label className="text-xs">Auto Pay</Label>
-                      <p className="text-[11px] text-muted-foreground">Record each payment on its due date. No reminders.</p>
-                    </div>
-                    <Switch checked={bAutopay} onCheckedChange={setBAutopay} data-testid="switch-bill-autopay" />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" onClick={closeBillEditor} data-testid="button-save-bill">
-                      Done
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={undoBillEdits} disabled={!billAutosave.changedSinceOpen}
-                      title="Put every field back to what it was when you opened this form" data-testid="button-undo-bill-edits">
-                      Undo changes
-                    </Button>
-                    <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="bill-autosave-status">
-                      {autosaveStatusLabel(billAutosave.status)}
-                    </span>
-                  </div>
-                </div>
+          <div className="space-y-4">
+            <section data-testid="overview-linked-assets">
+              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked assets</p>
+              <LinkedAssetsCard liabilityId={profile.id} openSignal={linkAssetSignal} onOpened={() => setLinkAssetSignal(0)} />
+            </section>
+            {/* Ownership — fractional owner shares, atomic + validated
+                (PUT /api/profiles/:id/liability-owners replaces the whole set
+                and validates total=100). */}
+            <section data-testid="overview-ownership">
+              <OwnershipEditor
+                profile={profile as any}
+                allProfiles={(ownerCandidates || []) as any}
+                onSaved={() => { /* React Query invalidations handled inside OwnershipEditor */ }}
+                kind="liability"
+              />
+            </section>
+            {/* Linked people — non-owner roles (co_signer, guarantor, etc.). */}
+            <section data-testid="overview-linked-people">
+              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked people</p>
+              <LinkedPeopleTab
+                profileId={profile.id}
+                profileType={profile.type}
+                onChanged={() => { /* React Query invalidations handled inside */ }}
+              />
+            </section>
+            <section>
+              <p className="micro-label text-muted-foreground mb-2 px-0.5">Nested Liabilities</p>
+              <NestedLiabilitiesCard liabilityId={profile.id} />
+            </section>
+            {/* Composed facts — what this liability IS decides what shows
+                here (utilization, linked collateral, escrow, rate, dates). */}
+            <DynamicOverview profileId={profile.id} />
+          </div>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editingTerms} onOpenChange={(o) => { if (!o) void closeTermsEditor(); }}>
-        <DialogContent className="max-h-[88dvh] overflow-y-auto" data-testid="terms-edit-dialog">
+      <Dialog open={expenseDialog.open} onOpenChange={(o) => setExpenseDialog((d) => ({ ...d, open: o }))}>
+        <DialogContent data-testid="dialog-liability-expense">
           <DialogHeader>
-            <DialogTitle>Edit loan terms</DialogTitle>
-            <DialogDescription>Changes save as you make them.</DialogDescription>
+            <DialogTitle>Add expense</DialogTitle>
+            <DialogDescription>A cost tied to {profile.name}: a fee, insurance, a repair. A payment on the debt itself is recorded with Payment.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <Label className="text-xs">Lender / creditor</Label>
-                      <Input value={tLender} onChange={(e) => setTLender(e.target.value)} placeholder="e.g. Chase Auto" data-testid="input-terms-lender" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Current balance ($)</Label>
-                      <Input type="number" inputMode="decimal" step="0.01" value={tBalance} onChange={(e) => setTBalance(e.target.value)} placeholder="e.g. 25000" data-testid="input-terms-balance" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Original balance ($)</Label>
-                      <Input type="number" inputMode="decimal" step="0.01" value={tOriginal} onChange={(e) => setTOriginal(e.target.value)} placeholder="e.g. 35000" data-testid="input-terms-original" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Annual interest rate (%)</Label>
-                      <Input type="number" inputMode="decimal" step="0.01" value={tRate} onChange={(e) => setTRate(e.target.value)} placeholder="e.g. 6.5" data-testid="input-terms-rate" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Monthly payment ($)</Label>
-                      <Input type="number" inputMode="decimal" step="0.01" value={tMonthly} onChange={(e) => setTMonthly(e.target.value)} placeholder="e.g. 1000" data-testid="input-terms-monthly" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Loan term (months)</Label>
-                      <Input type="number" inputMode="numeric" value={tTerm} onChange={(e) => setTTerm(e.target.value)} placeholder="e.g. 60" data-testid="input-terms-term" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Due day of month (1–31)</Label>
-                      <Input type="number" inputMode="numeric" min={1} max={31} value={tDueDay} onChange={(e) => setTDueDay(e.target.value)} placeholder="e.g. 15" data-testid="input-terms-due-day" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">First payment date</Label>
-                      <Input type="date" value={tFirstPayment} onChange={(e) => setTFirstPayment(e.target.value)} data-testid="input-terms-first-payment" />
-                    </div>
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    A monthly payment and a due day put this loan's payment on your calendar each month.
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" onClick={closeTermsEditor} data-testid="button-save-terms">
-                      Done
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={undoTermsEdits} disabled={!termsAutosave.changedSinceOpen}
-                      title="Put every field back to what it was when you opened this form" data-testid="button-undo-terms-edits">
-                      Undo changes
-                    </Button>
-                    <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="terms-autosave-status">
-                      {autosaveStatusLabel(termsAutosave.status)}
-                    </span>
-                  </div>
-                </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showTypeDialog} onOpenChange={setShowTypeDialog}>
-        <DialogContent data-testid="dialog-change-type">
-          <DialogHeader>
-            <DialogTitle>Change type</DialogTitle>
-            <DialogDescription>The type decides what this page tracks: a loan has a payoff, a card a limit, a bill a schedule.</DialogDescription>
-          </DialogHeader>
-          <Select value={typeDraft} onValueChange={setTypeDraft}>
-            <SelectTrigger data-testid="select-liability-type"><SelectValue placeholder="Choose a type" /></SelectTrigger>
-            <SelectContent>
-              {Array.from(new Set([...Object.keys(LIABILITY_TYPE_CHOICES), ...(subtypeRaw ? [subtypeRaw] : [])])).map((k) => (
-                <SelectItem key={k} value={k}>{LIABILITY_TYPE_CHOICES[k] || SUBTYPE_LABELS[k] || cap(k.replace(/_/g, " "))}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <div>
+              <Label htmlFor="liability-expense-desc">What was it for</Label>
+              <Input id="liability-expense-desc" value={expenseDialog.description} onChange={(e) => setExpenseDialog((d) => ({ ...d, description: e.target.value }))} placeholder="e.g. Late fee" data-testid="input-liability-expense-desc" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="liability-expense-amount">Amount</Label>
+                <Input id="liability-expense-amount" type="number" inputMode="decimal" step="0.01" min="0" value={expenseDialog.amount} onChange={(e) => setExpenseDialog((d) => ({ ...d, amount: e.target.value }))} data-testid="input-liability-expense-amount" />
+              </div>
+              <div>
+                <Label htmlFor="liability-expense-date">Date</Label>
+                <Input id="liability-expense-date" type="date" value={expenseDialog.date} onChange={(e) => setExpenseDialog((d) => ({ ...d, date: e.target.value }))} data-testid="input-liability-expense-date" />
+              </div>
+            </div>
+          </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowTypeDialog(false)}>Cancel</Button>
-            <Button onClick={() => changeTypeMutation.mutate(typeDraft)} disabled={changeTypeMutation.isPending || !typeDraft || typeDraft === subtypeRaw} data-testid="button-save-type">
-              {changeTypeMutation.isPending ? "Saving…" : "Save"}
+            <Button variant="ghost" onClick={() => setExpenseDialog((d) => ({ ...d, open: false }))}>Cancel</Button>
+            <Button
+              disabled={addExpenseMutation.isPending || !expenseDialog.description.trim() || !(Number(expenseDialog.amount) > 0) || !expenseDialog.date}
+              onClick={() => addExpenseMutation.mutate({ description: expenseDialog.description.trim(), amount: Number(expenseDialog.amount), date: expenseDialog.date })}
+              data-testid="button-save-liability-expense"
+            >
+              {addExpenseMutation.isPending ? "Adding…" : "Add expense"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={taskDialog.open} onOpenChange={(o) => setTaskDialog((d) => ({ ...d, open: o }))}>
+        <DialogContent data-testid="dialog-liability-task">
+          <DialogHeader>
+            <DialogTitle>Add task</DialogTitle>
+            <DialogDescription>Something to do about {profile.name}. It shows on your task list, linked to this liability.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="liability-task-title">Task</Label>
+              <Input id="liability-task-title" value={taskDialog.title} onChange={(e) => setTaskDialog((d) => ({ ...d, title: e.target.value }))} placeholder="e.g. Call about refinancing" data-testid="input-liability-task-title" />
+            </div>
+            <div>
+              <Label htmlFor="liability-task-due">Due (optional)</Label>
+              <Input id="liability-task-due" type="date" value={taskDialog.dueDate} onChange={(e) => setTaskDialog((d) => ({ ...d, dueDate: e.target.value }))} data-testid="input-liability-task-due" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setTaskDialog((d) => ({ ...d, open: false }))}>Cancel</Button>
+            <Button disabled={addTaskMutation.isPending || !taskDialog.title.trim()} onClick={() => addTaskMutation.mutate({ title: taskDialog.title.trim(), dueDate: taskDialog.dueDate })} data-testid="button-save-liability-task">
+              {addTaskMutation.isPending ? "Adding…" : "Add task"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2267,56 +2196,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               ) : (
                 "Record payment"
               )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit profile dialog — name + notes only; deeper field edits live on the Details tab */}
-      {/* U8: re-seed the form from the current profile every time the dialog
-         opens. Without this, opening the dialog after the profile mutated
-         elsewhere (e.g. an AI update) would show the old name/notes. */}
-      <Dialog open={showEditDialog} onOpenChange={(o) => {
-        if (o) {
-          setEditName(profile.name || "");
-          setEditNotes((profile as any).notes || "");
-        }
-        setShowEditDialog(o);
-      }}>
-        <DialogContent data-testid="dialog-edit-liability-profile">
-          <DialogHeader>
-            <DialogTitle>Edit profile</DialogTitle>
-            <DialogDescription>Update the liability name and notes.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <Label htmlFor="liability-edit-name" className="text-xs">Name</Label>
-              <Input
-                id="liability-edit-name"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                data-testid="input-edit-name"
-              />
-            </div>
-            <div>
-              <Label htmlFor="liability-edit-notes" className="text-xs">Notes</Label>
-              <Textarea
-                id="liability-edit-notes"
-                value={editNotes}
-                onChange={(e) => setEditNotes(e.target.value)}
-                rows={4}
-                data-testid="input-edit-notes"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowEditDialog(false)}>Cancel</Button>
-            <Button
-              onClick={() => editProfileMutation.mutate({ name: editName.trim() || profile.name, notes: editNotes })}
-              disabled={editProfileMutation.isPending || !editName.trim()}
-              data-testid="button-save-edit-profile"
-            >
-              {editProfileMutation.isPending ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

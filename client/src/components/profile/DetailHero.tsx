@@ -74,8 +74,8 @@ export interface DetailHeroProps {
    * The owner's profile-page design (2026-11-22): a flat header — a back
    * chevron, this title centred, `menu` at the right — over a large picture,
    * the name, the type with its icon and the chips. Passing it switches the
-   * hero to that layout; the page's own cards carry the numbers, so `stats`
-   * and `progress` are not drawn.
+   * hero to that layout: one card whose `stats` are the headline figures at
+   * the right (`progress` is not drawn).
    */
   pageTitle?: string;
   /** The ⋮ control at the right of the top bar (page layout only). */
@@ -90,11 +90,18 @@ export function DetailHero({
   testId = "detail-hero", pageTitle, menu, typeIcon: TypeIcon,
 }: DetailHeroProps) {
   if (pageTitle) {
-    const backClass = "pressable grid h-10 w-10 place-items-center rounded-full text-foreground/90 hover:bg-foreground/5 transition-colors";
-    const chevron = <ChevronLeft className="h-6 w-6" strokeWidth={2.2} />;
+    // The owner's profile header (2026-11-23): ONE card — the picture, a tag
+    // naming the page, the name, the chips, and the headline figures at the
+    // right (under the identity on a phone). `menu` sits at the top right.
+    const backClass = "pressable grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-colors -ml-1.5";
+    const chevron = <ChevronLeft className="h-5 w-5" strokeWidth={2.2} />;
+    const figures = stats.filter((s) => s.countTo == null || s.countTo > 0);
     return (
-      <div style={{ ["--accent-hsl" as any]: accent }} data-testid={testId}>
-        <div className="grid grid-cols-[40px_1fr_40px] items-center mb-4">
+      <div className="bubble relative p-3.5 sm:p-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-5" style={{ ["--accent-hsl" as any]: accent }} data-testid={testId}>
+        {/* back | picture | name, with the chips under the name from `sm` and
+            across the whole card on a phone (three chips beside a picture
+            wrapped to one per line there). */}
+        <div className="grid grid-cols-[auto_auto_minmax(0,1fr)] items-start gap-x-3 flex-1 min-w-0">
           {backHref && backHref.includes("?") ? (
             // Same reason as below: a query-carrying target stays inside the hash.
             <a href={`#${backHref}`} className={backClass} aria-label={backLabel} title={backLabel} data-testid="button-back">{chevron}</a>
@@ -103,11 +110,6 @@ export function DetailHero({
           ) : onBack ? (
             <button type="button" onClick={onBack} className={backClass} aria-label={backLabel} title={backLabel} data-testid="button-back">{chevron}</button>
           ) : <span />}
-          <p className="text-center text-[15px] font-semibold tracking-tight truncate" data-testid="detail-hero-page-title">{pageTitle}</p>
-          <div className="justify-self-end">{menu}</div>
-        </div>
-
-        <div className="flex items-center gap-4">
           {avatar ? (
             <>
               {avatar.inputRef && (
@@ -115,7 +117,7 @@ export function DetailHero({
               )}
               <button
                 type="button"
-                className="bubble pressable relative h-[76px] w-[76px] sm:h-[88px] sm:w-[88px] overflow-hidden group shrink-0 grid place-items-center !rounded-2xl"
+                className="sm:row-span-2 pressable relative h-[68px] w-[68px] sm:h-[84px] sm:w-[84px] overflow-hidden group shrink-0 grid place-items-center rounded-2xl border border-foreground/15 bg-foreground/[0.04]"
                 onClick={avatar.onPick}
                 disabled={avatar.busy}
                 title="Change profile picture"
@@ -123,7 +125,7 @@ export function DetailHero({
               >
                 {avatar.src
                   ? <img src={avatar.src} alt="" className="absolute inset-0 w-full h-full object-cover" />
-                  : <Icon className="h-8 w-8" strokeWidth={1.8} style={{ color: `hsl(${accent})` }} />}
+                  : <Icon className="h-9 w-9 text-foreground/85" strokeWidth={1.6} />}
                 <span className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <Camera className="h-5 w-5 text-white" />
                 </span>
@@ -137,20 +139,49 @@ export function DetailHero({
           ) : (
             <Medallion icon={Icon} accent={accent} />
           )}
-          <div className="flex-1 min-w-0">
-            <h1 className="text-[22px] font-bold tracking-tight leading-tight break-words" data-testid="detail-hero-title">{title}</h1>
+          <div className={cn("min-w-0 self-center sm:self-start", menu && "pr-9 lg:pr-0")}>
+            <span className="inline-block rounded px-1.5 py-0.5 text-[12px] font-semibold text-violet-100 bg-violet-500/70" data-testid="detail-hero-page-title">{pageTitle}</span>
+            <h1 className="mt-0.5 text-[22px] sm:text-[26px] font-bold tracking-tight leading-tight break-words" data-testid="detail-hero-title">{title}</h1>
             {typeLabel && (
-              <p className="mt-1 flex items-center gap-1.5 text-[14px] text-muted-foreground">
+              <p className="mt-0.5 flex items-center gap-1.5 text-[13px] text-muted-foreground">
                 {TypeIcon && <TypeIcon className="h-4 w-4 shrink-0" />}
                 <span className="truncate">{typeLabel}</span>
               </p>
             )}
             {subtitle && <p className="text-[13px] text-muted-foreground mt-0.5 truncate">{subtitle}</p>}
             {breadcrumb}
-            {badges && <div className="flex flex-wrap items-center gap-1.5 mt-2">{badges}</div>}
           </div>
+          {badges && <div className="col-span-3 sm:col-span-1 sm:col-start-3 flex flex-wrap items-center gap-1.5 mt-2.5 sm:mt-2">{badges}</div>}
         </div>
-        {actions && <div className="flex flex-wrap items-center gap-2 mt-4">{actions}</div>}
+
+        {figures.length > 0 && (
+          <div
+            className={cn("grid shrink-0 rounded-2xl border border-foreground/10 bg-foreground/[0.03] divide-x divide-foreground/10 lg:mr-9",
+              figures.length >= 4 ? "grid-cols-4" : figures.length === 3 ? "grid-cols-3" : "grid-cols-2")}
+            data-testid="detail-hero-figures"
+          >
+            {figures.map((s, i) => {
+              const inner = (
+                <>
+                  <span className="block text-[11px] sm:text-[13px] text-muted-foreground leading-tight truncate">{s.label}</span>
+                  <span
+                    className="block text-[15px] sm:text-[19px] font-bold leading-tight tabular-nums whitespace-nowrap"
+                    style={s.accent ? { color: `hsl(${s.accent})` } : undefined}
+                    data-testid={s.testId}
+                  >{s.value}</span>
+                  {s.sub && <span className="block text-[11px] text-muted-foreground leading-tight truncate">{s.sub}</span>}
+                </>
+              );
+              const cls = "px-1.5 sm:px-3.5 py-2 text-center min-w-0";
+              return s.onClick
+                ? <button key={s.testId || `${s.label}-${i}`} type="button" onClick={s.onClick} className={cn(cls, "pressable")} title={`Edit ${s.label.toLowerCase()}`}>{inner}</button>
+                : <div key={s.testId || `${s.label}-${i}`} className={cls}>{inner}</div>;
+            })}
+          </div>
+        )}
+
+        {menu && <div className="absolute top-2 right-2">{menu}</div>}
+        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
     );
   }

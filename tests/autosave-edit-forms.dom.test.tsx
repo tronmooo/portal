@@ -125,8 +125,8 @@ describe("the liability edit forms auto-save", () => {
     expect(page).not.toContain("saveTermsMutation");
     expect(page).not.toContain("saveBillMutation");
     expect(page).not.toMatch(/"Save terms"|"Save bill"/);
-    expect(page).toContain('data-testid="terms-autosave-status"');
-    expect(page).toContain('data-testid="bill-autosave-status"');
+    expect(page).toContain('"terms-autosave-status"');
+    expect(page).toContain('"bill-autosave-status"');
   });
   it("only what changed since the last save is written", () => {
     expect(page).toContain("changedFieldsOnly(buildTermsFields(saved), buildTermsFields(current))");

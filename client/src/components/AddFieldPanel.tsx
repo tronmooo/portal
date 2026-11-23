@@ -10,8 +10,8 @@
 // remove (two taps, Rule 8). Money, rate, date and ownership fields are NOT listed here:
 // they have their own editors (L2/L3 — a rate typed as text would lose its
 // unit marker).
-import { useEffect, useState } from "react";
-import { Check, Plus, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Check, Pencil, Plus, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -122,12 +122,18 @@ function useProfileFieldWrites(profileId: string) {
 }
 
 export function AddFieldPanel({
-  profileId, fields, showFields = false, title, openSignal, hideHeader = false, rows: rowLayout = false,
+  profileId, fields, showFields = false, title, openSignal, hideHeader = false, rows: rowLayout = false, list = false, leading, emptyHint,
 }: {
   /** The page draws its own heading and Add button (it bumps `openSignal`). */
   hideHeader?: boolean;
   /** List the fields as two-column rows, matching a page's detail rows. */
   rows?: boolean;
+  /** List the fields as label | value | pencil | X lines (a "Characteristics" card). */
+  list?: boolean;
+  /** Rows the page puts at the top of the list (a linked record, say). */
+  leading?: ReactNode;
+  /** Shown in the list layout when there is nothing to list. */
+  emptyHint?: string;
   /** Bump to open the Field | Value form from outside (a page's "Add custom field" action). */
   openSignal?: number;
   profileId: string;
@@ -154,7 +160,7 @@ export function AddFieldPanel({
   };
 
   return (
-    <div className={hideHeader && !adding && rows.length === 0 ? "hidden" : "space-y-2"} data-testid="add-field-panel">
+    <div className={hideHeader && !list && !adding && rows.length === 0 ? "hidden" : "space-y-2"} data-testid="add-field-panel">
       {!hideHeader && <div className="flex items-center justify-between gap-2">
         <p className="micro-label text-muted-foreground px-0.5">{title || ""}</p>
         <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAdding((a) => !a)} data-testid="add-field-button">
@@ -182,12 +188,68 @@ export function AddFieldPanel({
         </Card>
       )}
 
-      {rows.length > 0 && (
+      {list && (
+        <div className="divide-y divide-foreground/10" data-testid="add-field-list">
+          {leading}
+          {rows.map(([k, v]) => (
+            <FieldLine key={k} fieldKey={k} label={humanizeFieldName(k)} value={v} onSave={(nv) => save(k, nv)} onRemove={() => remove(k)} />
+          ))}
+          {rows.length === 0 && !leading && emptyHint && !adding && (
+            <p className="py-2 text-[13px] text-muted-foreground" data-testid="add-field-empty">{emptyHint}</p>
+          )}
+        </div>
+      )}
+
+      {!list && rows.length > 0 && (
         <div className={rowLayout ? "grid grid-cols-2 gap-2" : "grid grid-cols-2 sm:grid-cols-3 gap-2"} data-testid="add-field-list">
           {rows.map(([k, v]) => (
             <FieldCard key={k} row={rowLayout} wide={rowLayout && rows.length % 2 === 1 && k === rows[rows.length - 1][0]} fieldKey={k} label={humanizeFieldName(k)} value={v} onSave={(nv) => save(k, nv)} onRemove={() => remove(k)} />
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** One characteristic: label | value | pencil | X (two taps, Rule 8). */
+function FieldLine({ fieldKey, label, value, onSave, onRemove }: {
+  fieldKey: string; label: string; value: string;
+  onSave: (v: string) => Promise<boolean>; onRemove: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const { confirm, isArmed } = useConfirmArm();
+  const armKey = `rm-${fieldKey}`;
+  const commit = async () => {
+    const t = draft.trim();
+    if (!t || t === value) { setEditing(false); return; }
+    if (await onSave(t)) setEditing(false);
+  };
+  return (
+    <div className="flex items-center gap-2 py-1.5 min-w-0" data-testid={`add-field-cell-${fieldKey}`}>
+      <span className="w-[38%] shrink-0 text-[13px] text-muted-foreground leading-tight break-words">{label}</span>
+      {editing ? (
+        <>
+          <Input value={draft} onChange={(e) => setDraft(e.target.value)} className="h-8 text-[13px] flex-1 min-w-0" autoFocus
+            onKeyDown={(e) => { if (e.key === "Enter") void commit(); if (e.key === "Escape") { setDraft(value); setEditing(false); } }}
+            data-testid={`add-field-edit-${fieldKey}`} />
+          <button onClick={() => void commit()} className="grid h-7 w-7 shrink-0 place-items-center text-emerald-500" aria-label="Save"><Check className="h-4 w-4" /></button>
+          <button onClick={() => { setDraft(value); setEditing(false); }} className="grid h-7 w-7 shrink-0 place-items-center text-muted-foreground" aria-label="Cancel"><X className="h-4 w-4" /></button>
+        </>
+      ) : (
+        <>
+          <button type="button" className="flex-1 min-w-0 text-left text-[14px] font-medium break-words" onClick={() => { setDraft(value); setEditing(true); }} title={`Edit ${label}`}>{value}</button>
+          <button type="button" onClick={() => { setDraft(value); setEditing(true); }} aria-label={`Edit ${label}`}
+            className="pressable grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/5" data-testid={`add-field-pencil-${fieldKey}`}>
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => confirm(armKey, onRemove)}
+            className={`h-7 min-w-7 px-1 shrink-0 grid place-items-center rounded-md text-[11px] transition-colors ${isArmed(armKey) ? "bg-destructive text-destructive-foreground" : "text-muted-foreground hover:text-destructive hover:bg-destructive/10"}`}
+            aria-label={isArmed(armKey) ? `Tap again to remove ${label}` : `Remove ${label}`}
+            data-testid={`add-field-remove-${fieldKey}`}
+          >{isArmed(armKey) ? "Remove?" : <X className="h-3.5 w-3.5" />}</button>
+        </>
       )}
     </div>
   );
