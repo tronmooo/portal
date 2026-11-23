@@ -183,7 +183,7 @@ async function main() {
         check(shownOnPage, "the page shows the edited value without a reload");
 
         // Money tab lists the expense; Activity shows the day entered.
-        await page.locator('[data-testid="tab-money"]').click({ timeout: 15000 });
+        await page.locator('[data-testid="tab-money"], [data-testid="tab-financials"]').last().click({ timeout: 15000 });
         // The list is collapsed until opened; its header carries the count.
         const toggle = page.locator('[data-testid="button-toggle-expenses-list"]');
         await toggle.waitFor({ timeout: 15000 }).catch(() => undefined);

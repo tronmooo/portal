@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
 //
-// The asset profile's layout (owner's mock-up, 2026-11-22) is a new drawing of
+// The asset profile's layout (owner's mock-up, 2026-11-23) is a new drawing of
 // stores other screens already read. What is pinned here is the wiring:
 //
-//   · a "Not set" tile writes the one field it names, with the page's PATCH
-//   · Financial position is the user's number against currentAssetValue
+//   · a "Not set" row writes the one field it names, with the page's PATCH
+//   · the header's Current Value is currentAssetValue (the estimate while
+//     Portol tracks it) against the purchase price
 //   · the Alerts card is the date-rule engine's answer for this record, and
 //     "Clear document alerts" dismisses into the SERVER's dismiss list under
 //     the id the bell uses — never the browser-only snooze (Rule 8)
 //   · opening the page writes nothing (Rule 3)
-//   · a failed documents load is not "No documents yet" (Rule 7)
-//   · Delete only asks; it never deletes on its own (Rule 8)
+//   · + Task / + Expense create ordinary records linked to this asset
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -36,14 +36,15 @@ vi.mock("@/lib/cache-bus", () => ({
 }));
 
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
-import { AssetOverviewBody, AssetProfileActions } from "@/components/asset/AssetOverviewLayout";
+import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroStats, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { __resetValuationRefreshState, valuationQueryKey } from "@/hooks/useAssetValuation";
 
 const ID = "zenbook";
 const WARRANTY = "2031-03-14";
-// The user typed $500; the estimator has since made $306 the current value.
+// Bought for $500; the estimator has since made $306 the current value.
 const FIELDS = {
-  brand: "ASUS", currentValue: 306, currentValueSource: "estimate", userEnteredValue: 500,
+  brand: "ASUS", currentValue: 306, currentValueSource: "estimate", purchasePrice: 500,
   warrantyExpiration: WARRANTY,
 };
 const PROFILE = { id: ID, name: "ASUS ZenBook", type: "asset", notes: "", fields: FIELDS, relatedEvents: [] };
@@ -58,23 +59,22 @@ function json(body: any, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-let failDocuments = false;
 let dismissed: string[] = [];
 
 beforeEach(() => {
   calls.length = 0;
-  failDocuments = false;
   dismissed = [];
   queryClient.clear();
   __resetValuationRefreshState();
   queryClient.setQueryData(valuationQueryKey(ID), {
-    record: { status: "valued", value: 306, low: 175, high: 437, valuedAt: new Date().toISOString() },
+    record: { status: "valued", value: 306, low: 175, high: 437, confidence: 0.4, confidenceLabel: "low", valuedAt: new Date().toISOString() },
     supported: true, inputFingerprint: "fp", mode: "auto", freshness: { fresh: true, reason: null, detail: "" },
   });
   apiRequest.mockImplementation(async (method: string, url: string, body?: any) => {
     calls.push({ method, url, body });
     if (url.endsWith("/overview")) return json(SPEC);
-    if (url.endsWith("/documents")) { if (failDocuments) throw new Error("500"); return json([]); }
+    if (url.endsWith("/documents")) return json([]);
+    if (url.includes("history=1")) return json({ history: [] });
     if (url === "/api/profiles") return json([{ id: ID, name: "ASUS ZenBook", type: "asset", fields: FIELDS }]);
     if (url === "/api/preferences/dismissed_notifications") return json({ value: JSON.stringify(dismissed) });
     if (url === "/api/notifications/dismiss") { dismissed = [...dismissed, ...body.ids]; return json({ ids: dismissed }); }
@@ -86,7 +86,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const writes = () => calls.filter((c) => c.method !== "GET");
 
-function mount(over: { onEdit?: () => void; onDelete?: () => void; onOpenDocuments?: () => void } = {}) {
+function mount(over: { onEdit?: () => void; onDelete?: () => void; onOpenOwnership?: () => void } = {}) {
   const hook = () => [`/profiles/${ID}`, vi.fn()] as [string, (to: string) => void];
   render(
     <QueryClientProvider client={queryClient}>
@@ -94,10 +94,17 @@ function mount(over: { onEdit?: () => void; onDelete?: () => void; onOpenDocumen
         <DynamicOverview
           profileId={ID}
           renderBody={(spec) => (
-            <AssetOverviewBody spec={spec} profile={PROFILE} autoValuation onOpenDocuments={over.onOpenDocuments} />
+            <AssetOverviewBody spec={spec} profile={PROFILE} autoValuation ownerLabel="You own this"
+              onOpenOwnership={over.onOpenOwnership} onEdit={over.onEdit ?? (() => {})} />
           )}
         />
-        <AssetProfileActions profileId={ID} onEdit={over.onEdit ?? (() => {})} onDelete={over.onDelete ?? (() => {})} />
+        <AssetHeroStats profile={PROFILE} />
+        <AssetQuickAdd profileId={ID} onEdit={over.onEdit ?? (() => {})} />
+        {/* The header's ⋯ menu, open, as the page renders it. */}
+        <DropdownMenu open>
+          <DropdownMenuTrigger>menu</DropdownMenuTrigger>
+          <DropdownMenuContent><AssetAlertMenuItems profileId={ID} /></DropdownMenuContent>
+        </DropdownMenu>
       </Router>
     </QueryClientProvider>,
   );
@@ -111,84 +118,71 @@ describe("asset profile layout", () => {
     expect(writes()).toEqual([]);
   });
 
-  it("a Not set tile writes the field it names", async () => {
+  it("the header shows the estimate as Current Value, against the purchase price", async () => {
     mount();
-    const tile = await screen.findByTestId("overview-missing-purchasePrice");
-    expect(tile.textContent).toContain("Purchase price");
-    expect(tile.textContent).toContain("Not set");
-    fireEvent.click(tile);
+    await screen.findByTestId("asset-details");
+    expect(screen.getByTestId("hero-stat-current-value").textContent).toBe("Current Value$306");
+    expect(screen.getByTestId("hero-stat-purchase-price").textContent).toBe("Purchase Price$500");
+    expect(screen.getByTestId("hero-stat-change").textContent).toBe("Depreciation−$194 (39%)");
+    expect(screen.getByTestId("hero-stat-confidence").textContent).toBe("Confidence40%");
+    // The same numbers, as the Value & Depreciation table.
+    const card = screen.getByTestId("asset-value-card");
+    expect(card.textContent).toContain("Value & Depreciation");
+    expect(screen.getByTestId("asset-value-row-change").textContent).toBe("Change−38.8%");
+  });
+
+  it("the form saves what changed, in one write; money is stored as a number", async () => {
+    mount();
+    await screen.findByTestId("asset-details");
+    const save = screen.getByTestId("asset-details-save") as HTMLButtonElement;
+    expect(save.disabled).toBe(true); // nothing typed yet
+    fireEvent.change(screen.getByTestId("asset-name-input"), { target: { value: "ZenBook 14" } });
     fireEvent.change(screen.getByTestId("overview-field-input-purchasePrice"), { target: { value: "$450" } });
-    fireEvent.click(screen.getByText("Save"));
-    await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0]).toMatchObject({ method: "PATCH", url: `/api/profiles/${ID}`, body: { fields: { purchasePrice: 450 } } });
-  });
-
-  it("an existing field opens as a tile that can be removed in two taps", async () => {
-    mount();
-    fireEvent.click(await screen.findByTestId("overview-field-brand"));
-    const remove = screen.getByTestId("overview-field-remove-brand");
-    fireEvent.click(remove);
-    expect(writes()).toEqual([]); // the first tap only arms it
-    fireEvent.click(screen.getByTestId("overview-field-remove-brand"));
-    await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0].body).toEqual({ fieldsToDelete: ["brand"] });
-  });
-
-  it("Location, Notes and the entered value are edited where they are shown", async () => {
-    mount();
-    // Location: the same `location` field the chat's update_profile writes.
-    fireEvent.click(await screen.findByTestId("asset-detail-location"));
     fireEvent.change(screen.getByTestId("overview-field-input-location"), { target: { value: "Office" } });
-    fireEvent.click(screen.getByText("Save"));
-    await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0].body).toEqual({ fields: { location: "Office" } });
-
-    // Notes: the record's own `notes`, not a field.
-    fireEvent.click(screen.getByTestId("asset-detail-notes"));
     fireEvent.change(screen.getByTestId("asset-notes-input"), { target: { value: "Work laptop" } });
-    fireEvent.click(screen.getByTestId("asset-notes-save"));
-    await waitFor(() => expect(writes()).toHaveLength(2));
-    expect(writes()[1]).toMatchObject({ method: "PATCH", url: `/api/profiles/${ID}`, body: { notes: "Work laptop" } });
-
-    // The user's number: written as currentValue (a number), and it has no
-    // remove button — a value is changed, not deleted.
-    fireEvent.click(screen.getByTestId("asset-detail-entered-value"));
-    expect(screen.queryByLabelText(/Remove Your entered value/)).toBeNull();
-    fireEvent.change(screen.getByTestId("overview-field-input-currentValue"), { target: { value: "550" } });
-    fireEvent.click(screen.getByText("Save"));
-    await waitFor(() => expect(writes()).toHaveLength(3));
-    expect(writes()[2].body).toEqual({ fields: { currentValue: 550 } });
-  });
-
-  it("an odd tile out takes the whole row, so the grid has no empty half", async () => {
-    mount();
-    const grid = (await screen.findByTestId("asset-detail-location")).parentElement!;
-    // Every tile but Notes (always full width) — the last of an odd count spans.
-    const cells = Array.from(grid.children).slice(0, -1);
-    const spans = cells.filter((c) => c.className.includes("col-span-2"));
-    expect(spans.length).toBe(cells.length % 2);
-    if (spans.length) expect(spans[0]).toBe(cells[cells.length - 1]);
-  });
-
-  it("an alert's date is changed from the Alerts card", async () => {
-    mount();
-    fireEvent.click(await screen.findByTestId("asset-alert-edit-warrantyExpiration"));
-    fireEvent.change(screen.getByTestId("asset-date-input-warrantyExpiration"), { target: { value: "2032-01-01" } });
-    fireEvent.click(screen.getByText("Save"));
+    fireEvent.change(screen.getByTestId("overview-field-input-warrantyExpiration"), { target: { value: "2032-01-01" } });
+    expect(writes()).toEqual([]); // typing writes nothing
+    fireEvent.click(save);
     await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0].body).toEqual({ fields: { warrantyExpiration: "2032-01-01" } });
+    expect(writes()[0]).toMatchObject({ method: "PATCH", url: `/api/profiles/${ID}` });
+    expect(writes()[0].body).toEqual({
+      name: "ZenBook 14", notes: "Work laptop",
+      fields: { purchasePrice: 450, location: "Office", warrantyExpiration: "2032-01-01" },
+    });
   });
 
-  it("Financial position is the user's number against the current value", async () => {
+  it("clearing a box removes that field; Undo puts back what was there", async () => {
     mount();
-    await screen.findByTestId("asset-financial-position");
-    expect(screen.getByTestId("asset-detail-entered-value").textContent).toContain("$500");
-    expect(screen.getByTestId("asset-position-start").textContent).toBe("$500");
-    expect(screen.getByTestId("asset-position-now").textContent).toBe("$306");
-    expect(screen.getByTestId("asset-position-change").textContent).toBe("−38.8% (−$194)");
+    const price = (await screen.findByTestId("overview-field-input-purchasePrice")) as HTMLInputElement;
+    expect(price.value).toBe("500");
+    fireEvent.change(price, { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("asset-details-undo"));
+    expect(price.value).toBe("500");
+    expect(writes()).toEqual([]);
+    fireEvent.change(price, { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("asset-details-save"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0].body).toEqual({ fieldsToDelete: ["purchasePrice"] });
   });
 
-  it("Alerts are the rule engine's dates, cleared into the server's dismiss list", async () => {
+  it("a characteristic is changed with its pencil and removed with its X in two taps", async () => {
+    mount();
+    const panel = await screen.findByTestId("asset-characteristics");
+    expect(panel.textContent).toContain("ASUS");
+    fireEvent.click(screen.getByTestId("overview-field-brand"));
+    fireEvent.change(screen.getByTestId("overview-field-input-brand"), { target: { value: "Asus" } });
+    fireEvent.click(screen.getByTestId("overview-field-save-brand"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0].body).toEqual({ fields: { brand: "Asus" } });
+
+    fireEvent.click(await screen.findByTestId("overview-field-remove-brand"));
+    expect(writes()).toHaveLength(1); // the first tap only arms it
+    fireEvent.click(screen.getByTestId("overview-field-remove-brand"));
+    await waitFor(() => expect(writes()).toHaveLength(2));
+    expect(writes()[1].body).toEqual({ fieldsToDelete: ["brand"] });
+  });
+
+  it("alerts are the rule engine's dates, cleared into the server's dismiss list", async () => {
     const local = vi.spyOn(Storage.prototype, "setItem");
     mount();
     const row = await screen.findByTestId("asset-alert-row");
@@ -200,46 +194,44 @@ describe("asset profile layout", () => {
     expect(writes()[0]).toMatchObject({ method: "POST", url: "/api/notifications/dismiss", body: { ids: [ALERT_ID] } });
     expect(local).not.toHaveBeenCalled();
 
-    // Cleared is shown, and can be undone from the same place.
-    await screen.findByTestId("asset-alerts-cleared");
-    expect(screen.queryByTestId("asset-alert-row")).toBeNull();
+    // A cleared alert leaves Quick Info, and can be brought back from the same place.
+    await waitFor(() => expect(screen.queryByTestId("asset-alert-row")).toBeNull());
     fireEvent.click(await screen.findByTestId("button-restore-document-alerts"));
     await waitFor(() => expect(writes()).toHaveLength(2));
     expect(writes()[1]).toMatchObject({ url: "/api/notifications/restore", body: { ids: [ALERT_ID] } });
   });
 
-  it("a date added from Calendar & reminders is written as that field", async () => {
+  it("+ Task and + Expense create ordinary records linked to this asset", async () => {
     mount();
-    fireEvent.click(await screen.findByTestId("asset-add-date"));
-    fireEvent.change(screen.getByTestId("asset-add-date-kind"), { target: { value: "insuranceExpiration" } });
-    fireEvent.change(screen.getByTestId("asset-add-date-day"), { target: { value: "2027-06-01" } });
-    fireEvent.click(screen.getByTestId("asset-add-date-save"));
-    await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0].body).toEqual({ fields: { insuranceExpiration: "2027-06-01" } });
-  });
-
-  it("a failed documents load is not an empty list", async () => {
-    failDocuments = true;
-    mount();
-    const card = await screen.findByTestId("asset-documents-card");
-    await waitFor(() => expect(card.textContent).toContain("Couldn't load documents"));
-    expect(card.textContent).not.toContain("No documents yet");
-  });
-
-  it("Profile actions open the page's own edit and delete; nothing is deleted here", async () => {
-    const onEdit = vi.fn(), onDelete = vi.fn(), onOpenDocuments = vi.fn();
-    mount({ onEdit, onDelete, onOpenDocuments });
     await screen.findByTestId("asset-details");
-    fireEvent.click(screen.getByTestId("action-edit-profile"));
+    fireEvent.click(screen.getByTestId("quick-add-task"));
+    fireEvent.change(screen.getByTestId("quick-task-title"), { target: { value: "Renew warranty" } });
+    fireEvent.change(screen.getByTestId("quick-task-due"), { target: { value: "2027-01-05" } });
+    fireEvent.click(screen.getByTestId("quick-task-save"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0]).toMatchObject({ method: "POST", url: "/api/tasks", body: { title: "Renew warranty", dueDate: "2027-01-05", linkedProfiles: [ID] } });
+
+    fireEvent.click(screen.getByTestId("quick-add-expense"));
+    fireEvent.change(screen.getByTestId("quick-expense-amount"), { target: { value: "39.99" } });
+    fireEvent.change(screen.getByTestId("quick-expense-what"), { target: { value: "Charger" } });
+    fireEvent.change(screen.getByTestId("quick-expense-day"), { target: { value: "2026-11-20" } });
+    fireEvent.click(screen.getByTestId("quick-expense-save"));
+    await waitFor(() => expect(writes()).toHaveLength(2));
+    expect(writes()[1]).toMatchObject({ method: "POST", url: "/api/expenses", body: { amount: 39.99, description: "Charger", date: "2026-11-20", linkedProfiles: [ID] } });
+  });
+
+  it("Edit and ownership open the page's own controls and write nothing", async () => {
+    const onEdit = vi.fn(), onOpenOwnership = vi.fn();
+    mount({ onEdit, onOpenOwnership });
+    await screen.findByTestId("asset-details");
+    fireEvent.click(screen.getByTestId("asset-details-edit"));
     expect(onEdit).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByTestId("asset-add-document"));
-    expect(onOpenDocuments).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByTestId("button-delete-profile-info-tab"));
-    expect(onDelete).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId("asset-detail-ownership"));
+    expect(onOpenOwnership).toHaveBeenCalledTimes(1);
     expect(writes()).toEqual([]);
 
-    // Add custom field opens the same Field | Value | Add form as every profile.
-    fireEvent.click(screen.getByTestId("action-add-field"));
+    // Add Characteristic is the same Field | Value | Add form as every profile.
+    fireEvent.click(screen.getByTestId("asset-add-characteristic"));
     fireEvent.change(screen.getByTestId("add-field-key"), { target: { value: "Serial number" } });
     fireEvent.change(screen.getByTestId("add-field-value"), { target: { value: "ZX-1" } });
     fireEvent.click(screen.getByTestId("add-field-save"));

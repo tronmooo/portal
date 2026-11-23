@@ -105,7 +105,7 @@ async function main() {
     check(actRow && around.includes(dayLabel(today)) && !around.includes(dayLabel(yesterday)), `#7 the asset's Activity tab shows the expense on ${dayLabel(today)}, not ${dayLabel(yesterday)} ("${around.trim().slice(0, 110)}")`);
     await shot("asset-activity");
 
-    await page.locator('[data-testid="tab-money"]').click();
+    await page.locator('[data-testid="tab-money"], [data-testid="tab-financials"]').last().click();
     await page.locator('[data-testid="button-add-expense"]').first().click({ timeout: 15000 });
     await page.locator('[data-testid="dialog-add-expense"]').waitFor({ timeout: 10000 });
     const dlg = page.locator('[data-testid="dialog-add-expense"]');
