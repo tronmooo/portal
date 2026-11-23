@@ -186,6 +186,7 @@ export default defineConfig({
       'tests/due-label.test.ts',
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
+      'tests/dashboard-header-and-menu.test.ts',
       'tests/dashboard-done-means-gone.dom.test.tsx',
       'tests/bell-dismiss-shared.dom.test.tsx',
       'tests/executive-attention.test.ts',

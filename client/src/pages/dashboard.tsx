@@ -104,7 +104,6 @@ import {
   CalendarDays, Pin, PinOff, Filter as FilterIcon, Sparkle,
   Lightbulb, Repeat, Flag, User,
   Pause, Play, SkipForward, Tag as TagIcon, AlarmClock, ListChecks, Timer, ChevronsUpDown, FlaskConical,
-  Zap, Receipt, StickyNote, ArrowDownToLine,
 } from "lucide-react";
 import { useShowTestData, toggleShowTestData } from "@/lib/showTestData";
 import { devToolsEnabled } from "@/lib/dev-affordances";
@@ -4801,35 +4800,6 @@ interface DashboardSection {
 // (still toggleable via Customize and reachable on their own pages).
 // ── Executive command-center sections (2026-07) ──────────────────────────────
 
-// One-tap create row. Wraps the existing QuickAddDialog so a new record lands
-// on the active profile (kpiOwnerId-style resolution via the scope).
-export function QuickActionsSection({ filterMode, filterIds, allProfiles = [] }: { filterMode: string; filterIds: string[]; allProfiles?: any[] }) {
-  const [kind, setKind] = useState<QuickAddKind | null>(null);
-  // P1 dedupe (QA scorecard): profiles come from the page-level query.
-  const profiles = allProfiles;
-  const ownerId = useMemo(() => {
-    if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
-    return (profiles.find((p: any) => p.type === "self")?.id) || "";
-  }, [filterMode, filterIds, profiles]);
-  const actions: Array<{ k: QuickAddKind; label: string; icon: any }> = [
-    { k: "expense", label: "Expense", icon: Receipt },
-    { k: "income", label: "Income", icon: ArrowDownToLine },
-    { k: "bill", label: "Bill", icon: CreditCard },
-    { k: "note", label: "Note", icon: StickyNote },
-    { k: "task", label: "Task", icon: Bell },
-  ];
-  return (
-    <div className="flex flex-wrap gap-2" data-testid="section-quick-actions">
-      {actions.map(a => (
-        <Button key={a.k} variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setKind(a.k)} data-testid={`quick-action-${a.k}`}>
-          <a.icon className="h-3.5 w-3.5" /> {a.label}
-        </Button>
-      ))}
-      {kind && <QuickAddDialog open kind={kind} ownerProfileId={ownerId} onClose={() => setKind(null)} />}
-    </div>
-  );
-}
-
 // Recent notifications feed (expiring docs, overdue/ due tasks, bills, streaks).
 // Reuses the /api/notifications endpoint the bell already consumes.
 export function NotificationsSection({ filterMode, filterIds }: { filterMode: string; filterIds: string[] }) {
@@ -4915,7 +4885,6 @@ export function WeeklySummarySection({ stats, filterIds }: { stats: DashboardSta
 const SECTION_ICONS: Record<string, any> = {
   "exec-briefing": ListChecks,
   "hero-briefing": Sparkles,
-  "quick-actions": Zap,
   "needs-attention": AlertTriangle,
   "today": Calendar,
   "now-queue": Flame,
@@ -4940,7 +4909,7 @@ const DEFAULT_SECTIONS: DashboardSection[] = DEFAULT_SECTION_DEFS.map((s) => ({
 }));
 // Swimlane groups (id sets) — render small group header chips during layout
 const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: string[] }> = [
-  { key: "now",        label: "Now",        emoji: "⚡", ids: ["hero-briefing", "quick-actions", "exec-briefing", "needs-attention", "today", "now-queue", "notifications", "upcoming-dates", "obligations"] },
+  { key: "now",        label: "Now",        emoji: "⚡", ids: ["hero-briefing", "exec-briefing", "needs-attention", "today", "now-queue", "notifications", "upcoming-dates", "obligations"] },
   { key: "trajectory", label: "Trajectory", emoji: "📈", ids: ["hero-kpis", "kpis", "weekly-summary", "trends", "health", "goals", "key-findings"] },
   { key: "explore",    label: "Explore",    emoji: "🧭", ids: ["domain-hubs", "activity", "ai-summary"] },
   { key: "more",       label: "More", emoji: "🗂️", ids: ["finance"] },
@@ -5825,9 +5794,6 @@ export default function DashboardPage() {
       case "upcoming-dates":
         content = <UpcomingSection filterIds={filterIds} filterMode={filterMode} ready={bootstrapSettled} allProfiles={allProfiles} events={sharedEvents} goals={sharedGoals} />;
         break;
-      case "quick-actions":
-        content = <QuickActionsSection filterMode={filterMode} filterIds={filterIds} allProfiles={allProfiles} />;
-        break;
       case "exec-briefing":
         content = <ExecutiveBriefing filterMode={filterMode} filterIds={filterIds} stats={stats} enhanced={enhanced} ready={bootstrapSettled} enhancedError={enhancedError} enhancedFetching={enhancedFetching} overviewEnd={menuInBriefing ? dashboardMenu : undefined} />;
         break;
@@ -5845,12 +5811,15 @@ export default function DashboardPage() {
 
   // Under the hub shell this page's header is only the "⋮" menu, and a row
   // of its own for one button pushed every card down a line (2026-11-21:
-  // "make everything fit so I don't have to scroll"). When the briefing leads
-  // the page the menu sits at the end of its top bar instead.
-  const briefingLeads = filterMode === "everyone"
+  // "make everything fit so I don't have to scroll"). Whenever the briefing
+  // is on the page the menu sits at the end of its Next Important bar —
+  // not only when the briefing is the FIRST section: a saved layout with
+  // another section above it left the ⋮ alone on an empty row (owner,
+  // 2026-11-23: "this button should be in the Next Important bubble").
+  const briefingShown = filterMode === "everyone"
     ? !(showDashSkeleton && !stats)
-    : sections.find((s) => s.visible)?.id === "exec-briefing";
-  const menuInBriefing = hubEmbedded && briefingLeads;
+    : sections.some((s) => s.visible && s.id === "exec-briefing");
+  const menuInBriefing = hubEmbedded && briefingShown;
   const dashboardMenu = (
     <div className="flex items-center gap-1.5 shrink-0">
       <DropdownMenu>

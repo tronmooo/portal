@@ -138,8 +138,9 @@ green. After a push to `main`:
    the DEFAULT (Needs Attention, Tasks, Timeline, Money), and every card the
    preferences hide is named under the grid and opens on a tap
    (`exec-hidden-cards`) — hidden never reads as missing.
-   **Customize opens from the ⋮ menu at the top right, never from the tab
-   itself** (owner, 2026-11-22: "at the bottom, the customization shouldn't be
+   **Customize opens from the ⋮ menu at the end of the Next Important bar
+   (whenever the briefing is on the page), never from the tab itself; there
+   is no Quick Actions row** (owner, 2026-11-23; 2026-11-22: "at the bottom, the customization shouldn't be
    there"). It is the `ExecCustomizeDialog` (`components/dashboard/ExecCustomize.tsx`),
    built to the owner's design: tabs (Cards & Widgets, My Custom, AI Builder,
    Layout), Quiet Mode, a row per card (drag handle, size, switch, details),

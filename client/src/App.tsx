@@ -735,7 +735,13 @@ function App() {
                     <AppSidebar />
                   </div>
                   <div className="flex flex-col flex-1 min-w-0">
-                    <header className="flex items-center justify-between px-3 py-2.5 border-b border-border/50 shrink-0" style={{ background: 'linear-gradient(180deg, hsl(var(--background) / 0.55) 0%, hsl(var(--background) / 0.35) 100%)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
+                    {/* SAFE AREA (2026-11-23): installed to the iOS home screen the page
+                        draws under the status bar (viewport-fit=cover +
+                        black-translucent), and iOS keeps every tap in that strip.
+                        Without this padding the bell, theme and account buttons sat
+                        under the clock and battery and did nothing when tapped.
+                        Guard: tests/dashboard-header-and-menu.test.ts. */}
+                    <header className="flex items-center justify-between px-3 py-2.5 border-b border-border/50 shrink-0" data-testid="app-header" style={{ paddingTop: 'calc(0.625rem + env(safe-area-inset-top, 0px))', background: 'linear-gradient(180deg, hsl(var(--background) / 0.55) 0%, hsl(var(--background) / 0.35) 100%)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
                       <div className="hidden md:block">
                         <SidebarTrigger data-testid="button-sidebar-toggle" />
                       </div>
