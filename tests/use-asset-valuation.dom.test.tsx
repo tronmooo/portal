@@ -259,6 +259,25 @@ describe("Assets-tab sweep (useAssetsValuationSweep)", () => {
     first.unmount();
   });
 
+  it("re-writes the AI summary of an asset whose value changed, and not of one that did not", async () => {
+    apiRequest.mockImplementation(async (method: string, url: string, body?: any) => {
+      calls.push({ method, url, body });
+      if (url === "/api/valuations/status") return json({ rows: [{ profileId: "moved", fresh: false }, { profileId: "same", fresh: false }] });
+      if (url.includes("/moved/valuation/refresh")) return json({ snapshot: snapshot(record(900), true), ran: true, changed: true });
+      if (url.includes("/same/valuation/refresh")) return json({ snapshot: snapshot(record(500), true), ran: true, changed: false });
+      if (url.endsWith("/ai-summary")) return json({ summary: "Worth $900.", highlights: [], actionItems: [], generatedAt: new Date().toISOString() });
+      return json({});
+    });
+    render(<QueryClientProvider client={queryClient}><SweepProbe enabled /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByTestId("sweep").textContent).toBe("idle 2/2 failed=0"));
+    await waitFor(() => expect(calls.filter(c => c.url.endsWith("/ai-summary")).map(c => c.url)).toEqual(["/api/profiles/moved/ai-summary"]));
+    // An ordinary read (the server regenerates on a changed value), never a forced one.
+    expect(calls.some(c => c.url.includes("force=true"))).toBe(false);
+    // Ready for the profile before it is opened.
+    await waitFor(() => expect((queryClient.getQueryData(["/api/profiles", "moved", "ai-summary"]) as any)?.summary).toBe("Worth $900."));
+    expect(queryClient.getQueryData(["/api/profiles", "same", "ai-summary"])).toBeUndefined();
+  });
+
   it("re-values every auto-tracked asset even when its record is fresh; skips manual and just-checked ones", async () => {
     const recent = new Date(Date.now() - 60_000).toISOString();
     const old = new Date(Date.now() - 2 * 86_400_000).toISOString();
@@ -287,5 +306,16 @@ describe("Assets-tab sweep (useAssetsValuationSweep)", () => {
     render(<QueryClientProvider client={queryClient}><SweepProbe enabled={false} /></QueryClientProvider>);
     await new Promise(r => setTimeout(r, 30));
     expect(calls).toHaveLength(0);
+  });
+
+  it("a tracked asset not checked recently is refreshed when its profile opens, once", async () => {
+    const old = new Date(Date.now() - 60 * 60_000).toISOString();
+    queryClient.setQueryData(valuationQueryKey("a"), { ...snapshot(record(20000, { checkedAt: old, valuedAt: old }), true), mode: "auto" });
+    mount("a");
+    expect(screen.getByTestId("current-value-amount").textContent).toBe("$20,000"); // the saved value shows at once
+    await waitFor(() => expect(screen.getByTestId("current-value-amount").textContent).toBe("$21,000"));
+    const refreshes = calls.filter(c => c.url.includes("/refresh"));
+    expect(refreshes).toHaveLength(1);
+    expect(refreshes[0].body).toEqual({ force: true });
   });
 });

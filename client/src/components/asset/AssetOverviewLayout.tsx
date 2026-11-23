@@ -33,7 +33,9 @@ import { formatMoneyCompact, parseLocalDate } from "@/lib/format";
 import { localTodayISO } from "@/lib/dates";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
-import { useAssetValuation } from "@/hooks/useAssetValuation";
+import { useAssetValuation, useAssetValuationHistory } from "@/hooks/useAssetValuation";
+import { projectDepreciation, recentChange, seriesInRange, valueSeries, VALUE_RANGES, type ValuePoint, type ValueRangeKey } from "@shared/asset-depreciation";
+import { formatTimeAgo } from "@/lib/format";
 import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
 import { AddFieldPanel } from "@/components/AddFieldPanel";
 import { CurrentValueCard } from "@/components/asset/CurrentValueCard";
@@ -203,6 +205,74 @@ export function AssetHeroValue({ profile }: { profile: AssetLayoutProfile }) {
   );
 }
 
+const dayLabel = (iso: string) =>
+  new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+/**
+ * The value over time: the purchase (when its price and date are on file),
+ * every stored valuation, and today — on a real time axis, with the range's
+ * first and last points named. A range with fewer than two points says so
+ * instead of drawing a line through nothing.
+ */
+function ValueGraph({ id, points }: { id: string; points: ValuePoint[] }) {
+  const [range, setRange] = useState<ValueRangeKey>("all");
+  const now = useMemo(() => new Date(), [points]);
+  const shown = useMemo(() => seriesInRange(points, range, now), [points, range, now]);
+  const drawable = shown.length >= 2;
+  const t0 = drawable ? Date.parse(shown[0].at) : 0;
+  const t1 = drawable ? Date.parse(shown[shown.length - 1].at) : 1;
+  const hi = Math.max(...shown.map((p) => p.value), 1), lo = Math.min(...shown.map((p) => p.value), hi);
+  const xy = shown.map((p) => {
+    const x = t1 === t0 ? 100 : 6 + ((Date.parse(p.at) - t0) / (t1 - t0)) * 188;
+    const y = hi === lo ? 30 : 8 + (1 - (p.value - lo) / (hi - lo)) * 44;
+    return [x, y] as const;
+  });
+  const line = xy.map(([x, y], i) => `${i ? "L" : "M"} ${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+  const first = shown[0], last = shown[shown.length - 1];
+  const fell = drawable && last.value < first.value;
+
+  return (
+    <div className="mt-1.5" data-testid="asset-value-graph">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[12px] text-muted-foreground">Value over time</span>
+        <div className="flex items-center gap-0.5" role="group" aria-label="Time range">
+          {VALUE_RANGES.map((r) => (
+            <button key={r.key} type="button" onClick={() => setRange(r.key)} aria-pressed={range === r.key}
+              className={`h-6 px-2 rounded-md text-[11px] font-semibold ${range === r.key ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              data-testid={`asset-value-range-${r.key}`}>
+              {r.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {drawable ? (
+        <>
+          <svg viewBox="0 0 200 60" preserveAspectRatio="none" className="w-full h-[72px] mt-1" role="img"
+            aria-label={`From ${formatMoneyCompact(first.value)} on ${dayLabel(first.at)} to ${formatMoneyCompact(last.value)} on ${dayLabel(last.at)}`}>
+            <defs>
+              <linearGradient id={`val-fill-${id}`} x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stopColor="#8b5cf6" stopOpacity="0.35" /><stop offset="1" stopColor="#8b5cf6" stopOpacity="0.02" />
+              </linearGradient>
+            </defs>
+            <path d={`${line} L ${xy[xy.length - 1][0].toFixed(1)} 58 L ${xy[0][0].toFixed(1)} 58 Z`} fill={`url(#val-fill-${id})`} />
+            <path d={line} fill="none" stroke="#a78bfa" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+          </svg>
+          <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground tabular-nums">
+            <span data-testid="asset-value-graph-start">{dayLabel(first.at)} · {formatMoneyCompact(first.value)}</span>
+            <span className={fell ? "text-red-400" : last.value > first.value ? "text-emerald-400" : ""} data-testid="asset-value-graph-end">
+              Today · {formatMoneyCompact(last.value)}
+            </span>
+          </div>
+        </>
+      ) : (
+        <p className="py-2 text-[12px] text-muted-foreground" data-testid="asset-value-graph-empty">
+          Not enough valuations in this range yet. Each new estimate adds a point.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** What it would fetch at the end of its useful life — the user's own figure. */
 export const SALVAGE_KEY = "salvageValue";
 
@@ -225,6 +295,17 @@ export function ValueCard({ profile, spent = 0 }: {
   const fields = profile.fields || {};
   const priceKey = PURCHASE_PRICE_KEYS.find((k) => parseMoney(fields[k]) > 0) || "purchasePrice";
   const salvage = parseMoney(fields[SALVAGE_KEY]);
+  const history = useAssetValuationHistory(profile.id, v.supported);
+  const purchaseDateKey = Object.keys(fields).find((k) => PURCHASE_DATE_RE.test(k) && fields[k]);
+  const purchaseDate = purchaseDateKey ? String(fields[purchaseDateKey]) : null;
+  const points = useMemo(
+    () => valueSeries({ history: history.data || [], purchasePrice: v.paid, purchaseDate, currentValue: v.now, now: new Date() }),
+    [history.data, v.paid, purchaseDate, v.now],
+  );
+  const moved = useMemo(() => recentChange(points), [points]);
+  const ahead = projectDepreciation({ purchasePrice: v.paid, purchaseDate, currentValue: v.now, salvageValue: parseMoney(fields[SALVAGE_KEY]), now: new Date() });
+  const valuedAt = v.record?.valuedAt || null;
+  const failed = v.record?.status === "error";
   const up = v.delta > 0;
   const lostShare = v.hasChange && !up ? Math.min(1, Math.abs(v.delta) / v.paid) : 0;
   const salvageShare = salvage > 0 && v.paid > 0 && salvage < v.paid ? salvage / v.paid : null;
@@ -276,6 +357,32 @@ export function ValueCard({ profile, spent = 0 }: {
           </p>
         )}
       </div>
+
+      {/* When it was last valued, and whether a fresh estimate is on its way.
+          The saved figures above stay on screen while it is. */}
+      {v.auto && v.supported && (
+        <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-x-2" data-testid="asset-value-status">
+          {v.refreshing && <span className="text-primary flex items-center gap-1" data-testid="asset-value-updating"><RefreshCw className="h-3 w-3 animate-spin" /> Checking for an updated value…</span>}
+          {valuedAt
+            ? <span title={valuedAt} data-testid="asset-value-last-valued">{failed ? "Couldn't update just now — showing the estimate from" : "Last valued"} {dayLabel(valuedAt)} ({formatTimeAgo(valuedAt)})</span>
+            : !v.refreshing && <span>Not valued yet.</span>}
+        </p>
+      )}
+      {v.supported && <ValueGraph id={profile.id} points={points} />}
+      {(moved || ahead) && (
+        <div className="mt-1 mb-1 space-y-0.5 text-[12px] text-muted-foreground">
+          {moved && (
+            <p data-testid="asset-value-recent-change">
+              Latest change: <span className={`font-semibold tabular-nums ${moved.delta < 0 ? "text-red-400" : "text-emerald-400"}`}>{signed(moved.delta)} ({signedPct(moved.pct)})</span> since {dayLabel(moved.since)}.
+            </p>
+          )}
+          {ahead && (
+            <p data-testid="asset-value-projection">
+              At this rate (about {ahead.annualRatePct}% a year), roughly <span className="font-semibold tabular-nums text-foreground">{formatMoneyCompact(ahead.inOneYear)}</span> a year from now. An estimate from the purchase price and date.
+            </p>
+          )}
+        </div>
+      )}
 
       <Line label="Purchase price" kind="money" display={v.paid > 0 ? formatMoneyCompact(v.paid) : null} raw={v.paid > 0 ? String(v.paid) : ""}
         save={(val) => write(priceKey, val)} remove={() => write(priceKey, null)} hint="Unlocks how much it has depreciated"

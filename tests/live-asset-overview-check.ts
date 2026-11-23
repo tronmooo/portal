@@ -107,6 +107,10 @@ async function main() {
       check((await page.locator(t("overview-missing-purchasePrice")).innerText()).includes("$950"), "the Value card follows the saved purchase price without a reload");
       check((await page.locator(t("text-profile-detail-name")).innerText()).endsWith(" Pro"), "the header follows the saved name without a reload");
 
+      // ── The graph, with its ranges, is on the card ──
+      check((await page.locator(t("asset-value-graph")).count()) === 1, "the Value card has the value graph");
+      check((await page.locator(t("asset-value-range-1y")).count()) === 1, "the graph has time ranges");
+
       // ── Depreciation is stated; salvage value is the user's own figure ──
       const dep = await page.locator(t("asset-depreciation")).innerText();
       check(/Depreciated since purchase|Gained since purchase/.test(dep), `the Value card states the change since purchase (${dep.split("\n")[0]})`);

@@ -299,6 +299,7 @@ export default defineConfig({
       'tests/overview-engine.test.ts',
       'tests/overview-render.dom.test.tsx',
       'tests/asset-overview-layout.dom.test.tsx',
+      'tests/asset-value-refresh.test.ts',
       'tests/executive-sections-router.test.ts',
       'tests/dashboard-visuals.dom.test.tsx',
       'tests/wellness-popups.dom.test.tsx',

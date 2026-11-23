@@ -733,16 +733,22 @@ touching it.
 a 28px picture (still the photo picker) · the name · the current value
 (`AssetHeroValue`) · the ⋯ menu (Edit, Ownership, Documents, Clear / Restore
 alerts, Delete). The Overview is, in this order and nothing else:
-1. **Value & Depreciation** (`ValueCard`) — says HOW MUCH it has depreciated
-   ("it's just a random graph, that means nothing … remove confidence"): one
-   bar that is the purchase price, filled by what has been lost, with the
-   amount and percent; with no purchase price it asks for one instead of
-   drawing anything. Never a chart of past estimates and never a confidence
-   figure here. Then the money lines: Purchase price, Current value, Total
-   invested (purchase price + what was spent, when both are known) and
-   **Salvage value** (`SALVAGE_KEY`, the user's own figure — never estimated
-   or invented; marked on the bar), plus Refresh and the estimate's details
-   and tracking switch under the disclosure.
+1. **Value & Depreciation** (`ValueCard`) — says HOW MUCH it has depreciated:
+   one bar that is the purchase price, filled by what has been lost, with the
+   amount and percent (with no purchase price it asks for one). Under it:
+   when it was last valued (and "couldn't update — showing the estimate from
+   …" when a run failed); the **value graph** — the purchase, every stored
+   valuation and today on a real time axis, with 1M / 3M / 1Y / All and the
+   range's first and last points named (the owner called the undated,
+   unlabelled sparkline "a random graph"; a range with under two points says
+   so instead of drawing one); the latest change between two different
+   values; and a one-year projection only when there is enough to say so
+   (`projectDepreciation`, `shared/asset-depreciation.ts`: a dated purchase,
+   six months owned, a value that fell, a plausible rate; never below the
+   salvage value). No confidence figure here. Then the money lines: Purchase
+   price, Current value, Total invested and **Salvage value** (`SALVAGE_KEY`,
+   the user's own figure — never estimated), plus Refresh and the estimate's
+   details and tracking switch under the disclosure.
 2. **AI Asset Summary** (`AISummaryCard compact`) — a title and the text. The
    text is three short sentences: what it is worth, how much it has
    depreciated, and WHEN it would make sense to sell or replace it, with the
@@ -766,10 +772,27 @@ line under the tabs (`asset-trail`).
 loading state and the fallback). A line writes ONE field with the page's
 PATCH — the same field the chat's `update_profile` writes. Add a line by
 reading a store that exists, never by storing a copy; never invent a figure.
-**P2. One current value.** The header and the Value card both show
-`useValuePosition`: `currentAssetValue` (Rule 1) — the estimate while Portol
-tracks the value, the user's own number once tracking is off — against the
-purchase price.
+**P2. One current value, kept current without being asked.** The header and
+the Value card both show `useValuePosition`: `currentAssetValue` (Rule 1) —
+the estimate while Portol tracks the value, the user's own number once
+tracking is off — against the purchase price. Saved figures paint at once;
+then (owner, 2026-11-23: "automatically refresh whenever I open …"):
+- **Opening a profile** asks for a current estimate when the stored one is
+  stale OR the asset is tracked and has not been checked in the last ten
+  minutes (`refreshOnOpen`, `client/src/hooks/useAssetValuation.ts`).
+- **Opening the Assets tab** re-values every tracked asset
+  (`useAssetsValuationSweep`: bounded concurrency, one run shared by every
+  mount, each result patches its own card and the totals as it lands), then
+  re-writes the AI summary of each asset whose estimate CHANGED
+  (`refreshSummaries`, two at a time) so it is ready before its profile opens.
+- Both share one in-flight map, one per-asset attempt throttle and the same
+  ten-minute window, so the tab followed by a profile asks once. A manual
+  asset is never re-estimated; a failed run keeps the last estimate (Rule 7).
+- **History holds real moves** (`appendValuationHistory`): a run that reached
+  the same estimate as the last entry adds no point.
+Never add a second refresh path, a per-screen timer or an unconditional
+summary regeneration: extend these.
+*Guards:* `tests/asset-value-refresh.test.ts`, `tests/use-asset-valuation.dom.test.tsx`.
 **P3. Alerts are the rule engine's.** The menu's "Clear alerts" is
 `useRecordAlerts`: `rulesFromAll` over the UNFLATTENED profile row and its
 documents, filtered by `isAlertDateRule`, identified by `dateAlertId` (the

@@ -113,7 +113,10 @@ describe("CurrentValueCard — automatic value tracking switch", () => {
   });
 
   it("turning it OFF never fires a refresh", async () => {
-    queryClient.setQueryData(valuationQueryKey("a"), snapshot("auto"));
+    // Checked a moment ago, so merely opening the card asks for nothing
+    // (a tracked asset not checked in ten minutes is refreshed on open).
+    const seeded = snapshot("auto");
+    queryClient.setQueryData(valuationQueryKey("a"), { ...seeded, record: { ...seeded.record!, checkedAt: new Date().toISOString() } });
     mount();
     fireEvent.click(screen.getByTestId("valuation-mode-switch"));
     await waitFor(() => expect(patches()).toHaveLength(1));

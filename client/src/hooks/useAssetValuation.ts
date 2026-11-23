@@ -36,11 +36,14 @@ const LOCKED_POLL_MAX = 8;
 
 const inFlight = new Map<string, Promise<ValuationSnapshot | null>>();
 const lastAttemptAt = new Map<string, number>();
+/** Did the last refresh of this asset land a different estimate? (the server's `changed`) */
+const lastRunChanged = new Map<string, boolean>();
 
 /** Test hook: forget throttle + in-flight state. */
 export function __resetValuationRefreshState(): void {
   inFlight.clear();
   lastAttemptAt.clear();
+  lastRunChanged.clear();
 }
 
 function snapshotStamp(s: ValuationSnapshot | null | undefined): number {
@@ -91,6 +94,7 @@ export function refreshAssetValuation(profileId: string, opts: { force?: boolean
     let body: any = null;
     try { body = await res.json(); } catch { body = null; }
     let snapshot: ValuationSnapshot | null = body?.snapshot ?? null;
+    lastRunChanged.set(profileId, body?.changed === true);
     if (res.status === 202 || body?.locked) {
       // Another request (another tab, another open) is already valuing this
       // asset. Poll the cheap snapshot until it lands, bounded.
@@ -129,6 +133,28 @@ export function refreshAssetValuation(profileId: string, opts: { force?: boolean
 // rest. Opening the tab is the request for current values; nobody has to open
 // each asset. Only an asset checked within the last few minutes is skipped,
 // so reloading the tab doesn't re-buy the same lookups.
+
+/** How many AI summaries are re-written at once after a sweep. */
+export const SUMMARY_CONCURRENCY = 2;
+
+/**
+ * Re-write the AI summary of each asset whose estimate just changed, so it is
+ * ready when its profile is opened (owner, 2026-11-23). An ordinary read: the
+ * server regenerates a summary whose value fingerprint no longer matches and
+ * answers from its cache otherwise, so an unchanged asset costs nothing and is
+ * not asked. Failures are ignored — the profile fetches its own on open.
+ */
+async function refreshSummaries(ids: string[]): Promise<void> {
+  await runBounded(ids, SUMMARY_CONCURRENCY, async (id) => {
+    try {
+      const res = await apiRequest("GET", `/api/profiles/${id}/ai-summary`);
+      const body = await res.json();
+      if (body && typeof body === "object" && typeof body.summary === "string") {
+        queryClient.setQueryData(["/api/profiles", id, "ai-summary"], body);
+      }
+    } catch { /* the profile asks again when it opens */ }
+  });
+}
 
 /** How many valuations run at once from one tab. */
 export const SWEEP_CONCURRENCY = 8;
@@ -200,18 +226,41 @@ export function useAssetsValuationSweep(enabled: boolean): SweepProgress {
       update({ total: stale.length, done: 0, failed: 0, running: stale.length > 0 });
       if (stale.length === 0) return;
       let done = 0, failed = 0;
+      const changed: string[] = [];
       await runBounded(stale, SWEEP_CONCURRENCY, async (id) => {
         // force: a record still inside its freshness window is re-valued too.
         const snap = await refreshAssetValuation(id, { force: true });
         done++;
         if (!snap || snap.record?.status === "error") failed++;
+        else if (lastRunChanged.get(id)) changed.push(id);
         update({ done, failed });
       });
+      // After the values: the summaries of the assets that moved. Not awaited
+      // by the indicator — the values are what the list shows.
+      if (changed.length > 0) void refreshSummaries(changed);
       perfMeasure("assets:sweep:complete", "assets:sweep:start");
     })().finally(() => { sweepInFlight = null; update({ running: false }); });
   }, [enabled]);
 
   return progress;
+}
+
+/**
+ * Should opening this asset ask for a current estimate? Yes when the server
+ * says the stored one is stale — and, for an asset Portol tracks, whenever it
+ * has not been checked in the last few minutes (owner, 2026-11-23: "check for
+ * updated market values whenever an asset profile opens"). The same window
+ * the Assets-tab sweep uses, so opening the tab and then a profile asks once.
+ * `force` says the server's own freshness window should not hold it back.
+ */
+export function refreshOnOpen(snapshot: ValuationSnapshot | null | undefined, now: number = Date.now()): { refresh: boolean; force: boolean } {
+  if (!snapshot || !snapshot.supported) return { refresh: false, force: false };
+  if (!snapshot.freshness.fresh) return { refresh: true, force: false };
+  if (snapshot.mode === "manual") return { refresh: false, force: false };
+  const r: any = snapshot.record;
+  const checked = Date.parse(String(r?.checkedAt || r?.valuedAt || ""));
+  const due = !Number.isFinite(checked) || now - checked >= SWEEP_RECHECK_MS;
+  return { refresh: due, force: due };
 }
 
 export interface UseAssetValuation {
@@ -256,15 +305,17 @@ export function useAssetValuation(profileId: string | undefined, opts: { enabled
   }, [profileId, track]);
 
   // FRESHNESS CHECK → BACKGROUND REFRESH: after the stored estimate is on
-  // screen, kick off one refresh when the server said it is stale.
+  // screen, kick off one refresh when the server said it is stale, or when a
+  // tracked asset has not been checked in the last few minutes (refreshOnOpen).
   useEffect(() => {
     if (!enabled || !profileId || !data) return;
-    if (!data.supported || data.freshness.fresh) return;
+    const due = refreshOnOpen(data);
+    if (!due.refresh) return;
     if (inFlight.has(profileId)) { track(inFlight.get(profileId)!); return; }
     const last = lastAttemptAt.get(profileId) || 0;
     if (Date.now() - last < ATTEMPT_THROTTLE_MS) return;
-    track(refreshAssetValuation(profileId));
-  }, [enabled, profileId, data?.supported, data?.freshness?.fresh, data?.freshness?.reason, track]);
+    track(refreshAssetValuation(profileId, { force: due.force }));
+  }, [enabled, profileId, data?.supported, data?.freshness?.fresh, data?.freshness?.reason, data?.mode, track]);
 
   const refresh = useCallback(async () => {
     if (!profileId) return;

@@ -50,9 +50,23 @@ export function toHistoryEntry(record: ValuationRecord): ValuationHistoryEntry {
   };
 }
 
-/** Append, dedupe by valuedAt, keep the newest LIMIT entries. */
+/**
+ * Append, dedupe by valuedAt, keep the newest LIMIT entries.
+ *
+ * A run that reached the SAME estimate as the last entry adds nothing: the
+ * Assets tab re-values every asset each time it is opened, and a point per
+ * visit would bury the real moves under a flat run of repeats. The entry kept
+ * is the first time that value was seen; the record's own `valuedAt` still
+ * says when it was last confirmed.
+ */
 export function appendValuationHistory(history: ValuationHistoryEntry[], record: ValuationRecord): ValuationHistoryEntry[] {
   const entry = toHistoryEntry(record);
+  const sorted = [...history].sort((a, b) => a.valuedAt.localeCompare(b.valuedAt));
+  const last = sorted[sorted.length - 1];
+  if (last && last.valuedAt !== entry.valuedAt && last.status === entry.status
+    && last.value === entry.value && last.low === entry.low && last.high === entry.high) {
+    return sorted.slice(-VALUATION_HISTORY_LIMIT);
+  }
   const kept = history.filter(h => h.valuedAt !== entry.valuedAt);
   kept.push(entry);
   kept.sort((a, b) => a.valuedAt.localeCompare(b.valuedAt));

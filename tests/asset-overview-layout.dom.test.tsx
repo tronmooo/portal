@@ -59,21 +59,23 @@ function json(body: any, status = 200) {
 }
 
 let dismissed: string[] = [];
+let history: any[] = [];
 
 beforeEach(() => {
   calls.length = 0;
   dismissed = [];
+  history = [];
   queryClient.clear();
   __resetValuationRefreshState();
   queryClient.setQueryData(valuationQueryKey(ID), {
-    record: { status: "valued", value: 306, low: 175, high: 437, confidence: 0.4, confidenceLabel: "low", valuedAt: new Date().toISOString() },
+    record: { status: "valued", value: 306, low: 175, high: 437, confidence: 0.4, confidenceLabel: "low", valuedAt: new Date().toISOString(), checkedAt: new Date().toISOString() },
     supported: true, inputFingerprint: "fp", mode: "auto", freshness: { fresh: true, reason: null, detail: "" },
   });
   apiRequest.mockImplementation(async (method: string, url: string, body?: any) => {
     calls.push({ method, url, body });
     if (url.endsWith("/overview")) return json(SPEC);
     if (url.endsWith("/documents")) return json([]);
-    if (url.includes("history=1")) return json({ history: [] });
+    if (url.includes("history=1")) return json({ history });
     if (url === "/api/profiles") return json([{ id: ID, name: "ASUS ZenBook", type: "asset", fields: FIELDS }]);
     if (url === "/api/preferences/dismissed_notifications") return json({ value: JSON.stringify(dismissed) });
     if (url === "/api/notifications/dismiss") { dismissed = [...dismissed, ...body.ids]; return json({ ids: dismissed }); }
@@ -155,7 +157,29 @@ describe("asset profile layout", () => {
     expect(writes()).toEqual([]);
   });
 
-  it("the Value card says how much it has depreciated: a bar, no chart, no confidence", async () => {
+  it("the value graph is the stored valuations on a time axis, with ranges", async () => {
+    history = [
+      { valuedAt: "2025-01-10T12:00:00.000Z", status: "valued", value: 460 },
+      { valuedAt: new Date(Date.now() - 10 * 86_400_000).toISOString(), status: "valued", value: 320 },
+    ];
+    mount();
+    await screen.findByTestId("asset-details");
+    await waitFor(() => expect(screen.getByTestId("asset-value-graph-start").textContent).toContain("$460"));
+    expect(screen.getByTestId("asset-value-graph-end").textContent).toBe("Today · $306");
+    expect(screen.getByTestId("asset-value-recent-change").textContent).toContain("−$14");
+    // One month: the line starts at the range's edge with the value held from before it.
+    fireEvent.click(screen.getByTestId("asset-value-range-1m"));
+    expect(screen.getByTestId("asset-value-graph-start").textContent).toContain("$460");
+    expect(screen.getByTestId("asset-value-range-1m").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("with no stored valuations the graph says so instead of drawing a line through nothing", async () => {
+    mount();
+    await screen.findByTestId("asset-details");
+    expect((await screen.findByTestId("asset-value-graph-empty")).textContent).toContain("Not enough valuations");
+  });
+
+  it("the Value card says how much it has depreciated: a bar and no confidence", async () => {
     mount();
     await screen.findByTestId("asset-details");
     expect(screen.getByTestId("hero-stat-current-value").textContent).toBe("$306");
@@ -167,8 +191,9 @@ describe("asset profile layout", () => {
     expect((screen.getByTestId("asset-depreciation-bar") as HTMLElement).style.width).toBe("38.8%");
     expect(screen.getByTestId("asset-depreciation").textContent).toContain("39% of the $500 paid is gone; $306 is left.");
     expect(screen.getByTestId("asset-value-row-current-value").textContent).toContain("$306");
-    expect(card.querySelector("svg[role='img']")).toBeNull(); // the chart of past estimates is gone
     expect(card.textContent).not.toMatch(/Confidence/);
+    // Saved figures and when they were last valued are on screen at once.
+    expect(screen.getByTestId("asset-value-last-valued").textContent).toContain("Last valued");
   });
 
   it("with no purchase price the card asks for it instead of drawing anything", async () => {
