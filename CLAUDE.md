@@ -479,10 +479,10 @@ Owner request 2026-11-22: "each opens its own dedicated, full-screen workspace
 Document and Fill In** buttons navigate (`WORKSPACES`,
 `client/src/components/workspace/WorkspaceShell.tsx`); they are not modes of
 the chat box. Read these before touching that file, `pages/workspace-*.tsx`,
-the workspace branch of `pages/journal.tsx`, `pages/editor.tsx` or
-`server/workspace-ai.ts`.
+`pages/editor.tsx` or `server/workspace-ai.ts`.
 *Guards:* `tests/chat-workspace-buttons.dom.test.tsx`, `tests/workspace-notes.dom.test.tsx`,
-`tests/workspace-ai.test.ts`.
+`tests/journal-workspace.dom.test.tsx`, `tests/note-markdown.test.ts`,
+`tests/doc-rich-content.test.ts`, `tests/workspace-ai.test.ts`.
 *Live check (deployed app, smoke account, real browser):* `npx tsx tests/live-workspaces-ui-check.ts`.
 
 **W1. Full screen means the whole window.** A workspace is mounted on
@@ -496,10 +496,13 @@ workspace hands `WorkspaceCloseButton` a function that flushes what is pending
 and then goes to `/chat`. A failed save keeps the workspace open. The
 editor's Back does the same (the old "Unsaved changes. Leave anyway?" is gone).
 **W3. Opening writes nothing (Rule 3); typing does.** Notes creates the note on
-the first text and updates THAT note after; Journal is the Journal page's
-draft autosave; a new document saves itself once it has content, WITHOUT
-moving the URL (`quietSaveRef`: the route change remounts the editor and drops
-the caret). A new sheet still waits for its first Save.
+the first text and updates THAT note after; Journal creates one DRAFT entry,
+then updates it, and titles an untitled entry only if it was written in this
+sitting (opening an old entry and leaving writes nothing); a new document
+saves itself once it has content. EVERY document autosave leaves the URL alone
+(`quietSaveRef`: the route change remounts the editor and drops the caret —
+2026-11-23, the second autosave reloaded the page mid-typing); only the Save
+button moves it. A new sheet still waits for its first Save.
 **W4. A save never adopts another record (J1).** When `POST /api/notes`
 answers `deduped`, the Notes workspace does not take that id: it would
 overwrite the other note with whatever is typed next.
@@ -519,10 +522,34 @@ the request names them.
 what is missing) is the approval step; nothing is saved before it and nothing
 is ever submitted anywhere. In the workspace the dialog is not modal and sits
 under the workspace header, so the X stays in reach.
-*Not built (2026-11-23):* tables, images and page-layout controls in the
-document editor; note attachments and rich text (a note is markdown text);
-journal photos; Word and spreadsheet forms, and online (browser) form filling,
-in Fill In; a Computer mode.
+**W8. A note is markdown; the rich editor is a view of it.** Chat, search and
+every list read a note's text, so it stays markdown. The Notes workspace
+edits it as rich text through `markdownToNoteHtml` / `noteDocToMarkdown`
+(`shared/note-markdown.ts`): check lists are `- [ ]` / `- [x]`. A note holding
+what the editor cannot show (a table, a picture, raw HTML —
+`noteNeedsPlainEditor`) opens as plain markdown, so editing never drops it.
+Never store editor HTML in a note, and offer no formatting markdown cannot
+hold (no underline). A category is the note's one `category:<name>` tag; an
+attachment is a file saved to Documents and linked from the text
+(`#/documents/<id>`). The category filter is a view: it names what it hides
+and is never stored (Rule 4).
+**W9. A journal photo is a document the entry points at.** `photo:<documentId>`
+tags (`shared/journal-photos.ts`), written by the composer that owns the
+entry; the entry's own tags never include them on screen (`journalLabels`).
+The Journal workspace is its own screen (`pages/workspace-journal.tsx`) over
+the same journal API as the page and chat (J1, J2, J8 hold).
+**W10. What a document may hold is one list.** Tables, pictures and alignment
+are saved through `cleanDocHtml` (`client/src/lib/doc-html.ts`): the tag list
+in `shared/page-setup.ts`, a `style` cut down to its text alignment, a picture
+only when embedded or https. Page setup (paper, orientation, margins) is ONE
+scalar on the doc, in its `language` metadata field (`serializePageSetup`);
+the page, the PDF and the Word file are all drawn from it. A picture never
+goes to the AI: it travels as a `[[PICTURE n]]` marker and is put back, or
+appended if the model dropped it (`picturesToMarkers` / `markersToPictures`).
+*Not built (2026-11-23):* resizing pictures and column widths, headers/footers
+and page breaks in the editor; table and picture buttons on the phone toolbar;
+pictures inside notes; Word and spreadsheet forms, and online (browser) form
+filling, in Fill In; a Computer mode.
 
 ## Auto Pay rules (routine payments record themselves; the books stay honest)
 
@@ -704,6 +731,7 @@ Info, then AI Summary | Value & Depreciation) and `AssetAlertMenuItems` in the
 Clear / Restore alerts and Delete are the ⋯ menu ("remove all that space, make
 it look exactly like the photo"). Read this before touching any of them.
 *Guard:* `tests/asset-overview-layout.dom.test.tsx`.
+*Live check (deployed app, smoke account, real browser):* `npx tsx tests/live-asset-overview-check.ts`.
 
 **P1. The layout owns no data.** Rows, dates and "Not set" suggestions are the
 composed `OverviewSpec` (through `DynamicOverview`'s `renderBody`, which keeps

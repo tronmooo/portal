@@ -30,6 +30,7 @@ vi.mock("@/lib/queryClient", () => ({
     let data: any = {};
     if (method === "POST" && url === "/api/notes") data = postAnswer(body);
     else if (url === "/api/workspace/notes/assist") data = aiAnswer;
+    else if (url === "/api/upload/save-only") data = { documentId: "doc-9", documentName: body.fileName };
     else if (method === "PATCH") data = { id: url.split("/").pop(), ...body };
     return { ok: true, json: async () => data };
   }),
@@ -48,10 +49,15 @@ function mount() {
       },
     } },
   });
-  return render(<QueryClientProvider client={client}><NotesWorkspacePage /></QueryClientProvider>);
+  const view = render(<QueryClientProvider client={client}><NotesWorkspacePage /></QueryClientProvider>);
+  // These tests type into the plain-markdown editor (a textarea); the choice
+  // sticks for the notes opened after it. The rich editor is the same note
+  // through shared/note-markdown.ts, pinned by tests/note-markdown.test.ts.
+  fireEvent.click(screen.getByTestId("button-note-mode"));
+  return view;
 }
 const type = (text: string) => fireEvent.change(screen.getByTestId("input-note-content"), { target: { value: text } });
-const writes = () => calls.filter((c) => c.method !== "GET" && !c.url.includes("/assist"));
+const writes = () => calls.filter((c) => c.method !== "GET" && !c.url.includes("/assist") && !c.url.includes("/upload/"));
 const settle = (ms = NOTE_AUTOSAVE_MS + 300) => new Promise((r) => setTimeout(r, ms));
 
 beforeEach(() => {
@@ -105,7 +111,9 @@ describe("Notes workspace", () => {
     type("milk, eggs");
     await waitFor(() => expect(writes()).toHaveLength(1), { timeout: 3000 });
     fireEvent.click(screen.getByText("Turn this into a checklist"));
-    await waitFor(() => expect(screen.getByTestId("note-ai-proposal").textContent).toContain("- [ ] milk"));
+    // The suggestion is shown formatted: two check items.
+    await waitFor(() => expect(screen.getByTestId("note-ai-proposal").querySelectorAll('li[data-type="taskItem"]')).toHaveLength(2));
+    expect(screen.getByTestId("note-ai-proposal").textContent).toContain("milk");
     expect((screen.getByTestId("input-note-content") as HTMLTextAreaElement).value).toBe("milk, eggs");
     await settle();
     expect(writes()).toHaveLength(1); // still only the create
@@ -147,6 +155,48 @@ describe("Notes workspace", () => {
     type("Buy tires by Friday");
     await waitFor(() => expect(writes()).toHaveLength(1), { timeout: 3000 });
     expect(writes()[0]).toMatchObject({ method: "PATCH", url: "/api/notes/n1", body: { title: "Tires", content: "Buy tires by Friday", tags: ["car"] } });
+  });
+
+  it("a category is saved as the note's one category tag, beside its other tags", async () => {
+    notes = [{ id: "n1", title: "Tires", content: "Buy tires", tags: ["car", "category:Garage"], updatedAt: "2026-11-20T10:00:00Z" }];
+    mount();
+    fireEvent.click(await screen.findByTestId("note-row-n1"));
+    await waitFor(() => expect((screen.getByTestId("input-note-category") as HTMLInputElement).value).toBe("Garage"));
+    expect((screen.getByTestId("input-note-tags") as HTMLInputElement).value).toBe("car");
+    fireEvent.change(screen.getByTestId("input-note-category"), { target: { value: "Home" } });
+    await waitFor(() => expect(writes()).toHaveLength(1), { timeout: 3000 });
+    expect(writes()[0].body.tags).toEqual(["car", "category:Home"]);
+  });
+
+  it("the category filter says what it hides, and is not a reason to say there are no notes", async () => {
+    notes = [
+      { id: "n1", title: "Tires", content: "Buy tires", tags: ["category:Garage"], updatedAt: "2026-11-20T10:00:00Z" },
+      { id: "n2", title: "Soup", content: "Lentils", tags: ["category:Recipes"], updatedAt: "2026-11-21T10:00:00Z" },
+      { id: "n3", title: "Loose", content: "No category", tags: [], updatedAt: "2026-11-22T10:00:00Z" },
+    ];
+    mount();
+    fireEvent.click(await screen.findByTestId("notes-category-Garage"));
+    expect(screen.queryByTestId("note-row-n2")).toBeNull();
+    expect(screen.getByTestId("note-row-n1")).toBeTruthy();
+    expect(screen.getByTestId("notes-filter-notice").textContent).toMatch(/Showing Garage only — 2 other notes are hidden/);
+    fireEvent.change(screen.getByTestId("input-notes-search"), { target: { value: "zzz" } });
+    expect(screen.getByTestId("notes-list").textContent).toMatch(/No note matches "zzz" in Garage/);
+    fireEvent.change(screen.getByTestId("input-notes-search"), { target: { value: "" } });
+    fireEvent.click(screen.getByText("Show all"));
+    expect(screen.getByTestId("note-row-n2")).toBeTruthy();
+    expect(screen.queryByTestId("notes-filter-notice")).toBeNull();
+  });
+
+  it("an attached file is saved to Documents and linked from the note", async () => {
+    mount();
+    type("Lease notes");
+    await waitFor(() => expect(writes()).toHaveLength(1), { timeout: 3000 });
+    const file = new File(["%PDF-1.4"], "lease.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByTestId("input-note-attach"), { target: { files: [file] } });
+    await waitFor(() => expect(calls.some((c) => c.url === "/api/upload/save-only")).toBe(true));
+    expect(calls.find((c) => c.url === "/api/upload/save-only")!.body).toMatchObject({ fileName: "lease.pdf", mimeType: "application/pdf" });
+    await waitFor(() => expect(screen.getByTestId("note-attachment-doc-9").textContent).toContain("lease.pdf"));
+    expect((screen.getByTestId("input-note-content") as HTMLTextAreaElement).value).toBe("Lease notes\n\n[lease.pdf](#/documents/doc-9)");
   });
 
   it("the X saves what is pending, then returns to AI Chat", async () => {

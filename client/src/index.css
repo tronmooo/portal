@@ -1504,10 +1504,10 @@ html[data-workspace], body[data-workspace] { scrollbar-gutter: auto; overflow: h
     background: hsl(var(--card)) !important;
     box-shadow: 0 1px 3px hsl(0 0% 0% / 0.18), 0 8px 24px -12px hsl(0 0% 0% / 0.25);
     border: 1px solid hsl(var(--border));
-    max-width: 816px;
-    min-height: 1056px;
+    max-width: var(--page-w, 816px);
+    min-height: var(--page-h, 1056px);
     margin: 24px auto;
-    padding: 72px 84px;
+    padding: var(--page-pad, 96px);
   }
   /* The black phone canvas is for phones; on the page it is paper. */
   .doc-page.doc-mobile-black,
@@ -1517,3 +1517,22 @@ html[data-workspace], body[data-workspace] { scrollbar-gutter: auto; overflow: h
     caret-color: auto !important;
   }
 }
+
+/* Tables and pictures in a document (editor, AI proposal preview, shared page). */
+.ProseMirror table, .prose table { border-collapse: collapse; width: 100%; table-layout: fixed; margin: 12px 0; }
+.ProseMirror td, .ProseMirror th, .prose td, .prose th { border: 1px solid hsl(var(--border)); padding: 6px 8px; vertical-align: top; min-width: 40px; }
+.ProseMirror th, .prose th { background: hsl(var(--muted)); font-weight: 600; text-align: left; }
+.ProseMirror .selectedCell { background: hsl(var(--primary) / 0.14); }
+.ProseMirror td > p, .ProseMirror th > p { margin: 0; }
+.ProseMirror img, .prose img { max-width: 100%; height: auto; border-radius: 4px; }
+.ProseMirror img.ProseMirror-selectednode { outline: 2px solid hsl(var(--primary)); }
+
+/* Check lists in a note (rich editor and the AI suggestion preview). */
+.note-rich ul[data-type="taskList"] { list-style: none; padding-left: 0; margin: 0.5em 0; }
+.note-rich ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 0.5rem; margin: 0.15em 0; }
+.note-rich ul[data-type="taskList"] li > label { margin-top: 0.2em; flex: none; }
+.note-rich ul[data-type="taskList"] li > div { flex: 1; min-width: 0; }
+.note-rich ul[data-type="taskList"] li > div > p { margin: 0; }
+.note-rich ul[data-type="taskList"] li[data-checked="true"] > div { text-decoration: line-through; color: hsl(var(--muted-foreground)); }
+.note-rich ul[data-type="taskList"] input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: hsl(var(--primary)); }
+.note-rich p { margin: 0.4em 0; }

@@ -100,23 +100,47 @@ async function main() {
     await tid("button-workspace-notes").click();
     await tid("workspace-notes").waitFor({ timeout: 30000 });
     check(await coversScreen("workspace-notes"), "Notes fills the whole screen (no sidebar, no header)");
-    const noteText = `Workspace note ${tag}\npack the charger`;
-    await tid("input-note-content").fill(noteText);
-    const noteSaved = await until(async () => (await taggedArtifacts()).some((a) => a.type === "note" && a.content === noteText));
-    check(noteSaved, "Notes: what is typed saves itself as a note");
+    // Rich text: a heading line, then a check list, typed into the editor.
+    const note = tid("note-rich-editor");
+    await note.click();
+    await page.keyboard.type(`Workspace note ${tag}`);
+    await page.keyboard.press("Enter");
+    await tid("button-note-checklist").click();
+    await note.locator('ul[data-type="taskList"] > li').first().waitFor({ timeout: 5000 });
+    await page.waitForTimeout(300); // the toolbar hands the caret back to the editor
+    await page.keyboard.type("pack the charger");
+    const noteRow = async () => (await taggedArtifacts()).find((a) => a.type === "note");
+    const noteSaved = await until(async () => String((await noteRow())?.content || "").includes("- [ ] pack the charger"));
+    check(noteSaved, "Notes: rich text saves itself as a note, the check list as markdown the rest of the app reads");
     check((await tid("workspace-save-status").innerText()).includes("Saved"), "…and the header says Saved");
-    await tid("input-note-content").fill(`${noteText}\nand the adapter`);
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("and the adapter");
     const noteUpdated = await until(async () => {
       const rows = (await taggedArtifacts()).filter((a) => a.type === "note");
-      return rows.length === 1 && rows[0].content.endsWith("and the adapter");
+      return rows.length === 1 && rows[0].content.includes("- [ ] and the adapter");
     });
     check(noteUpdated, "…more typing updates the same note (one note, not two)");
-    check(await tid(`note-row-${((await taggedArtifacts()).find((a) => a.type === "note") || {}).id}`).isVisible().catch(() => false), "…and it is listed with the saved notes");
+    await note.locator('input[type="checkbox"]').first().click();
+    check(await until(async () => String((await noteRow())?.content || "").includes("- [x] pack the charger")), "…and ticking a box in the note is saved as ticked");
+    check(await tid(`note-row-${((await noteRow()) || {}).id}`).isVisible().catch(() => false), "…and it is listed with the saved notes");
+    await tid("input-note-category").fill(`Trip ${tag}`);
+    check(await until(async () => ((await noteRow())?.tags || []).includes(`category:Trip ${tag}`)), "Notes: a category is saved on the note");
+    check(await until(() => tid(`notes-category-Trip ${tag}`).isVisible(), 10000), "…and becomes a filter beside the list");
+    await tid("input-note-attach").setInputFiles({ name: `packing-${tag}.txt`, mimeType: "text/plain", buffer: Buffer.from(`packing list ${tag}`) });
+    const attached = await until(async () => /\(#\/documents\/[A-Za-z0-9-]+\)/.test(String((await noteRow())?.content || "")), 30000);
+    check(attached && await tid("note-attachments").isVisible(), "Notes: an attached file is saved to Documents and linked from the note");
+    // Reopen it: what was saved is what the editor shows.
+    await tid("button-note-new").click();
+    await tid(`note-row-${((await noteRow()) || {}).id}`).click();
+    check(await until(async () => (await note.locator('ul[data-type="taskList"] > li').count()) === 2 && (await note.locator('ul[data-type="taskList"] > li[data-checked="true"]').count()) === 1, 10000),
+      "Notes: reopened, the note shows its two check items, one ticked");
+    await page.waitForTimeout(1500);
+    check(String((await noteRow())?.content || "").includes("- [x] pack the charger") && (await tid("workspace-save-status").innerText()).includes("Saved"), "…and reopening it changed nothing");
     if (hasAi) {
       await page.getByText("Turn this into a checklist").click();
       const proposed = await tid("note-ai-proposal").waitFor({ timeout: 90000 }).then(() => true).catch(() => false);
       check(proposed, "Notes AI: a suggestion is shown");
-      check((await tid("input-note-content").inputValue()).endsWith("and the adapter"), "…and the note is unchanged until it is accepted");
+      check((await note.innerText()).includes("and the adapter") && String((await noteRow())?.content || "").includes("- [ ] and the adapter"), "…and the note is unchanged until it is accepted");
       if (proposed) await tid("button-note-ai-discard").click();
     } else console.log("SKIP  Notes AI (this server does not have the workspace AI routes yet)");
     await shot("1-notes");
@@ -126,13 +150,19 @@ async function main() {
     await tid("button-workspace-journal").click();
     await tid("workspace-journal").waitFor({ timeout: 30000 });
     check(await coversScreen("workspace-journal"), "Journal fills the whole screen");
-    check(await tid("journal-prompts").isVisible() && await tid("button-mood-good").isVisible(), "Journal: writing box, guided prompts and mood buttons are there");
+    check(await tid("journal-prompts").isVisible() && await tid("button-mood-good").isVisible() && await tid("journal-week").isVisible(), "Journal: the page has guided prompts, mood buttons and the week's moods");
     const entryText = `Workspace journal ${tag}: a calm and good day.`;
     await tid("input-journal-free-text").fill(entryText);
+    await tid("input-journal-photo").setInputFiles({ name: `photo-${tag}.png`, mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVQI12P8z8DAwMDEwMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg==", "base64") });
+    const photoShown = await page.locator('[data-testid^="journal-photo-"] img').first().waitFor({ timeout: 30000 }).then(() => true).catch(() => false);
+    check(photoShown, "Journal: an added photo shows on the entry");
     await shot("2-journal");
     // Leave at once: the X must save what the typing pause has not saved yet.
     await closeToChat("Journal");
     check(await until(async () => (await mineJ()).some((j) => j.content === entryText), 15000), "Journal: the entry on the page was saved on the way out");
+    const savedEntry = (await mineJ()).find((j) => j.content === entryText);
+    check((savedEntry?.tags || []).some((t: string) => t.startsWith("photo:")), "…with its photo");
+    check(await until(async () => String((await mineJ()).find((j) => j.content === entryText)?.title || "").trim().length >= 3, 15000), "…and a title written for it");
 
     // ── Document ─────────────────────────────────────────────────────────
     await tid("button-workspace-document").click();
@@ -155,7 +185,28 @@ async function main() {
       check((await page.locator(".ProseMirror").innerText()).includes("thank you for the lovely dinner"), "…and the document is unchanged until it is accepted");
       if (proposed) await tid("button-doc-ai-discard").click();
     } else console.log("SKIP  Document AI (this server does not have the workspace AI routes yet)");
+    // A table, a picture and the page turned sideways.
+    await page.locator(".ProseMirror").click();
+    await page.keyboard.press("Control+End");
+    await tid("button-doc-table").click();
+    await tid("menu-table-insert").click();
+    check(await page.locator(".ProseMirror table").count() === 1, "Document: a table can be inserted");
+    await tid("input-doc-image").setInputFiles({ name: "dot.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVQI12P8z8DAwMDEwMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg==", "base64") });
+    check(await page.locator(".ProseMirror img").first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false), "Document: a picture can be inserted");
+    await tid("button-doc-page-setup").click();
+    await tid("menu-page-landscape").click();
+    check((await tid("doc-editor-canvas").getAttribute("data-page-setup")) === "page:letter;landscape;normal", "Document: the page can be turned to landscape");
+    const richSaved = await until(async () => {
+      const d = (await taggedArtifacts()).find((a) => a.type === "doc");
+      return !!d && String(d.content).includes("<table") && String(d.content).includes("<img") && d.language === "page:letter;landscape;normal";
+    }, 25000);
+    check(richSaved, "…and the table, the picture and the page setup are saved with the document");
+    await page.waitForTimeout(6000); // a later autosave must not reload the editor
+    check(await page.locator(".ProseMirror table").count() === 1 && (await page.evaluate(() => window.location.hash)).startsWith("#/editor/new/doc"), "…and later autosaves leave the editor where it is");
     await shot("3-document");
+    // Back into the document (the AI panel had the focus), at the end of the text.
+    await page.locator(".ProseMirror p").first().click();
+    await page.keyboard.press("End");
     await page.keyboard.type(" See you soon.");
     await closeToChat("Document");
     check(await until(async () => (await taggedArtifacts()).some((a) => a.type === "doc" && String(a.content).includes("See you soon")), 15000), "Document: the last words typed were saved on the way out");
@@ -203,6 +254,9 @@ async function main() {
   } finally {
     if (browser) await browser.close().catch(() => undefined);
     for (const j of await mineJ().catch(() => [])) await api("DELETE", `/journal/${j.id}`).catch(() => undefined);
+    for (const d of ((await get("/documents").catch(() => [])) as any[]).filter((d) => String(d.name || "").includes(tag))) {
+      await api("DELETE", `/documents/${d.id}`).catch(() => undefined);
+    }
     for (const a of await taggedArtifacts().catch(() => [])) {
       await api("DELETE", a.type === "note" ? `/notes/${a.id}` : `/artifacts/${a.id}`).catch(() => undefined);
     }
