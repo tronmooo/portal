@@ -2188,45 +2188,33 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt, valueFingerpr
         </p>
       );
     }
-    if (!aiSummary) return null;
-    const todo = (aiSummary.actionItems || []).filter(Boolean).slice(0, 3);
+    if (!aiSummary?.summary) return null;
     const when = aiSummary.generatedAt ? formatTimeAgo(new Date(aiSummary.generatedAt)) : "just now";
     return (
-      <div className="bubble !rounded-2xl px-3 py-2 flex items-start gap-2" data-testid="card-ai-summary">
-        <Sparkles className="h-3.5 w-3.5 mt-[3px] shrink-0 text-primary" />
-        <div className="flex-1 min-w-0 space-y-1">
-          {todo.length > 0 && (
-            <ul className="space-y-0.5" data-testid="ai-summary-actions">
-              {todo.map((item, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-[13px] leading-snug" data-testid={`ai-action-${i}`}>
-                  <Circle className="h-2.5 w-2.5 mt-[5px] shrink-0 text-muted-foreground" />
-                  <span className="min-w-0">{item}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {/* With things to do, those ARE the summary; the paragraph waits
-              behind "More". With none, two lines of it, opened by a tap.
-              (`line-clamp` sets its own display, so no `block` beside it.) */}
-          {aiSummary.summary && (todo.length === 0 || summaryOpen) && (
-            <p
-              className={`text-[12px] leading-snug text-muted-foreground${valueStale ? " opacity-60" : ""} ${summaryOpen ? "" : "line-clamp-2"}`}
-              data-testid="text-ai-summary"
-            >
-              {aiSummary.summary}
-            </p>
-          )}
-          {aiSummary.summary && (
-            <button type="button" className="text-[11px] text-muted-foreground/80 hover:text-foreground underline-offset-2 hover:underline"
-              onClick={() => setSummaryOpen((o) => !o)} aria-expanded={summaryOpen} data-testid="ai-summary-toggle">
-              {summaryOpen ? "Less" : "More"}
-            </button>
-          )}
+      <div className="bubble !rounded-2xl px-3 py-2.5" data-testid="card-ai-summary">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
+          <h2 className="flex-1 text-[14px] font-semibold tracking-tight">AI Asset Summary</h2>
+          <button type="button" className="h-6 w-6 shrink-0 grid place-items-center rounded text-muted-foreground hover:text-foreground disabled:opacity-50"
+            onClick={handleRefresh} disabled={isFetching} aria-label="Refresh summary" title={`Written ${when}. Tap to refresh.`} data-testid="button-refresh-ai-summary">
+            <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
+          </button>
         </div>
-        <button type="button" className="h-6 w-6 shrink-0 grid place-items-center rounded text-muted-foreground hover:text-foreground disabled:opacity-50"
-          onClick={handleRefresh} disabled={isFetching} aria-label="Refresh summary" title={`Summary written ${when}. Tap to refresh.`} data-testid="button-refresh-ai-summary">
-          <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
-        </button>
+        {/* Three short sentences (shared/asset-summary-prompt.ts). An older,
+            longer one is held to four lines until "More".
+            (`line-clamp` sets its own display, so no `block` beside it.) */}
+        <p
+          className={`mt-1 text-[13px] leading-snug text-muted-foreground${valueStale ? " opacity-60" : ""} ${summaryOpen ? "" : "line-clamp-4"}`}
+          data-testid="text-ai-summary"
+        >
+          {aiSummary.summary}
+        </p>
+        {aiSummary.summary.length > 220 && (
+          <button type="button" className="mt-0.5 text-[11px] text-muted-foreground/80 hover:text-foreground hover:underline underline-offset-2"
+            onClick={() => setSummaryOpen((o) => !o)} aria-expanded={summaryOpen} data-testid="ai-summary-toggle">
+            {summaryOpen ? "Less" : "More"}
+          </button>
+        )}
       </div>
     );
   }
@@ -13681,7 +13669,9 @@ export default function ProfileDetailPage() {
                     onOpenOwnership={tabValues.has("contained") ? () => openTab("contained") : undefined}
                     tailSlot={assetLayout ? (
                       <>
-                        {assetTrackersCard}
+                        {/* Trackers stay reachable: their card shows here only
+                            when this asset has no Trackers tab to hold them. */}
+                        {!tabValues.has("all-trackers") && assetTrackersCard}
                         <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 sm:grid-cols-3 gap-2" />
                       </>
                     ) : undefined}

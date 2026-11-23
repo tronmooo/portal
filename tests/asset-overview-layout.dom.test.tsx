@@ -95,7 +95,7 @@ function mount(over: { onEdit?: () => void; onDelete?: () => void; onOpenOwnersh
           profileId={ID}
           renderBody={(spec) => (
             <AssetOverviewBody spec={spec} profile={PROFILE} autoValuation ownerLabel="You own this"
-              onOpenOwnership={over.onOpenOwnership} onEdit={over.onEdit ?? (() => {})}
+              onOpenOwnership={over.onOpenOwnership}
               summarySlot={<div data-testid="summary">summary</div>} tailSlot={<div data-testid="tail">tail</div>} />
           )}
         />
@@ -120,18 +120,32 @@ describe("the asset page's AI summary is the small one", () => {
   it("the asset Overview renders the compact summary", () => {
     expect(src).toMatch(/<AISummaryCard compact /);
   });
-  it("the compact summary is to-dos and a clamped paragraph, nothing else", () => {
+  it("the compact summary is a title and a clamped paragraph, nothing else", () => {
     const start = src.indexOf("  if (compact) {");
     const end = src.indexOf("  // No summary to show", start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const block = src.slice(start, end);
-    expect(block).toContain("ai-summary-actions");
-    expect(block).toContain("line-clamp-2");
+    expect(block).toContain("AI Asset Summary");
+    expect(block).toContain("line-clamp-4");
     expect(block).not.toContain("ai-summary-highlights");
+    expect(block).not.toContain("ai-summary-actions");
     expect(block).not.toContain("headerActions");
     expect(block).not.toContain("lookupBanners");
-    expect(block).toContain("if (!aiSummary) return null;"); // nothing to say: no card
+    expect(block).toContain("if (!aiSummary?.summary) return null;"); // nothing to say: no card
+  });
+  it("an owned thing's summary is asked for as three short sentences", async () => {
+    const { withAssetSummaryShape, ASSET_SUMMARY_SHAPE } = await import("@shared/asset-summary-prompt");
+    for (const t of ["asset", "vehicle", "property", "investment"]) {
+      expect(withAssetSummaryShape(t, "Summarize.")).toContain(ASSET_SUMMARY_SHAPE);
+    }
+    // People, pets and debts keep their own prompt.
+    for (const t of ["person", "self", "pet", "liability", "account"]) {
+      expect(withAssetSummaryShape(t, "Summarize.")).toBe("Summarize.");
+    }
+    expect(ASSET_SUMMARY_SHAPE).toMatch(/AT MOST three short sentences/);
+    const routes = require("node:fs").readFileSync(require("node:path").resolve(__dirname, "../server/routes.ts"), "utf8") as string;
+    expect(routes).toContain("typePrompt = withAssetSummaryShape(detail.type, typePrompt);");
   });
 });
 
@@ -139,7 +153,6 @@ describe("asset profile layout", () => {
   it("opening the page writes nothing", async () => {
     mount();
     await screen.findByTestId("asset-details");
-    await screen.findByTestId("asset-alert-row");
     expect(writes()).toEqual([]);
   });
 
@@ -148,8 +161,7 @@ describe("asset profile layout", () => {
     await screen.findByTestId("asset-details");
     expect(screen.getByTestId("hero-stat-current-value").textContent).toBe("$306");
     expect(screen.queryByTestId("hero-stat-purchase-price")).toBeNull();
-    const card = screen.getByTestId("asset-value-card");
-    expect(card.textContent).toContain("Value & Depreciation");
+    expect(screen.getByTestId("asset-value-card").textContent).toContain("Value & Depreciation");
     expect(screen.getByTestId("asset-value-row-purchase-price").textContent).toBe("Purchase Price$500");
     expect(screen.getByTestId("asset-value-row-current-value").textContent).toBe("Current Value$306");
     expect(screen.getByTestId("asset-value-row-depreciation").textContent).toBe("Depreciation−$194");
@@ -157,66 +169,65 @@ describe("asset profile layout", () => {
     expect(screen.getByTestId("asset-value-row-confidence").textContent).toBe("Confidence40%");
   });
 
-  it("the page reads value, details, summary, characteristics — then the page's own cards", async () => {
+  it("the Overview is three things in order: Value, the summary, Asset details", async () => {
     mount();
     await screen.findByTestId("asset-details");
-    const order = ["asset-value-card", "asset-details", "summary", "asset-characteristics", "tail"].map((id) => screen.getByTestId(id));
-    // Value comes first for a reader (CSS `order` on a phone); in the document
-    // it follows Asset Details, which a wide screen draws beside it.
+    const order = ["asset-value-card", "summary", "asset-details", "tail"].map((id) => screen.getByTestId(id));
     const follows = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(follows(order[1], order[2])).toBe(true);
-    expect(follows(order[0], order[2])).toBe(true);
-    expect(follows(order[2], order[3])).toBe(true);
-    expect(follows(order[3], order[4])).toBe(true);
-    expect(screen.getByTestId("asset-section-details").className).toContain("order-2");
-    expect(order[0].parentElement!.className).toContain("order-1");
+    for (let i = 0; i < order.length - 1; i++) expect(follows(order[i], order[i + 1])).toBe(true);
+    // What was taken off the Overview stays off.
+    for (const gone of ["asset-quick-info", "asset-characteristics", "asset-section-activity", "asset-details-save"]) {
+      expect(screen.queryByTestId(gone)).toBeNull();
+    }
   });
 
-  it("the form saves what changed, in one write; money is stored as a number", async () => {
+  it("a line's pencil edits it in place; money is stored as a number", async () => {
     mount();
-    await screen.findByTestId("asset-details");
-    const save = screen.getByTestId("asset-details-save") as HTMLButtonElement;
-    expect(save.disabled).toBe(true); // nothing typed yet
-    fireEvent.change(screen.getByTestId("asset-name-input"), { target: { value: "ZenBook 14" } });
+    const line = await screen.findByTestId("overview-missing-purchasePrice");
+    expect(line.textContent).toContain("Purchase price");
+    expect(line.textContent).toContain("$500");
+    fireEvent.click(line);
     fireEvent.change(screen.getByTestId("overview-field-input-purchasePrice"), { target: { value: "$450" } });
-    fireEvent.change(screen.getByTestId("overview-field-input-location"), { target: { value: "Office" } });
-    fireEvent.change(screen.getByTestId("asset-notes-input"), { target: { value: "Work laptop" } });
-    fireEvent.change(screen.getByTestId("overview-field-input-warrantyExpiration"), { target: { value: "2032-01-01" } });
     expect(writes()).toEqual([]); // typing writes nothing
-    fireEvent.click(save);
+    fireEvent.click(screen.getByTestId("overview-field-input-purchasePrice-save"));
     await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0]).toMatchObject({ method: "PATCH", url: `/api/profiles/${ID}` });
-    expect(writes()[0].body).toEqual({
-      name: "ZenBook 14", notes: "Work laptop",
-      fields: { purchasePrice: 450, location: "Office", warrantyExpiration: "2032-01-01" },
-    });
+    expect(writes()[0]).toMatchObject({ method: "PATCH", url: `/api/profiles/${ID}`, body: { fields: { purchasePrice: 450 } } });
   });
 
-  it("clearing a box removes that field; Undo puts back what was there", async () => {
+  it("Name, Location and Notes are lines of the same list", async () => {
     mount();
-    const price = (await screen.findByTestId("overview-field-input-purchasePrice")) as HTMLInputElement;
-    expect(price.value).toBe("500");
-    fireEvent.change(price, { target: { value: "" } });
-    fireEvent.click(screen.getByTestId("asset-details-undo"));
-    expect(price.value).toBe("500");
-    expect(writes()).toEqual([]);
-    fireEvent.change(price, { target: { value: "" } });
-    fireEvent.click(screen.getByTestId("asset-details-save"));
+    fireEvent.click(await screen.findByTestId("asset-detail-name"));
+    fireEvent.change(screen.getByTestId("asset-name-input"), { target: { value: "ZenBook 14" } });
+    fireEvent.click(screen.getByTestId("asset-name-input-save"));
     await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0].body).toEqual({ fieldsToDelete: ["purchasePrice"] });
+    expect(writes()[0].body).toEqual({ name: "ZenBook 14" });
+
+    // Location: the same `location` field the chat's update_profile writes.
+    fireEvent.click(screen.getByTestId("asset-detail-location"));
+    fireEvent.change(screen.getByTestId("overview-field-input-location"), { target: { value: "Office" } });
+    fireEvent.click(screen.getByTestId("overview-field-input-location-save"));
+    await waitFor(() => expect(writes()).toHaveLength(2));
+    expect(writes()[1].body).toEqual({ fields: { location: "Office" } });
+
+    fireEvent.click(screen.getByTestId("asset-detail-notes"));
+    fireEvent.change(screen.getByTestId("asset-notes-input"), { target: { value: "Work laptop" } });
+    fireEvent.click(screen.getByTestId("asset-notes-input-save"));
+    await waitFor(() => expect(writes()).toHaveLength(3));
+    expect(writes()[2].body).toEqual({ notes: "Work laptop" });
   });
 
-  it("a characteristic is changed with its pencil and removed with its X in two taps", async () => {
+  it("a characteristic and a date are lines too; removing one takes two taps", async () => {
     mount();
-    const panel = await screen.findByTestId("asset-characteristics");
-    expect(panel.textContent).toContain("ASUS");
+    const list = await screen.findByTestId("asset-details");
+    expect(list.textContent).toContain("ASUS");
+    fireEvent.click(screen.getByTestId("overview-field-warrantyExpiration"));
+    fireEvent.change(screen.getByTestId("overview-field-input-warrantyExpiration"), { target: { value: "2032-01-01" } });
+    fireEvent.click(screen.getByTestId("overview-field-input-warrantyExpiration-save"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0].body).toEqual({ fields: { warrantyExpiration: "2032-01-01" } });
+
     fireEvent.click(screen.getByTestId("overview-field-brand"));
-    fireEvent.change(screen.getByTestId("overview-field-input-brand"), { target: { value: "Asus" } });
-    fireEvent.click(screen.getByTestId("overview-field-save-brand"));
-    await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0].body).toEqual({ fields: { brand: "Asus" } });
-
-    fireEvent.click(await screen.findByTestId("overview-field-remove-brand"));
+    fireEvent.click(screen.getByTestId("overview-field-remove-brand"));
     expect(writes()).toHaveLength(1); // the first tap only arms it
     fireEvent.click(screen.getByTestId("overview-field-remove-brand"));
     await waitFor(() => expect(writes()).toHaveLength(2));
@@ -226,17 +237,13 @@ describe("asset profile layout", () => {
   it("alerts are the rule engine's dates, cleared into the server's dismiss list", async () => {
     const local = vi.spyOn(Storage.prototype, "setItem");
     mount();
-    const row = await screen.findByTestId("asset-alert-row");
-    expect(row.textContent).toContain("Warranty Expiration");
+    const clear = await screen.findByTestId("button-clear-document-alerts");
+    await waitFor(() => expect(clear.textContent).toContain("Clear 1 alert"));
     expect(screen.queryByTestId("button-restore-document-alerts")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("button-clear-document-alerts"));
+    fireEvent.click(clear);
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(writes()[0]).toMatchObject({ method: "POST", url: "/api/notifications/dismiss", body: { ids: [ALERT_ID] } });
     expect(local).not.toHaveBeenCalled();
-
-    // A cleared alert leaves Quick Info, and can be brought back from the same place.
-    await waitFor(() => expect(screen.queryByTestId("asset-alert-row")).toBeNull());
     fireEvent.click(await screen.findByTestId("button-restore-document-alerts"));
     await waitFor(() => expect(writes()).toHaveLength(2));
     expect(writes()[1]).toMatchObject({ url: "/api/notifications/restore", body: { ids: [ALERT_ID] } });
@@ -261,17 +268,14 @@ describe("asset profile layout", () => {
     expect(writes()[1]).toMatchObject({ method: "POST", url: "/api/expenses", body: { amount: 39.99, description: "Charger", date: "2026-11-20", linkedProfiles: [ID] } });
   });
 
-  it("Edit and ownership open the page's own controls and write nothing", async () => {
-    const onEdit = vi.fn(), onOpenOwnership = vi.fn();
-    mount({ onEdit, onOpenOwnership });
+  it("Ownership opens its tab, and Add characteristic is the plain Field | Value form", async () => {
+    const onOpenOwnership = vi.fn();
+    mount({ onOpenOwnership });
     await screen.findByTestId("asset-details");
-    fireEvent.click(screen.getByTestId("asset-details-edit"));
-    expect(onEdit).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId("asset-detail-ownership"));
     expect(onOpenOwnership).toHaveBeenCalledTimes(1);
     expect(writes()).toEqual([]);
 
-    // Add Characteristic is the same Field | Value | Add form as every profile.
     fireEvent.click(screen.getByTestId("asset-add-characteristic"));
     fireEvent.change(screen.getByTestId("add-field-key"), { target: { value: "Serial number" } });
     fireEvent.change(screen.getByTestId("add-field-value"), { target: { value: "ZX-1" } });

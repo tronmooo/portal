@@ -717,69 +717,66 @@ and schedule fields are never listed there as text (L2/L3).
 
 ## Asset profile layout (the owner's design; a drawing of stores other screens read)
 
-Owner, 2026-11-23, after three rounds: "everything's just too big … just say
-Honda CRV and the value", "any attached photo should be barely anything",
-"characteristics all the way at the bottom", "recent activity all the way at
-the bottom", "make logical sense out of this". An owned thing's page
-(`usesAssetLayout`, `client/src/pages/profile-detail.tsx`; an account keeps
-`AccountOverview`) is built from `client/src/components/asset/AssetOverviewLayout.tsx`.
-Read this before touching it.
+Owner, 2026-11-23, final round, with three pictures and their order: the
+Value card, then the AI summary, then a plain details list — "we're gonna
+simplify this completely. Everything else, delete [from] the overview tab."
+(Earlier the same day: "everything's just too big … just say Honda CRV and
+the value", "any attached photo should be barely anything".) An owned thing's
+page (`usesAssetLayout`, `client/src/pages/profile-detail.tsx`; an account
+keeps `AccountOverview`) is built from
+`client/src/components/asset/AssetOverviewLayout.tsx`. Read this before
+touching it.
 *Guard:* `tests/asset-overview-layout.dom.test.tsx`.
 *Live check (deployed app, smoke account, real browser):* `npx tsx tests/live-asset-overview-check.ts`.
 
-**P0. The header is one slim row and the page has one order.** `DetailHero
-layout="slim"`: back · a 28px picture (still the photo picker) · the name ·
-the current value (`AssetHeroValue`) · the ⋯ menu. No tag, chips, owner line,
-figures block or stat tiles — each of those has a home below: Category and
-Ownership are Asset Details rows; Purchase Price, the change and Confidence
-are the Value card; the document count is on the Documents tab label; the
-parent trail and tags are a small line under the tabs (`asset-trail`). Never
-grow the header again. The Overview reads, top to bottom: **Value →
-Asset Details → Quick Info → linked things → AI Summary → Characteristics →
-the page's own cards (trackers, saved cells: `tailSlot`) → Recent activity,
-always last.** On a wide screen Asset Details sits beside Value + Quick Info.
-Card titles are 14px and rows 32px; do not scale them back up.
-The AI summary on this page is the COMPACT card (`AISummaryCard compact`;
-owner: "too much … redundancy, make it much smaller"): up to three things to
-do, or — with none — two lines of the summary; the rest opens under "More".
-No figure tiles (the Value card has them), no Look up value (the Value card's
-Refresh), no "generated" line, and no card at all when there is no summary.
+**P0. A slim header, then three things.** `DetailHero layout="slim"`: back ·
+a 28px picture (still the photo picker) · the name · the current value
+(`AssetHeroValue`) · the ⋯ menu (Edit, Ownership, Documents, Clear / Restore
+alerts, Delete). The Overview is, in this order and nothing else:
+1. **Value & Depreciation** (`ValueCard`) — purchase price, current value,
+   total invested (purchase price + what was spent, when both are known), the
+   change, confidence, the chart, Refresh, and the estimate's details and
+   tracking switch under its disclosure.
+2. **AI Asset Summary** (`AISummaryCard compact`) — a title and the text. The
+   text is three short sentences (worth, change since purchase, what needs
+   attention): `withAssetSummaryShape`, `shared/asset-summary-prompt.ts`. No
+   figure tiles, no to-do list, no Look up value; no card when there is no
+   summary.
+3. **Asset details** — ONE list (`Line`): label left, value right, a pencil.
+   Name, Category, every characteristic, Purchase price and date, Location,
+   each date, Ownership, Notes, then "+ Add characteristic".
+Do not put Quick Info, linked sections, a separate Characteristics card,
+recent activity or a boxed form back on the Overview: those are the other
+tabs' (Financials, Contained, History). The page keeps only what would
+otherwise be unreachable: saved characteristic cells (`DetailValueCells`, D7)
+and, when the asset has no Trackers tab, its trackers card (`tailSlot`). The
+document count is on the Documents tab; the parent trail and tags are a small
+line under the tabs (`asset-trail`).
 
-**P1. The layout owns no data.** Rows, dates and "Not set" suggestions are the
-composed `OverviewSpec` (through `DynamicOverview`'s `renderBody`, which keeps
-the loading state and the fallback). A row writes ONE field with the page's
-PATCH — the same field the chat's `update_profile` writes. Add a section by
-reading a store that exists, never by storing a copy. Quick Info is only what
-the app worked out (age from the purchase date, the composition's calculated
-metrics, the next alert): never invent a figure such as a "useful life".
+**P1. The layout owns no data.** Lines and dates are the composed
+`OverviewSpec` (through `DynamicOverview`'s `renderBody`, which keeps the
+loading state and the fallback). A line writes ONE field with the page's
+PATCH — the same field the chat's `update_profile` writes. Add a line by
+reading a store that exists, never by storing a copy; never invent a figure.
 **P2. One current value.** The header and the Value card both show
 `useValuePosition`: `currentAssetValue` (Rule 1) — the estimate while Portol
 tracks the value, the user's own number once tracking is off — against the
-purchase price. How the estimate was made, Refresh and the "Track value
-automatically" switch are the `CurrentValueCard` under the Value card's
-disclosure.
-**P3. Alerts are the rule engine's.** Quick Info's alert row and the menu's
-"Clear alerts" are `useRecordAlerts`: `rulesFromAll` over the UNFLATTENED
-profile row and its documents, filtered by `isAlertDateRule`, identified by
-`dateAlertId` (the bell's id), cleared and restored through
-`useDismissedAlerts` (Rule 8). Never the browser snooze.
-**P4. Asset Details is one form, edited in line.** Owner, 2026-11-23: "make
-it look exactly like this … everything's inline edit". Every value sits in its
-own box and is typed into where it stands (`AssetDetailsForm`): Name, Purchase
-Price and Date, Location, each date, Notes; Category is the composition's
-label and Ownership opens the Contained tab. ONE **Save** (the owner's design,
-as O6) sends only what changed in a single PATCH — a cleared box removes that
-field, money is stored as a number — and writes it into the page's cache at
-once; **Undo** puts back what was there; typing and opening write nothing
-(Rule 3). **Edit** opens the full dialog. A date stored as something other
-than a calendar day ("2024") stays a text box, so the form cannot lose it. A
-characteristic (`CharRow`) has a pencil and an X (two taps, Rule 8). The page
-is dense (32px rows, tight cards). Only what the app calculated is read-only.
+purchase price.
+**P3. Alerts are the rule engine's.** The menu's "Clear alerts" is
+`useRecordAlerts`: `rulesFromAll` over the UNFLATTENED profile row and its
+documents, filtered by `isAlertDateRule`, identified by `dateAlertId` (the
+bell's id), cleared and restored through `useDismissedAlerts` (Rule 8). Never
+the browser snooze.
+**P4. A line is edited where it stands.** The pencil turns the value into an
+input; the check writes it (money as a number; `name` and `notes` are the
+record's own); the remove button takes two taps (Rule 8); typing and opening
+write nothing (Rule 3). Category is the composition's label (read-only) and
+Ownership opens the Contained tab. A date stored as something other than a
+calendar day ("2024") is edited as text, so it cannot be lost.
 **P5. Quick add creates ordinary records.** + Task, + Expense and + Note post
 to `/api/tasks`, `/api/expenses` and `/api/notes` with this asset linked, so
 they show on the Tasks page, in Finance and under Notes too; More holds "Add
-a date" and "Add a document". Delete only opens
-the page's confirmation (Rule 8); opening the page writes nothing (Rule 3).
+a date" and "Add a document". Delete only opens the page's confirmation.
 **P6. One finance tab.** Where a tab set has both, Money is merged into
 **Financials** (rollup, breakdown, linked liabilities, the loan, bills and
 expenses); a saved `/money` link opens Financials. Subscriptions and the other

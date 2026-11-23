@@ -5,7 +5,8 @@
 //
 // What it proves end to end (CLAUDE.md, "Asset profile layout"):
 //   · the header is the name and the current value; the Value card has the rest
-//   · Asset Details is typed into in place and ONE Save stores what changed
+//   · the Overview is the Value card, the AI summary and one Asset details list;
+//     a line's pencil edits it in place
 //   · a characteristic is added, and removed with two taps
 //   · + Task creates an ordinary task linked to the asset
 //   · Money is merged into Financials, which lists the asset's expense
@@ -84,36 +85,45 @@ async function main() {
       check((await page.locator(t("asset-value-row-purchase-price")).innerText()).includes("$899"), "the Value card shows the purchase price ($899)");
       check((await page.locator(t("tab-money")).count()) === 0 && (await page.locator(t("tab-financials")).count()) === 1, "Money is merged into Financials (no Money tab)");
 
-      // ── Asset Details: type in place, one Save ──
-      check(await page.locator(t("asset-details-save")).isDisabled(), "Save is disabled until something is typed");
+      // ── Asset details: each line's pencil edits it in place ──
+      const edit = async (line: string, input: string, value: string) => {
+        await page.locator(t(line)).click();
+        await page.locator(t(input)).fill(value);
+        await page.locator(t(`${input}-save`)).click();
+      };
+      await page.locator(t("asset-detail-name")).click();
       await page.locator(t("asset-name-input")).fill(`Overview Laptop ${tag} Pro`);
-      await page.locator(t("overview-field-input-purchasePrice")).fill("950");
-      await page.locator(t("overview-field-input-location")).fill("Office");
-      await page.locator(t("asset-notes-input")).fill(`Checked ${tag}`);
       const before = await stored();
-      check(before.fields?.location == null && before.name === `Overview Laptop ${tag}`, "typing alone stores nothing");
-      await page.locator(t("asset-details-save")).click();
-      const after = await until(stored, (p) => p.name?.endsWith(" Pro") && p.fields?.location === "Office");
-      check(after.name === `Overview Laptop ${tag} Pro`, `Save stored the name (${after.name})`);
-      check(Number(after.fields?.purchasePrice) === 950, `Save stored the purchase price as a number (${JSON.stringify(after.fields?.purchasePrice)})`);
-      check(after.fields?.location === "Office", "Save stored the location");
-      check(after.notes === `Checked ${tag}`, "Save stored the notes");
+      check(before.name === `Overview Laptop ${tag}`, "typing alone stores nothing");
+      await page.locator(t("asset-name-input-save")).click();
+      await edit("overview-missing-purchasePrice", "overview-field-input-purchasePrice", "950");
+      await edit("asset-detail-location", "overview-field-input-location", "Office");
+      await edit("asset-detail-notes", "asset-notes-input", `Checked ${tag}`);
+      const after = await until(stored, (p) => p.name?.endsWith(" Pro") && p.fields?.location === "Office" && p.notes === `Checked ${tag}`);
+      check(after.name === `Overview Laptop ${tag} Pro`, `the name line stored the name (${after.name})`);
+      check(Number(after.fields?.purchasePrice) === 950, `the purchase price is stored as a number (${JSON.stringify(after.fields?.purchasePrice)})`);
+      check(after.fields?.location === "Office", "the location line stored the location");
+      check(after.notes === `Checked ${tag}`, "the notes line stored the notes");
       await page.waitForFunction((sel) => document.querySelector(sel)?.textContent?.includes("$950"), t("asset-value-row-purchase-price"), { timeout: 20000 }).catch(() => undefined);
       check((await page.locator(t("asset-value-row-purchase-price")).innerText()).includes("$950"), "the Value card follows the saved purchase price without a reload");
       check((await page.locator(t("text-profile-detail-name")).innerText()).endsWith(" Pro"), "the header follows the saved name without a reload");
 
-      // ── Characteristics: add, then remove in two taps ──
+      // ── The Overview holds three things and nothing else ──
+      for (const gone of ["asset-quick-info", "asset-characteristics", "asset-section-activity"]) {
+        check((await page.locator(t(gone)).count()) === 0, `the Overview has no ${gone}`);
+      }
+
+      // ── Characteristics are lines of the same list: add, then remove in two taps ──
       await page.locator(t("asset-add-characteristic")).click();
       await page.locator(t("add-field-key")).fill("Color");
       await page.locator(t("add-field-value")).fill("Silver");
       await page.locator(t("add-field-save")).click();
       const withColor = await until(stored, (p) => Object.entries(p.fields || {}).some(([k, v]) => /^colou?r$/i.test(k) && v === "Silver"));
-      const colorKey = Object.keys(withColor.fields || {}).find((k) => /^colou?r$/i.test(k));
-      check(!!colorKey, "Add Characteristic stored Color = Silver");
+      check(Object.keys(withColor.fields || {}).some((k) => /^colou?r$/i.test(k)), "Add characteristic stored Color = Silver");
+      await page.locator(t("overview-field-brand")).click({ timeout: 20000 });
       const brandRemove = page.locator(t("overview-field-remove-brand"));
-      await brandRemove.waitFor({ timeout: 20000 });
       await brandRemove.click();
-      check((await stored()).fields?.brand === "ASUS", "the first tap on X only arms it");
+      check((await stored()).fields?.brand === "ASUS", "the first tap on remove only arms it");
       await brandRemove.click();
       const noBrand = await until(stored, (p) => p.fields?.brand == null);
       check(noBrand.fields?.brand == null, "the second tap removes the characteristic");

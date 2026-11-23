@@ -194,6 +194,7 @@ import { storage, type IStorage } from "./storage";
 import { ProfileLinkFailure } from "./profile-link-failure";
 import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
+import { withAssetSummaryShape } from "@shared/asset-summary-prompt";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { shownOccurrenceToPay, rollBillsForward } from "@shared/bills-timeline";
 import { buildWidgetFromPrompt } from "./exec-widget-builder";
@@ -6317,6 +6318,9 @@ JSON Schema:
 
 Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights with key metrics. The summary should be personalized and specific to the data.`;
 
+      // An owned thing's summary is three short sentences (worth, change, what
+      // needs attention): the asset page shows that text and nothing else.
+      typePrompt = withAssetSummaryShape(detail.type, typePrompt);
       const userPrompt = `${typePrompt}\n\nProfile data:\n${JSON.stringify(profileData, null, 1)}`;
 
       const client = await getAnthropicClient();

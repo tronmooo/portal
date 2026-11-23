@@ -1,8 +1,8 @@
 // ─── Asset profile layout (owner's design, 2026-11-23) ──────────────────────
 //
-// The asset's Overview drawn to the owner's mock-up: the value stats in the
-// header, Asset Details as rows, Characteristics and Quick Info beside it, and
-// AI Summary next to Value & Depreciation underneath.
+// The asset's Overview as the owner settled it ("we're gonna simplify this
+// completely"): the Value card, a three-sentence AI summary, and ONE plain
+// list of details with a pencil per line.
 //
 // Layout only. Every number and row here is read from a store another screen
 // already reads, so nothing on this page can disagree with the rest of the app:
@@ -19,8 +19,8 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  Bell, BellOff, Calendar, CalendarPlus, Check, ChevronDown, CircleDot, FileText, Hash,
-  MapPin, MoreHorizontal, Package, Pencil, Plus, RefreshCw, ShoppingCart, StickyNote, Tag, Type, Users, X,
+  Bell, BellOff, Calendar, CalendarPlus, Check, ChevronDown, ChevronRight, CircleDot, FileText, Hash,
+  MapPin, MoreHorizontal, Package, Pencil, Plus, RefreshCw, ShoppingCart, StickyNote, Tag, Type, Users, Trash2, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,13 +39,12 @@ import { AddFieldPanel } from "@/components/AddFieldPanel";
 import { NewNoteForm } from "@/components/notes/NewNoteForm";
 import { CurrentValueCard } from "@/components/asset/CurrentValueCard";
 import {
-  ProvenanceMark, formatValue, renderSection, toneClass, useFieldWrite,
+  formatValue, useFieldWrite,
 } from "@/components/overview/DynamicOverview";
 import { parseMoney, resolveAssetValue } from "@shared/asset-value";
 import { currentAssetValue, isAutoValuationEnabled } from "@shared/valuation/context";
-import { calendarDelta, countdownLabel, isAlertDateRule, rulesFromAll, type DateRule } from "@shared/date-rules";
+import { countdownLabel, isAlertDateRule, rulesFromAll, type DateRule } from "@shared/date-rules";
 import { dateAlertId } from "@shared/alert-ids";
-import { fieldSemantics } from "@shared/overview-semantics";
 import { humanizeFieldName } from "@shared/field-label";
 import type { OverviewSection, OverviewSpec, OverviewValue } from "@shared/overview-spec";
 
@@ -58,8 +57,6 @@ export interface AssetLayoutProfile {
 }
 
 const PANEL = "bubble !rounded-2xl px-3 py-2.5";
-/** The editor a row opens into. */
-const TILE_BOX = "rounded-xl bg-muted/30 px-3 py-2.5";
 const PURCHASE_PRICE_KEYS = ["purchasePrice", "originalPrice", "costBasis"];
 const PURCHASE_DATE_RE = /^(purchase|purchased|acquisition|acquired|bought)[_ ]?(date|on)$|^date[_ ]?(of[_ ]?)?purchased?$/i;
 /** Sections with a shape of their own; everything else is a card of fields. */
@@ -68,221 +65,94 @@ const SPECIAL = new Set([
   "documentSummary", "maintenanceSummary", "miniTimeline", "missingInfo", "aiInsight",
 ]);
 
-function iconFor(key: string) {
-  const k = key.toLowerCase();
-  if (/purchase.*price|cost|paid/.test(k)) return ShoppingCart;
-  if (/value|worth|price/.test(k)) return Tag;
-  if (/date|expir|renew|due|year/.test(k)) return Calendar;
-  if (/location|address|city|room/.test(k)) return MapPin;
-  if (/note|description/.test(k)) return StickyNote;
-  if (/serial|vin|model|number|plate|identifier|sku/.test(k)) return Hash;
-  if (/brand|make|manufacturer|category|type/.test(k)) return Package;
-  return CircleDot;
-}
-
-const isDateKey = (key: string) => fieldSemantics(key, "2026-01-01").role === "date";
-function Panel({ title, action, children, testId, grow }: {
-  title: string; action?: React.ReactNode; children: React.ReactNode; testId?: string;
-  /** Takes the height left in its column, so two columns end on the same line. */
-  grow?: boolean;
-}) {
-  return (
-    <section className={`${PANEL} ${grow ? "flex-1" : ""}`} data-testid={testId}>
-      <div className="flex items-center justify-between gap-2 min-h-[32px]">
-        <h2 className="text-[14px] font-semibold tracking-tight">{title}</h2>
-        {action && <div className="flex items-center gap-1.5 shrink-0">{action}</div>}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-// ── Asset Details: one form, edited in line ─────────────────────────────────
-
-const BOX = "h-8 w-full rounded-md border border-border/60 bg-background/40 px-2.5 text-[13px] flex items-center min-w-0";
-
-interface FormCell {
-  /** Draft key: "name", "notes", or the stored field key. */
-  key: string;
-  label: string;
-  icon?: any;
-  kind?: "text" | "money" | "date" | "long";
-  /** What is stored now, as the input shows it. */
-  original?: string;
-  placeholder?: string;
-  /** A cell that is not typed into: Category (the app's label), Ownership (opens its tab). */
-  fixed?: React.ReactNode;
-  testId?: string;
-}
+// ── Asset details: one plain list ────────────────────────────────────────────
 
 /**
- * Asset Details as the owner drew it: every value in its own box, typed into
- * where it stands, and ONE Save for whatever changed. Opening writes nothing
- * (Rule 3); Save sends only the changed values in a single PATCH — the same
- * `name` / `notes` / `fields` the Edit dialog and the chat's update_profile
- * write — and puts them in the page's cache at once.
+ * One line of the Asset details list, as the owner drew it: the label on the
+ * left, the value on the right, a pencil. The pencil turns the value into an
+ * input in place; the check writes it — the same field the chat's
+ * update_profile writes — and the X (two taps, Rule 8) removes it.
  */
-function AssetDetailsForm({ profileId, rows, onEdit }: {
-  profileId: string; rows: FormCell[][]; onEdit: () => void;
-}) {
-  const { toast } = useToast();
-  const [edits, setEdits] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const cells = rows.flat().filter((c) => !c.fixed);
-  const valueOf = (c: FormCell) => edits[c.key] ?? c.original ?? "";
-  const changed = cells.filter((c) => c.key in edits && edits[c.key].trim() !== (c.original ?? "").trim());
-  const set = (key: string, v: string) => setEdits((e) => ({ ...e, [key]: v }));
-
-  const save = async () => {
-    if (changed.length === 0) return;
-    const body: Record<string, any> = {};
-    const fields: Record<string, string | number> = {};
-    const remove: string[] = [];
-    for (const c of changed) {
-      const v = edits[c.key].trim();
-      if (c.key === "name") {
-        if (!v) { toast({ title: "A name can't be blank", variant: "destructive" }); return; }
-        body.name = v;
-      } else if (c.key === "notes") body.notes = v;
-      else if (!v) remove.push(c.key);
-      // Money is stored as a number, like every other amount the app writes.
-      else fields[c.key] = c.kind === "money" ? parseMoney(v) : v;
-    }
-    if (Object.keys(fields).length) body.fields = fields;
-    if (remove.length) body.fieldsToDelete = remove;
-    setSaving(true);
-    try {
-      await apiRequest("PATCH", `/api/profiles/${profileId}`, body);
-      // The header and every row show the saved values now, not after a refetch.
-      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
-        if (!old) return old;
-        const nextFields = { ...(old.fields || {}), ...fields };
-        for (const k of remove) delete nextFields[k];
-        return { ...old, ...(body.name !== undefined ? { name: body.name } : {}), ...(body.notes !== undefined ? { notes: body.notes } : {}), fields: nextFields };
-      });
-      setEdits({});
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "overview"] });
-      void invalidateDomains("profiles");
-    } catch (err: any) {
-      toast({ title: "Couldn't save", description: formatApiError(err), variant: "destructive" });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const control = (c: FormCell) => {
-    if (c.fixed) return c.fixed;
-    const v = valueOf(c);
-    if (c.kind === "long") {
-      const limit = Math.max(500, (c.original ?? "").length);
-      return (
-        <span className="relative block w-full">
-          <Input value={v} maxLength={limit} placeholder={c.placeholder} onChange={(e) => set(c.key, e.target.value)}
-            className="h-8 text-[13px] pr-14" aria-label={c.label} data-testid={c.testId} />
-          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground tabular-nums">{v.length}/{limit}</span>
-        </span>
-      );
-    }
-    return (
-      <Input value={v} placeholder={c.placeholder ?? "Not set"} onChange={(e) => set(c.key, e.target.value)}
-        type={c.kind === "date" ? "date" : "text"} inputMode={c.kind === "money" ? "decimal" : undefined}
-        onKeyDown={(e) => { if (e.key === "Enter") void save(); }}
-        className="h-8 text-[13px] tabular-nums" aria-label={c.label} data-testid={c.testId} />
-    );
-  };
-
-  return (
-    <section className={`${PANEL} flex-1`} data-testid="asset-details">
-      <div className="flex items-center justify-between gap-2 min-h-[32px] mb-1">
-        <h2 className="text-[14px] font-semibold tracking-tight">Asset Details</h2>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {changed.length > 0 && (
-            <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setEdits({})} data-testid="asset-details-undo">Undo</Button>
-          )}
-          <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={onEdit} data-testid="asset-details-edit">
-            <Pencil className="h-3.5 w-3.5" /> Edit
-          </Button>
-          <Button size="sm" className="h-8 text-xs gap-1 bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-50"
-            disabled={saving || changed.length === 0} onClick={() => void save()} data-testid="asset-details-save">
-            <Check className="h-3.5 w-3.5" /> {saving ? "Saving…" : "Save"}
-          </Button>
-        </div>
-      </div>
-      <div>
-        {rows.map((row, i) => (
-          <div key={i} className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1 py-1 border-b border-border/30 last:border-b-0">
-            {row.map((c, j) => {
-              const Icon = c.icon;
-              return (
-                <div key={c.key} className={`flex items-center gap-2.5 min-w-0 ${j === 0 ? "flex-[1.25_1_0%]" : "flex-1"} basis-full sm:basis-0`}>
-                  {j === 0 && Icon && <Icon className="h-[17px] w-[17px] shrink-0 text-muted-foreground" strokeWidth={1.8} />}
-                  <span className={`shrink-0 text-[13px] truncate ${j === 0 ? "w-[108px]" : "sm:w-auto w-[135px] pl-[27px] sm:pl-0"}`}>{c.label}</span>
-                  <span className="flex-1 min-w-0">{control(c)}</span>
-                </div>
-              );
-            })}
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-/** One characteristic: label | value, a pencil to change it, an X to remove it (two taps). */
-function CharRow({ profileId, fieldKey, label, display, raw, kind = "text", reason, readOnly, testId, removeTestId }: {
-  profileId: string; fieldKey: string; label: string; display: React.ReactNode | null; raw?: string;
-  kind?: "text" | "money" | "date"; reason?: string; readOnly?: boolean; testId?: string; removeTestId?: string;
+function Line({ label, display, raw, kind = "text", save, remove, onOpen, hint, testId, inputTestId, removeTestId, multiline }: {
+  label: string;
+  /** What the line shows; null means it is not set. */
+  display: React.ReactNode | null;
+  raw?: string;
+  kind?: "text" | "money" | "date";
+  /** Stores the typed value; absent on a line the app worked out. */
+  save?: (value: string | number) => Promise<boolean>;
+  remove?: () => Promise<boolean>;
+  /** A line that opens somewhere else instead of editing here (Ownership). */
+  onOpen?: () => void;
+  hint?: string;
+  testId?: string; inputTestId?: string; removeTestId?: string;
+  multiline?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
   const { confirm, isArmed } = useConfirmArm();
-  const write = useFieldWrite(profileId);
-  const Icon = iconFor(fieldKey);
   const unset = display == null;
-  const save = async () => {
+  const commit = async () => {
     const text = draft.trim();
-    if (!text) return;
-    setSaving(true);
-    const ok = await write(fieldKey, kind === "money" ? parseMoney(text) : text);
-    setSaving(false);
+    if (!text || !save) return;
+    setBusy(true);
+    const ok = await save(kind === "money" ? parseMoney(text) : text);
+    setBusy(false);
     if (ok) setEditing(false);
   };
-  return (
-    <div className="flex items-center gap-2.5 min-h-[32px] py-0.5 border-b border-border/30 last:border-b-0" title={unset ? reason : undefined}>
-      <Icon className="h-[17px] w-[17px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
-      <span className="w-[42%] max-w-[190px] shrink-0 text-[13px] truncate">{label}</span>
-      <span className="self-stretch w-px bg-border/40" />
-      {editing ? (
-        <>
-          <Input autoFocus value={draft} type={kind === "date" ? "date" : "text"} onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") setEditing(false); }}
-            className="h-7 text-[13px] flex-1 min-w-0" aria-label={label} data-testid={`overview-field-input-${fieldKey}`} />
-          <button type="button" className="h-7 w-7 grid place-items-center text-emerald-400 disabled:opacity-50" disabled={saving || !draft.trim()}
-            onClick={() => void save()} aria-label={`Save ${label}`} data-testid={`overview-field-save-${fieldKey}`}><Check className="h-4 w-4" /></button>
-          <button type="button" className="h-7 w-7 grid place-items-center text-muted-foreground" onClick={() => setEditing(false)} aria-label="Cancel"><X className="h-4 w-4" /></button>
-        </>
-      ) : (
-        <>
-          <span className={`flex-1 min-w-0 truncate text-[13px] ${unset ? "text-muted-foreground/70" : "tabular-nums"}`}>{unset ? "Not set" : display}</span>
-          {readOnly ? <span data-testid={testId} /> : (
-            <button type="button" className="h-7 w-7 grid place-items-center text-muted-foreground hover:text-foreground"
-              onClick={() => { setDraft(raw ?? ""); setEditing(true); }} aria-label={`Edit ${label}`} data-testid={testId}>
-              <Pencil className="h-3.5 w-3.5" />
-            </button>
+  const row = "flex items-center gap-3 min-h-[40px] py-1.5 border-b border-border/30 last:border-b-0";
+
+  if (editing) {
+    return (
+      <div className={`${row} flex-wrap`}>
+        <span className="text-[13px] text-muted-foreground shrink-0">{label}</span>
+        <div className="flex-1 min-w-[160px] flex items-center justify-end gap-1">
+          {multiline ? (
+            <textarea autoFocus rows={2} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label={label}
+              className="flex-1 min-w-0 rounded-md border border-input bg-background px-2 py-1 text-[13px]" data-testid={inputTestId} />
+          ) : (
+            <Input autoFocus value={draft} type={kind === "date" ? "date" : "text"} inputMode={kind === "money" ? "decimal" : undefined}
+              onChange={(e) => setDraft(e.target.value)} aria-label={label}
+              onKeyDown={(e) => { if (e.key === "Enter") void commit(); if (e.key === "Escape") setEditing(false); }}
+              className="h-8 text-[13px] flex-1 min-w-0 text-right" data-testid={inputTestId} />
           )}
-          {!readOnly && !unset && (
-            <button type="button" disabled={saving}
-              className={`h-7 min-w-7 px-1 grid place-items-center rounded text-[11px] ${isArmed("rm") ? "bg-destructive text-destructive-foreground" : "text-muted-foreground hover:text-destructive"}`}
+          <button type="button" className="h-8 w-8 grid place-items-center text-emerald-400 disabled:opacity-40" disabled={busy || !draft.trim()}
+            onClick={() => void commit()} aria-label={`Save ${label}`} data-testid={inputTestId ? `${inputTestId}-save` : undefined}><Check className="h-4 w-4" /></button>
+          {remove && !unset && (
+            <button type="button" disabled={busy}
+              className={`h-8 min-w-8 px-1 grid place-items-center rounded text-[11px] ${isArmed("rm") ? "bg-destructive text-destructive-foreground" : "text-muted-foreground hover:text-destructive"}`}
               aria-label={isArmed("rm") ? `Tap again to remove ${label}` : `Remove ${label}`} data-testid={removeTestId}
-              onClick={() => confirm("rm", async () => { setSaving(true); await write(fieldKey, null); setSaving(false); })}>
-              {isArmed("rm") ? "Remove?" : <X className="h-4 w-4" />}
+              onClick={() => confirm("rm", async () => { setBusy(true); const ok = await remove(); setBusy(false); if (ok) setEditing(false); })}>
+              {isArmed("rm") ? "Remove?" : <Trash2 className="h-3.5 w-3.5" />}
             </button>
           )}
-        </>
-      )}
-    </div>
+          <button type="button" className="h-8 w-8 grid place-items-center text-muted-foreground" onClick={() => setEditing(false)} aria-label="Cancel"><X className="h-4 w-4" /></button>
+        </div>
+      </div>
+    );
+  }
+
+  const value = (
+    <span className={`min-w-0 truncate text-right text-[14px] ${unset ? "text-muted-foreground/70" : "font-semibold tabular-nums"}`}>
+      {unset ? "Not set" : display}
+    </span>
+  );
+  const open = onOpen ?? (save ? () => { setDraft(raw ?? ""); setEditing(true); } : undefined);
+  if (!open) {
+    return (
+      <div className={row} data-testid={testId}>
+        <span className="text-[13px] text-muted-foreground shrink-0">{label}</span>
+        <span className="flex-1" />{value}<span className="w-4 shrink-0" />
+      </div>
+    );
+  }
+  return (
+    <button type="button" className={`${row} w-full text-left`} onClick={open} title={unset ? hint : undefined} data-testid={testId}>
+      <span className="text-[13px] text-muted-foreground shrink-0">{label}</span>
+      <span className="flex-1" />{value}
+      {onOpen ? <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" /> : <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />}
+    </button>
   );
 }
 
@@ -336,7 +206,11 @@ export function AssetHeroValue({ profile }: { profile: AssetLayoutProfile }) {
 
 /** Value & Depreciation: the history as a line, the same four numbers as a
  *  table, and — one tap away — how the estimate was made and its switch. */
-function ValueCard({ profile }: { profile: AssetLayoutProfile }) {
+function ValueCard({ profile, spent = 0 }: {
+  profile: AssetLayoutProfile;
+  /** What has been spent on it since (the composition's "Spent to date"). */
+  spent?: number;
+}) {
   const v = useValuePosition(profile);
   const [details, setDetails] = useState(false);
   const history = useAssetValuationHistory(profile.id, v.supported);
@@ -360,6 +234,8 @@ function ValueCard({ profile }: { profile: AssetLayoutProfile }) {
   const rows: Array<[string, React.ReactNode, string]> = [
     ["Purchase Price", v.paid > 0 ? formatMoneyCompact(v.paid) : "Not set", v.paid > 0 ? "" : "text-muted-foreground/70 font-normal"],
     [v.auto ? "Current Value" : "Your Value", v.now > 0 ? formatMoneyCompact(v.now) : "Not estimated yet", v.now > 0 ? "text-emerald-400" : "text-muted-foreground/70 font-normal"],
+    // Purchase price plus what was spent on it since — shown only when both are known.
+    ...(v.paid > 0 && spent > 0 ? [["Total invested", formatMoneyCompact(v.paid + spent), ""] as [string, React.ReactNode, string]] : []),
     ...(v.hasChange ? [
       [up ? "Appreciation" : "Depreciation", signed(v.delta), tone],
       ["Change", signedPct(v.pct), tone],
@@ -488,7 +364,7 @@ function AddDateForm({ profileId, options, onDone }: {
     if (ok) onDone();
   };
   return (
-    <div className={`${TILE_BOX} ring-1 ring-primary/40 space-y-2`} data-testid="asset-add-date-form">
+    <div className="space-y-2" data-testid="asset-add-date-form">
       <p className="text-[12px] text-muted-foreground">
         An expiration or renewal raises an alert before it arrives. Every date shows on your calendar.
       </p>
@@ -525,26 +401,25 @@ function AddDateForm({ profileId, options, onDone }: {
 // ── The layout ───────────────────────────────────────────────────────────────
 
 export function AssetOverviewBody({
-  spec, profile, autoValuation, ownerLabel, onOpenOwnership, onEdit, summarySlot, tailSlot,
+  spec, profile, ownerLabel, onOpenOwnership, summarySlot, tailSlot,
 }: {
   spec: OverviewSpec;
   profile: AssetLayoutProfile;
-  autoValuation: boolean;
+  autoValuation?: boolean;
   /** "You own this" / "Owned by …" — from the owner links, which the page holds. */
   ownerLabel: string;
   /** Opens the tab where ownership is changed. */
   onOpenOwnership?: () => void;
-  /** Opens the profile's Edit dialog (every field at once). */
-  onEdit: () => void;
+  /** Kept for callers; the list edits in place and the ⋯ menu holds Edit. */
+  onEdit?: () => void;
   /** The AI summary card — the page owns it. */
   summarySlot?: React.ReactNode;
-  /** The page's own cards (trackers, saved characteristic cells), drawn after
-   *  Characteristics and before Recent activity. */
+  /** The page's own cards (saved characteristic cells; trackers when the
+   *  asset has no tab for them), drawn after the list. */
   tailSlot?: React.ReactNode;
 }) {
   const [addingField, setAddingField] = useState(false);
   const fields = profile.fields || {};
-  const { alerts } = useRecordAlerts(profile.id);
 
   const priceKey = PURCHASE_PRICE_KEYS.find((k) => parseMoney(fields[k]) > 0) || "purchasePrice";
   const price = parseMoney(fields[priceKey]);
@@ -560,12 +435,8 @@ export function AssetOverviewBody({
     // Appreciation / depreciation is the header's and the value card's.
     && !/^(appreciation|depreciation)$/.test(m.semanticKey) && !staple.has(keyOf(m)));
   // A summary metric that is simply one of the record's fields (a brand, a
-  // model) is a characteristic; what is left is what the app worked out.
+  // model) is a characteristic.
   const fieldMetrics = summary.filter((m) => m.sourceReference?.kind === "field");
-  const worked = [
-    ...summary.filter((m) => m.sourceReference?.kind !== "field"),
-    ...spec.sections.filter((s) => s.component === "financialSummary").flatMap((s) => s.values || []),
-  ].filter((m, i, all) => all.findIndex((x) => x.semanticKey === m.semanticKey) === i);
   const characteristics = [
     ...fieldMetrics,
     ...fieldSections.flatMap((s) => s.values || []).filter((v) => !staple.has(keyOf(v))),
@@ -573,145 +444,82 @@ export function AssetOverviewBody({
 
   const dateValues = spec.sections.filter((s) => s.component === "dateCard").flatMap((s) => s.values || [])
     .filter((v) => !staple.has(keyOf(v)));
-  const missingDates = spec.missingInformation.filter((m) => isDateKey(m.fieldKey) && !staple.has(m.fieldKey));
-  const missingFields = spec.missingInformation.filter((m) => !isDateKey(m.fieldKey) && !staple.has(m.fieldKey)
-    // A missing current value is set from Value & Depreciation.
-    && m.semanticKey !== "currentValue");
-  const isoOrBlank = (v: string) => !v || /^\d{4}-\d{2}-\d{2}/.test(v);
-  // A date typed as something other than a calendar day ("2024") stays a text
-  // box, so opening the form can never lose it.
-  const dateCell = (key: string, label: string, stored: string, icon?: any): FormCell => ({
-    key, label, icon, original: isoOrBlank(stored) ? stored.slice(0, 10) : stored,
-    kind: isoOrBlank(stored) ? "date" : "text", testId: `overview-field-input-${key}`,
-  });
-  const fixedBox = (children: React.ReactNode) => <span className={BOX}>{children}</span>;
-  const extraCells: FormCell[] = [
-    { key: "location", label: "Location", icon: MapPin, original: location, testId: "overview-field-input-location" },
-    ...dateValues.filter((v) => v.editable).map((v) => dateCell(v.editable!.fieldKey, v.label, v.value == null ? "" : String(v.value), Calendar)),
-    ...missingDates.map((m) => dateCell(m.fieldKey, m.label, "", Calendar)),
-  ];
-  const formRows: FormCell[][] = [
-    [{ key: "name", label: "Name", icon: Type, original: profile.name || "", placeholder: "Name this asset", testId: "asset-name-input" }],
-    [
-      { key: "category", label: "Category", icon: Package, fixed: fixedBox(<span className="capitalize truncate" data-testid="asset-detail-category">{spec.identity.entityLabel || profile.type}</span>) },
-      {
-        key: "ownership", label: "Ownership", icon: Users,
-        fixed: onOpenOwnership ? (
-          <button type="button" className={`${BOX} justify-between gap-2 hover:border-primary/50`} onClick={onOpenOwnership} data-testid="asset-detail-ownership">
-            <span className="truncate">{ownerLabel}</span><ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          </button>
-        ) : fixedBox(<span className="truncate" data-testid="asset-detail-ownership">{ownerLabel}</span>),
-      },
-    ],
-    [
-      { key: priceKey, label: "Purchase Price", icon: ShoppingCart, kind: "money", original: price > 0 ? String(price) : "", testId: "overview-field-input-purchasePrice" },
-      dateCell(purchaseDateKey, "Purchase Date", purchaseDate),
-    ],
-    // What is left, two to a line; an odd one out takes the line.
-    ...Array.from({ length: Math.ceil(extraCells.length / 2) }, (_, i) => extraCells.slice(i * 2, i * 2 + 2)),
-    [{ key: "notes", label: "Notes", icon: StickyNote, kind: "long", original: profile.notes || "", placeholder: "No notes yet", testId: "asset-notes-input" }],
-  ];
-  // A second cell on a line carries no icon of its own, like the owner's drawing.
-  for (const row of formRows) if (row[1]) row[1] = { ...row[1], icon: undefined };
+  const write = useFieldWrite(profile.id);
+  const saveField = (key: string) => (value: string | number) => write(key, value);
+  const removeField = (key: string) => () => write(key, null);
+  const { toast } = useToast();
+  /** The record's own `name` / `notes` (not a field). */
+  const saveRecord = (prop: "name" | "notes") => async (value: string | number) => {
+    try {
+      await apiRequest("PATCH", `/api/profiles/${profile.id}`, { [prop]: String(value) });
+      queryClient.setQueryData(["/api/profiles", profile.id, "detail"], (old: any) => (old ? { ...old, [prop]: String(value) } : old));
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      void invalidateDomains("profiles");
+      return true;
+    } catch (err: any) {
+      toast({ title: "Couldn't save", description: formatApiError(err), variant: "destructive" });
+      return false;
+    }
+  };
+  const isoDay = (v: string) => /^\d{4}-\d{2}-\d{2}/.test(v);
+  const showDate = (v: string) => (isoDay(v) ? parseLocalDate(v)?.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) ?? v : v);
+  const spent = Number(spec.summaryMetrics.find((m) => m.semanticKey === "totalExpenses")?.value) || 0;
 
-  const charRows = [
-    ...characteristics.map((v) => v.editable ? (
-      <CharRow key={v.semanticKey} profileId={profile.id} fieldKey={v.editable.fieldKey} label={v.label}
-        display={formatValue(v)} raw={rawOf(v)} kind={kindOf(v)}
-        testId={`overview-field-${v.semanticKey}`} removeTestId={`overview-field-remove-${v.semanticKey}`} />
-    ) : (
-      <CharRow key={v.semanticKey} profileId={profile.id} fieldKey={v.semanticKey} label={v.label}
-        display={formatValue(v)} readOnly testId={`overview-field-${v.semanticKey}`} />
-    )),
-    ...missingFields.map((m) => (
-      <CharRow key={m.semanticKey} profileId={profile.id} fieldKey={m.fieldKey} label={m.label}
-        display={null} reason={m.reason} testId={`overview-missing-${m.semanticKey}`} />
-    )),
-  ];
-
-  const today = localTodayISO();
-  const ownedFor = /^\d{4}-\d{2}-\d{2}/.test(purchaseDate) && purchaseDate.slice(0, 10) <= today
-    ? calendarDelta(purchaseDate.slice(0, 10), today) : null;
-  const age = ownedFor
-    ? [ownedFor.years ? `${ownedFor.years} yr${ownedFor.years === 1 ? "" : "s"}` : "", ownedFor.months ? `${ownedFor.months} mo` : "",
-       !ownedFor.years && !ownedFor.months ? `${ownedFor.totalDays} day${ownedFor.totalDays === 1 ? "" : "s"}` : ""].filter(Boolean).join(" ")
-    : "";
-  const nextAlert = alerts.find((a) => !a.cleared);
-  const hasQuick = !!age || worked.length > 0 || !!nextAlert;
-  const quickRow = (icon: any, label: string, value: React.ReactNode, testId: string, trailing?: React.ReactNode) => {
-    const Icon = icon;
+  const valueLine = (v: OverviewValue) => {
+    const key = v.editable?.fieldKey;
     return (
-      <div key={testId} className="flex items-center gap-2.5 min-h-[32px] py-0.5 border-b border-border/30 last:border-b-0" data-testid={testId}>
-        <Icon className="h-[17px] w-[17px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
-        <span className="w-[42%] max-w-[190px] shrink-0 text-[13px] truncate">{label}</span>
-        <span className="self-stretch w-px bg-border/40" />
-        <span className="flex-1 min-w-0 truncate text-[13px] tabular-nums">{value}</span>
-        {trailing}
-      </div>
+      <Line key={v.semanticKey} label={v.label} display={formatValue(v)} raw={rawOf(v)} kind={kindOf(v)}
+        save={key ? saveField(key) : undefined} remove={key ? removeField(key) : undefined}
+        testId={`overview-field-${v.semanticKey}`} inputTestId={key ? `overview-field-input-${key}` : undefined}
+        removeTestId={`overview-field-remove-${v.semanticKey}`} />
     );
   };
 
-  const sectionsOf = (...components: string[]) =>
-    spec.sections.filter((s) => components.includes(s.component)).map((s) => renderSection(s, profile.id));
-
-  const linked = sectionsOf("progressIndicator", "relationshipSummary", "ownershipSummary", "maintenanceSummary", "aiInsight");
-  const activity = sectionsOf("miniTimeline");
-
-  // Top to bottom (owner, 2026-11-23): what it is worth, what it is, what the
-  // app worked out, what it is linked to, the summary — then the long tail:
-  // characteristics, and recent activity last. On a wide screen Asset Details
-  // sits beside Value + Quick Info; `order` puts Value first on a phone.
+  // The whole Overview (owner, 2026-11-23: "we're gonna simplify this
+  // completely"): the value, three sentences, and one list. Quick Info, linked
+  // sections, trackers and recent activity are not here — they are the other
+  // tabs' (Financials, Contained, History).
   return (
     <>
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] gap-2.5">
-        <div className="flex flex-col min-w-0 order-2 lg:order-1" data-testid="asset-section-details">
-          <AssetDetailsForm profileId={profile.id} rows={formRows} onEdit={onEdit} />
-        </div>
-        {/* On a phone this column dissolves, so its two cards take their own
-            places in the one-column order: Value, Asset Details, Quick Info. */}
-        <div className="contents lg:flex lg:flex-col lg:gap-2.5 lg:min-w-0 lg:order-2">
-          <div className="order-1 min-w-0"><ValueCard profile={profile} /></div>
-          {hasQuick && (
-            <div className="order-3 min-w-0 flex flex-col lg:flex-1">
-            <Panel title="Quick Info" testId="asset-quick-info" grow>
-              {age && quickRow(Calendar, "Age", age, "asset-quick-age")}
-              {worked.map((m) => quickRow(iconFor(m.semanticKey), m.label, <span className={toneClass(m.tone)}>{formatValue(m)}</span>,
-                `overview-metric-${m.semanticKey}`, <ProvenanceMark value={m} />))}
-              {nextAlert && quickRow(Bell, nextAlert.title, nextAlert.when, "asset-alert-row")}
-            </Panel>
-            </div>
-          )}
-        </div>
+      <div className={`grid grid-cols-1 gap-2.5 ${summarySlot ? "lg:grid-cols-2" : ""}`}>
+        <ValueCard profile={profile} spent={spent} />
+        {summarySlot && <div className="min-w-0 [&>*]:h-full" data-testid="asset-summary-slot">{summarySlot}</div>}
       </div>
 
-      {linked}
+      <section className={PANEL} data-testid="asset-details">
+        <h2 className="text-[15px] font-semibold tracking-tight mb-0.5">Asset details</h2>
+        {/* One column on a phone; two on a wide screen, so a line's value is
+            not a screen's width from its label. */}
+        <div className="lg:grid lg:grid-cols-2 lg:gap-x-10">
+        <Line label="Name" display={profile.name || null} raw={profile.name || ""} save={saveRecord("name")}
+          testId="asset-detail-name" inputTestId="asset-name-input" />
+        <Line label="Category" display={<span className="capitalize">{spec.identity.entityLabel || profile.type}</span>} testId="asset-detail-category" />
+        {characteristics.map(valueLine)}
+        <Line label="Purchase price" kind="money" display={price > 0 ? formatMoneyCompact(price) : null} raw={price > 0 ? String(price) : ""}
+          save={saveField(priceKey)} remove={removeField(priceKey)} hint="Unlocks the change since you bought it"
+          testId="overview-missing-purchasePrice" inputTestId="overview-field-input-purchasePrice" removeTestId="overview-field-remove-purchasePrice" />
+        <Line label="Purchase date" kind={!purchaseDate || isoDay(purchaseDate) ? "date" : "text"}
+          display={purchaseDate ? showDate(purchaseDate) : null} raw={isoDay(purchaseDate) ? purchaseDate.slice(0, 10) : purchaseDate}
+          save={saveField(purchaseDateKey)} remove={removeField(purchaseDateKey)}
+          testId="asset-detail-purchase-date" inputTestId={`overview-field-input-${purchaseDateKey}`} removeTestId="overview-field-remove-purchaseDate" />
+        <Line label="Location" display={location || null} raw={location} save={saveField("location")} remove={removeField("location")}
+          testId="asset-detail-location" inputTestId="overview-field-input-location" removeTestId="overview-field-remove-location" />
+        {dateValues.map(valueLine)}
+        <Line label="Ownership" display={ownerLabel} onOpen={onOpenOwnership} testId="asset-detail-ownership" />
+        <Line label="Notes" display={(profile.notes || "").trim() || null} raw={profile.notes || ""} save={saveRecord("notes")} multiline
+          testId="asset-detail-notes" inputTestId="asset-notes-input" />
+        </div>
+        {addingField ? (
+          <div className="pt-2"><AddFieldPanel profileId={profile.id} inline onAdded={() => setAddingField(false)} /></div>
+        ) : (
+          <button type="button" className="mt-1.5 flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground"
+            onClick={() => setAddingField(true)} data-testid="asset-add-characteristic">
+            <Plus className="h-3.5 w-3.5" /> Add characteristic
+          </button>
+        )}
+      </section>
 
-      {summarySlot && <div className="min-w-0" data-testid="asset-summary-slot">{summarySlot}</div>}
-
-      {/* ── Characteristics ── */}
-      <Panel
-        title="Characteristics"
-        testId="asset-characteristics"
-        action={
-          <Button variant="outline" size="sm" className="h-7 text-xs gap-1 border-emerald-500/50" onClick={() => setAddingField((a) => !a)} data-testid="asset-add-characteristic">
-            <Plus className="h-3.5 w-3.5 text-emerald-400" /> Add Characteristic
-          </Button>
-        }
-      >
-        {charRows.length > 0
-          ? <div className="grid grid-cols-1 lg:grid-cols-2 lg:gap-x-6">{charRows}</div>
-          : !addingField && (
-            <p className="py-1 text-[13px] text-muted-foreground" data-testid="asset-characteristics-empty">
-              Nothing here yet. Add a colour, a model, a serial number, a condition.
-            </p>
-          )}
-        {addingField && <div className="mt-2"><AddFieldPanel profileId={profile.id} inline onAdded={() => setAddingField(false)} /></div>}
-      </Panel>
-
-      {/* Whatever the page adds (trackers, saved cells) comes here, then
-          recent activity, which is always last. */}
       {tailSlot}
-      {activity.length > 0 && <div data-testid="asset-section-activity">{activity}</div>}
     </>
   );
 }
