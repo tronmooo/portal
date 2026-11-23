@@ -144,21 +144,15 @@ async function main() {
     check(!/overdue/i.test(t), "#16 the loan's own page does not call it overdue");
     await shot("loan-overview");
 
-    await page.locator('[data-testid="nested-liabilities-card"]').first().scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => undefined);
-    let nested = await page.locator(`[data-testid="nested-liability-${child.id}"]`).first().waitFor({ timeout: 8000 }).then(() => true).catch(() => false);
-    if (!nested) {
-      for (const tab of ["tab-details", "tab-overview"]) {
-        await page.locator(`[data-testid="${tab}"]`).click().catch(() => undefined);
-        nested = await page.locator(`[data-testid="nested-liability-${child.id}"]`).first().waitFor({ timeout: 5000 }).then(() => true).catch(() => false);
-        if (nested) break;
-      }
-    }
+    // Nested debts live with the owners and linked records (the owner chip).
+    await page.locator('[data-testid="chip-owner"]').click();
+    const nested = await page.locator(`[data-testid="nested-liability-${child.id}"]`).first().waitFor({ timeout: 10000 }).then(() => true).catch(() => false);
     check(nested, "#22 the nested Liabilities panel lists the child debt");
     await shot("loan-nested");
+    await page.keyboard.press("Escape");
 
-    await page.locator('[data-testid="tab-details"]').click();
-    const hasTermRows = (await appears("Loan term (as entered)", 10000)) && (await appears(/Payoff at \$[\d,.]+\/mo \(calculated\)/, 5000));
-    check(hasTermRows, "#27 term and payoff are labelled as two different numbers");
+    const hasTermRows = (await appears("Term (months)", 10000)) && (await appears("Remaining Term", 5000));
+    check(hasTermRows, "#27 the entered term and the calculated remaining term are two labelled figures");
     await page.locator('[data-testid="button-edit-terms"]').click({ timeout: 10000 });
     const rateBox = page.locator('[data-testid="input-terms-rate"]');
     await rateBox.waitFor({ timeout: 10000 });
@@ -166,7 +160,8 @@ async function main() {
     await shot("loan-terms-form");
     await page.keyboard.press("Escape");
 
-    await page.locator('[data-testid="tab-overview"]').click();
+    // The payment quick actions live with the payments (Overview is the summary).
+    await page.locator('[data-testid="tab-payments"]').click();
     await page.locator('[data-testid="action-extra"]').first().click({ timeout: 15000 });
     await page.locator('[data-testid="payment-dialog"]').waitFor({ timeout: 10000 });
     const amt = await page.locator('[data-testid="payment-amount-input"]').inputValue();
@@ -186,7 +181,7 @@ async function main() {
     check(armed && stillThere, `#26 one tap on Reverse only arms it; the payment is still there (armed=${armed}, payment kept=${stillThere})`);
     await shot("loan-reverse-armed");
 
-    await page.locator('[data-testid="tab-activity"]').click();
+    await page.locator('[data-testid="tab-history"]').click();
     const payRow = await appears(/Payment \$2,155/);
     t = await text();
     const payAround = t.slice(Math.max(0, t.search(/Payment \$2,155/)), t.search(/Payment \$2,155/) + 200);

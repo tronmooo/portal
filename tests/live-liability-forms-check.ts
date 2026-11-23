@@ -57,7 +57,7 @@ async function main() {
 
       // ── Overview: a due day is a number, a 2022 first payment is not a deadline.
       await page.goto(`${UI_BASE}/#/profiles/${loanId}`);
-      await page.locator('[data-testid="tab-details"]').waitFor({ timeout: 30000 });
+      await page.locator('[data-testid="button-edit-terms"]').waitFor({ timeout: 30000 });
       await page.waitForTimeout(2500);
       const overview = (await page.locator("body").innerText()).replace(/\s+/g, " ");
       check(!/Jan 1, 2001|2001/.test(overview), 'the Overview does not print the due day as "Jan 1, 2001"');
@@ -65,8 +65,7 @@ async function main() {
       check(!/\b0\.1%/.test(overview), 'no panel shows the rate as "0.1%"');
       await page.screenshot({ path: `${SHOT}/live-liability-overview.png` });
 
-      // ── Details → Edit loan terms: no Save button; a change saves by itself.
-      await page.locator('[data-testid="tab-details"]').click();
+      // ── Liability Details → Edit: a change saves by itself (Save only finishes).
       await page.locator('[data-testid="button-edit-terms"]').click({ timeout: 15000 });
       const rate = page.locator('[data-testid="input-terms-rate"]');
       await rate.waitFor({ timeout: 15000 });
@@ -94,6 +93,8 @@ async function main() {
       if (!(/5\.50?\s*%/.test(header) && /305,000/.test(header))) console.log(`page text: ${header.slice(0, 900)}`);
 
       // ── Delete → back on the Liabilities list.
+      // "Delete this liability" is in the More menu.
+      await page.locator('[data-testid="button-more-actions"]').click();
       await page.locator('[data-testid="button-delete-profile"]').click({ timeout: 15000 });
       await page.locator('[data-testid="button-confirm-delete-profile"]').click({ timeout: 15000 });
       // Hash router: "/linked?tab=liabilities" is the URL "/?tab=liabilities#/linked".

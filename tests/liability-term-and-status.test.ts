@@ -84,8 +84,8 @@ describe("the liability page says what is true", () => {
   });
 
   it("an auto-saved edit can be undone, and shows in the header at once", () => {
-    expect(page).toContain('data-testid="button-undo-terms-edits"');
-    expect(page).toContain('data-testid="button-undo-bill-edits"');
+    expect(page).toContain('"button-undo-terms-edits"');
+    expect(page).toContain('"button-undo-bill-edits"');
     expect(page).toContain("const o = termsAutosave.opened;");
     // The saved fields go into the detail cache before the refetch.
     expect(page.split("patchDetailFields(fields);").length - 1).toBe(2);
