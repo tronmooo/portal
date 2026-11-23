@@ -71,7 +71,9 @@ async function main() {
 
     // ── the AI Builder, with the real model ──────────────────────────────
     const asks: Array<[string, (w: any) => boolean, string]> = [
-      ["do I exercise more after sleeping 8 hours", (w) => w.kind === "compare" && w.source?.key === "sleep_hours" && w.other?.kind === "workouts", "a comparison: workouts, grouped by sleep"],
+      ["do I exercise more after sleeping 8 hours", // "Exercise" may be every workout, one of the account's workout trackers, or
+      // the exercise-minutes measurement: each is a fair reading the tab can draw.
+      (w) => w.kind === "compare" && w.source?.key === "sleep_hours" && (["workouts", "tracker"].includes(w.other?.kind) || ["exercise_minutes", "steps"].includes(w.other?.key)), "a comparison: exercise, grouped by sleep"],
       ["my average sleep this month", (w) => w.kind === "metric" && w.source?.key === "sleep_hours" && w.calc === "average", "the sleep average"],
       [`how often do I do ${name}`, (w) => w.kind === "metric" && (w.source?.kind === "tracker" || w.source?.kind === "workouts") && w.calc === "count", "a count of that workout"],
       ["what I spend on healthcare", (w) => w.source?.kind === "spending", "health spending"],
