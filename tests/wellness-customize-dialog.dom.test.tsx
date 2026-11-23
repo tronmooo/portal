@@ -26,7 +26,7 @@ const lists = { journal: { loading: false, error: false }, expenses: { loading: 
 
 beforeEach(() => {
   stored = null; writes = [];
-  suggest = () => ({ status: 200, body: { by: "ai", widget: { id: "widget", title: "Exercise After Sleep", icon: "chart", kind: "compare", source: { kind: "metric", key: "sleep_hours" }, other: { kind: "workouts" }, threshold: 8, lag: 0, by: "ai" } } });
+  suggest = () => ({ status: 200, body: { by: "ai", widgets: [{ id: "widget-1", title: "Exercise After Sleep", icon: "chart", kind: "compare", source: { kind: "metric", key: "sleep_hours" }, other: { kind: "workouts" }, threshold: 8, lag: 0, by: "ai" }] } });
   vi.stubGlobal("fetch", vi.fn(async (url: any, opts?: any) => {
     const u = String(url); const method = String(opts?.method || "GET");
     const json = (b: any, status = 200) => new Response(JSON.stringify(b), { status, headers: { "Content-Type": "application/json" } });
@@ -218,13 +218,13 @@ describe("the AI Builder proposes; the user adds", () => {
     fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
     fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: "Do I exercise more after sleeping eight hours?" } });
     fireEvent.click(screen.getByTestId("wellness-ai-build"));
-    await screen.findByTestId("wellness-ai-proposal");
-    expect(text("wellness-ai-proposal")).toContain("Exercise After Sleep");
-    expect(text("wellness-ai-proposal")).toContain("Proposed by AI");
-    expect(text("wellness-ai-proposal")).toContain("Sleep 8 h or more");
+    await screen.findByTestId("wellness-ai-proposal-0");
+    expect(text("wellness-ai-proposal-0")).toContain("Exercise After Sleep");
+    expect(text("wellness-ai-summary")).toContain("Proposed by AI");
+    expect(text("wellness-ai-proposal-0")).toContain("Sleep 8 h or more");
     expect(rows("wellness-customize-visible").some((r) => r.startsWith("w:"))).toBe(false);
     expect(writes).toEqual([]);
-    fireEvent.click(screen.getByTestId("wellness-ai-use"));
+    fireEvent.click(screen.getByTestId("wellness-ai-use-0"));
     expect(rows("wellness-customize-visible")).toContain("w:exercise-after-sleep");
     await save();
     expect(saved().widgets[0]).toMatchObject({ kind: "compare", by: "ai", threshold: 8 });
@@ -235,20 +235,20 @@ describe("the AI Builder proposes; the user adds", () => {
     fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
     fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: "sleep and workouts" } });
     fireEvent.click(screen.getByTestId("wellness-ai-build"));
-    await screen.findByTestId("wellness-ai-proposal");
-    fireEvent.click(screen.getByTestId("wellness-ai-discard"));
-    expect(screen.queryByTestId("wellness-ai-proposal")).toBeNull();
+    await screen.findByTestId("wellness-ai-proposal-0");
+    fireEvent.click(screen.getByTestId("wellness-ai-discard-0"));
+    expect(screen.queryByTestId("wellness-ai-proposal-0")).toBeNull();
     expect((screen.getByTestId("wellness-customize-save") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("an answer the tab cannot draw is refused, not shown", async () => {
-    suggest = () => ({ status: 200, body: { by: "ai", widget: { id: "w", title: "All my data", kind: "metric", source: { kind: "sql", key: "select *" } } } });
+    suggest = () => ({ status: 200, body: { by: "ai", widgets: [{ id: "w", title: "All my data", kind: "metric", source: { kind: "sql", key: "select *" } }] } });
     await open();
     fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
     fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: "show me everything" } });
     fireEvent.click(screen.getByTestId("wellness-ai-build"));
     await screen.findByTestId("wellness-ai-error");
-    expect(screen.queryByTestId("wellness-ai-proposal")).toBeNull();
+    expect(screen.queryByTestId("wellness-ai-proposal-0")).toBeNull();
   });
 
   it("says when the fixed rules, not the model, read the sentence", async () => {
@@ -257,9 +257,91 @@ describe("the AI Builder proposes; the user adds", () => {
     fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
     fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: "my sleep average" } });
     fireEvent.click(screen.getByTestId("wellness-ai-build"));
-    await screen.findByTestId("wellness-ai-proposal");
-    expect(text("wellness-ai-proposal")).toContain("Read by fixed rules");
-    expect(text("wellness-ai-proposal")).toContain("7.8 h");
+    await screen.findByTestId("wellness-ai-proposal-0");
+    expect(text("wellness-ai-summary")).toContain("Read by fixed rules");
+    expect(text("wellness-ai-proposal-0")).toContain("7.8 h");
+  });
+});
+
+describe("a whole dashboard from one description", () => {
+  const many = () => ({ status: 200, body: { by: "ai", name: "Running & Sleep", widgets: [
+    { id: "widget-1", title: "Running Distance", kind: "metric", source: { kind: "tracker", key: "Running", field: "distance" }, calc: "total", display: "bar", by: "ai" },
+    { id: "widget-2", title: "Weekly Sleep", kind: "metric", source: { kind: "metric", key: "sleep_hours" }, calc: "average", display: "number", range: "7d", by: "ai" },
+    { id: "widget-3", title: "Cycling Distance", kind: "metric", source: { kind: "tracker", key: "Cycling" }, calc: "total", display: "bar", by: "ai" },
+  ] } });
+  const build = async (said: string) => {
+    fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
+    fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: said } });
+    fireEvent.click(screen.getByTestId("wellness-ai-build"));
+    await screen.findByTestId("wellness-ai-proposals");
+  };
+
+  it("each card is previewed from the person's own trackers; one over a tracker they do not have is not offered", async () => {
+    suggest = many;
+    await open();
+    await build("running distance, weekly sleep and cycling distance");
+    expect(screen.getAllByTestId(/^wellness-ai-proposal-\d+$/)).toHaveLength(2);
+    // Five runs of 2 mi in the last 30 days.
+    expect(text("wellness-ai-proposal-0")).toContain("Running Distance");
+    expect(text("wellness-ai-proposal-0")).toContain("10 mi");
+    expect(text("wellness-ai-proposal-1")).toContain("7.9 h");
+    expect(text("wellness-ai-summary")).toContain("2 cards");
+    expect(text("wellness-ai-summary")).toContain("1 could not be built: you have no tracker for it.");
+    expect(writes).toEqual([]);
+  });
+
+  it("Add all puts them on the dashboard being edited", async () => {
+    suggest = many;
+    await open();
+    await build("running distance and weekly sleep");
+    fireEvent.click(screen.getByTestId("wellness-ai-add-all"));
+    expect(screen.queryByTestId("wellness-ai-proposals")).toBeNull();
+    expect(rows("wellness-customize-visible").slice(-2)).toEqual(["w:running-distance", "w:weekly-sleep"]);
+    await save();
+    expect(saved().widgets.map((w) => [w.title, w.by])).toEqual([["Running Distance", "ai"], ["Weekly Sleep", "ai"]]);
+    expect(saved().dashboards).toHaveLength(1);
+  });
+
+  it("Make a new dashboard holds exactly those cards and leaves the first dashboard as it was", async () => {
+    suggest = many;
+    await open();
+    await build("running distance and weekly sleep");
+    expect(text("wellness-ai-new-dashboard")).toBe("Make a new dashboard: Running & Sleep");
+    fireEvent.click(screen.getByTestId("wellness-ai-new-dashboard"));
+    expect(screen.getByTestId("wellness-customize-board-running-sleep").getAttribute("aria-pressed")).toBe("true");
+    expect(rows("wellness-customize-visible")).toEqual(["w:running-distance", "w:weekly-sleep"]);
+    await save();
+    const b = saved();
+    expect(b.dashboards.map((d) => d.name)).toEqual(["Overview", "Running & Sleep"]);
+    expect(b.active).toBe("running-sleep");
+    expect(visibleWellnessCards({ ...b, active: "overview" })).toHaveLength(10);
+  });
+
+  it("when nothing it proposed can be drawn from the person's trackers, it says so instead of offering it", async () => {
+    suggest = () => ({ status: 200, body: { by: "ai", widgets: [{ id: "w", title: "Cycling Distance", kind: "metric", source: { kind: "tracker", key: "Cycling" }, calc: "total", display: "bar" }] } });
+    await open();
+    fireEvent.click(screen.getByTestId("wellness-customize-builder-ai"));
+    fireEvent.change(screen.getByTestId("wellness-ai-prompt"), { target: { value: "my cycling distance" } });
+    fireEvent.click(screen.getByTestId("wellness-ai-build"));
+    await screen.findByTestId("wellness-ai-error");
+    expect(screen.queryByTestId("wellness-ai-proposals")).toBeNull();
+  });
+});
+
+describe("cards offered from the person's own trackers", () => {
+  it("lists what has data, and one tap adds a card that already shows it", async () => {
+    await open();
+    const offers = within(screen.getByTestId("wellness-customize-from-trackers")).getAllByRole("button").map((b) => b.textContent);
+    expect(offers.some((o) => o!.includes("Sleep Trend") && o!.includes("20 readings"))).toBe(true);
+    expect(offers.some((o) => o!.includes("Guitar Practice Minutes"))).toBe(true);
+    fireEvent.click(screen.getByTestId("wellness-customize-suggest-tracker:t-guitar:minutes"));
+    expect(rows("wellness-customize-visible")).toContain("w:guitar-practice-minutes");
+    // Offered once: it is no longer in the list.
+    expect(screen.queryByTestId("wellness-customize-suggest-tracker:t-guitar:minutes")).toBeNull();
+    fireEvent.click(screen.getByTestId("wellness-customize-more-w:guitar-practice-minutes"));
+    expect(text("wellness-widget-value-guitar-practice-minutes")).toBe("75 min");
+    await save();
+    expect(saved().widgets[0]).toMatchObject({ source: { kind: "tracker", key: "Guitar practice", field: "minutes" }, calc: "total" });
   });
 });
 

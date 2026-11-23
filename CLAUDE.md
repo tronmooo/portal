@@ -946,12 +946,26 @@ averaged on each side) or SCORE (weighted parts against targets, a part with
 no data left out — never scored zero). There is no free-form formula. Add a
 new kind of widget by adding a source or a calculation in
 `shared/wellness-widgets.ts`.
-**H8. The AI only chooses.** `GET /api/wellness-widgets/suggest` writes
-nothing; the model is told tracker names and which measurements have data,
-never a reading; its answer passes the validator or the fixed rules answer
-(`inferWellnessWidgetFromText`). The dialog shows a proposal with a live
-preview and Add / Discard (W5). Never let the model emit a query, a formula
-or markup.
+**H8. The AI only chooses, from what the person actually tracks.**
+`GET /api/wellness-widgets/suggest` writes nothing. The model is given an
+OUTLINE of the user's trackers (`outlineTrackers`: name, number fields with
+units, entry count, whether it is a workout) and which measurements have
+readings — never a reading, a note or a date. Its answer is a LIST of cards
+(one description may ask for several, at most `MAX_BUILD_WIDGETS`); each passes
+`sanitizeWellnessWidget` and is then GROUNDED (`groundWellnessWidget`): the
+tracker's real name and field are written back, and a card over a tracker the
+person does not have is refused — on the server against the account, and again
+in the dialog against the subject's own trackers (H10). With no model, or no
+valid answer, the fixed rules answer (`inferWellnessWidgetsFromText`). The
+dialog shows each proposal with a live preview and Add / Discard, plus "Add
+all" and "Make a new dashboard" (`addWellnessDashboardWithWidgets`) — W5: it
+proposes, the user applies. Never let the model emit a query, a formula or
+markup.
+**H8a. Offers come from the records.** "From your trackers"
+(`suggestWellnessWidgets`) lists a card only for a tracker or measurement that
+has entries, so every offer shows real figures the moment it is added; an
+amount is totalled, a level (severity, rating, rate) averaged. Nothing is
+offered for an empty account.
 **H9. A comparison is a pattern, not a diagnosis.** Every COMPARE card shows
 `COMPARE_CAVEAT` and how it was worked out; under `MIN_COMPARE_DAYS` paired
 days it says so instead of stating a pattern. Insights name an out-of-range
@@ -964,8 +978,7 @@ for the whole tab, journal / expenses / goals for the cards that read them.
 `buildWellnessWidgetView` returns null while a list it needs is not loaded.
 *Not built (2026-11-23):* drag-to-reorder on the tab itself (it is in
 Customize); per-widget colors; widgets over documents or the calendar; a
-custom score replacing the header's Wellness chip; an AI-generated whole
-dashboard (templates exist).
+custom score replacing the header's Wellness chip.
 
 ## Touch rules (the app is used on a phone; a mouse click proves nothing about a finger)
 

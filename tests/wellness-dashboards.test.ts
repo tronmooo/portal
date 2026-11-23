@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_WELLNESS_OPTIONS, MAX_DASHBOARDS, WELLNESS_CARD_IDS, WELLNESS_DEFAULT_HIDDEN, WELLNESS_PREFS_KEY, WELLNESS_TEMPLATES,
-  activeWellnessBoard, addWellnessDashboard, addWellnessWidget, defaultWellnessBoards, duplicateWellnessWidget, hiddenWellnessCards,
+  activeWellnessBoard, addWellnessDashboard, addWellnessDashboardWithWidgets, addWellnessWidget, defaultWellnessBoards, duplicateWellnessWidget, hiddenWellnessCards,
   isWellnessCardVisible, moveWellnessCard, parseWellnessBoards, placeWellnessCard, removeWellnessBoard, removeWellnessWidget,
   renameWellnessBoard, resetWellnessLayout, serializeWellnessBoards, setActiveWellnessBoard, setWellnessCardSize, setWellnessCardVisible,
   setWellnessOptions, updateWellnessWidget, visibleWellnessCards, wellnessCardHint, wellnessCardSize, wellnessCardTitle,
@@ -160,6 +160,12 @@ describe("several dashboards", () => {
     let many = defaultWellnessBoards();
     for (let i = 0; i < 12; i++) many = addWellnessDashboard(many, `D${i}`, "blank");
     expect(many.dashboards).toHaveLength(MAX_DASHBOARDS);
+  });
+  it("a dashboard can be made from a set of cards: it shows exactly those, and the others do not gain them", () => {
+    const b = addWellnessDashboardWithWidgets(defaultWellnessBoards(), "Running & Sleep", [idea("consistency"), idea("rhr")]);
+    expect(activeWellnessBoard(b).name).toBe("Running & Sleep");
+    expect(visibleWellnessCards(b)).toEqual(["w:exercise-consistency", "w:resting-heart-rate"]);
+    expect(visibleWellnessCards(setActiveWellnessBoard(b, "overview"))).toEqual(visibleWellnessCards(defaultWellnessBoards()));
   });
   it("every template names cards that exist", () => {
     for (const t of WELLNESS_TEMPLATES) {

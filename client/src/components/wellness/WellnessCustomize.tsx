@@ -24,7 +24,7 @@ import { useToast } from "@/hooks/use-toast";
 import { WIDGET_ICON } from "@/components/dashboard/ExecCustomize";
 import { isWidgetCardId, widgetCardId } from "@shared/dashboard-engine";
 import {
-  MAX_DASHBOARDS, WELLNESS_PREFS_KEY, WELLNESS_TEMPLATES, activeWellnessBoard, addWellnessDashboard, addWellnessWidget,
+  MAX_DASHBOARDS, WELLNESS_PREFS_KEY, WELLNESS_TEMPLATES, activeWellnessBoard, addWellnessDashboard, addWellnessDashboardWithWidgets, addWellnessWidget,
   defaultWellnessBoards, duplicateWellnessWidget, hiddenWellnessCards, orderedWellnessCards, parseWellnessBoards, placeWellnessCard,
   removeWellnessBoard, removeWellnessWidget, renameWellnessBoard, resetWellnessLayout, serializeWellnessBoards, setActiveWellnessBoard,
   setWellnessCardSize, setWellnessCardVisible, setWellnessOptions, updateWellnessWidget, visibleWellnessCards, wellnessCardHint,
@@ -34,7 +34,7 @@ import {
 import { RANGE_LABEL, RANGE_WORDS, WELLNESS_RANGES, type WellnessRange } from "@shared/wellness-period";
 import {
   MAX_WELLNESS_WIDGETS, WELLNESS_CALCS, WELLNESS_CALC_LABELS, WELLNESS_DISPLAYS, WELLNESS_DISPLAY_LABELS, WELLNESS_SOURCE_KINDS,
-  WELLNESS_WIDGET_IDEAS, buildWellnessWidgetView, findTrackerByName, sanitizeWellnessWidget, trackerNumberFields,
+  WELLNESS_WIDGET_IDEAS, buildWellnessWidgetView, findTrackerByName, groundWellnessWidget, sanitizeWellnessWidget, suggestWellnessWidgets, trackerNumberFields,
   type ScorePart, type SeriesRef, type WellnessSourceData, type WellnessSourceKind, type WellnessWidget,
 } from "@shared/wellness-widgets";
 import { CANONICAL_METRICS } from "@shared/wellness-canon";
@@ -326,7 +326,7 @@ export function WellnessCustomizeDialog({ open, onClose, data, lists, range, tod
   const [building, setBuilding] = useState<WellnessWidget | null>(null);
   const [formKey, setFormKey] = useState(0);
   const [prompt, setPrompt] = useState("");
-  const [proposal, setProposal] = useState<{ widget: WellnessWidget; by: "ai" | "rules" } | null>(null);
+  const [proposal, setProposal] = useState<{ widgets: WellnessWidget[]; by: "ai" | "rules"; name?: string; dropped: number } | null>(null);
   const touched = useRef(false);
   const wasOpen = useRef(false);
   useEffect(() => {
@@ -356,11 +356,28 @@ export function WellnessCustomizeDialog({ open, onClose, data, lists, range, tod
     mutationFn: async (text: string) => {
       const r = await apiRequest("GET", `/api/wellness-widgets/suggest?prompt=${encodeURIComponent(text)}`);
       const body = await r.json();
-      const widget = sanitizeWellnessWidget(body?.widget, "widget");
-      if (!widget) throw new Error("Unexpected response");
-      return { widget, by: body?.by === "ai" ? "ai" as const : "rules" as const };
+      const raw: unknown[] = Array.isArray(body?.widgets) ? body.widgets : [body?.widget];
+      const widgets: WellnessWidget[] = [];
+      let dropped = 0;
+      raw.forEach((x, i) => {
+        const clean = sanitizeWellnessWidget(x, `widget-${i + 1}`);
+        // Held to THIS person's trackers: a card over a tracker they do not
+        // have could only ever say "nothing recorded".
+        const ok = clean ? groundWellnessWidget(clean, data.trackers) : null;
+        if (ok) widgets.push({ ...ok, id: `proposal-${widgets.length + 1}` }); else dropped++;
+      });
+      if (!widgets.length) throw new Error("Unexpected response");
+      const name = typeof body?.name === "string" ? body.name.replace(/\s+/g, " ").trim().slice(0, 24) : "";
+      return { widgets, by: body?.by === "ai" ? "ai" as const : "rules" as const, dropped, ...(name ? { name } : {}) };
     },
     onSuccess: (p) => setProposal(p),
+  });
+  // Cards offered from what this person actually tracks (shared/wellness-widgets).
+  const fromTrackers = useMemo(() => suggestWellnessWidgets(data, draft.widgets), [data, draft.widgets]);
+  const dropProposal = (id: string) => setProposal((p) => {
+    if (!p) return p;
+    const widgets = p.widgets.filter((w) => w.id !== id);
+    return widgets.length ? { ...p, widgets } : null;
   });
 
   // ── Reorder: drag the handle (pointer or touch), or arrow keys on it ───────
@@ -572,6 +589,20 @@ export function WellnessCustomizeDialog({ open, onClose, data, lists, range, tod
 
       {panel("Build Your Own", `${draft.widgets.length} of ${MAX_WELLNESS_WIDGETS}`, (
         <div className="space-y-2.5">
+          {fromTrackers.length > 0 && (
+            <div data-testid="wellness-customize-from-trackers">
+              <p className="text-[12px] text-muted-foreground mb-1.5">From your trackers — each one already has data to show.</p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {fromTrackers.map((sg) => (
+                  <button key={sg.key} type="button" onClick={() => add({ ...sg.widget, by: "manual" })}
+                    className="rounded-lg border border-border/70 px-2.5 py-1.5 text-left hover:bg-muted min-w-0" data-testid={`wellness-customize-suggest-${sg.key}`}>
+                    <span className="flex items-center gap-1 text-[12px] font-semibold"><Plus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /><span className="truncate">{sg.widget.title}</span></span>
+                    <span className="block text-[11px] text-muted-foreground leading-tight truncate">{sg.hint}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
             <p className="text-[12px] text-muted-foreground mb-1.5">Widget ideas — one tap, then change anything about them.</p>
             <div className="flex flex-wrap gap-1.5" data-testid="wellness-customize-ideas">
@@ -615,27 +646,56 @@ export function WellnessCustomizeDialog({ open, onClose, data, lists, range, tod
           {builder === "ai" && (
             <div className="rounded-lg border border-border/60 p-2.5 space-y-2" data-testid="wellness-builder-ai">
               <label className="block text-[12px] text-muted-foreground" htmlFor="wellness-ai-prompt">
-                Say what you want to see. Portol picks from the data it can draw — it never writes its own queries.
+                Say what you want to see — one card, or a whole dashboard. Portol builds it from your own trackers and the data it can draw; it never writes its own queries.
               </label>
-              <textarea id="wellness-ai-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} maxLength={300} rows={2}
-                placeholder="Do I exercise more after sleeping eight hours?" className="w-full rounded-lg border border-border bg-background/60 px-2 py-1.5 text-[13px]"
-                data-testid="wellness-ai-prompt" />
+              <textarea id="wellness-ai-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} maxLength={400} rows={3}
+                placeholder="My running distance, weekly sleep average, weight trend, and whether I exercise more after sleeping eight hours"
+                className="w-full rounded-lg border border-border bg-background/60 px-2 py-1.5 text-[13px]" data-testid="wellness-ai-prompt" />
               <button type="button" disabled={prompt.trim().length < 3 || suggest.isPending} onClick={() => { setProposal(null); suggest.mutate(prompt.trim()); }}
                 className="rounded-xl px-3.5 py-2 text-[13px] font-bold text-white disabled:opacity-50" style={{ background: `hsl(${PURPLE})` }}
-                data-testid="wellness-ai-build">{suggest.isPending ? "Building…" : "Build widget"}</button>
-              {suggest.isError && !suggest.isPending && <p className="text-[12px] text-destructive" data-testid="wellness-ai-error">Couldn't build that. Try again, or build it yourself above.</p>}
+                data-testid="wellness-ai-build">{suggest.isPending ? "Building…" : "Build with AI"}</button>
+              {suggest.isError && !suggest.isPending && <p className="text-[12px] text-destructive" data-testid="wellness-ai-error">Couldn't build that from your data. Try again, or build it yourself above.</p>}
               {proposal && (
-                <div className="rounded-lg border border-border/60 p-2 space-y-2" data-testid="wellness-ai-proposal">
-                  <p className="text-[13px] font-semibold">{proposal.widget.title}
-                    <span className="ml-2 text-[11px] font-normal text-muted-foreground">{proposal.by === "ai" ? "Proposed by AI" : "Read by fixed rules"}</span>
+                <div className="space-y-2" data-testid="wellness-ai-proposals">
+                  <p className="text-[12px] text-muted-foreground" data-testid="wellness-ai-summary">
+                    {proposal.by === "ai" ? "Proposed by AI" : "Read by fixed rules"} · {proposal.widgets.length} card{proposal.widgets.length === 1 ? "" : "s"}, drawn from your records. Nothing is added until you say so.
+                    {proposal.dropped > 0 ? ` ${proposal.dropped} could not be built: you have no tracker for ${proposal.dropped === 1 ? "it" : "them"}.` : ""}
                   </p>
-                  <WellnessWidgetCardBody widget={proposal.widget} data={data} lists={lists} range={range} todayISO={todayISO} />
-                  <div className="flex gap-1.5">
-                    <button type="button" onClick={() => { if (add(proposal.widget)) { setProposal(null); setPrompt(""); } }}
-                      className="rounded-full px-3 py-1 text-[12px] font-bold text-white" style={{ background: `hsl(${PURPLE})` }} data-testid="wellness-ai-use">Add this widget</button>
-                    <button type="button" onClick={() => setProposal(null)} className="rounded-full border border-border px-3 py-1 text-[12px] font-semibold hover:bg-muted"
-                      data-testid="wellness-ai-discard">Discard</button>
-                  </div>
+                  {proposal.widgets.map((w, i) => (
+                    <div key={w.id} className="rounded-lg border border-border/60 p-2 space-y-2" data-testid={`wellness-ai-proposal-${i}`}>
+                      <p className="text-[13px] font-semibold">{w.title}</p>
+                      <WellnessWidgetCardBody widget={w} data={data} lists={lists} range={range} todayISO={todayISO} />
+                      <div className="flex gap-1.5">
+                        <button type="button" onClick={() => { if (add(w)) dropProposal(w.id); }}
+                          className="rounded-full px-3 py-1 text-[12px] font-bold text-white" style={{ background: `hsl(${PURPLE})` }} data-testid={`wellness-ai-use-${i}`}>Add this widget</button>
+                        <button type="button" onClick={() => dropProposal(w.id)} className="rounded-full border border-border px-3 py-1 text-[12px] font-semibold hover:bg-muted"
+                          data-testid={`wellness-ai-discard-${i}`}>Discard</button>
+                      </div>
+                    </div>
+                  ))}
+                  {proposal.widgets.length > 1 && (
+                    <div className="flex flex-wrap gap-1.5" data-testid="wellness-ai-bulk">
+                      <button type="button"
+                        onClick={() => {
+                          let next = draft; let n = 0;
+                          for (const w of proposal.widgets) { const r = addWellnessWidget(next, w); if (r.widget) { next = r.boards; n++; } }
+                          if (n) { edit(next); setProposal(null); setPrompt(""); toast({ title: `${n} cards added to ${board.name}`, description: "Press Save Changes to keep them." }); }
+                        }}
+                        className="rounded-full px-3 py-1.5 text-[12px] font-bold text-white" style={{ background: `hsl(${PURPLE})` }} data-testid="wellness-ai-add-all">
+                        Add all to {board.name}
+                      </button>
+                      {draft.dashboards.length < MAX_DASHBOARDS && (
+                        <button type="button"
+                          onClick={() => {
+                            const next = addWellnessDashboardWithWidgets(draft, proposal.name || "My Dashboard", proposal.widgets);
+                            if (next !== draft) { edit(next); setExpanded(null); setProposal(null); setPrompt(""); toast({ title: "New dashboard made from these cards", description: "Press Save Changes to keep it." }); }
+                          }}
+                          className="rounded-full border border-border px-3 py-1.5 text-[12px] font-semibold hover:bg-muted" data-testid="wellness-ai-new-dashboard">
+                          Make a new dashboard{proposal.name ? `: ${proposal.name}` : ""}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

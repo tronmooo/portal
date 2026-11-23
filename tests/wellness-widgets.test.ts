@@ -3,7 +3,8 @@
 // to one validator and computed from the records on read.
 import { describe, it, expect } from "vitest";
 import {
-  COMPARE_CAVEAT, WELLNESS_WIDGET_IDEAS, buildWellnessWidgetView, describeWellnessWidget, formatWellnessValue, inferWellnessWidgetFromText,
+  COMPARE_CAVEAT, WELLNESS_WIDGET_IDEAS, buildWellnessWidgetView, describeWellnessWidget, formatWellnessValue, groundWellnessWidget,
+  inferWellnessWidgetFromText, inferWellnessWidgetsFromText, suggestWellnessWidgets,
   resolveSeries, sanitizeWellnessWidget, wellnessWidgetNeeds, type WellnessSourceData, type WellnessWidget,
 } from "../shared/wellness-widgets";
 import { TODAY, TZ, daysAgo, fixtureMetrics, fixtureTrackers } from "./helpers/wellness-fixture";
@@ -180,6 +181,66 @@ describe("a sentence, read by fixed rules (the AI Builder's fallback)", () => {
       const w = infer(text);
       expect(sanitizeWellnessWidget(w)).toEqual(w);
     }
+  });
+});
+
+describe("several cards from one description", () => {
+  const names = { trackerNames: trackers.map((t) => t.name) };
+  it("each thing asked for is its own card", () => {
+    const ws = inferWellnessWidgetsFromText("running distance, my weekly sleep average, weight trend and whether I exercise more after sleeping eight hours", names);
+    expect(ws.map((w) => w.kind)).toEqual(["metric", "metric", "metric", "compare"]);
+    expect(ws[1]).toMatchObject({ source: { kind: "metric", key: "sleep_hours" }, range: "7d" });
+    expect(ws[3]).toMatchObject({ source: { kind: "metric", key: "sleep_hours" }, other: { kind: "workouts" }, threshold: 8 });
+    expect(new Set(ws.map((w) => w.id)).size).toBe(4);
+  });
+  it("one thing is one card; a score's parts are not split", () => {
+    expect(inferWellnessWidgetsFromText("my average sleep", names)).toHaveLength(1);
+    const score = inferWellnessWidgetsFromText("a health score from sleep and workouts", names);
+    expect(score).toHaveLength(1);
+    expect(score[0].kind).toBe("score");
+  });
+});
+
+describe("held to the trackers the person actually has", () => {
+  it("writes the real tracker name and field back, and drops a field it does not have", () => {
+    const w = widget({ kind: "metric", source: { kind: "tracker", key: "guitar", field: "MINUTES" }, calc: "total" });
+    expect(groundWellnessWidget(w, trackers)!.source).toEqual({ kind: "tracker", key: "Guitar practice", field: "minutes" });
+    const noField = widget({ kind: "metric", source: { kind: "tracker", key: "Guitar practice", field: "laps" }, calc: "count" });
+    expect(groundWellnessWidget(noField, trackers)!.source).toEqual({ kind: "tracker", key: "Guitar practice" });
+  });
+  it("refuses a card over a tracker that does not exist — anywhere in it", () => {
+    expect(groundWellnessWidget(widget({ kind: "metric", source: { kind: "tracker", key: "Cycling" } }), trackers)).toBeNull();
+    expect(groundWellnessWidget(widget({ kind: "compare", source: { kind: "metric", key: "sleep_hours" }, other: { kind: "tracker", key: "Cycling" } }), trackers)).toBeNull();
+    expect(groundWellnessWidget(widget({ kind: "score", parts: [{ source: { kind: "tracker", key: "Cycling" }, target: 1 }] }), trackers)).toBeNull();
+  });
+  it("leaves the fixed sources alone", () => {
+    const w = widget({ kind: "compare", source: { kind: "workouts" }, other: { kind: "mood" } });
+    expect(groundWellnessWidget(w, [])).toEqual(w);
+  });
+});
+
+describe("suggested from what is actually tracked", () => {
+  const offers = suggestWellnessWidgets(data());
+  it("offers a card for each measurement and tracker that has data, busiest first", () => {
+    const titles = offers.map((o) => o.widget.title);
+    expect(titles).toEqual(["Sleep Trend", "Running Log", "Running Distance", "Weight Trend", "Nutrition Calories", "Systolic Trend", "Diastolic Trend", "Headache Severity", "Guitar Practice Minutes"]);
+    // A level is averaged, an amount is added up.
+    expect(offers.find((o) => o.widget.title === "Headache Severity")!.widget).toMatchObject({ calc: "average", display: "line" });
+    expect(offers.find((o) => o.widget.title === "Running Distance")!.widget).toMatchObject({ calc: "total", source: { kind: "tracker", key: "Running", field: "distance" } });
+    expect(offers[0]).toMatchObject({ key: "metric:sleep_hours", entries: 20, hint: "20 readings · last Nov 23" });
+    for (let i = 1; i < offers.length; i++) expect(offers[i - 1].entries).toBeGreaterThanOrEqual(offers[i].entries);
+  });
+  it("every offer draws real figures the moment it is added", () => {
+    for (const o of offers) {
+      const v = buildWellnessWidgetView(widget(o.widget as any), data(), "all", TODAY)!;
+      expect(v.empty, o.widget.title).toBeUndefined();
+      expect(v.headline?.value, o.widget.title).toBeTruthy();
+    }
+    expect(view(offers.find((o) => o.widget.title === "Guitar Practice Minutes")!.widget as any, "all").headline!.value).toBe("75 min");
+  });
+  it("offers nothing for an empty account, and nothing the person already has", () => {
+    expect(suggestWellnessWidgets(data({ metrics: new Map(), trackers: [] }))).toEqual([]);
+    expect(suggestWellnessWidgets(data(), [{ title: "Sleep Trend" }]).some((o) => o.widget.title === "Sleep Trend")).toBe(false);
   });
 });
 

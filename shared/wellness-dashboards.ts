@@ -316,4 +316,16 @@ export function addWellnessDashboard(b: WellnessBoards, name: string, templateKe
   return { ...b, active: id, widgets, dashboards: [...b.dashboards.map((d) => carryWidgetChange(d, created, [])), fresh] };
 }
 
+/**
+ * A new dashboard holding exactly these cards (the AI Builder's "make a
+ * dashboard from these"). It becomes the active one; the cards start hidden on
+ * every dashboard that already existed.
+ */
+export function addWellnessDashboardWithWidgets(b: WellnessBoards, name: string, bases: ReadonlyArray<Omit<WellnessWidget, "id">>): WellnessBoards {
+  if (b.dashboards.length >= MAX_DASHBOARDS) return b;
+  let next = addWellnessDashboard(b, name, "blank");
+  for (const base of bases) next = addWellnessWidget(next, base).boards;
+  return next;
+}
+
 export { MAX_DASHBOARDS };

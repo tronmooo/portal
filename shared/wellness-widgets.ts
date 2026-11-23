@@ -629,6 +629,7 @@ const SOURCE_WORDS: Array<{ re: RegExp; ref: SeriesRef; title: string }> = [
 ];
 
 export interface WellnessInferContext { trackerNames?: string[] }
+const NUMBER_WORDS: Record<string, number> = { five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 
 function sourcesIn(text: string, ctx: WellnessInferContext): Array<{ at: number; ref: SeriesRef; title: string }> {
   const found: Array<{ at: number; end: number; ref: SeriesRef; title: string }> = [];
@@ -693,7 +694,7 @@ export function inferWellnessWidgetFromText(text: string, ctx: WellnessInferCont
     const [first, second] = found;
     const by = conditionFirst ? first : second;
     const what = conditionFirst ? second : first;
-    const th = /(\d+(?:\.\d+)?)\s*(?:\+|or more|hours?|hrs?|h\b)/i.exec(said);
+    const th = /(\d+(?:\.\d+)?)\s*(?:\+|or more|hours?|hrs?|h\b)/i.exec(said.replace(/\b(five|six|seven|eight|nine|ten)\b/gi, (w) => String(NUMBER_WORDS[w.toLowerCase()])));
     return done({
       title: `${what.title} vs. ${by.title}`.slice(0, 40), icon: "chart", kind: "compare", source: by.ref, other: what.ref,
       ...(th && by.ref.key === "sleep_hours" ? { threshold: Number(th[1]) } : {}),
@@ -716,4 +717,118 @@ export function inferWellnessWidgetFromText(text: string, ctx: WellnessInferCont
     : calc === "count" || calc === "total" ? "bar" : "line";
   const icon: WellnessWidgetIcon = one.ref.kind === "workouts" ? "dumbbell" : one.ref.kind === "mood" ? "book" : one.ref.kind === "spending" ? "wallet" : one.ref.kind === "tracker" ? "chart" : "heart";
   return done({ title: one.title, icon, kind: "metric", source: one.ref, calc, display });
+}
+
+// ── Several widgets from one description ─────────────────────────────────────
+// "A dashboard with my running distance, weekly sleep average, weight trend and
+// whether I exercise more after sleeping eight hours" is four cards.
+
+export const MAX_BUILD_WIDGETS = 6;
+
+/** The fixed-rules reading of a description that may ask for several cards. */
+export function inferWellnessWidgetsFromText(text: string, ctx: WellnessInferContext = {}): WellnessWidget[] {
+  const said = clip(text, 400);
+  const whole = () => [inferWellnessWidgetFromText(said, ctx, "widget-1")];
+  // A score names its parts with "and"; it is one card.
+  if (/\bscore\b/i.test(said)) return whole();
+  const clauses = said.split(/[,;\n]|\band\b|\bplus\b|\balso\b/i).map((c) => c.trim()).filter((c) => c.length >= 3);
+  const out: WellnessWidget[] = [];
+  const seen = new Set<string>();
+  for (const clause of clauses) {
+    if (sourcesIn(clause, ctx).length === 0) continue;
+    const w = inferWellnessWidgetFromText(clause, ctx, `widget-${out.length + 1}`);
+    const key = JSON.stringify([w.kind, w.source, w.other, w.calc]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(w);
+    if (out.length >= MAX_BUILD_WIDGETS) break;
+  }
+  return out.length >= 2 ? out : whole();
+}
+
+/**
+ * Hold a proposed widget to the user's ACTUAL trackers: a tracker source must
+ * name one that exists (its real name is written back, and a field that tracker
+ * does not have is dropped to "count entries"). A widget pointing at a tracker
+ * the user does not have is refused — it could only ever draw "nothing
+ * recorded". Other sources are fixed lists and need no grounding.
+ */
+export function groundWellnessWidget(w: WellnessWidget, trackers: readonly any[]): WellnessWidget | null {
+  let ok = true;
+  const ground = (ref: SeriesRef | undefined): SeriesRef | undefined => {
+    if (!ref || ref.kind !== "tracker") return ref;
+    const t = findTrackerByName(trackers, ref.key || "");
+    if (!t) { ok = false; return ref; }
+    // A tracker that IS a canonical measurement reads as that measurement, so
+    // it merges with every other source of it the way the tab does.
+    const canon = !ref.field ? resolveCanonicalMetric(t.name, t.category) : null;
+    if (canon) return { kind: "metric", key: canon.id };
+    const field = ref.field ? trackerNumberFields(t).find((f) => f.toLowerCase() === String(ref.field).toLowerCase()) : undefined;
+    return { kind: "tracker", key: String(t.name), ...(field ? { field } : {}) };
+  };
+  const next: WellnessWidget = {
+    ...w,
+    ...(w.source ? { source: ground(w.source) } : {}),
+    ...(w.other ? { other: ground(w.other) } : {}),
+    ...(w.parts ? { parts: w.parts.map((p) => ({ ...p, source: ground(p.source)! })) } : {}),
+  };
+  return ok ? sanitizeWellnessWidget(next, w.id) : null;
+}
+
+// ── Suggested from what the user actually tracks ─────────────────────────────
+
+export interface WellnessSuggestion { key: string; hint: string; entries: number; widget: Omit<WellnessWidget, "id"> }
+
+const titleCase = (s: string) => clip(s, 30).replace(/\b[a-z]/g, (c) => c.toUpperCase());
+
+/**
+ * Cards worth offering, read from the records themselves: every tracker and
+ * measurement that has entries becomes a card that will show real figures the
+ * moment it is added. Nothing is suggested for something with no data.
+ */
+export function suggestWellnessWidgets(data: WellnessSourceData, existing: ReadonlyArray<Pick<WellnessWidget, "title">> = [], max = 10): WellnessSuggestion[] {
+  const out: WellnessSuggestion[] = [];
+  const have = new Set(existing.map((w) => w.title.toLowerCase()));
+  const push = (s: WellnessSuggestion) => { if (!have.has(s.widget.title.toLowerCase()) && !out.some((o) => o.widget.title === s.widget.title)) out.push(s); };
+  const last = (pts: DayPoint[]) => (pts.length ? ` · last ${shortDay(pts[pts.length - 1].day)}` : "");
+
+  for (const m of data.metrics.values()) {
+    // Distance and exercise minutes are read off the workouts themselves below.
+    if (m.metric.id === "distance" || m.metric.id === "exercise_minutes") continue;
+    const pts = metricDailyPoints(m);
+    if (pts.length < 2) continue;
+    const n = pts.reduce((a, p) => a + p.n, 0);
+    const additive = ADDITIVE_METRICS.has(m.metric.id);
+    push({
+      key: `metric:${m.metric.id}`, entries: n, hint: `${n} readings${last(pts)}`,
+      widget: { title: clip(`${m.metric.label} ${additive ? "Per Day" : "Trend"}`, 40), icon: "heart", kind: "metric", source: M(m.metric.id), calc: "average", display: additive ? "bar" : "line" },
+    });
+  }
+  for (const t of data.trackers) {
+    const n = (t?.entries || []).length;
+    if (!t?.name || n === 0 || resolveCanonicalMetric(t.name, t.category)) continue;
+    const workout = isWorkoutTracker(t);
+    // Number fields that are not already a health measurement of their own
+    // (a Blood Pressure tracker's systolic is offered above, as the measurement).
+    const fields = trackerNumberFields(t).filter((f) => !/^(id|sets?|reps?)$/i.test(f) && (workout || !resolveCanonicalMetric(f)));
+    if (!workout && fields.length === 0 && trackerNumberFields(t).length > 0) continue;
+    const pts = dailyPoints((t.entries as any[]).filter((e) => e?.timestamp).map((e) => ({ value: 1, at: e.timestamp })), "sum", data.timezone);
+    const name = titleCase(t.name);
+    const icon = workout ? "dumbbell" as const : "chart" as const;
+    const counts = fields.map((f) => ({ f, n: (t.entries as any[]).filter((e) => Number.isFinite(num(e?.values?.[f]))).length })).sort((a, b) => b.n - a.n);
+    const best = counts[0] && counts[0].n >= 2 ? counts[0] : null;
+    // How often: for a workout, and for a tracker with no number to add up.
+    if (workout || !best) {
+      push({ key: `tracker:${t.id}`, entries: n, hint: `${n} entr${n === 1 ? "y" : "ies"}${last(pts)}`, widget: { title: clip(`${name} Log`, 40), icon, kind: "metric", source: { kind: "tracker", key: t.name }, calc: "count", display: "bar" } });
+    }
+    // Its busiest number: added up, or averaged when it is a level rather than an amount.
+    if (best) {
+      const level = /severity|level|rating|score|intensity|pain|mood|rate|bpm|temp|pace|speed/i.test(best.f);
+      push({
+        key: `tracker:${t.id}:${best.f}`, entries: best.n, hint: `${best.n} values${last(pts)}`,
+        widget: { title: clip(`${name} ${titleCase(best.f)}`, 40), icon, kind: "metric", source: { kind: "tracker", key: t.name, field: best.f }, calc: level ? "average" : "total", display: level ? "line" : "bar" },
+      });
+    }
+  }
+  return out.sort((a, b) => b.entries - a.entries).slice(0, max);
 }

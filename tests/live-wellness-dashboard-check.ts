@@ -78,6 +78,17 @@ async function main() {
       [`how often do I do ${name}`, (w) => w.kind === "metric" && (w.source?.kind === "tracker" || w.source?.kind === "workouts") && w.calc === "count", "a count of that workout"],
       ["what I spend on healthcare", (w) => w.source?.kind === "spending", "health spending"],
     ];
+    // One description, several cards — built on the account's real tracker and its real field.
+    {
+      const r = await api("GET", `/wellness-widgets/suggest?prompt=${encodeURIComponent(`a dashboard with my ${name} distance, my weekly sleep average and my weight trend`)}`);
+      const ws: any[] = Array.isArray(r.data?.widgets) ? r.data.widgets : [];
+      const rowing = ws.find((w) => w.source?.kind === "tracker" && w.source?.key === name);
+      check(r.ok && ws.length === 3 && ws.every((w) => !!sanitizeWellnessWidget(w)), `AI Builder (${r.data?.by}): one description → three cards (${ws.map((w) => w.title).join(" · ")})`);
+      check(!!rowing && rowing.source.field === "distance" && rowing.calc === "total", `…the first reads the real tracker's real field: ${JSON.stringify(rowing?.source)} · ${rowing?.calc}`);
+      const none = await api("GET", `/wellness-widgets/suggest?prompt=${encodeURIComponent("my kitesurfing zqnothing distance")}`);
+      const bad = (Array.isArray(none.data?.widgets) ? none.data.widgets : []).filter((w: any) => w.source?.kind === "tracker" && /kitesurf/i.test(String(w.source?.key)));
+      check(none.ok && bad.length === 0, "…and it never invents a tracker the account does not have");
+    }
     for (const [prompt, ok, what] of asks) {
       const r = await api("GET", `/wellness-widgets/suggest?prompt=${encodeURIComponent(prompt)}`);
       const w = r.data?.widget;
@@ -154,6 +165,10 @@ async function main() {
     await tap("wellness-customize-show-labs");
     await tap("wellness-customize-add-mood");
 
+    // Offered from the account's own trackers: the new workout is in the list.
+    check((await T(`wellness-customize-suggest-tracker:${trackerId}`).count()) === 1 && (await text(`wellness-customize-suggest-tracker:${trackerId}`)).includes("3 entries"),
+      "the dialog offers a card for the new workout, read from its entries");
+
     // Built by hand: a count of the new workout's sessions.
     await tap("wellness-customize-builder-manual");
     await T("wellness-widget-form-title").fill("Rowing count");
@@ -169,11 +184,11 @@ async function main() {
     await tap("wellness-customize-builder-ai");
     await T("wellness-ai-prompt").fill("Do I exercise more after sleeping 8 hours?");
     await tap("wellness-ai-build");
-    await T("wellness-ai-proposal").waitFor({ timeout: 30000 });
-    check((await text("wellness-ai-proposal")).includes("not a medical conclusion"), "the AI Builder shows a proposal with its caveat");
+    await T("wellness-ai-proposal-0").waitFor({ timeout: 30000 });
+    check((await text("wellness-ai-proposal-0")).includes("not a medical conclusion"), "the AI Builder shows a proposal with its caveat");
     check((await storedNow()).widgets.length === 0, "…and has saved nothing yet");
     await shot("3-ai");
-    await tap("wellness-ai-use");
+    await tap("wellness-ai-use-0");
 
     // Reorder by finger: drag the last visible row up past the one above it.
     const order = () => page.$$eval('[data-testid="wellness-customize-visible"] > li', (ns: Element[]) => ns.map((n) => n.getAttribute("data-testid")!.replace("wellness-customize-row-", "")));
