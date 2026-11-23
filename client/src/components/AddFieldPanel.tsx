@@ -81,12 +81,16 @@ function useProfileFieldWrites(profileId: string) {
 }
 
 export function AddFieldPanel({
-  profileId, fields, showFields = false, title,
+  profileId, fields, showFields = false, title, inline = false, onAdded,
 }: {
   profileId: string;
   fields?: Record<string, unknown> | null;
   showFields?: boolean;
   title?: string;
+  /** The form itself, always open, with no "Add field" button of its own —
+   *  for a caller whose own control opens it (the asset's Profile actions). */
+  inline?: boolean;
+  onAdded?: () => void;
 }) {
   const { save, remove } = useProfileFieldWrites(profileId);
   const [adding, setAdding] = useState(false);
@@ -102,19 +106,21 @@ export function AddFieldPanel({
     setSaving(true);
     const ok = await save(k, v);
     setSaving(false);
-    if (ok) { setNewKey(""); setNewVal(""); setAdding(false); }
+    if (ok) { setNewKey(""); setNewVal(""); setAdding(false); onAdded?.(); }
   };
 
   return (
     <div className="space-y-2" data-testid="add-field-panel">
-      <div className="flex items-center justify-between gap-2">
-        <p className="micro-label text-muted-foreground px-0.5">{title || ""}</p>
-        <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAdding((a) => !a)} data-testid="add-field-button">
-          <Plus className="h-3.5 w-3.5" /> Add field
-        </Button>
-      </div>
+      {!inline && (
+        <div className="flex items-center justify-between gap-2">
+          <p className="micro-label text-muted-foreground px-0.5">{title || ""}</p>
+          <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAdding((a) => !a)} data-testid="add-field-button">
+            <Plus className="h-3.5 w-3.5" /> Add field
+          </Button>
+        </div>
+      )}
 
-      {adding && (
+      {(adding || inline) && (
         <Card className="p-3 flex flex-wrap items-end gap-2" data-testid="add-field-form">
           <div className="flex-1 min-w-[120px]">
             <label className="micro-label text-muted-foreground" htmlFor={`add-field-key-${profileId}`}>Field</label>

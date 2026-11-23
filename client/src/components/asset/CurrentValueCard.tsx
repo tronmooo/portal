@@ -14,8 +14,7 @@
 // reachable under the disclosure, labelled as history.
 
 import { useState } from "react";
-import { ChevronDown, ChevronUp, RefreshCw, Sparkles, History as HistoryIcon, AlertCircle, Pencil } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { BarChart3, CalendarClock, ChevronDown, ChevronUp, RefreshCw, Sparkles, History as HistoryIcon, AlertCircle, Pencil } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,6 +40,17 @@ function confidenceClass(label: ValuationRecord["confidenceLabel"]): string {
     case "low": return "bg-muted text-muted-foreground";
     default: return "bg-muted text-muted-foreground";
   }
+}
+
+/**
+ * The number the USER typed for this asset: kept in userEnteredValue once an
+ * estimate has become the canonical currentValue, or still in currentValue
+ * before then. One reader, shared with the Asset details tile and the
+ * Financial position card.
+ */
+export function userEnteredAssetValue(fields: Record<string, any> | null | undefined): number {
+  if (!fields) return 0;
+  return parseMoney(fields.userEnteredValue) || (!isEstimatorOwnedValue(fields) ? parseMoney(fields.currentValue ?? fields.current_value) : 0);
 }
 
 export function CurrentValueCard({
@@ -82,9 +92,9 @@ export function CurrentValueCard({
 
   if (!snapshot && isLoading) {
     return (
-      <Card className={className} data-testid="current-value-card-loading">
-        <CardContent className="pt-4 pb-3"><div className="h-10 animate-pulse rounded bg-muted/50" /></CardContent>
-      </Card>
+      <div className={`bubble p-4 ${className || ""}`} data-testid="current-value-card-loading">
+        <div className="h-14 animate-pulse rounded-xl bg-muted/50" />
+      </div>
     );
   }
   if (!snapshot || !snapshot.supported) return null;
@@ -92,9 +102,7 @@ export function CurrentValueCard({
 
   // The number the user typed: kept in userEnteredValue once an estimate has
   // become the canonical currentValue, or still in currentValue before then.
-  const userOwned = fields
-    ? (parseMoney(fields.userEnteredValue) || (!isEstimatorOwnedValue(fields) ? parseMoney(fields.currentValue ?? fields.current_value) : 0))
-    : 0;
+  const userOwned = userEnteredAssetValue(fields);
   const stale = !snapshot.freshness.fresh;
   // The server is authoritative; a payload from an older build has no mode,
   // and absent means auto — exactly as this asset behaved before the switch.
@@ -137,11 +145,11 @@ export function CurrentValueCard({
   };
 
   const trackingSwitch = (
-    <div className="flex items-start justify-between gap-3 border-t border-border/40 pt-2" data-testid="valuation-mode-row">
+    <div className="flex items-center justify-between gap-3 border-t border-border/40 pt-3" data-testid="valuation-mode-row">
       <div className="min-w-0">
-        <p className="text-[12px] font-medium leading-tight">Track value automatically</p>
-        <p className="text-[11px] text-muted-foreground leading-tight" data-testid="valuation-mode-help">
-          {auto ? "On — Portol estimates and refreshes this value" : "Off — you set the value yourself"}
+        <p className="text-[15px] font-semibold leading-tight">Track value automatically</p>
+        <p className="text-[12px] text-muted-foreground leading-snug mt-0.5" data-testid="valuation-mode-help">
+          {auto ? "Keep this value up to date with Portol's estimates" : "Off — you set the value yourself"}
         </p>
       </div>
       <Switch
@@ -155,13 +163,12 @@ export function CurrentValueCard({
   );
 
   return (
-    <Card className={className} data-testid="current-value-card">
-      <CardContent className="pt-4 pb-3 space-y-2">
+    <div className={`bubble p-4 space-y-2.5 ${className || ""}`} data-testid="current-value-card">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             {auto ? (
               <p className="micro-label text-muted-foreground flex items-center gap-1.5">
-                <Sparkles className="h-3 w-3 text-primary" /> Estimated current value
+                <Sparkles className="h-3.5 w-3.5 text-cyan-400" /> Estimated current value
               </p>
             ) : (
               <p className="micro-label text-muted-foreground flex items-center gap-1.5" data-testid="current-value-manual-heading">
@@ -192,7 +199,7 @@ export function CurrentValueCard({
               ) : (
                 <button
                   type="button"
-                  className="text-2xl font-bold tabular-nums leading-tight hover:text-primary text-left"
+                  className="text-[34px] font-bold tabular-nums leading-tight hover:text-primary text-left"
                   onClick={() => { setDraft(ownValue > 0 ? String(ownValue) : ""); setEditing(true); }}
                   data-testid="current-value-manual-amount"
                 >
@@ -201,50 +208,57 @@ export function CurrentValueCard({
               )
             ) : record?.status === "valued" && record.value != null ? (
               <>
-                <p className="text-2xl font-bold tabular-nums leading-tight" data-testid="current-value-amount">
+                <p className="text-[34px] font-bold tabular-nums leading-tight" data-testid="current-value-amount">
                   {formatMoneyCompact(headline.value ?? record.value)}
                 </p>
                 {record.low != null && record.high != null && (
-                  <p className="text-xs text-muted-foreground tabular-nums" data-testid="current-value-range">
-                    Likely {formatMoneyCompact(record.low)} – {formatMoneyCompact(record.high)}
+                  <p className="text-[13px] text-muted-foreground tabular-nums" data-testid="current-value-range">
+                    Likely range: {formatMoneyCompact(record.low)} – {formatMoneyCompact(record.high)}
                   </p>
                 )}
               </>
             ) : record?.status === "error" && record.value != null ? (
-              <p className="text-2xl font-bold tabular-nums leading-tight" data-testid="current-value-amount">{formatMoneyCompact(record.value)}</p>
+              <p className="text-[34px] font-bold tabular-nums leading-tight" data-testid="current-value-amount">{formatMoneyCompact(record.value)}</p>
             ) : (
               <p className="text-sm font-medium text-muted-foreground" data-testid="current-value-unavailable">
                 {!record ? (refreshing ? "Estimating…" : "Not estimated yet") : "Not enough information for a defensible estimate"}
               </p>
             )}
           </div>
-          <div className="text-right shrink-0 space-y-1">
+          <div className="shrink-0 flex flex-col items-end gap-2">
             {!auto ? (
               <Badge variant="secondary" className="text-[11px]" data-testid="current-value-set-by-you">Set by you</Badge>
             ) : (
               <>
                 {record && record.confidenceLabel !== "none" && (
-                  <Badge variant="secondary" className={`text-[11px] capitalize ${confidenceClass(record.confidenceLabel)}`} data-testid="current-value-confidence">
-                    {record.confidenceLabel} confidence · {Math.round(record.confidence * 100)}%
+                  <Badge variant="secondary" className={`text-[12px] rounded-full px-2.5 py-1 ${confidenceClass(record.confidenceLabel)}`} title={`${record.confidenceLabel} confidence`} data-testid="current-value-confidence">
+                    Confidence: {Math.round(record.confidence * 100)}%
                   </Badge>
                 )}
-                <div>
-                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { void refresh(); }} disabled={refreshing} data-testid="current-value-refresh">
-                    <RefreshCw className={`h-3 w-3 mr-1 ${refreshing ? "animate-spin" : ""}`} />
-                    {refreshing ? "Refreshing…" : "Refresh"}
-                  </Button>
-                </div>
+                <Button size="sm" variant="outline" className="h-9 px-4 text-[13px] rounded-xl" onClick={() => { void refresh(); }} disabled={refreshing} data-testid="current-value-refresh">
+                  <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
+                  {refreshing ? "Refreshing…" : "Refresh"}
+                </Button>
               </>
             )}
           </div>
         </div>
 
         {auto && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground" data-testid="current-value-meta">
-            {record?.valuedAt && <span title={record.valuedAt}>Valued {relative(record.valuedAt)}</span>}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-muted-foreground" data-testid="current-value-meta">
+            {record?.valuedAt && (
+              <span className="inline-flex items-center gap-1.5" title={record.valuedAt}>
+                <CalendarClock className="h-3.5 w-3.5" /> Last updated: {relative(record.valuedAt)}
+              </span>
+            )}
             {refreshing && <span className="text-primary" data-testid="current-value-refreshing">Refreshing in background…</span>}
             {!refreshing && stale && record && <span>Re-check due ({snapshot.freshness.reason?.replace(/_/g, " ")})</span>}
-            {record?.methodSummary && <span className="truncate max-w-full">Method: {record.methodSummary}</span>}
+            {(record?.methodSummary || (record?.methodology?.length ?? 0) > 0) && (
+              <span className="inline-flex items-center gap-1.5 min-w-0 max-w-full">
+                <BarChart3 className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">Method: {record!.methodSummary || METHOD_LABEL[record!.methodology[0]]}</span>
+              </span>
+            )}
             {userOwned > 0 && record?.value != null && userOwned !== record.value && (
               <span data-testid="current-value-user-value">Your entered value: {formatMoneyCompact(userOwned)} (kept)</span>
             )}
@@ -338,8 +352,7 @@ export function CurrentValueCard({
         )}
 
         {trackingSwitch}
-      </CardContent>
-    </Card>
+    </div>
   );
 }
 

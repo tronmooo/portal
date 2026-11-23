@@ -16,7 +16,7 @@
 // caller; this component just gives them somewhere consistent to sit.
 
 import * as React from "react";
-import { Camera, RefreshCw, ArrowLeft, type LucideIcon } from "lucide-react";
+import { Camera, RefreshCw, ArrowLeft, ChevronLeft, type LucideIcon } from "lucide-react";
 import { Link } from "wouter";
 import { Medallion, Pill } from "@/components/dashboard/visuals";
 import { MetricCard } from "@/components/ui/metric-card";
@@ -67,6 +67,12 @@ export interface DetailHeroProps {
    * Pass `value` instead of `countTo` for a stat that is meaningful at zero.
    */
   stats?: HeroStat[];
+  /**
+   * The screen's name, centred between the back arrow and the actions
+   * ("Asset Profile"). With it the back control is the arrow alone — its label
+   * stays as the accessible name — and the avatar is drawn large.
+   */
+  pageTitle?: string;
   /** Below the stats — a payoff/term bar. */
   progress?: React.ReactNode;
   testId?: string;
@@ -74,12 +80,19 @@ export interface DetailHeroProps {
 
 export function DetailHero({
   title, accent, icon: Icon, typeLabel, badges, subtitle, breadcrumb, notes,
-  avatar, backHref, onBack, backLabel = "Back", actions, stats = [], progress,
+  avatar, backHref, onBack, backLabel = "Back", actions, stats = [], progress, pageTitle,
   testId = "detail-hero",
 }: DetailHeroProps) {
   // A count of zero is not a fact worth a tile. Stats that pass `value` are
   // kept as-is: "Autopay: Off" and "Status: Upcoming" mean something.
   const shown = stats.filter((s) => s.countTo == null || s.countTo > 0);
+  const backClass = pageTitle
+    ? "inline-flex items-center justify-center h-9 w-9 -ml-2 rounded-full text-foreground hover:bg-muted/40 transition-colors"
+    : "inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors";
+  const backInner = pageTitle
+    ? <><ChevronLeft className="h-5 w-5" /><span className="sr-only">{backLabel}</span></>
+    : <><ArrowLeft className="h-3.5 w-3.5" /> {backLabel}</>;
+  const avatarBox = pageTitle ? "w-[72px] h-[72px] !rounded-2xl" : "w-12 h-12";
 
   return (
     <div
@@ -89,7 +102,7 @@ export function DetailHero({
     >
       {/* Back + actions */}
       {(backHref || onBack || actions) && (
-        <div className="flex items-center justify-between gap-2 mb-3">
+        <div className={pageTitle ? "grid grid-cols-[1fr_auto_1fr] items-center gap-2 mb-3" : "flex items-center justify-between gap-2 mb-3"}>
           {backHref && backHref.includes("?") ? (
             // A query-carrying target ("/linked?tab=assets") must stay INSIDE
             // the hash: wouter's Link hoists the query out of it, and the
@@ -98,35 +111,36 @@ export function DetailHero({
             // and is still a real, shareable link.
             <a
               href={`#${backHref}`}
-              className="inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors"
+              className={`${backClass} justify-self-start`}
               data-testid="button-back"
             >
-              <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
+              {backInner}
             </a>
           ) : backHref ? (
             <Link
               href={backHref}
-              className="inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors"
+              className={`${backClass} justify-self-start`}
               data-testid="button-back"
             >
-              <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
+              {backInner}
             </Link>
           ) : onBack ? (
             <button
               type="button"
               onClick={onBack}
-              className="inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors"
+              className={`${backClass} justify-self-start`}
               data-testid="button-back"
             >
-              <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
+              {backInner}
             </button>
           ) : <span />}
-          {actions && <div className="flex items-center gap-1.5 shrink-0">{actions}</div>}
+          {pageTitle && <p className="text-[15px] font-semibold text-center" data-testid="detail-hero-page-title">{pageTitle}</p>}
+          {actions ? <div className="flex items-center gap-1.5 shrink-0 justify-self-end">{actions}</div> : pageTitle ? <span /> : null}
         </div>
       )}
 
       {/* Identity */}
-      <div className="flex items-start gap-3">
+      <div className={pageTitle ? "flex items-center gap-4" : "flex items-start gap-3"}>
         {avatar ? (
           <>
             {avatar.inputRef && (
@@ -141,7 +155,7 @@ export function DetailHero({
             )}
             <button
               type="button"
-              className="medallion pressable relative w-12 h-12 overflow-hidden group shrink-0"
+              className={`medallion pressable relative ${avatarBox} overflow-hidden group shrink-0`}
               style={{ ["--accent-hsl" as any]: accent }}
               onClick={avatar.onPick}
               disabled={avatar.busy}
@@ -150,7 +164,7 @@ export function DetailHero({
             >
               {avatar.src
                 ? <img src={avatar.src} alt="" className="w-full h-full object-cover" />
-                : <Icon className="h-[22px] w-[22px]" strokeWidth={2.1} />}
+                : <Icon className={pageTitle ? "h-8 w-8" : "h-[22px] w-[22px]"} strokeWidth={2.1} />}
               <span className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                 <Camera className="h-4 w-4 text-white" />
               </span>
@@ -167,7 +181,7 @@ export function DetailHero({
 
         <div className="flex-1 min-w-0">
           <h1
-            className="text-xl font-bold tracking-tight leading-tight"
+            className={`${pageTitle ? "text-2xl" : "text-xl"} font-bold tracking-tight leading-tight`}
             data-testid="detail-hero-title"
           >
             {title}

@@ -161,6 +161,10 @@ async function main() {
 
         // Edit → type → no Save button → it saves by itself.
         await page.goto(`${UI_BASE}/#/profiles/${asset.id}`);
+        // An asset's Edit lives in the header's ⋯ menu (asset layout, 2026-11-22).
+        await page.locator('[data-testid="button-profile-menu"], [data-testid="button-header-edit-profile"]').first().waitFor({ timeout: 30000 });
+        const profileMenu = page.locator('[data-testid="button-profile-menu"]');
+        if (await profileMenu.count()) await profileMenu.click();
         await page.locator('[data-testid="button-header-edit-profile"]').click({ timeout: 30000 });
         await page.locator('[data-testid="dialog-edit-profile"]').waitFor({ timeout: 15000 });
         check((await page.locator('[data-testid="button-save-profile"]').count()) === 0, "the Edit dialog has no Save button");
