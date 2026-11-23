@@ -266,7 +266,15 @@ Details. Do not put them back on the Overview. A count from a failed request
 reads "Couldn't load", never 0 (Rule 7). The app's own bookkeeping
 (`source: "obligation"`, `obligationId`, any bare record id) is never listed as
 a detail (`isProvenanceField`, `components/AddFieldPanel.tsx`).
-*Guard:* `tests/liability-profile-design.dom.test.tsx`.
+A field the user adds is always listed: only a key the screens own, or a
+figure/date stored as text, is kept out of the list — never a name that merely
+sounds financial ("Loan number: HF-88213" was saved and shown nowhere,
+`freeFormFieldEntries`).
+*Guards:* `tests/liability-profile-design.dom.test.tsx`, `tests/add-field-panel.dom.test.tsx`.
+*Live check (real browser, smoke account; edits in place, adds a field, Auto
+Pay, a change made from the app's chat, delete):*
+`npx tsx tests/live-liability-profile-check.ts` (to check an undeployed client
+against the deployed API: `SMOKE_UI_BASE=http://localhost:5199 LIVE_API_ORIGIN=https://portol.me`).
 
 **L1. One debt = one record.** A loan or card IS its own bill: its payment
 amount and due day are fields on it, and the schedule/calendar are derived

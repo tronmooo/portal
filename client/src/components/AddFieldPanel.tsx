@@ -23,18 +23,34 @@ import { formatApiError } from "@/lib/formatError";
 import { isReservedFieldKey } from "@shared/profile-field-identity";
 import { fieldSemantics, isAdministrativeKey } from "@shared/overview-semantics";
 import { humanizeFieldName } from "@shared/field-label";
+import { canonicalFieldKey } from "@shared/profile-field-canon";
 
 // Money, rates, due days, dates, ownership shares and coverage limits have
 // their own editors; everything else a person typed is listed here.
-const OWN_EDITOR_ROLES = new Set(["financial", "date", "ownership", "coverage", "administrative"]);
-// Settings the liability screens own (schedule, type, Auto Pay state).
+//
+// "Has its own editor" is decided by the KEY being one the screens own, or by
+// the VALUE being a figure or a date — never by the name merely sounding
+// financial. The role alone hid "Loan number: HF-88213", "Payment method: ACH"
+// and "Interest type: Fixed": saved, then nowhere on the page (2026-11-23).
+const OWN_EDITOR_ROLES = new Set(["financial", "date", "ownership", "coverage"]);
+// The canonical money/rate keys (and every alias that folds into them, L2).
+const OWN_EDITOR_CANON = new Set(["balance", "interestRate", "monthlyPayment", "originalBalance", "currentValue", "purchasePrice"]);
+// Settings the liability screens own (schedule, type, Auto Pay state, terms).
 const SCREEN_OWNED_KEYS = new Set([
   "frequency", "billingfrequency", "liabilitytype", "subtype", "category", "liabilitycategory",
   "paymentstatus", "status", "autopay", "autorenew", "paused", "pauseduntil", "recurrence",
   "recurrenceend", "occurrences", "remindme", "reminderleaddays", "ownername", "loan", "finance",
   // Shown (and edited) as a row of the liability's own details.
   "lender", "creditor", "servicer",
+  // Terms and schedule: the loan-terms / bill-details forms write these.
+  "dueday", "paymentdueday", "duedate", "nextduedate", "firstpaymentdate", "loanstartdate", "startdate",
+  "lastpaymentdate", "lastpaid", "autorecordsince", "termmonths", "remainingtermmonths", "loantermmonths",
+  "term", "count", "amount", "cost", "principal", "minimumpayment", "minpayment", "creditlimit", "extrapayment",
 ]);
+const FIGURE_RE = /^[\s$€£]*-?[\d,]+(\.\d+)?\s*%?$/;
+const DATE_VALUE_RE = /^\d{4}-\d{2}(-\d{2})?([T ].*)?$|^\d{1,2}\/\d{1,2}\/\d{2,4}$/;
+// A name that says the value is a label, not an amount ("Loan number: 88213").
+const LABEL_NAME_RE = /(number|num|no|id|code|ref|reference|vin|phone|method|type|name|note|notes|contact|plan|website|url|email)$/i;
 
 // Where a record came from is the app's bookkeeping, not a detail the user
 // typed: a liability converted from a bill carried "Source: obligation" and
@@ -60,8 +76,16 @@ export function freeFormFieldEntries(fields: Record<string, unknown> | null | un
     // own editors; typing over one as text would change its type.
     if (typeof v !== "string") continue;
     if (SCREEN_OWNED_KEYS.has(k.toLowerCase().replace(/[^a-z]/g, ""))) continue;
+    if (OWN_EDITOR_CANON.has(canonicalFieldKey(k))) continue;
     const role = fieldSemantics(k, v).role;
-    if (OWN_EDITOR_ROLES.has(role)) continue;
+    if (role === "administrative") continue;
+    if (OWN_EDITOR_ROLES.has(role)) {
+      // A figure or a date stored as text still belongs to its own editor;
+      // words under a financial-sounding name are the user's own detail.
+      const label = LABEL_NAME_RE.test(k.replace(/[^a-zA-Z]/g, ""));
+      if (DATE_VALUE_RE.test(v.trim())) continue;
+      if (!label && FIGURE_RE.test(v)) continue;
+    }
     if (isProvenanceField(k, v)) continue;
     out.push([k, v]);
   }
