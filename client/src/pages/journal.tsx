@@ -4,7 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { invalidateDomain } from "@/lib/cache-bus";
-import { WorkspaceShell, WorkspaceAiBar, aiErrorText, leaveWorkspace } from "@/components/workspace/WorkspaceShell";
+import { journalLabels, journalPhotoIds } from "@shared/journal-photos";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday, addDays as tzAddDays } from "@shared/timezone";
 import { parseLocalDate } from "@/lib/format";
@@ -38,7 +38,7 @@ import { TimeRangeSelector } from "@/components/ui/time-range";
 import { useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
 
-const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
+export const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
   amazing:   { icon: Sparkles, label: "Amazing",   color: "#6DAA45", bg: "bg-green-500/10" },
   great:     { icon: Smile,    label: "Great",     color: "#5BAA6A", bg: "bg-emerald-500/10" },
   good:      { icon: Smile,    label: "Good",      color: "#4F98A3", bg: "bg-teal-500/10" },
@@ -183,9 +183,14 @@ function JournalCard({ entry, onEdit, ownerName }: { entry: JournalEntry; onEdit
           </div>
         )}
 
-        {(entry.tags?.length ?? 0) > 0 && (
+        {journalPhotoIds(entry.tags).length > 0 && (
+          <p className="text-xs text-muted-foreground mt-2" data-testid="journal-card-photos">
+            {journalPhotoIds(entry.tags).length} {journalPhotoIds(entry.tags).length === 1 ? "photo" : "photos"} · open the entry in the Journal workspace to see {journalPhotoIds(entry.tags).length === 1 ? "it" : "them"}
+          </p>
+        )}
+        {journalLabels(entry.tags).length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-border">
-            {(entry.tags ?? []).map((t, i) => (
+            {journalLabels(entry.tags).map((t, i) => (
               <span key={i} className="text-xs text-muted-foreground">#{t}</span>
             ))}
           </div>
@@ -289,25 +294,10 @@ function JournalMoodTrend({ entries }: { entries: JournalEntry[] }) {
   );
 }
 
-/** Guided prompts the Journal workspace offers. Fixed, never generated. */
-export const JOURNAL_PROMPTS = [
-  "What went well today?",
-  "What is on my mind right now?",
-  "What am I grateful for?",
-  "What was hard today, and what did I learn from it?",
-  "What do I want tomorrow to look like?",
-];
-
-/**
- * The Journal page, and — with `workspace` — the full-screen Journal
- * workspace opened from AI Chat: the same composer and the same saved
- * entries, with the app's navigation out of the way, guided prompts and an
- * AI box that READS the journal (summary, themes) and never rewrites it.
- */
-export function JournalScreen({ workspace = false }: { workspace?: boolean }) {
+export default function JournalPage() {
   useEffect(() => { document.title = "Journal — Portol"; }, []);
   const { toast } = useToast();
-  const [showCreate, setShowCreate] = useState(workspace);
+  const [showCreate, setShowCreate] = useState(false);
   // Rules 23/24: `?highlight=journal:<id>` lands on that entry's card.
   useRecordHighlight("journal");
   // QA Bug 7 + user report 2026-07-16 ("Write entry doesn't let me write"):
@@ -342,23 +332,7 @@ export function JournalScreen({ workspace = false }: { workspace?: boolean }) {
   // ── Free-form mode (user request): write as much or as little as you want.
   // Autosaves as a draft entry (POST once, then PATCH), shows a "Saved" stamp,
   // supports tags, and old free-form entries reopen here for editing.
-  const [entryMode, setEntryMode] = useState<"guided" | "free">(workspace ? "free" : "guided");
-  // Journal workspace: the AI's answer about the journal (read-only).
-  const [reflection, setReflection] = useState<{ answer: string; entriesRead: number } | null>(null);
-  const [reflecting, setReflecting] = useState(false);
-  const askJournalAi = async (instruction: string) => {
-    setReflecting(true);
-    try {
-      const r = await apiRequest("POST", "/api/workspace/journal/reflect", { instruction, draft: freeText });
-      const j = await r.json();
-      if (typeof j?.answer !== "string" || !j.answer.trim()) throw new Error("The AI returned nothing.");
-      setReflection({ answer: j.answer, entriesRead: Number(j.entriesRead) || 0 });
-    } catch (err) {
-      toast({ title: "AI couldn't answer that", description: aiErrorText(err), variant: "destructive" });
-    } finally {
-      setReflecting(false);
-    }
-  };
+  const [entryMode, setEntryMode] = useState<"guided" | "free">("guided");
   const [freeText, setFreeText] = useState("");
   const [freeTags, setFreeTags] = useState("");
   const [draftId, setDraftId] = useState<string | null>(null);
@@ -462,9 +436,7 @@ export function JournalScreen({ workspace = false }: { workspace?: boolean }) {
         // is only right when an EXISTING entry was reopened for editing.
         toast({ title: editingEntry ? "Entry updated" : "Entry saved" });
         resetForm();
-        // The workspace stays a writing surface: a saved entry makes room for the next.
-        setShowCreate(workspace);
-        if (workspace) setEntryMode("free");
+        setShowCreate(false);
       }
     } catch (err: any) {
       if (finalize) toast({ title: "Couldn't save entry", description: formatApiError(err), variant: "destructive" });
@@ -633,9 +605,9 @@ export function JournalScreen({ workspace = false }: { workspace?: boolean }) {
     return profiles.find((p) => linked.includes(p.id))?.name ?? null;
   };
 
-  const page = (
+  return (
     <PageContainer width="2xl">
-      {!workspace && <PageHeader
+      <PageHeader
         title="Journal"
         subtitle={filterMode === "selected" && filterLabel
           ? `${entries.length} ${entries.length === 1 ? "entry" : "entries"} · ${filterLabel}`
@@ -648,10 +620,10 @@ export function JournalScreen({ workspace = false }: { workspace?: boolean }) {
             {showCreate ? <><X className="h-3.5 w-3.5 mr-1" /> Cancel</> : <><Plus className="h-3.5 w-3.5 mr-1" /> New Entry</>}
           </Button>
         }
-      />}
+      />
 
       {/* 7-day mood strip */}
-      <div className={workspace ? "hidden" : "flex gap-2 justify-center"}>
+      <div className="flex gap-2 justify-center">
         {last7.map((day, i) => {
           const cfg = day.mood ? MOOD_CONFIG[day.mood] : null;
           const MIcon = cfg?.icon || Meh;
@@ -667,7 +639,7 @@ export function JournalScreen({ workspace = false }: { workspace?: boolean }) {
         })}
       </div>
 
-      {!workspace && <JournalMoodTrend entries={entries} />}
+      <JournalMoodTrend entries={entries} />
 
       {/* Create form — guided 5-minute template OR free-form editor */}
       {showCreate && (
@@ -734,20 +706,6 @@ export function JournalScreen({ workspace = false }: { workspace?: boolean }) {
                       {freeSavingRef.current ? "Saving…" : lastSavedAt ? `Saved ${lastSavedAt}` : "Autosaves as you write"}
                     </span>
                   </div>
-                  {workspace && (
-                    <div className="flex gap-1.5 overflow-x-auto pb-2 mb-1" data-testid="journal-prompts">
-                      {JOURNAL_PROMPTS.map((prompt) => (
-                        <button
-                          key={prompt}
-                          type="button"
-                          onClick={() => setFreeText((t) => (t.trim() ? `${t.replace(/\s+$/, "")}\n\n${prompt}\n` : `${prompt}\n`))}
-                          className="shrink-0 h-7 px-2.5 rounded-full border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
-                        >
-                          {prompt}
-                        </button>
-                      ))}
-                    </div>
-                  )}
                   <textarea
                     value={freeText}
                     autoFocus
@@ -984,48 +942,4 @@ export function JournalScreen({ workspace = false }: { workspace?: boolean }) {
       )}
     </PageContainer>
   );
-  if (!workspace) return page;
-  return (
-    <WorkspaceShell
-      kind="journal"
-      title={<span className="text-base font-semibold truncate block">{title.trim() || (editingEntry ? "Editing an entry" : "New journal entry")}</span>}
-      status={freeSavingRef.current ? "Saving…" : lastSavedAt ? `Saved ${lastSavedAt}` : freeText.trim() ? "Saving as you write" : "Nothing written yet"}
-      actions={
-        <button
-          type="button"
-          onClick={() => { if (freeText.trim()) void saveFreeEntry(true); else { resetForm(); setEntryMode("free"); setShowCreate(true); } }}
-          className="h-9 px-2.5 rounded-md border border-border text-xs flex items-center gap-1"
-          title="Save this entry and start a new one"
-          data-testid="button-journal-workspace-new"
-        >
-          <Plus className="h-3.5 w-3.5" /> <span className="hidden sm:inline">New entry</span>
-        </button>
-      }
-      onClose={async () => {
-        // What is on the page is saved before leaving (the debounce may not have fired yet).
-        if (entryMode === "free" && freeText.trim()) await saveFreeEntry(false);
-        leaveWorkspace();
-      }}
-    >
-      <div className="flex-1 min-h-0 overflow-y-auto">{page}</div>
-      {reflection && (
-        <div className="border-t border-border bg-card px-4 py-3 shrink-0 max-h-[35vh] overflow-y-auto" data-testid="journal-ai-answer">
-          <p className="text-xs font-semibold mb-1.5">From your journal · {reflection.entriesRead} {reflection.entriesRead === 1 ? "entry" : "entries"} read · your entries are not changed</p>
-          <p className="text-sm whitespace-pre-wrap">{reflection.answer}</p>
-          <button type="button" className="mt-2 h-8 px-3 rounded-md border border-border text-xs" onClick={() => setReflection(null)}>Close</button>
-        </div>
-      )}
-      <WorkspaceAiBar
-        placeholder="Ask AI about your journal — a summary, themes, how your mood has been…"
-        busy={reflecting}
-        onAsk={(i) => void askJournalAi(i)}
-        suggestions={["Summarize my last week", "What themes keep coming up?", "How has my mood been lately?"]}
-        testId="journal-ai"
-      />
-    </WorkspaceShell>
-  );
-}
-
-export default function JournalPage() {
-  return <JournalScreen />;
 }
