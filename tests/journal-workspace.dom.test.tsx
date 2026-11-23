@@ -28,6 +28,13 @@ vi.mock("@/pages/journal", () => {
   const mk = (label: string) => ({ icon: Icon, label, color: "#888", bg: "bg-muted" });
   return { MOOD_CONFIG: { amazing: mk("Amazing"), great: mk("Great"), good: mk("Good"), okay: mk("Okay"), neutral: mk("Neutral"), bad: mk("Bad"), awful: mk("Awful"), terrible: mk("Terrible") } };
 });
+let scopeState: any = { mode: "everyone", selectedIds: [], selectedNames: [], isFiltered: false };
+vi.mock("@/hooks/useProfileScope", () => ({ useProfileScope: () => scopeState }));
+const showEveryone = vi.fn();
+vi.mock("@/lib/profileFilter", () => ({
+  scopeLabel: (names: string[]) => names.join(", "),
+  setFilterEveryone: () => showEveryone(),
+}));
 const navigated: string[] = [];
 vi.mock("@/lib/hashNavigate", () => ({ hashNavigate: (to: string) => { navigated.push(to); } }));
 vi.mock("@/lib/queryClient", () => ({
@@ -35,7 +42,8 @@ vi.mock("@/lib/queryClient", () => ({
   apiRequest: vi.fn(async (method: string, url: string, body?: any) => {
     calls.push({ method, url, body });
     let data: any = {};
-    if (method === "POST" && url === "/api/journal") data = { id: "j-new", ...body };
+    if (method === "GET" && url.startsWith("/api/journal")) { if (listFails) throw new Error("500: boom"); data = entries; }
+    else if (method === "POST" && url === "/api/journal") data = { id: "j-new", ...body };
     else if (url === "/api/upload/save-only") data = { documentId: "doc-7" };
     else if (url === "/api/workspace/journal/reflect") data = { answer: "You wrote about a calm walk.", entriesRead: 3 };
     return { ok: true, json: async () => data };
@@ -49,7 +57,6 @@ function mount() {
     defaultOptions: { queries: {
       retry: false,
       queryFn: async ({ queryKey }) => {
-        if (queryKey[0] === "/api/journal") { if (listFails) throw new Error("500: boom"); return entries; }
         if (queryKey[0] === "/api/profiles") return [{ id: "p1", name: "Tron", type: "self" }, { id: "p2", name: "Bob", type: "person" }];
         return [];
       },
@@ -58,10 +65,14 @@ function mount() {
   return render(<QueryClientProvider client={client}><JournalWorkspacePage /></QueryClientProvider>);
 }
 const write = (text: string) => fireEvent.change(screen.getByTestId("input-journal-free-text"), { target: { value: text } });
-const writes = () => calls.filter((c) => !c.url.includes("/reflect") && !c.url.includes("/upload/"));
+const writes = () => calls.filter((c) => c.method !== "GET" && !c.url.includes("/reflect") && !c.url.includes("/upload/"));
+const reads = () => calls.filter((c) => c.method === "GET");
 const settle = (ms = JOURNAL_AUTOSAVE_MS + 300) => new Promise((r) => setTimeout(r, ms));
 
-beforeEach(() => { calls.length = 0; navigated.length = 0; entries = []; listFails = false; });
+beforeEach(() => {
+  calls.length = 0; navigated.length = 0; entries = []; listFails = false; showEveryone.mockClear();
+  scopeState = { mode: "everyone", selectedIds: [], selectedNames: [], isFiltered: false };
+});
 afterEach(cleanup);
 
 describe("photo pointers (pure)", () => {
@@ -164,6 +175,17 @@ describe("Journal workspace", () => {
     mount();
     await waitFor(() => screen.getByTestId("journal-timeline-error"));
     expect(screen.getByTestId("journal-timeline").textContent).not.toMatch(/line up here/);
+  });
+
+  it("the timeline follows the app's profile scope, says so, and offers the way out", async () => {
+    scopeState = { mode: "selected", selectedIds: ["p2"], selectedNames: ["Bob"], isFiltered: true };
+    mount();
+    await waitFor(() => expect(reads().some((c) => c.url === "/api/journal?profileIds=p2")).toBe(true));
+    expect(screen.getByTestId("journal-scope-notice").textContent).toMatch(/Showing Bob only — other people's entries are hidden/);
+    await waitFor(() => expect(screen.getByTestId("journal-timeline").textContent).toMatch(/No entries for Bob/));
+    expect(screen.getByTestId("journal-timeline").textContent).not.toMatch(/line up here/);
+    fireEvent.click(screen.getByText("Show everyone"));
+    expect(showEveryone).toHaveBeenCalledTimes(1);
   });
 
   it("another person's entry is marked as theirs in the timeline", async () => {

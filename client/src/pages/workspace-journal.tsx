@@ -24,6 +24,8 @@ import { parseLocalDate } from "@/lib/format";
 import { useDocumentBlobUrl } from "@/lib/document-preview";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
+import { useProfileScope } from "@/hooks/useProfileScope";
+import { scopeLabel, setFilterEveryone } from "@/lib/profileFilter";
 import { MOOD_CONFIG } from "@/pages/journal";
 import { WorkspaceShell, WorkspaceAiBar, aiErrorText, leaveWorkspace } from "@/components/workspace/WorkspaceShell";
 
@@ -57,7 +59,7 @@ function Photo({ id, onRemove, armed }: { id: string; onRemove?: () => void; arm
         : <div className="h-full w-full flex items-center justify-center text-[11px] text-muted-foreground">{blob.error ? "Couldn't load" : <Loader2 className="h-4 w-4 animate-spin" />}</div>}
       {onRemove && (
         <button type="button" onClick={onRemove} aria-label={armed ? "Tap again to remove this photo" : "Remove photo"}
-          className={`absolute top-1 right-1 h-6 rounded-full text-[10px] px-1.5 flex items-center gap-0.5 ${armed ? "bg-destructive text-destructive-foreground" : "bg-background/85 text-foreground"}`}>
+          className={`absolute top-1 right-1 h-6 rounded-full text-[11px] px-1.5 flex items-center gap-0.5 ${armed ? "bg-destructive text-destructive-foreground" : "bg-background/85 text-foreground"}`}>
           <X className="h-3 w-3" />{armed ? "Remove?" : ""}
         </button>
       )}
@@ -71,7 +73,15 @@ export default function JournalWorkspacePage() {
   const { confirm, isArmed } = useConfirmArm();
   const today = getUserToday(BROWSER_TIMEZONE);
 
-  const entriesQuery = useQuery<JournalEntry[]>({ queryKey: ["/api/journal"] });
+  // The timeline follows the app-wide profile scope, like the Journal page:
+  // same key, same ?profileIds=. A scope hides other people's entries, so the
+  // rail names it and offers the way out (Rule 4).
+  const scope = useProfileScope();
+  const profileParam = scope.selectedIds.length > 0 ? `?profileIds=${scope.selectedIds.join(",")}` : "";
+  const entriesQuery = useQuery<JournalEntry[]>({
+    queryKey: ["/api/journal", scope.mode, ...scope.selectedIds],
+    queryFn: () => apiRequest("GET", `/api/journal${profileParam}`).then((r) => r.json()),
+  });
   const profilesQuery = useQuery<ProfileRow[]>({ queryKey: ["/api/profiles"] });
   const entries = Array.isArray(entriesQuery.data) ? entriesQuery.data : [];
   const profiles = Array.isArray(profilesQuery.data) ? profilesQuery.data : [];
@@ -261,7 +271,7 @@ export default function JournalWorkspacePage() {
           style={{ background: `hsl(${ACCENT})` }} data-testid="button-journal-new">
           <Plus className="h-4 w-4" /> New entry
         </button>
-        <div className="mt-3 rounded-2xl border border-border/60 bg-card px-3 py-2.5" data-testid="journal-week">
+        <div className="bubble mt-3 px-3 py-2.5" data-testid="journal-week">
           <p className="micro-label text-muted-foreground mb-2">This week</p>
           <div className="flex justify-between">
             {week.map((d) => {
@@ -273,13 +283,21 @@ export default function JournalWorkspacePage() {
                   <span className={`h-8 w-8 rounded-full flex items-center justify-center ${cfg ? cfg.bg : "bg-muted"}`}>
                     {Icon ? <Icon className="h-4 w-4" style={{ color: cfg!.color }} /> : <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />}
                   </span>
-                  <span className={`text-[10px] ${d.day === today ? "font-bold text-foreground" : "text-muted-foreground"}`}>{d.label}</span>
+                  <span className={`text-[11px] ${d.day === today ? "font-bold text-foreground" : "text-muted-foreground"}`}>{d.label}</span>
                 </button>
               );
             })}
           </div>
         </div>
       </div>
+      {scope.isFiltered && (
+        <p className="px-4 pb-2 text-[11px] text-muted-foreground shrink-0" data-testid="journal-scope-notice">
+          Showing {scopeLabel(scope.selectedNames, scope.mode, scope.selectedIds.length)} only — other people's entries are hidden.{" "}
+          <button type="button" className="underline" title="Changes the profile filter for the whole app" onClick={() => setFilterEveryone()}>
+            Show everyone
+          </button>
+        </p>
+      )}
       <div className="flex-1 overflow-y-auto px-3 pb-3" data-testid="journal-timeline">
         {entriesQuery.isLoading ? (
           <p className="p-2 text-xs text-muted-foreground flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading your journal…</p>
@@ -289,7 +307,9 @@ export default function JournalWorkspacePage() {
             <button type="button" className="underline mt-1" onClick={() => entriesQuery.refetch()}>Retry</button>
           </div>
         ) : months.length === 0 ? (
-          <p className="p-2 text-xs text-muted-foreground">Your entries will line up here, day by day.</p>
+          <p className="p-2 text-xs text-muted-foreground">
+            {scope.isFiltered ? `No entries for ${scopeLabel(scope.selectedNames, scope.mode, scope.selectedIds.length)}.` : "Your entries will line up here, day by day."}
+          </p>
         ) : months.map((m) => (
           <div key={m.month} className="mb-3">
             <p className="micro-label text-muted-foreground px-1 mb-1.5">{m.month}</p>
@@ -393,7 +413,7 @@ export default function JournalWorkspacePage() {
               </div>
 
               {/* The page. */}
-              <div className="mt-5 rounded-3xl border border-border/70 bg-card shadow-sm px-5 md:px-8 py-6">
+              <div className="bubble mt-5 px-5 md:px-8 py-6">
                 <input value={title} onChange={(e) => { setTitle(e.target.value); touch(); }} placeholder="Title (optional — written for you if left blank)"
                   aria-label="Entry title" maxLength={120} className="w-full bg-transparent text-lg font-semibold outline-none placeholder:text-muted-foreground/50" data-testid="input-journal-title" />
                 <div className="flex gap-1.5 overflow-x-auto py-3" data-testid="journal-prompts">

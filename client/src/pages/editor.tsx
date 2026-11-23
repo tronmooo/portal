@@ -1588,16 +1588,16 @@ export default function EditorPage() {
                 <Button variant="ghost" size="sm" className="h-8 px-2 gap-1" data-testid="button-doc-page-setup"><FileCog className="h-4 w-4" /> Page</Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-56">
-                <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Paper</p>
+                <p className="micro-label text-muted-foreground px-2 pt-1.5 pb-1">Paper</p>
                 {(Object.keys(PAGE_SIZES) as Array<keyof typeof PAGE_SIZES>).map((k) => (
                   <DropdownMenuItem key={k} onClick={() => changePageSetup({ size: k })} data-testid={`menu-page-size-${k}`}>{pageSetup.size === k ? "✓ " : ""}{PAGE_SIZES[k].label}</DropdownMenuItem>
                 ))}
                 <DropdownMenuSeparator />
-                <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Orientation</p>
+                <p className="micro-label text-muted-foreground px-2 pt-1.5 pb-1">Orientation</p>
                 <DropdownMenuItem onClick={() => changePageSetup({ orientation: "portrait" })} data-testid="menu-page-portrait">{pageSetup.orientation === "portrait" ? "✓ " : ""}Portrait</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => changePageSetup({ orientation: "landscape" })} data-testid="menu-page-landscape">{pageSetup.orientation === "landscape" ? "✓ " : ""}Landscape</DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Margins</p>
+                <p className="micro-label text-muted-foreground px-2 pt-1.5 pb-1">Margins</p>
                 {(Object.keys(PAGE_MARGINS) as Array<keyof typeof PAGE_MARGINS>).map((k) => (
                   <DropdownMenuItem key={k} onClick={() => changePageSetup({ margins: k })} data-testid={`menu-page-margins-${k}`}>{pageSetup.margins === k ? "✓ " : ""}{PAGE_MARGINS[k].label}</DropdownMenuItem>
                 ))}

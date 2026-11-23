@@ -532,7 +532,7 @@ export default function NotesWorkspacePage() {
           </div>
           {/* The sheet. */}
           <div className="flex-1 min-h-0 overflow-y-auto bg-muted/20" onDragOver={(e) => e.preventDefault()} onDrop={(e) => void onDropFile(e)}>
-            <div className="max-w-3xl mx-auto my-4 mx-3 md:mx-auto rounded-2xl border border-border/70 bg-card shadow-sm px-5 md:px-10 py-6 md:py-8 min-h-[60vh]" data-testid="note-sheet">
+            <div className="bubble max-w-3xl my-4 mx-3 md:mx-auto px-5 md:px-10 py-6 md:py-8 min-h-[60vh]" data-testid="note-sheet">
               {mode === "rich" ? (
                 <div className="relative">
                   {!content.trim() && <p className="absolute top-0 left-0 text-muted-foreground/60 pointer-events-none">Start typing, paste, or drop a file here…</p>}
