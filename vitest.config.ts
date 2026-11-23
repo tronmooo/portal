@@ -298,6 +298,7 @@ export default defineConfig({
       'tests/exec-customize-dialog.dom.test.tsx',
       // Wellness tab redesign (2026-11-23): the shared dashboard engine, period
       // maths, cards, custom widgets, dashboards and the rendered tab + dialog.
+      'tests/patch-keeps-unsent-fields.test.ts',
       'tests/dashboard-engine.test.ts',
       'tests/wellness-period.test.ts',
       'tests/wellness-cards.test.ts',

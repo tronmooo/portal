@@ -29,7 +29,7 @@ export const FINANCE_IMPORT_SOURCE = "chatgpt_import";
 
 // ── Field primitives ────────────────────────────────────────────────────────
 const money = z
-  .number({ invalid_type_error: "amount must be a number" })
+  .number({ error: "amount must be a number" })
   .finite("amount must be a finite number");
 // A real calendar day, not merely the shape of one: "2026-02-30" passed the
 // regex, was planned as "create", and then blew up the commit halfway
@@ -230,7 +230,7 @@ export function extractJsonBlock(text: string): string {
 function zodIssuesToErrors(issues: z.ZodIssue[]): ImportValidationError[] {
   return issues.map((i) => ({
     path: i.path
-      .map((p, idx) => (typeof p === "number" ? `[${p}]` : idx === 0 ? p : `.${p}`))
+      .map((p, idx) => (typeof p === "number" ? `[${p}]` : idx === 0 ? String(p) : `.${String(p)}`))
       .join(""),
     message: i.message,
   }));

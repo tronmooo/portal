@@ -405,7 +405,7 @@ export const insertProfileSchema = z.object({
   type: z.enum(["person", "pet", "vehicle", "account", "property", "subscription", "medical", "self", "loan", "investment", "asset", "liability"]),
   type_key: z.string().optional(),
   name: z.string().min(1),
-  fields: z.record(z.any()).optional().default({}),
+  fields: z.record(z.string(), z.any()).optional().default({}),
   tags: z.array(z.string()).optional().default([]),
   notes: z.string().optional().default(""),
   parentProfileId: z.string().optional(),
@@ -531,7 +531,7 @@ export type InsertTracker = z.infer<typeof insertTrackerSchema>;
 
 export const insertTrackerEntrySchema = z.object({
   trackerId: z.string(),
-  values: z.record(z.any()),
+  values: z.record(z.string(), z.any()),
   notes: z.string().optional(),
   // Bug #37: aligned with the master journal MoodLevel so AI-emitted moods
   // (amazing/neutral/awful) don't get rejected by Zod when logged to a
@@ -994,7 +994,7 @@ export const insertArtifactSchema = z.object({
   language: z.string().optional(),
   dataBindings: z.object({
     tool: z.string(),
-    params: z.record(z.any()).default({}),
+    params: z.record(z.string(), z.any()).default({}),
   }).optional(),
   chartData: z.array(z.any()).optional(),
   chartType: z.enum(["bar", "line", "area", "pie"]).optional(),
@@ -1002,12 +1002,12 @@ export const insertArtifactSchema = z.object({
   sheetData: z.object({
     rows: z.number().int().min(1).max(10000),
     cols: z.number().int().min(1).max(200),
-    cells: z.record(z.object({
+    cells: z.record(z.string(), z.object({
       v: z.union([z.string(), z.number(), z.null()]).optional(),
       f: z.string().max(2000).optional(),
     })),
-    colWidths: z.record(z.number()).optional(),
-    rowHeights: z.record(z.number()).optional(),
+    colWidths: z.record(z.string(), z.number()).optional(),
+    rowHeights: z.record(z.string(), z.number()).optional(),
   }).optional(),
   source: z.enum(["chat", "manual", "ai"]).optional(),
 });
@@ -1354,7 +1354,7 @@ export const insertDocumentSchema = z.object({
   type: z.string().default("other"),
   mimeType: z.string().default("image/jpeg"),
   fileData: z.string(), // base64
-  extractedData: z.record(z.any()).optional().default({}),
+  extractedData: z.record(z.string(), z.any()).optional().default({}),
   linkedProfiles: z.array(z.string()).optional().default([]),
   tags: z.array(z.string()).optional().default([]),
 });
@@ -1757,8 +1757,8 @@ export const insertCaptureSchema = z.object({
   ownerProfileId: z.string().uuid().nullable().optional(),
   title: z.string().default(""),
   rawInput: z.string(),
-  structuredData: z.record(z.unknown()).default({}),
-  metadata: z.record(z.unknown()).default({}),
+  structuredData: z.record(z.string(), z.unknown()).default({}),
+  metadata: z.record(z.string(), z.unknown()).default({}),
   relationships: z.array(z.object({
     kind: z.string(),
     id: z.string(),
@@ -1855,4 +1855,33 @@ export interface UpsertAiChatRun {
   message?: string;
   result?: Record<string, unknown> | null;
   error?: string | null;
+}
+
+
+// ============================================================
+// PATCH bodies
+// ============================================================
+
+/**
+ * Validate a PATCH body: the insert schema with every field optional, keeping
+ * ONLY the fields the request sent.
+ *
+ * `schema.partial().safeParse(body)` is not enough on zod 4: a field with a
+ * `.default()` is filled in when it is absent, so a rename
+ * (`{ name: "New" }`) would also carry `tags: []`, `fields: {}`,
+ * `extractedData: {}`, `linkedProfiles: []` … and overwrite the stored values
+ * with them. A PATCH changes what was sent and nothing else (Rule 6).
+ *
+ * Every PATCH route goes through this. Guard: tests/patch-keeps-unsent-fields.test.ts.
+ */
+export function parsePatch<T extends z.ZodObject<any>>(schema: T, body: unknown):
+  | { success: true; data: Partial<z.infer<T>> }
+  | { success: false; error: z.ZodError } {
+  const parsed = schema.partial().safeParse(body);
+  if (!parsed.success) return { success: false, error: parsed.error as z.ZodError };
+  const sent = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+  const data = Object.fromEntries(
+    Object.entries(parsed.data as Record<string, unknown>).filter(([k]) => Object.prototype.hasOwnProperty.call(sent, k) && sent[k] !== undefined),
+  ) as Partial<z.infer<T>>;
+  return { success: true, data };
 }

@@ -487,6 +487,7 @@ import {
   insertAssetPartyLinkSchema,
   insertDocumentSchema,
   isCalendarDay,
+  parsePatch,
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE, toCents, validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
@@ -5685,7 +5686,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       ? fieldsToDeleteRaw.filter((k: any) => typeof k === "string" && k.length > 0)
       : undefined;
     {
-      const parsed = insertProfileSchema.partial().safeParse(req.body);
+      const parsed = parsePatch(insertProfileSchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
       if (fieldPathsToDelete && fieldPathsToDelete.length > 0) {
@@ -6674,7 +6675,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
   }));
   app.patch("/api/trackers/:id", asyncHandler(async (req, res) => {
     {
-      const parsed = insertTrackerSchema.partial().safeParse(req.body);
+      const parsed = parsePatch(insertTrackerSchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
     }
@@ -7199,7 +7200,7 @@ Rules:
       delete req.body.dueTime;
     }
     {
-      const parsed = insertTaskSchema.partial().safeParse(req.body);
+      const parsed = parsePatch(insertTaskSchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
     }
@@ -7678,7 +7679,7 @@ Rules:
   }));
   app.patch("/api/expenses/:id", asyncHandler(async (req, res) => {
     {
-      const parsed = insertExpenseSchema.partial().safeParse(req.body);
+      const parsed = parsePatch(insertExpenseSchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       // A blank date input parses to undefined ("not given"); drop it rather
       // than hand storage a patch that names the column with nothing in it.
@@ -7993,7 +7994,7 @@ Rules:
   }));
   app.patch("/api/events/:id", asyncHandler(async (req, res) => {
     {
-      const parsed = insertEventSchema.partial().safeParse(req.body);
+      const parsed = parsePatch(insertEventSchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
     }
@@ -8321,7 +8322,7 @@ Rules:
   }));
   app.patch("/api/documents/:id", asyncHandler(async (req, res) => {
     {
-      const parsed = insertDocumentSchema.partial().safeParse(req.body);
+      const parsed = parsePatch(insertDocumentSchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
     }
@@ -8740,7 +8741,7 @@ Rules:
   app.patch("/api/habits/:id", asyncHandler(async (req, res) => {
     try {
       {
-        const parsed = insertHabitSchema.partial().safeParse(req.body);
+        const parsed = parsePatch(insertHabitSchema, req.body);
         if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
         req.body = { ...req.body, ...parsed.data };
       }
@@ -8891,7 +8892,7 @@ Rules:
       req.body.status = canonicalObligationStatus(req.body.status);
     }
     {
-      const parsed = insertObligationSchema.partial().safeParse(req.body);
+      const parsed = parsePatch(insertObligationSchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = withoutUndefined({ ...req.body, ...parsed.data });
     }
@@ -9449,7 +9450,7 @@ Rules:
       ? metadataToDeleteRaw.filter((k: any) => typeof k === "string" && k.length > 0)
       : undefined;
     {
-      const parsed = insertArtifactSchema.partial().safeParse(req.body);
+      const parsed = parsePatch(insertArtifactSchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
       // The share token is minted only by POST /:id/share (random bytes) and
@@ -9726,7 +9727,7 @@ Rules:
   }));
   app.patch("/api/journal/:id", asyncHandler(async (req, res) => {
     {
-      const parsed = insertJournalEntrySchema.partial().safeParse(req.body);
+      const parsed = parsePatch(insertJournalEntrySchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
     }
@@ -11404,7 +11405,7 @@ No emojis. No prose outside the JSON.`,
 
   app.patch("/api/goals/:id", asyncHandler(async (req, res) => {
     {
-      const parsed = insertGoalSchema.partial().safeParse(req.body);
+      const parsed = parsePatch(insertGoalSchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = withoutUndefined({ ...req.body, ...parsed.data });
     }
@@ -11632,7 +11633,7 @@ No emojis. No prose outside the JSON.`,
       req.body.frequency = normalizeIncomeFrequency(req.body.frequency);
     }
     {
-      const parsed = insertIncomeSchema.partial().safeParse(req.body);
+      const parsed = parsePatch(insertIncomeSchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
       req.body = { ...req.body, ...parsed.data };
     }

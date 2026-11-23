@@ -91,7 +91,14 @@ green. After a push to `main`:
    read-modify-write of a whole array (tags, lists): add a server endpoint
    that applies the change to the stored row, like
    `POST /api/events/:id/occurrence`.
-   *Guards:* `tests/sync-rules-valuation*.test.*`, `tests/sync-rules-followups.test.ts`.
+   **A PATCH carries only what was sent.** Every PATCH route validates its
+   body with `parsePatch(insertXSchema, req.body)` (`shared/schema.ts`), never
+   `schema.partial().safeParse(body)`: on zod 4 a bare partial fills in every
+   field that has a `.default()`, so a rename would also write `tags: []`,
+   `fields: {}`, `extractedData: {}`, `linkedProfiles: []` over the stored
+   values. (2026-11-23, caught while upgrading zod 3 → 4, before it shipped.)
+   *Guards:* `tests/sync-rules-valuation*.test.*`, `tests/sync-rules-followups.test.ts`,
+   `tests/patch-keeps-unsent-fields.test.ts`.
 7. **A failed request is not an empty account.** No `queryFn` may turn a
    failure into `[]`/`null`. Let React Query keep the last good data.
    *Guard:* `tests/sync-rules-failed-request.dom.test.tsx`.
