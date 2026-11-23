@@ -97,7 +97,7 @@ export function DetailHero({
   const backInner = pageTitle
     ? <><ChevronLeft className="h-5 w-5" /><span className="sr-only">{backLabel}</span></>
     : <><ArrowLeft className="h-3.5 w-3.5" /> {backLabel}</>;
-  const avatarBox = pageTitle ? "w-14 h-14 !rounded-2xl" : "w-12 h-12";
+  const avatarBox = pageTitle ? "w-[72px] h-[72px] sm:w-[84px] sm:h-[84px] !rounded-xl" : "w-12 h-12";
   const backEl = (
           backHref && backHref.includes("?") ? (
             // A query-carrying target ("/linked?tab=assets") must stay INSIDE

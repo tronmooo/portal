@@ -131,75 +131,55 @@ describe("asset profile layout", () => {
     expect(screen.getByTestId("asset-value-row-change").textContent).toBe("Change−38.8%");
   });
 
-  it("a row writes the field it names; money is stored as a number", async () => {
+  it("the form saves what changed, in one write; money is stored as a number", async () => {
     mount();
-    const row = await screen.findByTestId("overview-missing-purchasePrice");
-    expect(row.textContent).toContain("Purchase Price");
-    fireEvent.click(row);
+    await screen.findByTestId("asset-details");
+    const save = screen.getByTestId("asset-details-save") as HTMLButtonElement;
+    expect(save.disabled).toBe(true); // nothing typed yet
+    fireEvent.change(screen.getByTestId("asset-name-input"), { target: { value: "ZenBook 14" } });
     fireEvent.change(screen.getByTestId("overview-field-input-purchasePrice"), { target: { value: "$450" } });
-    fireEvent.click(screen.getByText("Save"));
+    fireEvent.change(screen.getByTestId("overview-field-input-location"), { target: { value: "Office" } });
+    fireEvent.change(screen.getByTestId("asset-notes-input"), { target: { value: "Work laptop" } });
+    fireEvent.change(screen.getByTestId("overview-field-input-warrantyExpiration"), { target: { value: "2032-01-01" } });
+    expect(writes()).toEqual([]); // typing writes nothing
+    fireEvent.click(save);
     await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0]).toMatchObject({ method: "PATCH", url: `/api/profiles/${ID}`, body: { fields: { purchasePrice: 450 } } });
+    expect(writes()[0]).toMatchObject({ method: "PATCH", url: `/api/profiles/${ID}` });
+    expect(writes()[0].body).toEqual({
+      name: "ZenBook 14", notes: "Work laptop",
+      fields: { purchasePrice: 450, location: "Office", warrantyExpiration: "2032-01-01" },
+    });
   });
 
-  it("a characteristic can be removed in two taps", async () => {
+  it("clearing a box removes that field; Undo puts back what was there", async () => {
+    mount();
+    const price = (await screen.findByTestId("overview-field-input-purchasePrice")) as HTMLInputElement;
+    expect(price.value).toBe("500");
+    fireEvent.change(price, { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("asset-details-undo"));
+    expect(price.value).toBe("500");
+    expect(writes()).toEqual([]);
+    fireEvent.change(price, { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("asset-details-save"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0].body).toEqual({ fieldsToDelete: ["purchasePrice"] });
+  });
+
+  it("a characteristic is changed with its pencil and removed with its X in two taps", async () => {
     mount();
     const panel = await screen.findByTestId("asset-characteristics");
     expect(panel.textContent).toContain("ASUS");
     fireEvent.click(screen.getByTestId("overview-field-brand"));
+    fireEvent.change(screen.getByTestId("overview-field-input-brand"), { target: { value: "Asus" } });
+    fireEvent.click(screen.getByTestId("overview-field-save-brand"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0].body).toEqual({ fields: { brand: "Asus" } });
+
+    fireEvent.click(await screen.findByTestId("overview-field-remove-brand"));
+    expect(writes()).toHaveLength(1); // the first tap only arms it
     fireEvent.click(screen.getByTestId("overview-field-remove-brand"));
-    expect(writes()).toEqual([]); // the first tap only arms it
-    fireEvent.click(screen.getByTestId("overview-field-remove-brand"));
-    await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0].body).toEqual({ fieldsToDelete: ["brand"] });
-  });
-
-  it("Name, Location and Notes are edited where they are shown", async () => {
-    mount();
-    fireEvent.click(await screen.findByTestId("asset-detail-name"));
-    fireEvent.change(screen.getByTestId("asset-name-input"), { target: { value: "ZenBook 14" } });
-    fireEvent.click(screen.getByTestId("asset-name-save"));
-    await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0]).toMatchObject({ method: "PATCH", url: `/api/profiles/${ID}`, body: { name: "ZenBook 14" } });
-
-    // Location: the same `location` field the chat's update_profile writes.
-    fireEvent.click(screen.getByTestId("asset-detail-location"));
-    fireEvent.change(screen.getByTestId("overview-field-input-location"), { target: { value: "Office" } });
-    fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(writes()).toHaveLength(2));
-    expect(writes()[1].body).toEqual({ fields: { location: "Office" } });
-
-    fireEvent.click(screen.getByTestId("asset-detail-notes"));
-    fireEvent.change(screen.getByTestId("asset-notes-input"), { target: { value: "Work laptop" } });
-    fireEvent.click(screen.getByTestId("asset-notes-save"));
-    await waitFor(() => expect(writes()).toHaveLength(3));
-    expect(writes()[2].body).toEqual({ notes: "Work laptop" });
-  });
-
-  it("an odd row out takes the whole row, so the panel has no empty half", async () => {
-    mount();
-    const grid = (await screen.findByTestId("asset-detail-location")).parentElement!;
-    // Name and Notes are always full width; of the rows between, the last of an odd count spans.
-    const cells = Array.from(grid.children).slice(1, -1);
-    const spans = cells.filter((c) => c.className.includes("sm:col-span-2"));
-    expect(spans.length).toBe(cells.length % 2);
-    if (spans.length) expect(spans[0]).toBe(cells[cells.length - 1]);
-  });
-
-  it("a date on the record is a row that can be changed, and one can be added", async () => {
-    mount();
-    fireEvent.click(await screen.findByTestId("overview-field-warrantyExpiration"));
-    fireEvent.change(screen.getByTestId("overview-field-input-warrantyExpiration"), { target: { value: "2032-01-01" } });
-    fireEvent.click(screen.getByText("Save"));
-    await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0].body).toEqual({ fields: { warrantyExpiration: "2032-01-01" } });
-
-    fireEvent.click(screen.getByTestId("asset-add-date"));
-    fireEvent.change(screen.getByTestId("asset-add-date-kind"), { target: { value: "insuranceExpiration" } });
-    fireEvent.change(screen.getByTestId("asset-add-date-day"), { target: { value: "2027-06-01" } });
-    fireEvent.click(screen.getByTestId("asset-add-date-save"));
-    await waitFor(() => expect(writes()).toHaveLength(2));
-    expect(writes()[1].body).toEqual({ fields: { insuranceExpiration: "2027-06-01" } });
+    expect(writes()[1].body).toEqual({ fieldsToDelete: ["brand"] });
   });
 
   it("alerts are the rule engine's dates, cleared into the server's dismiss list", async () => {

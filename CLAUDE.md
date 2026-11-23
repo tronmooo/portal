@@ -672,18 +672,23 @@ estimate was made, Refresh and the "Track value automatically" switch are the
 profile row and its documents, filtered by `isAlertDateRule`, identified by
 `dateAlertId` (the bell's id), cleared and restored through
 `useDismissedAlerts` (Rule 8). Never the browser snooze.
-**P4. Dense, no empty halves, and what is shown is edited where it is shown.**
-Rows are 36px with tight card padding. The rows between Name and Notes are a
-list and an odd one out takes the row. The two columns end on the same line
-without a blank area inside a card: Quick Info goes under whichever column is
-shorter, and Asset Details shows one row per line instead of two when the
-column beside it is taller (`pairRows`). Name and Notes (the record's own
-`name` / `notes`), every field row and every date open an editor in place;
-money is stored as a number. Category is the composition's label and
-Ownership opens the Contained tab; only what the app calculated is read-only.
+**P4. Asset Details is one form, edited in line.** Owner, 2026-11-23: "make
+it look exactly like this … everything's inline edit". Every value sits in its
+own box and is typed into where it stands (`AssetDetailsForm`): Name, Purchase
+Price and Date, Location, each date, Notes; Category is the composition's
+label and Ownership opens the Contained tab. ONE **Save** (the owner's design,
+as O6) sends only what changed in a single PATCH — a cleared box removes that
+field, money is stored as a number — and writes it into the page's cache at
+once; **Undo** puts back what was there; typing and opening write nothing
+(Rule 3). **Edit** opens the full dialog. A date stored as something other
+than a calendar day ("2024") stays a text box, so the form cannot lose it. A
+characteristic (`CharRow`) has a pencil and an X (two taps, Rule 8). The page
+is dense (32px rows, tight cards) and AI Summary shares ONE card with Value &
+Depreciation. Only what the app calculated is read-only.
 **P5. Quick add creates ordinary records.** + Task, + Expense and + Note post
 to `/api/tasks`, `/api/expenses` and `/api/notes` with this asset linked, so
-they show on the Tasks page, in Finance and under Notes too. Delete only opens
+they show on the Tasks page, in Finance and under Notes too; More holds "Add
+a date" and "Add a document". Delete only opens
 the page's confirmation (Rule 8); opening the page writes nothing (Rule 3).
 **P6. One finance tab.** Where a tab set has both, Money is merged into
 **Financials** (rollup, breakdown, linked liabilities, the loan, bills and

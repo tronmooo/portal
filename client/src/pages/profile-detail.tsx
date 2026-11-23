@@ -13444,6 +13444,9 @@ export default function ProfileDetailPage() {
           {heroSpec?.identity?.entityLabel || String(profile.type).replace(/_/g, " ")}
         </Pill>
       </span>
+      {ownerPillLabel === "You own this" && personOptions.find((p: any) => p.type === "self")?.name && (
+        <Pill tone="neutral">{personOptions.find((p: any) => p.type === "self")?.name}</Pill>
+      )}
       {hasTab("contained") ? (
         <button type="button" onClick={() => openTab("contained")} title="Open ownership" data-testid="hero-owner-pill">
           <Pill tone="ai"><User className="h-3 w-3" />{ownerPillLabel}</Pill>
@@ -13582,12 +13585,14 @@ export default function ProfileDetailPage() {
             >
               <div className={assetLayout ? "flex flex-col lg:flex-row lg:items-center gap-2 border-b border-border/50 pb-1" : "contents"}>
               <div className={`overflow-x-auto pb-1 -mx-1 px-1 min-w-0 ${assetLayout ? "lg:flex-1" : "border-b border-border/50"}`} style={{WebkitOverflowScrolling: 'touch'}}>
-                <TabsList className="inline-flex h-8 w-max gap-0.5 p-0.5 bg-muted/50">
+                <TabsList className={assetLayout ? "inline-flex h-9 w-max gap-1 p-0 bg-transparent rounded-none" : "inline-flex h-8 w-max gap-0.5 p-0.5 bg-muted/50"}>
                   {tabs.map(tab => (
                     <TabsTrigger
                       key={tab.value}
                       value={tab.value}
-                      className="text-[13px] px-3 whitespace-nowrap"
+                      className={assetLayout
+                        ? "text-[13px] px-3 h-9 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-emerald-400 data-[state=active]:bg-emerald-500/10 data-[state=active]:shadow-none"
+                        : "text-[13px] px-3 whitespace-nowrap"}
                       data-testid={tab.testId}
                     >
                       {tab.label}
@@ -13599,6 +13604,7 @@ export default function ProfileDetailPage() {
                 <div className="overflow-x-auto -mx-1 px-1 pb-1 shrink-0">
                   <AssetQuickAdd
                     profileId={profile.id}
+                    fields={profile.fields}
                     onEdit={() => setShowEditDialog(true)}
                     onOpenDocuments={tabValues.has("trackers") ? () => openTab("trackers") : undefined}
                   />
