@@ -733,18 +733,26 @@ touching it.
 a 28px picture (still the photo picker) · the name · the current value
 (`AssetHeroValue`) · the ⋯ menu (Edit, Ownership, Documents, Clear / Restore
 alerts, Delete). The Overview is, in this order and nothing else:
-1. **Value & Depreciation** (`ValueCard`) — purchase price, current value,
-   total invested (purchase price + what was spent, when both are known), the
-   change, confidence, the chart, Refresh, and the estimate's details and
-   tracking switch under its disclosure.
+1. **Value & Depreciation** (`ValueCard`) — says HOW MUCH it has depreciated
+   ("it's just a random graph, that means nothing … remove confidence"): one
+   bar that is the purchase price, filled by what has been lost, with the
+   amount and percent; with no purchase price it asks for one instead of
+   drawing anything. Never a chart of past estimates and never a confidence
+   figure here. Then the money lines: Purchase price, Current value, Total
+   invested (purchase price + what was spent, when both are known) and
+   **Salvage value** (`SALVAGE_KEY`, the user's own figure — never estimated
+   or invented; marked on the bar), plus Refresh and the estimate's details
+   and tracking switch under the disclosure.
 2. **AI Asset Summary** (`AISummaryCard compact`) — a title and the text. The
-   text is three short sentences (worth, change since purchase, what needs
-   attention): `withAssetSummaryShape`, `shared/asset-summary-prompt.ts`. No
+   text is three short sentences: what it is worth, how much it has
+   depreciated, and WHEN it would make sense to sell or replace it, with the
+   reason (`withAssetSummaryShape`, `shared/asset-summary-prompt.ts`). No
    figure tiles, no to-do list, no Look up value; no card when there is no
    summary.
 3. **Asset details** — ONE list (`Line`): label left, value right, a pencil.
-   Name, Category, every characteristic, Purchase price and date, Location,
-   each date, Ownership, Notes, then "+ Add characteristic".
+   Name, Category, every characteristic, Purchase date, Location, each date,
+   Ownership, Notes, then "+ Add characteristic". (Purchase price is the
+   Value card's.)
 Do not put Quick Info, linked sections, a separate Characteristics card,
 recent activity or a boxed form back on the Overview: those are the other
 tabs' (Financials, Contained, History). The page keeps only what would

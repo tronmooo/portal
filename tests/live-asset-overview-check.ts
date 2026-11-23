@@ -81,7 +81,7 @@ async function main() {
       // ── Header ──
       check(/\$\d/.test(await page.locator(t("hero-stat-current-value")).innerText()), "the header shows the current value");
       check((await page.locator(t("hero-stat-purchase-price")).count()) === 0, "the header shows nothing but the name and the value");
-      check((await page.locator(t("asset-value-row-purchase-price")).innerText()).includes("$899"), "the Value card shows the purchase price ($899)");
+      check((await page.locator(t("overview-missing-purchasePrice")).innerText()).includes("$899"), "the Value card shows the purchase price ($899)");
       check((await page.locator(t("tab-money")).count()) === 0 && (await page.locator(t("tab-financials")).count()) === 1, "Money is merged into Financials (no Money tab)");
 
       // ── Asset details: each line's pencil edits it in place ──
@@ -103,9 +103,17 @@ async function main() {
       check(Number(after.fields?.purchasePrice) === 950, `the purchase price is stored as a number (${JSON.stringify(after.fields?.purchasePrice)})`);
       check(after.fields?.location === "Office", "the location line stored the location");
       check(after.notes === `Checked ${tag}`, "the notes line stored the notes");
-      await page.waitForFunction((sel) => document.querySelector(sel)?.textContent?.includes("$950"), t("asset-value-row-purchase-price"), { timeout: 20000 }).catch(() => undefined);
-      check((await page.locator(t("asset-value-row-purchase-price")).innerText()).includes("$950"), "the Value card follows the saved purchase price without a reload");
+      await page.waitForFunction((sel) => document.querySelector(sel)?.textContent?.includes("$950"), t("overview-missing-purchasePrice"), { timeout: 20000 }).catch(() => undefined);
+      check((await page.locator(t("overview-missing-purchasePrice")).innerText()).includes("$950"), "the Value card follows the saved purchase price without a reload");
       check((await page.locator(t("text-profile-detail-name")).innerText()).endsWith(" Pro"), "the header follows the saved name without a reload");
+
+      // ── Depreciation is stated; salvage value is the user's own figure ──
+      const dep = await page.locator(t("asset-depreciation")).innerText();
+      check(/Depreciated since purchase|Gained since purchase/.test(dep), `the Value card states the change since purchase (${dep.split("\n")[0]})`);
+      check(!/Confidence/.test(await page.locator(t("asset-value-card")).innerText()), "the Value card shows no confidence figure");
+      await edit("asset-value-salvage", "overview-field-input-salvageValue", "150");
+      const withSalvage = await until(stored, (p) => Number(p.fields?.salvageValue) === 150);
+      check(Number(withSalvage.fields?.salvageValue) === 150, "the salvage value is stored as a number");
 
       // ── The Overview holds three things and nothing else ──
       for (const gone of ["asset-quick-info", "asset-characteristics", "asset-section-activity"]) {

@@ -33,7 +33,7 @@ import { formatMoneyCompact, parseLocalDate } from "@/lib/format";
 import { localTodayISO } from "@/lib/dates";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
-import { useAssetValuation, useAssetValuationHistory } from "@/hooks/useAssetValuation";
+import { useAssetValuation } from "@/hooks/useAssetValuation";
 import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
 import { AddFieldPanel } from "@/components/AddFieldPanel";
 import { CurrentValueCard } from "@/components/asset/CurrentValueCard";
@@ -203,46 +203,32 @@ export function AssetHeroValue({ profile }: { profile: AssetLayoutProfile }) {
   );
 }
 
-/** Value & Depreciation: the history as a line, the same four numbers as a
- *  table, and — one tap away — how the estimate was made and its switch. */
-function ValueCard({ profile, spent = 0 }: {
+/** What it would fetch at the end of its useful life — the user's own figure. */
+export const SALVAGE_KEY = "salvageValue";
+
+/**
+ * Value & Depreciation. Owner, 2026-11-23: "make sure it says how much it
+ * depreciated — it's just a random graph, that means nothing … add the asset
+ * salvage value … remove confidence." So: no chart of past estimates and no
+ * confidence figure; ONE bar that is the purchase price, filled by what has
+ * been lost, then the money lines — purchase price, current value, total
+ * invested, salvage value — each edited in place where it is the user's own.
+ */
+export function ValueCard({ profile, spent = 0 }: {
   profile: AssetLayoutProfile;
   /** What has been spent on it since (the composition's "Spent to date"). */
   spent?: number;
 }) {
   const v = useValuePosition(profile);
   const [details, setDetails] = useState(false);
-  const history = useAssetValuationHistory(profile.id, v.supported);
-  const points = useMemo(() => {
-    const past = (history.data || []).filter((h) => h.value != null && h.value > 0).map((h) => Number(h.value)).slice(-5);
-    const list = [...(v.paid > 0 ? [v.paid] : []), ...past];
-    if (v.now > 0 && list[list.length - 1] !== v.now) list.push(v.now);
-    return list;
-  }, [history.data, v.paid, v.now]);
-
+  const write = useFieldWrite(profile.id);
+  const fields = profile.fields || {};
+  const priceKey = PURCHASE_PRICE_KEYS.find((k) => parseMoney(fields[k]) > 0) || "purchasePrice";
+  const salvage = parseMoney(fields[SALVAGE_KEY]);
   const up = v.delta > 0;
-  const tone = up ? "text-emerald-400" : "text-red-400";
-  const hi = Math.max(...points, 1), lo = Math.min(...points, hi);
-  const xy = points.map((n, i) => {
-    const x = points.length === 1 ? 100 : 12 + (i * 176) / (points.length - 1);
-    const y = hi === lo ? 40 : 16 + (1 - (n - lo) / (hi - lo)) * 46;
-    return [x, y] as const;
-  });
-  const line = xy.map(([x, y], i) => `${i ? "L" : "M"} ${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
-
-  const rows: Array<[string, React.ReactNode, string]> = [
-    ["Purchase Price", v.paid > 0 ? formatMoneyCompact(v.paid) : "Not set", v.paid > 0 ? "" : "text-muted-foreground/70 font-normal"],
-    [v.auto ? "Current Value" : "Your Value", v.now > 0 ? formatMoneyCompact(v.now) : "Not estimated yet", v.now > 0 ? "text-emerald-400" : "text-muted-foreground/70 font-normal"],
-    // Purchase price plus what was spent on it since — shown only when both are known.
-    ...(v.paid > 0 && spent > 0 ? [["Total invested", formatMoneyCompact(v.paid + spent), ""] as [string, React.ReactNode, string]] : []),
-    ...(v.hasChange ? [
-      [up ? "Appreciation" : "Depreciation", signed(v.delta), tone],
-      ["Change", signedPct(v.pct), tone],
-    ] as Array<[string, React.ReactNode, string]> : []),
-    ...(v.confidence != null ? [
-      ["Confidence", `${v.confidence}%`, v.confidence >= 70 ? "text-emerald-400" : v.confidence >= 45 ? "text-amber-400" : ""],
-    ] as Array<[string, React.ReactNode, string]> : []),
-  ];
+  const lostShare = v.hasChange && !up ? Math.min(1, Math.abs(v.delta) / v.paid) : 0;
+  const salvageShare = salvage > 0 && v.paid > 0 && salvage < v.paid ? salvage / v.paid : null;
+  const aboveSalvage = salvage > 0 && v.now > 0 ? v.now - salvage : null;
 
   return (
     <section className={`${PANEL} min-w-0`} data-testid="asset-value-card">
@@ -255,31 +241,56 @@ function ValueCard({ profile, spent = 0 }: {
           </Button>
         )}
       </div>
-      <div className={`grid gap-3 items-center ${xy.length >= 2 ? "grid-cols-1 min-[420px]:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]" : "grid-cols-1"}`}>
-        {xy.length >= 2 && (
-          <svg viewBox="0 0 200 80" className="w-full h-auto max-h-[84px]" preserveAspectRatio="none" role="img" aria-label={`Value from ${formatMoneyCompact(points[0])} to ${formatMoneyCompact(points[points.length - 1])}`}>
-            <defs>
-              <linearGradient id={`val-fill-${profile.id}`} x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0" stopColor="#8b5cf6" stopOpacity="0.38" /><stop offset="1" stopColor="#8b5cf6" stopOpacity="0.03" />
-              </linearGradient>
-            </defs>
-            <path d={`${line} L ${xy[xy.length - 1][0]} 76 L ${xy[0][0]} 76 Z`} fill={`url(#val-fill-${profile.id})`} />
-            <path d={line} fill="none" stroke="#a78bfa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            {xy.map(([x, y], i) => <circle key={i} cx={x} cy={y} r="3" fill="#c4b5fd" />)}
-          </svg>
-        )}
-        <div className="min-w-0">
-          {rows.map(([label, value, cls]) => (
-            <div key={label} className="flex items-center justify-between gap-3 py-0.5" data-testid={`asset-value-row-${label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>
-              <span className="text-[13px] text-muted-foreground">{label}</span>
-              <span className={`text-[13px] font-semibold tabular-nums ${cls}`}>{value}</span>
+
+      {/* How much it has depreciated: the bar is the purchase price, the
+          filled part is what has been lost. */}
+      <div className="bubble-row !rounded-xl px-3 py-2 mt-1 mb-1" data-testid="asset-depreciation">
+        {v.hasChange ? (
+          <>
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-[13px] text-muted-foreground">{up ? "Gained since purchase" : "Depreciated since purchase"}</span>
+              <span className={`text-[16px] font-bold tabular-nums ${up ? "text-emerald-400" : "text-red-400"}`} data-testid="asset-depreciation-amount">
+                {signed(v.delta)} <span className="text-[12px] font-semibold">({signedPct(v.pct)})</span>
+              </span>
             </div>
-          ))}
-          {!v.hasChange && v.paid <= 0 && (
-            <p className="text-[12px] text-muted-foreground mt-1">Add a purchase price to see how the value has changed.</p>
-          )}
-        </div>
+            {!up && (
+              <div className="relative mt-1.5 h-1.5 rounded-full bg-muted" role="img"
+                aria-label={`${Math.round(lostShare * 100)}% of the purchase price lost`}>
+                <div className="h-full rounded-full bg-gradient-to-r from-orange-400 to-red-400" style={{ width: `${Math.max(2, Math.round(lostShare * 1000) / 10)}%` }} data-testid="asset-depreciation-bar" />
+                {/* Where it stops: the salvage value, measured from the right. */}
+                {salvageShare != null && (
+                  <span className="absolute -top-0.5 h-2.5 w-0.5 rounded bg-foreground/70" style={{ left: `${(1 - salvageShare) * 100}%` }} title="Salvage value" data-testid="asset-salvage-mark" />
+                )}
+              </div>
+            )}
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {up
+                ? `Worth ${formatMoneyCompact(v.now)} against ${formatMoneyCompact(v.paid)} paid.`
+                : `${Math.round(lostShare * 100)}% of the ${formatMoneyCompact(v.paid)} paid is gone; ${formatMoneyCompact(v.now)} is left.`}
+              {aboveSalvage != null && aboveSalvage > 0 && ` ${formatMoneyCompact(aboveSalvage)} of that is above its salvage value.`}
+            </p>
+          </>
+        ) : (
+          <p className="text-[13px] text-muted-foreground">
+            {v.paid > 0 ? "No current value yet — tap Refresh to estimate it." : "Add the purchase price below to see how much it has depreciated."}
+          </p>
+        )}
       </div>
+
+      <Line label="Purchase price" kind="money" display={v.paid > 0 ? formatMoneyCompact(v.paid) : null} raw={v.paid > 0 ? String(v.paid) : ""}
+        save={(val) => write(priceKey, val)} remove={() => write(priceKey, null)} hint="Unlocks how much it has depreciated"
+        testId="overview-missing-purchasePrice" inputTestId="overview-field-input-purchasePrice" removeTestId="overview-field-remove-purchasePrice" />
+      <Line label={v.auto ? "Current value" : "Your value"} testId="asset-value-row-current-value"
+        display={v.now > 0 ? <span className="text-emerald-400">{formatMoneyCompact(v.now)}</span> : null} />
+      {/* Purchase price plus what was spent on it since — only when both are known. */}
+      {v.paid > 0 && spent > 0 && (
+        <Line label="Total invested" display={formatMoneyCompact(v.paid + spent)} testId="asset-value-row-total-invested" />
+      )}
+      <Line label="Salvage value" kind="money" display={salvage > 0 ? formatMoneyCompact(salvage) : null} raw={salvage > 0 ? String(salvage) : ""}
+        save={(val) => write(SALVAGE_KEY, val)} remove={() => write(SALVAGE_KEY, null)}
+        hint="What it would fetch at the end of its useful life"
+        testId="asset-value-salvage" inputTestId={`overview-field-input-${SALVAGE_KEY}`} removeTestId="overview-field-remove-salvageValue" />
+
       {v.supported && (
         <>
           <button type="button" className="mt-2 text-[12px] text-muted-foreground hover:text-foreground flex items-center gap-1"
@@ -426,7 +437,7 @@ export function AssetOverviewBody({
   const purchaseDate = fields[purchaseDateKey] ? String(fields[purchaseDateKey]) : "";
   const location = typeof fields.location === "string" ? fields.location.trim() : "";
   // Drawn by this layout itself, so the composition's copy is not repeated.
-  const staple = new Set([priceKey, purchaseDateKey, "purchasePrice", "purchaseDate", "userEnteredValue", "location", "ownershipPercentage"]);
+  const staple = new Set([priceKey, purchaseDateKey, "purchasePrice", "purchaseDate", "userEnteredValue", "location", "ownershipPercentage", SALVAGE_KEY]);
 
   const keyOf = (v: OverviewValue) => v.editable?.fieldKey || v.semanticKey;
   const fieldSections: OverviewSection[] = spec.sections.filter((s) => !SPECIAL.has(s.component));
@@ -494,9 +505,6 @@ export function AssetOverviewBody({
           testId="asset-detail-name" inputTestId="asset-name-input" />
         <Line label="Category" display={<span className="capitalize">{spec.identity.entityLabel || profile.type}</span>} testId="asset-detail-category" />
         {characteristics.map(valueLine)}
-        <Line label="Purchase price" kind="money" display={price > 0 ? formatMoneyCompact(price) : null} raw={price > 0 ? String(price) : ""}
-          save={saveField(priceKey)} remove={removeField(priceKey)} hint="Unlocks the change since you bought it"
-          testId="overview-missing-purchasePrice" inputTestId="overview-field-input-purchasePrice" removeTestId="overview-field-remove-purchasePrice" />
         <Line label="Purchase date" kind={!purchaseDate || isoDay(purchaseDate) ? "date" : "text"}
           display={purchaseDate ? showDate(purchaseDate) : null} raw={isoDay(purchaseDate) ? purchaseDate.slice(0, 10) : purchaseDate}
           save={saveField(purchaseDateKey)} remove={removeField(purchaseDateKey)}

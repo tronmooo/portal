@@ -35,7 +35,7 @@ vi.mock("@/lib/cache-bus", () => ({
 }));
 
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
-import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroValue, AssetAddDateDialog } from "@/components/asset/AssetOverviewLayout";
+import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroValue, AssetAddDateDialog, ValueCard } from "@/components/asset/AssetOverviewLayout";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { __resetValuationRefreshState, valuationQueryKey } from "@/hooks/useAssetValuation";
 
@@ -155,17 +155,41 @@ describe("asset profile layout", () => {
     expect(writes()).toEqual([]);
   });
 
-  it("the header shows only the value; the other figures are the Value card's", async () => {
+  it("the Value card says how much it has depreciated: a bar, no chart, no confidence", async () => {
     mount();
     await screen.findByTestId("asset-details");
     expect(screen.getByTestId("hero-stat-current-value").textContent).toBe("$306");
-    expect(screen.queryByTestId("hero-stat-purchase-price")).toBeNull();
-    expect(screen.getByTestId("asset-value-card").textContent).toContain("Value & Depreciation");
-    expect(screen.getByTestId("asset-value-row-purchase-price").textContent).toBe("Purchase Price$500");
-    expect(screen.getByTestId("asset-value-row-current-value").textContent).toBe("Current Value$306");
-    expect(screen.getByTestId("asset-value-row-depreciation").textContent).toBe("Depreciation−$194");
-    expect(screen.getByTestId("asset-value-row-change").textContent).toBe("Change−38.8%");
-    expect(screen.getByTestId("asset-value-row-confidence").textContent).toBe("Confidence40%");
+    const card = screen.getByTestId("asset-value-card");
+    expect(card.textContent).toContain("Value & Depreciation");
+    expect(screen.getByTestId("asset-depreciation").textContent).toContain("Depreciated since purchase");
+    expect(screen.getByTestId("asset-depreciation-amount").textContent).toBe("−$194 (−38.8%)");
+    // $194 of $500 is gone: the bar is 39% full (38.8).
+    expect((screen.getByTestId("asset-depreciation-bar") as HTMLElement).style.width).toBe("38.8%");
+    expect(screen.getByTestId("asset-depreciation").textContent).toContain("39% of the $500 paid is gone; $306 is left.");
+    expect(screen.getByTestId("asset-value-row-current-value").textContent).toContain("$306");
+    expect(card.querySelector("svg[role='img']")).toBeNull(); // the chart of past estimates is gone
+    expect(card.textContent).not.toMatch(/Confidence/);
+  });
+
+  it("with no purchase price the card asks for it instead of drawing anything", async () => {
+    const hook = () => [`/profiles/${ID}`, vi.fn()] as [string, (to: string) => void];
+    const bare = { ...PROFILE, fields: { currentValue: 306, currentValueSource: "estimate" } };
+    render(<QueryClientProvider client={queryClient}><Router hook={hook as any}><ValueCard profile={bare} /></Router></QueryClientProvider>);
+    const block = await screen.findByTestId("asset-depreciation");
+    expect(block.textContent).toBe("Add the purchase price below to see how much it has depreciated.");
+    expect(screen.queryByTestId("asset-depreciation-bar")).toBeNull();
+  });
+
+  it("salvage value is the user's own figure: stored as a number and marked on the bar", async () => {
+    mount();
+    const line = await screen.findByTestId("asset-value-salvage");
+    expect(line.textContent).toContain("Not set");
+    expect(screen.queryByTestId("asset-salvage-mark")).toBeNull();
+    fireEvent.click(line);
+    fireEvent.change(screen.getByTestId("overview-field-input-salvageValue"), { target: { value: "$80" } });
+    fireEvent.click(screen.getByTestId("overview-field-input-salvageValue-save"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0].body).toEqual({ fields: { salvageValue: 80 } });
   });
 
   it("the Overview is three things in order: Value, the summary, Asset details", async () => {
