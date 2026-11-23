@@ -73,6 +73,11 @@ export interface DetailHeroProps {
    * stays as the accessible name — and the avatar is drawn large.
    */
   pageTitle?: string;
+  /**
+   * Beside the identity on a wide screen, under it on a phone — the asset's
+   * value figures.
+   */
+  aside?: React.ReactNode;
   /** Below the stats — a payoff/term bar. */
   progress?: React.ReactNode;
   testId?: string;
@@ -80,7 +85,7 @@ export interface DetailHeroProps {
 
 export function DetailHero({
   title, accent, icon: Icon, typeLabel, badges, subtitle, breadcrumb, notes,
-  avatar, backHref, onBack, backLabel = "Back", actions, stats = [], progress, pageTitle,
+  avatar, backHref, onBack, backLabel = "Back", actions, stats = [], progress, pageTitle, aside,
   testId = "detail-hero",
 }: DetailHeroProps) {
   // A count of zero is not a fact worth a tile. Stats that pass `value` are
@@ -140,7 +145,8 @@ export function DetailHero({
       )}
 
       {/* Identity */}
-      <div className={pageTitle ? "flex items-center gap-4" : "flex items-start gap-3"}>
+      <div className={aside ? "flex flex-col lg:flex-row lg:items-center gap-4" : "contents"}>
+      <div className={`${pageTitle ? "flex items-center gap-4" : "flex items-start gap-3"} ${aside ? "flex-1 min-w-0" : ""}`}>
         {avatar ? (
           <>
             {avatar.inputRef && (
@@ -199,6 +205,9 @@ export function DetailHero({
             </div>
           )}
         </div>
+      </div>
+
+      {aside && <div className="lg:shrink-0">{aside}</div>}
       </div>
 
       {notes && (

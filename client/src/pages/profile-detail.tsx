@@ -1,7 +1,7 @@
 import { NewNoteForm } from "@/components/notes/NewNoteForm";
 import { DetailValueCells } from "@/components/details/DetailValueCells";
 import { AddFieldPanel } from "@/components/AddFieldPanel";
-import { AssetOverviewBody, AssetProfileActions } from "@/components/asset/AssetOverviewLayout";
+import { AssetOverviewBody, AssetProfileActions, AssetHeroStats, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { OverviewSpec } from "@shared/overview-spec";
 import { changedFieldsOnly } from "@shared/field-patch";
@@ -3219,29 +3219,33 @@ function usesAssetLayout(profile: any): boolean {
   return !!profile && isAssetTabProfile(profile) && !isAccountProfile(profile);
 }
 
-function InfoTab({ profile, onEdit, onOpenDocuments }: { profile: ProfileDetail; onEdit: () => void; onOpenDocuments?: () => void }) {
+function InfoTab({ profile, onEdit, ownerLabel, onOpenOwnership, summarySlot }: {
+  profile: ProfileDetail; onEdit: () => void;
+  /** Asset layout only: who owns it, where ownership is changed, the AI summary card. */
+  ownerLabel?: string; onOpenOwnership?: () => void; summarySlot?: React.ReactNode;
+}) {
   const dynamic = isAssetTabProfile(profile as any) || isLiabilityTabProfile(profile as any);
   const legacy = <StaticInfoTab profile={profile} onEdit={onEdit} />;
   if (!dynamic) return legacy;
   if (usesAssetLayout(profile)) {
     const auto = isAutoValuationEnabled(profile.fields);
     return (
-      <div className="space-y-4">
-        <CurrentValueCard profileId={profile.id} fields={profile.fields} />
-        <DynamicOverview
-          profileId={profile.id}
-          fallback={legacy}
-          autoValuation={auto}
-          renderBody={(spec) => (
-            <AssetOverviewBody
-              spec={spec}
-              profile={profile as any}
-              autoValuation={auto}
-              onOpenDocuments={onOpenDocuments}
-            />
-          )}
-        />
-      </div>
+      <DynamicOverview
+        profileId={profile.id}
+        fallback={legacy}
+        autoValuation={auto}
+        renderBody={(spec) => (
+          <AssetOverviewBody
+            spec={spec}
+            profile={profile as any}
+            autoValuation={auto}
+            ownerLabel={ownerLabel || "You own this"}
+            onOpenOwnership={onOpenOwnership}
+            onEdit={onEdit}
+            summarySlot={summarySlot}
+          />
+        )}
+      />
     );
   }
   return (
@@ -8515,7 +8519,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "contained", label: "Contained", testId: "tab-contained" },
     { value: "financials", label: "Financials", testId: "tab-financials" },
-    { value: "money", label: "Money", testId: "tab-money" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -8536,7 +8539,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "contained", label: "Contained", testId: "tab-contained" },
     { value: "financials", label: "Financials", testId: "tab-financials" },
-    { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
@@ -8563,7 +8565,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "contained", label: "Contained", testId: "tab-contained" },
     { value: "financials", label: "Financials", testId: "tab-financials" },
-    { value: "money", label: "Money", testId: "tab-money" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -8575,7 +8576,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "contained", label: "Contained", testId: "tab-contained" },
     { value: "financials", label: "Financials", testId: "tab-financials" },
-    { value: "money", label: "Money", testId: "tab-money" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -8616,7 +8616,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "contained", label: "Contained", testId: "tab-contained" },
     { value: "financials", label: "Financials", testId: "tab-financials" },
-    { value: "money", label: "Money", testId: "tab-money" },
     { value: "linked-subs", label: "Subscriptions", testId: "tab-linked-subs" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
     { value: "insights", label: "Insights", testId: "tab-insights" },
@@ -8626,7 +8625,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "contained", label: "Contained", testId: "tab-contained" },
     { value: "financials", label: "Financials", testId: "tab-financials" },
-    { value: "money", label: "Money", testId: "tab-money" },
     { value: "payments", label: "Payments", testId: "tab-payments" },
     { value: "rewards", label: "Rewards", testId: "tab-rewards" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
@@ -8636,7 +8634,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "contained", label: "Contained", testId: "tab-contained" },
     { value: "financials", label: "Financials", testId: "tab-financials" },
-    { value: "money", label: "Money", testId: "tab-money" },
     { value: "access", label: "Access", testId: "tab-access" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
@@ -8646,7 +8643,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "contained", label: "Contained", testId: "tab-contained" },
     { value: "financials", label: "Financials", testId: "tab-financials" },
-    { value: "money", label: "Money", testId: "tab-money" },
     { value: "tasks", label: "Operations", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "insights", label: "Insights", testId: "tab-insights" },
@@ -8656,7 +8652,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "contained", label: "Contained", testId: "tab-contained" },
     { value: "financials", label: "Financials", testId: "tab-financials" },
-    { value: "money", label: "Money", testId: "tab-money" },
     { value: "valuation", label: "Valuation", testId: "tab-valuation" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
@@ -8666,7 +8661,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "contained", label: "Contained", testId: "tab-contained" },
     { value: "financials", label: "Financials", testId: "tab-financials" },
-    { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "history", label: "History", testId: "tab-history" },
@@ -8675,7 +8669,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "contained", label: "Contained", testId: "tab-contained" },
     { value: "financials", label: "Financials", testId: "tab-financials" },
-    { value: "money", label: "Money", testId: "tab-money" },
     { value: "warranty", label: "Warranty", testId: "tab-warranty" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
@@ -13557,6 +13550,7 @@ export default function ProfileDetailPage() {
             </Button>
           </>}
           stats={heroStats}
+          aside={assetLayout ? <AssetHeroStats profile={profile as any} /> : undefined}
         />
       </div>
 
@@ -13576,14 +13570,17 @@ export default function ProfileDetailPage() {
         {(() => {
           const tabs = pageTabs;
           const tabValues = new Set(tabs.map(t => t.value));
-          const activeTab = resolveProfileTab(tabs, urlTabSlug);
+          // A saved link to the old Money tab opens Financials, where it went.
+          const moneyMoved = urlTabSlug?.toLowerCase() === "money" && !tabValues.has("money") && tabValues.has("financials");
+          const activeTab = moneyMoved ? "financials" : resolveProfileTab(tabs, urlTabSlug);
           return (
             <Tabs
               value={activeTab}
               onValueChange={(v) => navigate(`/profiles/${id}/${slugForProfileTab(tabs, v)}`)}
               className="mt-3"
             >
-              <div className="overflow-x-auto pb-1 border-b border-border/50 -mx-1 px-1" style={{WebkitOverflowScrolling: 'touch'}}>
+              <div className={assetLayout ? "flex flex-col lg:flex-row lg:items-center gap-2 border-b border-border/50 pb-1" : "contents"}>
+              <div className={`overflow-x-auto pb-1 -mx-1 px-1 min-w-0 ${assetLayout ? "lg:flex-1" : "border-b border-border/50"}`} style={{WebkitOverflowScrolling: 'touch'}}>
                 <TabsList className="inline-flex h-8 w-max gap-0.5 p-0.5 bg-muted/50">
                   {tabs.map(tab => (
                     <TabsTrigger
@@ -13597,13 +13594,29 @@ export default function ProfileDetailPage() {
                   ))}
                 </TabsList>
               </div>
+              {assetLayout && (
+                <div className="overflow-x-auto -mx-1 px-1 pb-1 shrink-0">
+                  <AssetQuickAdd
+                    profileId={profile.id}
+                    onEdit={() => setShowEditDialog(true)}
+                    onOpenDocuments={tabValues.has("trackers") ? () => openTab("trackers") : undefined}
+                  />
+                </div>
+              )}
+              </div>
 
               {tabValues.has("info") && (
                 <TabsContent value="info" className="mt-4 px-1 sm:px-0">
                   <InfoTab
                     profile={profile}
                     onEdit={() => setShowEditDialog(true)}
-                    onOpenDocuments={tabValues.has("trackers") ? () => openTab("trackers") : undefined}
+                    ownerLabel={ownerPillLabel}
+                    onOpenOwnership={tabValues.has("contained") ? () => openTab("contained") : undefined}
+                    summarySlot={assetLayout ? (
+                      <SectionErrorBoundary name="profile-ai-summary" inline>
+                        <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} valueFingerprint={profileValueFingerprint(profile)} fields={profile.fields} />
+                      </SectionErrorBoundary>
+                    ) : undefined}
                   />
                   {/* Person/Self Overview — single home for net worth, assets,
                       and liabilities (June 2026 restructure). The Finance tab
@@ -13710,13 +13723,6 @@ export default function ProfileDetailPage() {
                       header). User report 2026-08-26. */}
                   {assetLayout ? (
                     <>
-                      {/* The AI summary sits under the composed page on an asset:
-                          the mock-up leads with the value, not with prose. */}
-                      <div className="mt-4">
-                        <SectionErrorBoundary name="profile-ai-summary" inline>
-                          <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} valueFingerprint={profileValueFingerprint(profile)} fields={profile.fields} />
-                        </SectionErrorBoundary>
-                      </div>
                       <AssetProfileActions
                         profileId={profile.id}
                         onEdit={() => setShowEditDialog(true)}
@@ -13794,9 +13800,23 @@ export default function ProfileDetailPage() {
                       Financials so a "$50 gas for my truck" logged via chat is
                       visible right where the user looks. Same expenses UI as a
                       person's Finance tab, scoped to this asset's own expenses. */}
+                  {/* The Money tab is merged in here (owner, 2026-11-23: "all
+                      finances, all liabilities in the Financials tab"): the
+                      loan this asset carries sits between its linked
+                      liabilities and its bills and expenses. */}
+                  {!tabValues.has("money") && (
+                    <section data-testid="asset-loan">
+                      <p className="micro-label text-muted-foreground mb-2 px-0.5">Loan</p>
+                      <LoanTab
+                        profile={profile}
+                        obligations={profile.relatedObligations || []}
+                        hideEmptyEditor={["asset","vehicle","property"].includes(profile.type)}
+                      />
+                    </section>
+                  )}
                   <section data-testid="asset-expenses">
-                    <p className="micro-label text-muted-foreground mb-2 px-0.5">Expenses</p>
-                    <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                    <p className="micro-label text-muted-foreground mb-2 px-0.5">Bills &amp; expenses</p>
+                    <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} hideLoanSections={!tabValues.has("money")} />
                   </section>
                 </TabsContent>
               )}
