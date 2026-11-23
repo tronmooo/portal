@@ -69,7 +69,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Panel, FieldGrid, FieldRow, ReadValue, InfoRow, InfoList, PayoffLine, FigureRow } from "@/components/liability/LiabilityOverviewCards";
+import { Panel, FieldGrid, FieldRow, ReadValue, PayoffLine, FigureRow } from "@/components/liability/LiabilityOverviewCards";
 import {
   Select,
   SelectContent,
@@ -1381,7 +1381,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const chipCls = "!text-[13px] !px-2.5 !py-1.5 !font-medium";
   const actionBtn = "h-9 gap-1.5 rounded-lg text-[13px] shrink-0";
   const tabCls = "text-[14px] px-3.5 h-9 rounded-lg whitespace-nowrap data-[state=active]:shadow-[inset_0_-2px_0_hsl(155_62%_50%)]";
-  const inputCls = "h-9 text-[14px]";
+  const inputCls = "h-8 text-[13px] text-right";
 
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="liability-profile-page">
@@ -1504,11 +1504,12 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             </div>
           </div>
 
-          {/* OVERVIEW — the owner's design (2026-11-23): the details as a form
-              that edits in place, the characteristics the user added, the
-              quick figures, and the AI summary beside the balance falling to
-              zero. Payments, the schedule and the cost of the debt have their
-              own tabs. */}
+          {/* OVERVIEW — the owner's design (2026-11-23, with a picture of the
+              asset's list: "make the liabilities look exactly like this"):
+              ONE plain details list (label left, value right, a pencil) that
+              edits in place and holds the characteristics the user added;
+              then the balance falling to zero; then the AI summary. Payments,
+              the schedule and the cost of the debt have their own tabs. */}
           <TabsContent value="overview" className="mt-3 space-y-3">
             {missedPayments > 0 && (
               <button type="button" onClick={() => setTab("schedule")} className="bubble w-full px-4 py-2.5 flex items-center gap-2 text-left text-[13px]" style={{ ["--accent-hsl" as any]: RED }} data-testid="missed-payments-notice">
@@ -1518,51 +1519,45 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               </button>
             )}
 
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-              {/* LIABILITY DETAILS — read as the fields they become; Edit (or a
-                  tap on any value) turns them into inputs that save themselves
-                  (L7). Save finishes: it waits for the pending save. */}
+              {/* LIABILITY DETAILS — a tap on any line turns the list into
+                  inputs that save themselves (L7). While it is open the header
+                  carries Undo and Save; Save finishes (it waits for the
+                  pending save). */}
               <section
                 ref={detailsRef}
-                className="bubble p-4 scroll-mt-3"
+                className="bubble !rounded-2xl px-3 py-2.5 scroll-mt-3"
                 data-testid={recurringBill && editing ? "bill-details-edit-card" : "liability-details-card"}
               >
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-3 min-h-8">
-                  <h2 className="text-[16px] font-semibold tracking-tight">Liability Details</h2>
-                  <div className="flex items-center gap-2">
-                    {editing && (
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-0.5 min-h-8">
+                  <h2 className="text-[15px] font-semibold tracking-tight">Liability details</h2>
+                  {editing && (
+                    <div className="flex items-center gap-2">
                       <span className="text-[12px] text-muted-foreground" role="status" aria-live="polite" data-testid={recurringBill ? "bill-autosave-status" : "terms-autosave-status"}>
                         {autosaveStatusLabel(recurringBill ? billAutosave.status : termsAutosave.status)}
                       </span>
-                    )}
-                    {editing ? (
                       <Button size="sm" variant="outline" className="h-8 gap-1 text-[13px] rounded-lg" onClick={undoEditing}
                         disabled={!(recurringBill ? billAutosave.changedSinceOpen : termsAutosave.changedSinceOpen)}
                         title="Put every field back to what it was when you started editing"
                         data-testid={recurringBill ? "button-undo-bill-edits" : "button-undo-terms-edits"}>
                         <RotateCcw className="h-3.5 w-3.5" /> Undo
                       </Button>
-                    ) : (
-                      <Button size="sm" variant="outline" className="h-8 gap-1 text-[13px] rounded-lg" onClick={startEditing} data-testid={recurringBill ? "button-edit-bill" : "button-edit-terms"}>
-                        <Pencil className="h-3.5 w-3.5" /> Edit
+                      <Button size="sm" className="h-8 gap-1 text-[13px] rounded-lg bg-emerald-500 text-white hover:bg-emerald-500/90"
+                        onClick={() => void finishEditing()} data-testid={recurringBill ? "button-save-bill" : "button-save-terms"}>
+                        <Check className="h-3.5 w-3.5" /> Save
                       </Button>
-                    )}
-                    <Button size="sm" className="h-8 gap-1 text-[13px] rounded-lg bg-emerald-500 text-white hover:bg-emerald-500/90 disabled:opacity-40"
-                      onClick={() => void finishEditing()} disabled={!editing} data-testid={recurringBill ? "button-save-bill" : "button-save-terms"}>
-                      <Check className="h-3.5 w-3.5" /> Save
-                    </Button>
-                  </div>
+                    </div>
+                  )}
                 </div>
 
                 <FieldGrid testId="liability-details-fields">
-                  <FieldRow icon={FileText} label="Name" wide htmlFor="liability-name">
+                  <FieldRow label="Name" htmlFor="liability-name">
                     {editing
                       ? <Input id="liability-name" className={inputCls} value={editName} onChange={(e) => setEditName(e.target.value)} onBlur={() => void commitNameNotes()} maxLength={120} data-testid="input-edit-name" />
                       : <ReadValue value={profile.name} onClick={startEditing} actionLabel="Edit name" testId="detail-name" />}
                   </FieldRow>
-                  <FieldRow icon={TypeIcon} label="Type" wide>
+                  <FieldRow label="Type">
                     <Select value={subtypeRaw || undefined} onValueChange={(k) => { if (k !== subtypeRaw) changeTypeMutation.mutate(k); }} disabled={changeTypeMutation.isPending}>
-                      <SelectTrigger className={inputCls} data-testid="select-liability-type"><SelectValue placeholder="Choose a type" /></SelectTrigger>
+                      <SelectTrigger className="h-8 w-auto max-w-full gap-2 border-0 bg-transparent px-0 text-[14px] font-semibold shadow-none focus:ring-0" data-testid="select-liability-type"><SelectValue placeholder="Choose a type" /></SelectTrigger>
                       <SelectContent>
                         {typeChoices.map((k) => <SelectItem key={k} value={k}>{typeLabelOf(k)}</SelectItem>)}
                       </SelectContent>
@@ -1570,12 +1565,12 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   </FieldRow>
 
                   {recurringBill ? (<>
-                    <FieldRow icon={Wallet} label="Amount" htmlFor="bill-amount">
+                    <FieldRow label="Amount" htmlFor="bill-amount">
                       {editing
                         ? <Input id="bill-amount" className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={bAmount} onChange={(e) => setBAmount(e.target.value)} placeholder="e.g. 14.99" data-testid="input-bill-amount" />
                         : <ReadValue value={payAmount > 0 ? fmtUSD(payAmount) : ""} onClick={startEditing} actionLabel="Edit amount" testId="detail-amount" />}
                     </FieldRow>
-                    <FieldRow icon={RefreshCw} label="Frequency">
+                    <FieldRow label="Frequency">
                       {editing ? (
                         // Only cadences the recurrence engine understands
                         // (shared/recurrence freqToUnit): an unsupported token
@@ -1592,184 +1587,150 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                         </Select>
                       ) : <ReadValue value={cap(cadence)} onClick={startEditing} actionLabel="Edit frequency" testId="detail-frequency" />}
                     </FieldRow>
-                    <FieldRow icon={CalendarIcon} label="Payment Date" htmlFor="bill-due">
+                    <FieldRow label="Payment Date" htmlFor="bill-due">
                       {editing
                         // Moves the whole series. One payment only is moved on
                         // its date in the Schedule tab.
                         ? <Input id="bill-due" className={inputCls} type="date" value={bDueDate} onChange={(e) => setBDueDate(e.target.value)} title="Moves the whole series" data-testid="input-bill-due-date" />
                         : <ReadValue value={nextDueISO ? fmtDate(nextDueISO) : seriesComplete ? "Complete" : billHeldLabel ?? ""} onClick={startEditing} actionLabel="Edit payment date" testId="detail-next-due" />}
                     </FieldRow>
-                    <FieldRow icon={Layers} label="Term" htmlFor="bill-count">
+                    <FieldRow label="Term" htmlFor="bill-count">
                       {editing
                         ? <Input id="bill-count" className={inputCls} type="number" inputMode="numeric" min={1} value={bCount} onChange={(e) => setBCount(e.target.value)} placeholder="Blank = ongoing" data-testid="input-bill-count" />
                         : <ReadValue value={billTotalTerm != null ? `${billRemainingTerm ?? billTotalTerm} of ${billTotalTerm} left` : "Ongoing"} onClick={startEditing} actionLabel="Edit number of payments" testId="detail-term" />}
                     </FieldRow>
-                    <FieldRow icon={Flag} label="Ends On" htmlFor="bill-end">
+                    <FieldRow label="Ends On" htmlFor="bill-end">
                       {editing
                         ? <Input id="bill-end" className={inputCls} type="date" value={bEnd} onChange={(e) => setBEnd(e.target.value)} title="Blank = no end date" data-testid="input-bill-end" />
                         : <ReadValue value={schedule?.recurrenceEnd ? fmtDate(schedule.recurrenceEnd) : "No end date"} onClick={startEditing} actionLabel="Edit end date" testId="detail-end" />}
                     </FieldRow>
-                    <FieldRow icon={Bell} label="Reminder" htmlFor="bill-reminder">
+                    <FieldRow label="Reminder" htmlFor="bill-reminder">
                       {editing
                         ? <Input id="bill-reminder" className={inputCls} type="number" inputMode="numeric" min={0} value={bReminder} onChange={(e) => setBReminder(e.target.value)} placeholder="Days before" data-testid="input-bill-reminder" />
                         : <ReadValue value={billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : ""} onClick={startEditing} actionLabel="Edit reminder" testId="detail-reminder" />}
                     </FieldRow>
                   </>) : (<>
-                    <FieldRow icon={Landmark} label="Lender" wide htmlFor="terms-lender">
+                    <FieldRow label="Lender" htmlFor="terms-lender">
                       {editing
                         ? <Input id="terms-lender" className={inputCls} value={tLender} onChange={(e) => setTLender(e.target.value)} placeholder="e.g. Chase Auto" data-testid="input-terms-lender" />
                         : <ReadValue value={terms.lender} onClick={startEditing} actionLabel="Edit lender" testId="detail-lender" />}
                     </FieldRow>
-                    <FieldRow icon={Layers} label="Original Amount" htmlFor="terms-original">
+                    <FieldRow label="Original Amount" htmlFor="terms-original">
                       {editing
                         ? <Input id="terms-original" className={inputCls} type="number" inputMode="decimal" step="0.01" value={tOriginal} onChange={(e) => setTOriginal(e.target.value)} placeholder="e.g. 35000" data-testid="input-terms-original" />
                         : <ReadValue value={terms.originalBalance > 0 ? fmtUSDShort(terms.originalBalance) : ""} onClick={startEditing} actionLabel="Edit original amount" testId="detail-original" />}
                     </FieldRow>
-                    <FieldRow icon={Wallet} label="Current Balance" htmlFor="terms-balance">
+                    <FieldRow label="Current Balance" htmlFor="terms-balance">
                       {editing
                         ? <Input id="terms-balance" className={inputCls} type="number" inputMode="decimal" step="0.01" value={tBalance} onChange={(e) => setTBalance(e.target.value)} placeholder="e.g. 25000" data-testid="input-terms-balance" />
                         : <ReadValue value={fmtUSDShort(terms.currentBalance)} onClick={startEditing} actionLabel="Edit current balance" testId="detail-balance" />}
                     </FieldRow>
-                    <FieldRow icon={Percent} label="APR (Interest)" htmlFor="terms-rate">
+                    <FieldRow label="APR (Interest)" htmlFor="terms-rate">
                       {editing
                         ? <Input id="terms-rate" className={inputCls} type="number" inputMode="decimal" step="0.01" value={tRate} onChange={(e) => setTRate(e.target.value)} placeholder="% e.g. 6.5" data-testid="input-terms-rate" />
                         : <ReadValue value={summary.annualRate > 0 ? fmtPct(summary.annualRate) : ""} onClick={startEditing} actionLabel="Edit interest rate" testId="detail-rate" />}
                     </FieldRow>
-                    <FieldRow icon={Clock} label="Term (months)" htmlFor="terms-term">
+                    <FieldRow label="Term (months)" htmlFor="terms-term">
                       {editing
                         ? <Input id="terms-term" className={inputCls} type="number" inputMode="numeric" value={tTerm} onChange={(e) => setTTerm(e.target.value)} placeholder="e.g. 60" data-testid="input-terms-term" />
                         : <ReadValue value={terms.remainingTermMonths ? `${terms.remainingTermMonths} months` : ""} onClick={startEditing} actionLabel="Edit term" testId="detail-term" />}
                     </FieldRow>
-                    <FieldRow icon={CreditCard} label={family === "revolving" ? "Min. Payment" : "Monthly Payment"} htmlFor="terms-monthly">
+                    <FieldRow label={family === "revolving" ? "Min. Payment" : "Monthly Payment"} htmlFor="terms-monthly">
                       {editing
                         ? <Input id="terms-monthly" className={inputCls} type="number" inputMode="decimal" step="0.01" value={tMonthly} onChange={(e) => setTMonthly(e.target.value)} placeholder="e.g. 440" data-testid="input-terms-monthly" />
                         : <ReadValue value={payAmount > 0 ? fmtUSD(payAmount) : ""} onClick={startEditing} actionLabel="Edit payment" testId="detail-payment" />}
                     </FieldRow>
-                    <FieldRow icon={CalendarIcon} label="Due Day" htmlFor="terms-due-day">
+                    <FieldRow label="Due Day" htmlFor="terms-due-day">
                       {editing
                         // A day of the month and a payment put this loan on the calendar.
                         ? <Input id="terms-due-day" className={inputCls} type="number" inputMode="numeric" min={1} max={31} value={tDueDay} onChange={(e) => setTDueDay(e.target.value)} placeholder="1–31" data-testid="input-terms-due-day" />
                         : <ReadValue value={terms.dueDay ? ordinal(terms.dueDay) : ""} onClick={startEditing} actionLabel="Edit due day" testId="detail-due-day" />}
                     </FieldRow>
-                    <FieldRow icon={CalendarIcon} label="Start Date" htmlFor="terms-first-payment">
+                    <FieldRow label="Start Date" htmlFor="terms-first-payment">
                       {editing
                         ? <Input id="terms-first-payment" className={inputCls} type="date" value={tFirstPayment} onChange={(e) => setTFirstPayment(e.target.value)} data-testid="input-terms-first-payment" />
                         : <ReadValue value={terms.firstPaymentDate ? fmtDate(terms.firstPaymentDate) : ""} onClick={startEditing} actionLabel="Edit start date" testId="detail-start" />}
                     </FieldRow>
-                    <FieldRow icon={Flag} label="Payoff Date">
+                    <FieldRow label="Payoff Date">
                       {/* Calculated from the balance, rate and payment above —
                           it changes when they do, so it has no input of its own. */}
                       {payoffText
-                        ? <ReadValue value={payoffText} onClick={canProject ? () => setTab("cost") : undefined} actionLabel="See the payoff schedule" testId="detail-payoff" />
+                        ? <ReadValue value={payoffText} onClick={canProject ? () => setTab("cost") : undefined} opens actionLabel="See the payoff schedule" testId="detail-payoff" />
                         : <ReadValue value="" onClick={startEditing} actionLabel="Add a rate and a payment to project the payoff" testId="detail-payoff" />}
                     </FieldRow>
                   </>)}
 
-                  <FieldRow icon={Shield} label="Autopay" wide>
-                    <div className="flex items-center gap-2.5 min-h-9">
+                  <FieldRow label="Autopay" wide>
+                    <div className="flex items-center justify-end gap-2.5 min-w-0">
+                      <span className="min-w-0 text-right text-[12px] leading-snug text-muted-foreground" data-testid="hero-autopay-state">
+                        {(recurringBill && editing ? bAutopay : autopayOn)
+                          ? (recurringBill ? "Automatically record each payment" : "Automatically record payment & expense")
+                          : "Off: you record each payment yourself"}
+                      </span>
                       {recurringBill && editing ? (
                         <Switch checked={bAutopay} onCheckedChange={setBAutopay} aria-label="Autopay" className="data-[state=checked]:bg-emerald-500" data-testid="switch-bill-autopay" />
                       ) : (
                         <Switch checked={autopayOn} disabled={autoPaySave.isPending || !schedule} onCheckedChange={(enabled) => autoPaySave.mutate({ enabled })}
                           aria-label="Autopay" className="data-[state=checked]:bg-emerald-500" data-testid="switch-autopay-hero" />
                       )}
-                      <span className="text-[13px] leading-snug" data-testid="hero-autopay-state">
-                        {(recurringBill && editing ? bAutopay : autopayOn)
-                          ? (recurringBill ? "Automatically record each payment" : "Automatically record payment & expense")
-                          : "Off: you record each payment yourself"}
-                      </span>
-                      <span title="When Autopay is on, Portol records the payment on its due date (shown as Assumed paid until confirmed) and stops due-date reminders." className="text-muted-foreground"><Info className="h-4 w-4" /></span>
+                      <span title="When Autopay is on, Portol records the payment on its due date (shown as Assumed paid until confirmed) and stops due-date reminders." className="shrink-0 text-muted-foreground"><Info className="h-4 w-4" /></span>
                     </div>
                   </FieldRow>
-                  <FieldRow icon={FileText} label="Notes" wide alignTop htmlFor="liability-notes">
-                    {editing ? (
-                      <div className="relative">
-                        <Textarea id="liability-notes" value={editNotes} onChange={(e) => setEditNotes(e.target.value.slice(0, 500))} onBlur={() => void commitNameNotes()} rows={2} className="text-[14px] pr-14" data-testid="input-edit-notes" />
-                        <span className="absolute bottom-1.5 right-2 text-[11px] text-muted-foreground tabular-nums">{editNotes.length}/500</span>
-                      </div>
-                    ) : <ReadValue value={profileNotes.trim()} onClick={startEditing} actionLabel="Edit notes" testId="detail-notes" multiline />}
-                  </FieldRow>
-                </FieldGrid>
-              </section>
-
-              <div className="space-y-3 min-w-0">
-                {/* CHARACTERISTICS — anything the form has no box for. The same
-                    Field | Value | Add as every profile (D7/D8): each line can
-                    be changed (pencil) or removed (X, two taps). */}
-                <Panel
-                  title="Characteristics"
-                  testId="characteristics-card"
-                  actions={
-                    <Button variant="outline" size="sm" className="h-8 gap-1 text-[13px] rounded-lg border-emerald-500/60 text-emerald-400 hover:text-emerald-300" onClick={() => setAddFieldSignal((n) => n + 1)} data-testid="add-field-button">
-                      <Plus className="h-3.5 w-3.5" /> Add Characteristic
-                    </Button>
-                  }
-                >
+                  {/* What the form has no line for: the linked asset, then
+                      every characteristic the user added (D7/D8: pencil to
+                      change, two taps to remove), then the notes — the same
+                      lines, in the same list. */}
                   <AddFieldPanel
                     profileId={profile.id} fields={profile.fields} showFields hideHeader list openSignal={addFieldSignal}
                     leading={
-                      <InfoRow
-                        icon={SUBTYPE_ICONS[subtypeRaw] === Car ? Car : Link2}
-                        label="Linked asset"
-                        testId="detail-row-linked-asset"
-                        // A failed request is not "none linked" (Rule 7).
-                        value={assetLinksQuery.isError ? "Couldn't load"
-                          : !assetLinksQuery.data ? "Loading…"
-                          : linkedAssets.length === 0
-                            ? <button type="button" className="font-semibold text-cyan-400" onClick={() => openLinks(true)} data-testid="link-asset-add">+ Add</button>
+                      <FieldRow label="Linked asset">
+                        <ReadValue
+                          testId="detail-row-linked-asset"
+                          // A failed request is not "none linked" (Rule 7).
+                          value={assetLinksQuery.isError ? "Couldn't load"
+                            : !assetLinksQuery.data ? "Loading…"
                             : linkedAssets.map((a) => a.name).join(", ")}
-                        onEdit={() => openLinks(!!assetLinksQuery.data && linkedAssets.length === 0)}
-                        editLabel={linkedAssets.length === 0 ? "Link an asset" : "Manage linked assets"}
-                      />
+                          onClick={() => openLinks(!!assetLinksQuery.data && linkedAssets.length === 0)}
+                          actionLabel={assetLinksQuery.data && linkedAssets.length === 0 ? "Link an asset" : "Manage linked assets"}
+                        />
+                      </FieldRow>
+                    }
+                    trailing={
+                      <FieldRow label="Notes" wide alignTop={editing} htmlFor="liability-notes">
+                        {editing ? (
+                          <div className="relative w-full">
+                            <Textarea id="liability-notes" value={editNotes} onChange={(e) => setEditNotes(e.target.value.slice(0, 500))} onBlur={() => void commitNameNotes()} rows={2} className="text-[13px] pr-14" data-testid="input-edit-notes" />
+                            <span className="absolute bottom-1.5 right-2 text-[11px] text-muted-foreground tabular-nums">{editNotes.length}/500</span>
+                          </div>
+                        ) : <ReadValue value={profileNotes.trim()} onClick={startEditing} actionLabel="Edit notes" testId="detail-notes" />}
+                      </FieldRow>
                     }
                   />
-                  <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 gap-2 mt-2" />
-                </Panel>
+                </FieldGrid>
+                <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 gap-2 mt-2" />
+                <button type="button" className="mt-1.5 flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground"
+                  onClick={() => setAddFieldSignal((n) => n + 1)} data-testid="add-field-button">
+                  <Plus className="h-3.5 w-3.5" /> Add characteristic
+                </button>
+              </section>
 
-                {/* QUICK INFO — figures the page works out; the pencil opens
-                    the terms they are worked out from. */}
-                <Panel title="Quick Info" testId="quick-info-card">
-                  <InfoList>
-                    <InfoRow
-                      icon={CalendarIcon} label="Next Due" testId="quick-next-due"
-                      value={nextDueISO ? `${fmtDate(nextDueISO)}${nextDueDays != null ? ` · ${dayLabel(nextDueDays)}` : ""}` : paidOff ? "Paid off" : seriesComplete ? "Complete" : billHeldLabel ?? addValue}
-                      tone={nextDueDays != null && nextDueDays < 0 ? "danger" : undefined}
-                      onEdit={startEditing} editLabel="Edit the payment day"
-                    />
-                    {recurringBill ? (<>
-                      <InfoRow icon={ActivityIcon} label="Payment Status" testId="quick-status"
-                        value={seriesComplete ? "Complete" : billHeldLabel ?? BILL_STATUS_META[billStatusEff].label}
-                        onEdit={() => setTab("schedule")} editLabel="Open the schedule" />
-                      <InfoRow icon={Check} label="Payments Made" testId="quick-paid" value={String(billPaidCount)} onEdit={() => setTab("payments")} editLabel="Open payments" />
-                      <InfoRow icon={Layers} label="Yearly Total" testId="quick-annual" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : schedule ? addValue : "Loading…"} onEdit={startEditing} editLabel="Edit the amount" />
-                    </>) : (<>
-                      <InfoRow icon={Clock} label="Remaining Term" testId="quick-remaining-term"
-                        value={paidOff ? "Paid off" : canProject ? `${summary.remainingMonths} month${summary.remainingMonths === 1 ? "" : "s"}` : payoffText || addValue}
-                        onEdit={startEditing} editLabel="Edit the terms" />
-                      <InfoRow icon={Percent} label="Interest Left (Est.)" testId="quick-interest"
-                        value={canProject ? fmtUSDShort(Math.round(summary.totalRemainingInterest)) : paidOff ? fmtUSDShort(0) : payoffText || addValue}
-                        onEdit={startEditing} editLabel="Edit the terms" />
-                      <InfoRow icon={Layers} label="Left to Pay (Est.)" testId="quick-total"
-                        value={canProject ? fmtUSDShort(Math.round(summary.currentBalance + summary.totalRemainingInterest)) : paidOff ? fmtUSDShort(0) : payoffText || addValue}
-                        onEdit={startEditing} editLabel="Edit the terms" />
-                    </>)}
-                  </InfoList>
-                </Panel>
-              </div>
-            </div>
-
-            {/* The AI summary draws nothing until it has one; the card beside
-                it then takes the row (`only:`), so there is never a hole. */}
+            {/* Then the figures the page works out (the balance falling to
+                zero; a bill's next payment), then the AI summary — the order
+                of the asset's page. The summary draws nothing until it has
+                one; the card beside it then takes the row. */}
             <div className="grid gap-3 lg:grid-cols-2 [&>*:only-child]:lg:col-span-2">
-              <AISummaryCard profileId={profile.id} valueFingerprint={profileValueFingerprint(profile)} />
-
               {recurringBill ? (
                 <Panel title="Next Payment" testId="next-payment-card"
                   actions={<Button variant="outline" size="sm" className="h-8 text-[13px] rounded-lg" onClick={() => setTab("schedule")} data-testid="button-open-schedule">Open schedule</Button>}>
                   <FigureRow label="Date" value={nextDueISO ? fmtDate(nextDueISO) : seriesComplete ? "Complete" : billHeldLabel ?? "Not scheduled"} testId="next-payment-date" />
+                  {nextDueISO && nextDueDays != null && <FigureRow label="Due" value={dayLabel(nextDueDays)} tone={nextDueDays < 0 ? "danger" : undefined} testId="quick-next-due" />}
                   <FigureRow label="Amount" value={payAmount > 0 ? fmtUSD(payAmount) : "Not set"} tone="danger" />
                   <FigureRow label="Repeats" value={repeatsLabel.replace(/^Repeats /, "").replace(/^./, (c) => c.toUpperCase())} />
                   <FigureRow label="Autopay" value={autopayOn ? "On" : "Off"} tone={autopayOn ? "good" : undefined} />
+                  <FigureRow label="Payment Status" value={seriesComplete ? "Complete" : billHeldLabel ?? BILL_STATUS_META[billStatusEff].label} testId="quick-status" />
+                  <FigureRow label="Payments Made" value={String(billPaidCount)} testId="quick-paid" />
+                  {/* A failed or pending schedule is not "$0" (Rule 7). */}
+                  <FigureRow label="Yearly Total" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : schedule ? "Not set" : "Loading…"} testId="quick-annual" />
                 </Panel>
               ) : (
                 <Panel title="Balance & Payoff" testId="balance-payoff-card">
@@ -1791,12 +1752,18 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                       <FigureRow label="Current Balance" value={fmtUSDShort(summary.currentBalance)} tone="danger" />
                       <FigureRow label="Original Amount" value={summary.originalBalance > 0 ? fmtUSDShort(summary.originalBalance) : "Not set"} />
                       {summary.originalBalance > 0 && <FigureRow label="Paid Down" value={`${fmtUSDShort(paidDown)} · ${summary.payoffProgressPct.toFixed(1)}%`} testId="paid-down" />}
-                      <FigureRow label="Interest Left (Est.)" value={canProject ? fmtUSDShort(Math.round(summary.totalRemainingInterest)) : "Not projected"} />
+                      <FigureRow label="Next Due" tone={nextDueDays != null && nextDueDays < 0 ? "danger" : undefined} testId="quick-next-due"
+                        value={nextDueISO ? `${fmtDate(nextDueISO)}${nextDueDays != null ? ` · ${dayLabel(nextDueDays)}` : ""}` : paidOff ? "Paid off" : "Not set"} />
+                      <FigureRow label="Remaining Term" testId="quick-remaining-term"
+                        value={paidOff ? "Paid off" : canProject ? `${summary.remainingMonths} month${summary.remainingMonths === 1 ? "" : "s"}` : "Not projected"} />
+                      <FigureRow label="Interest Left (Est.)" testId="quick-interest" value={canProject ? fmtUSDShort(Math.round(summary.totalRemainingInterest)) : paidOff ? fmtUSDShort(0) : "Not projected"} />
+                      <FigureRow label="Left to Pay (Est.)" testId="quick-total" value={canProject ? fmtUSDShort(Math.round(summary.currentBalance + summary.totalRemainingInterest)) : paidOff ? fmtUSDShort(0) : "Not projected"} />
                       <FigureRow label="Payoff (Est.)" value={payoffText || "Not projected"} tone={paidOff || canProject ? "good" : undefined} testId="payoff-est" />
                     </div>
                   </div>
                 </Panel>
               )}
+              <AISummaryCard profileId={profile.id} valueFingerprint={profileValueFingerprint(profile)} />
             </div>
           </TabsContent>
 

@@ -57,7 +57,7 @@ async function main() {
 
       // ── Overview: a due day is a number, a 2022 first payment is not a deadline.
       await page.goto(`${UI_BASE}/#/profiles/${loanId}`);
-      await page.locator('[data-testid="button-edit-terms"]').waitFor({ timeout: 30000 });
+      await page.locator('[data-testid="detail-balance"]').waitFor({ timeout: 30000 });
       await page.waitForTimeout(2500);
       const overview = (await page.locator("body").innerText()).replace(/\s+/g, " ");
       check(!/Jan 1, 2001|2001/.test(overview), 'the Overview does not print the due day as "Jan 1, 2001"');
@@ -66,7 +66,7 @@ async function main() {
       await page.screenshot({ path: `${SHOT}/live-liability-overview.png` });
 
       // ── Liability Details → Edit: a change saves by itself (Save only finishes).
-      await page.locator('[data-testid="button-edit-terms"]').click({ timeout: 15000 });
+      await page.locator('[data-testid="detail-balance"]').click({ timeout: 15000 });
       const rate = page.locator('[data-testid="input-terms-rate"]');
       await rate.waitFor({ timeout: 15000 });
       check((await rate.inputValue()) === "6.25", `the rate field opens as the percent 6.25 (got ${await rate.inputValue()})`);

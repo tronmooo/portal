@@ -254,25 +254,35 @@ Schedule (every date, then the amortization table), Cost of Ownership (payoff
 outlook, cost of borrowing, calculator), Documents, History (activity, then
 record changes) — beside the quick-add row: + Payment, + Expense, + Task,
 + More (document, characteristic, owners & linked records, Ask Portol, delete).
-The Overview is Liability Details (a label | value form), Characteristics,
-Quick Info, and the AI Summary beside Balance & Payoff
+The Overview is the asset page's (owner, 2026-11-23, with a picture of the
+Asset details list: "make the liabilities look exactly like this"), in this
+order: ONE **Liability details** list — label left, value right, a pencil; no
+icons, no boxed values, no Edit button — holding the terms, Autopay, the
+linked asset, every characteristic, the notes and "+ Add characteristic";
+then Balance & Payoff (a bill: Next Payment), which carries the figures the
+page works out (next due, remaining term, interest left, left to pay; a
+bill's status, payments made, yearly total); then the AI Summary
 (`components/liability/LiabilityOverviewCards.tsx`, presentation only: every
-figure is one the page already derives, Rule 1).
+figure is one the page already derives, Rule 1). Do not bring back a separate
+Characteristics or Quick Info card.
 Nothing on it is a dead end or a blank (owner, 2026-11-22: "no empty spaces,
 everything editable, everything able to be added"):
-- Liability Details edits IN PLACE: Edit, a tap on any value, a header figure
-  or the name turns the card into inputs holding the stored values. The terms
+- Liability details edits IN PLACE: a tap on any line, a header figure or the
+  name turns the list into inputs holding the stored values (Undo and Save
+  are in its header only while it is open). The terms
   save themselves (L7: `useAutosave`, only what changed, nothing on open); the
   name and notes are written when their box is left and on Save, once. Save
   finishes (it waits for the pending save); Undo puts back what the form
   opened with. Starting an edit never resets a form that is already open.
-- A fact the record lacks reads "+ Add". The type is changed by writing
+- A fact the record lacks reads "Not set" in the list (as the asset's) and
+  "+ Add" in the header; a tap on either adds it. The type is changed by writing
   `type_key` (L4). The payoff date is calculated, so it has no input.
 - A payment the record does not store is never printed from the engine's
   360-month assumption; with no rate or payment the payoff figures say what
   to add instead of a guess (`canProject`).
-- Characteristics is the plain Add field (D7), drawn as label | value |
-  pencil | X lines (`AddFieldPanel` `list`). A field the user adds is always
+- A characteristic is the plain Add field (D7), drawn as a line of the same
+  list (`AddFieldPanel` `list`): the pencil edits it, and the remove button
+  (two taps) is in the edit. A field the user adds is always
   listed: only a key the screens own, or a figure/date stored as text, is kept
   out — never a name that merely sounds financial ("Loan number: HF-88213"
   was saved and shown nowhere, `freeFormFieldEntries`). The app's own
@@ -717,8 +727,9 @@ and schedule fields are never listed there as text (L2/L3).
 
 ## Asset profile layout (the owner's design; a drawing of stores other screens read)
 
-Owner, 2026-11-23, final round, with three pictures and their order: the
-Value card, then the AI summary, then a plain details list — "we're gonna
+Owner, 2026-11-23, with three pictures: a plain details list, the Value card and
+the AI summary (final order, same day: "asset details, AI [valuation], then
+AI summary") — "we're gonna
 simplify this completely. Everything else, delete [from] the overview tab."
 (Earlier the same day: "everything's just too big … just say Honda CRV and
 the value", "any attached photo should be barely anything".) An owned thing's
@@ -733,7 +744,11 @@ touching it.
 a 28px picture (still the photo picker) · the name · the current value
 (`AssetHeroValue`) · the ⋯ menu (Edit, Ownership, Documents, Clear / Restore
 alerts, Delete). The Overview is, in this order and nothing else:
-1. **Value & Depreciation** (`ValueCard`) — says HOW MUCH it has depreciated:
+1. **Asset details** — ONE list (`Line`): label left, value right, a pencil.
+   Name, Category, every characteristic, Purchase date, Location, each date,
+   Ownership, Notes, then "+ Add characteristic". (Purchase price is the
+   Value card's.)
+2. **Value & Depreciation** (`ValueCard`) — says HOW MUCH it has depreciated:
    one bar that is the purchase price, filled by what has been lost, with the
    amount and percent (with no purchase price it asks for one). Under it:
    when it was last valued (and "couldn't update — showing the estimate from
@@ -749,16 +764,12 @@ alerts, Delete). The Overview is, in this order and nothing else:
    price, Current value, Total invested and **Salvage value** (`SALVAGE_KEY`,
    the user's own figure — never estimated), plus Refresh and the estimate's
    details and tracking switch under the disclosure.
-2. **AI Asset Summary** (`AISummaryCard compact`) — a title and the text. The
+3. **AI Asset Summary** (`AISummaryCard compact`) — a title and the text. The
    text is three short sentences: what it is worth, how much it has
    depreciated, and WHEN it would make sense to sell or replace it, with the
    reason (`withAssetSummaryShape`, `shared/asset-summary-prompt.ts`). No
    figure tiles, no to-do list, no Look up value; no card when there is no
    summary.
-3. **Asset details** — ONE list (`Line`): label left, value right, a pencil.
-   Name, Category, every characteristic, Purchase date, Location, each date,
-   Ownership, Notes, then "+ Add characteristic". (Purchase price is the
-   Value card's.)
 Do not put Quick Info, linked sections, a separate Characteristics card,
 recent activity or a boxed form back on the Overview: those are the other
 tabs' (Financials, Contained, History). The page keeps only what would

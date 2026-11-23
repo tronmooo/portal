@@ -122,7 +122,7 @@ async function main() {
 
       // ── 1. It loads, in the design, from the stored record ──────────────────
       await open();
-      await page.locator('[data-testid="detail-row-linked-asset"]').filter({ hasText: /\+ Add|Loading|Couldn/ }).waitFor({ timeout: 20000 }).catch(() => undefined);
+      await page.locator('[data-testid="detail-row-linked-asset"]').filter({ hasText: /Not set|Loading|Couldn/ }).waitFor({ timeout: 20000 }).catch(() => undefined);
       await page.waitForTimeout(1500);
       check((await text("detail-hero-page-title")) === "Liability Profile", "the header card is tagged Liability Profile");
       check(/Balance.*Payment.*APR.*Payoff/.test(await text("detail-hero-figures")), "…and carries Balance / Payment / APR / Payoff");
@@ -135,7 +135,7 @@ async function main() {
       }
       check((await text("detail-lender")) === "Honda Financial Services" && (await text("detail-original")) === "$28,000" && (await text("detail-due-day")) === "12th" && (await text("detail-start")) === "Jan 12, 2024",
         "Liability Details reads the stored lender, original amount, due day and start date");
-      check(/\b12, 20\d\d/.test(await text("quick-next-due")) && /\d+ months?/.test(await text("quick-remaining-term")), `Quick Info has the next due date and the remaining term (${await text("quick-next-due")})`);
+      check(/\b12, 20\d\d/.test(await text("quick-next-due")) && /\d+ months?/.test(await text("quick-remaining-term")), `Balance & Payoff has the next due date and the remaining term (${await text("quick-next-due")})`);
       check((await page.locator('[data-testid="payoff-line"]').count()) === 1 && /\$9,580 · 34\.2%/.test(await text("paid-down")), "Balance & Payoff draws the line and shows $9,580 · 34.2% paid down");
       const body = (await page.locator('[data-testid="liability-profile-page"]').innerText()).replace(/\s+/g, " ");
       check(!body.includes(INTERNAL_ID.slice(0, 8)) && !/obligation id/i.test(body) && !/source\s*obligation/i.test(body), "no 'Source: obligation' / 'Obligation ID' lines");
@@ -168,7 +168,7 @@ async function main() {
       await page.locator('[data-testid="add-field-save"]').tap();
       const withField = await until(profile, (p) => Object.values(p.fields || {}).includes(`HF-${tag}`));
       check(Object.values(withField.fields || {}).includes(`HF-${tag}`), "the added characteristic is stored");
-      const fieldShown = await page.locator('[data-testid="characteristics-card"]').filter({ hasText: `HF-${tag}` }).waitFor({ timeout: 20000 }).then(() => true).catch(() => false);
+      const fieldShown = await page.locator('[data-testid="liability-details-card"]').filter({ hasText: `HF-${tag}` }).waitFor({ timeout: 20000 }).then(() => true).catch(() => false);
       check(fieldShown, "…and listed under Characteristics");
 
       // ── 4. Auto Pay switches on from the card ───────────────────────────────
@@ -194,9 +194,9 @@ async function main() {
       const task = (Array.isArray(tasks) ? tasks : []).find((t) => t.title === `Verify task ${tag}`);
       check(!!task, "+ Task stores the task");
       if (task) taskId = task.id;
-      await page.locator('[data-testid="link-asset-add"]').tap();
+      await page.locator('[data-testid="detail-row-linked-asset"]').tap();
       const picker = await page.locator('[data-testid="link-asset-picker"]').waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
-      check(picker, "Linked asset: + Add opens the asset picker");
+      check(picker, "Linked asset: the line opens the asset picker");
       await page.keyboard.press("Escape");
 
       // ── 6. The other tabs load ──────────────────────────────────────────────

@@ -1,13 +1,13 @@
 // The building blocks of the liability profile's Overview, to the owner's
-// design (2026-11-23): a titled panel, the label | control rows of the
-// "Liability Details" form, the Quick Info rows and the Balance & Payoff line.
+// design (2026-11-23): a titled panel, the label | value | pencil lines of the
+// "Liability details" list and the Balance & Payoff line.
 //
 // Presentation only. Every value arrives already computed by the page from
 // the one source it has always read (Rule 1): nothing here reads a field,
 // fetches, or writes. A control that does something is handed its handler.
 
 import * as React from "react";
-import { Pencil, Plus, type LucideIcon } from "lucide-react";
+import { ChevronRight, Pencil, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── A titled card ────────────────────────────────────────────────────────────
@@ -37,90 +37,65 @@ export function Panel({
   );
 }
 
-// ── Liability Details: one label | control row ───────────────────────────────
+// ── Liability details: one plain list, the Asset details list ────────────────
+// Owner, 2026-11-23, with a picture of the asset's list: "make the liabilities
+// look exactly like this". A line is the label on the left, the value on the
+// right and a pencil; no icons, no boxed values.
 
-/** The rows sit in a two-column grid from `sm`; a `wide` row takes both. */
+/** One column on a phone; two on a wide screen, as the asset's list. */
 export function FieldGrid({ children, testId }: { children: React.ReactNode; testId?: string }) {
-  return <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5" data-testid={testId}>{children}</div>;
+  return <div className="lg:grid lg:grid-cols-2 lg:gap-x-10" data-testid={testId}>{children}</div>;
 }
 
+export const LINE = "flex items-center gap-3 min-h-[40px] py-1.5 border-b border-border/30 min-w-0";
+
 export function FieldRow({
-  icon: Icon, label, htmlFor, wide, children, alignTop,
+  label, htmlFor, wide, children, alignTop,
 }: {
-  icon: LucideIcon;
   label: string;
   htmlFor?: string;
+  /** Takes both columns on a wide screen. */
   wide?: boolean;
   alignTop?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <div className={cn("flex gap-2.5 min-w-0", alignTop ? "items-start" : "items-center", wide && "sm:col-span-2")}>
-      <Icon className={cn("h-[18px] w-[18px] shrink-0 text-muted-foreground", alignTop && "mt-2")} strokeWidth={1.8} />
-      <label htmlFor={htmlFor} className={cn("w-[104px] shrink-0 text-[13px] text-muted-foreground leading-tight", alignTop && "mt-2")}>{label}</label>
-      <div className="flex-1 min-w-0">{children}</div>
+    <div className={cn(LINE, alignTop && "items-start", wide && "lg:col-span-2")}>
+      <label htmlFor={htmlFor} className={cn("shrink-0 text-[13px] text-muted-foreground leading-tight", alignTop && "mt-1.5")}>{label}</label>
+      <div className="flex-1 min-w-0 flex justify-end">{children}</div>
     </div>
   );
 }
 
 /**
- * A value drawn as the field it becomes: tapping it starts editing. A fact the
- * record lacks reads "+ Add" (owner, 2026-11-22: nothing is a blank).
+ * A line's value: right-aligned, with the pencil that starts the edit. A fact
+ * the record lacks reads "Not set" and is still a tap away from being added.
+ * `opens` marks a line that goes somewhere else instead (a chevron).
  */
 export function ReadValue({
-  value, onClick, actionLabel, testId, multiline,
+  value, onClick, actionLabel, testId, opens,
 }: {
   value?: React.ReactNode;
   onClick?: () => void;
   actionLabel?: string;
   testId?: string;
+  opens?: boolean;
+  /** Kept for callers; a long value is cut to its line, as the asset's. */
   multiline?: boolean;
 }) {
   const empty = value === undefined || value === null || value === "";
-  const cls = cn(
-    "flex w-full items-center rounded-lg border border-foreground/15 bg-foreground/[0.03] px-3 text-left text-[14px] min-h-9",
-    multiline ? "py-2 whitespace-pre-wrap break-words" : "truncate",
+  const text = (
+    <span className={cn("min-w-0 truncate text-right text-[14px]", empty ? "text-muted-foreground/70" : "font-semibold tabular-nums")} data-testid={testId}>
+      {empty ? "Not set" : value}
+    </span>
   );
-  const body = empty
-    ? <span className="flex items-center gap-1 font-semibold text-cyan-400"><Plus className="h-3.5 w-3.5" /> Add</span>
-    : <span className={cn("font-medium", !multiline && "truncate")}>{value}</span>;
-  return onClick ? (
-    <button type="button" onClick={onClick} aria-label={actionLabel} title={actionLabel} className={cn(cls, "pressable hover:border-foreground/30 transition-colors")} data-testid={testId}>{body}</button>
-  ) : (
-    <div className={cls} data-testid={testId}>{body}</div>
-  );
-}
-
-// ── Quick Info / Characteristics: label | value | pencil ─────────────────────
-
-export function InfoRow({
-  icon: Icon, label, value, onEdit, editLabel, testId, tone,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: React.ReactNode;
-  onEdit?: () => void;
-  editLabel?: string;
-  testId?: string;
-  tone?: "danger" | "good";
-}) {
+  if (!onClick) return <div className="flex min-w-0 items-center gap-3">{text}<span className="w-4 shrink-0" /></div>;
   return (
-    <div className="flex items-center gap-2.5 py-2 min-w-0" data-testid={testId}>
-      <Icon className="h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
-      <span className="w-[42%] shrink-0 text-[13px] text-muted-foreground leading-tight">{label}</span>
-      <span className={cn("flex-1 min-w-0 text-[14px] font-medium break-words tabular-nums", tone === "danger" && "text-red-500", tone === "good" && "text-emerald-400")}>{value}</span>
-      {onEdit && (
-        <button type="button" onClick={onEdit} aria-label={editLabel} title={editLabel}
-          className="pressable grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/5">
-          <Pencil className="h-3.5 w-3.5" />
-        </button>
-      )}
-    </div>
+    <button type="button" onClick={onClick} aria-label={actionLabel} title={actionLabel} className="flex min-w-0 max-w-full items-center gap-3 text-left">
+      {text}
+      {opens ? <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" /> : <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />}
+    </button>
   );
-}
-
-export function InfoList({ children, testId }: { children: React.ReactNode; testId?: string }) {
-  return <div className="divide-y divide-foreground/10" data-testid={testId}>{children}</div>;
 }
 
 // ── Balance & Payoff: the balance falling to zero ────────────────────────────
