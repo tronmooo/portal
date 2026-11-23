@@ -11,6 +11,7 @@ export function MobileBottomNav() {
 
   return (
     <nav
+      data-app-floating
       className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-border/50"
       style={{ background: "hsl(var(--background) / 0.72)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", WebkitTapHighlightColor: "transparent" }}
       role="navigation"

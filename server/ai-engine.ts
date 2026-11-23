@@ -192,7 +192,6 @@ import { recordChatFailure } from "./ai-failure-log";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { parseCaptureTarget, type CaptureKind } from "@shared/capture-target";
 import { generateTitle } from "./content-title";
-import { draftDocumentFromButton } from "./workspace-document";
 import { detectRecurrenceFreq, parseRecurrence, withAnchorDay } from "@shared/recurrence";
 import { resolveTaskActor } from "@shared/task-actor";
 import { annualLabelEvent, profileIsNamedBy, personNamedByTitle } from "@shared/birthday-event";
@@ -16582,12 +16581,6 @@ export interface ProcessMessageOptions {
    * "For" chip; a person named in the text ("Bob's journal: …") wins over it.
    */
   capture?: { kind: CaptureKind; profileId?: string };
-  /**
-   * The composer's Document button was on: the message is a request for a
-   * document, drafted from the facts on file and saved as an editable doc.
-   * The chat tool loop does not run, so nothing else is created from it.
-   */
-  workspace?: { mode: "document" };
 }
 
 /**
@@ -16745,8 +16738,8 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   // The Journal / Note button IS the instruction to save: a diary line that
   // happens to be a question ("Why was today so hard?") is still an entry,
   // not a read turn.
-  const turnScope: TurnScope = options?.capture || options?.workspace
-    ? { intent: "CREATE", allowedMutations: "all", reason: `${options.capture?.kind || options.workspace?.mode} button`, clauses: [] }
+  const turnScope: TurnScope = options?.capture
+    ? { intent: "CREATE", allowedMutations: "all", reason: `${options.capture.kind} button`, clauses: [] }
     : classifyTurnScope(userMessage);
   const turnId = options?.turnId || randomUUID();
   const requestId = options?.requestId || options?.sourceMessageId;
@@ -16880,24 +16873,6 @@ async function processMessageInner(userMessage: string, conversationHistory: Arr
       results: captured.results,
       turnId, sourceMessageId,
       ...(domains.length > 0 ? { mutations: [{ op: "create" as const, entityType: null, domains, tool: `capture:${options.capture.kind}` }] } : {}),
-      meta: { timings: { aiMs: Date.now() - turnStartedAt, tools: [] } },
-    };
-  }
-
-  // ── DOCUMENT BUTTON ─────────────────────────────────────────────────────
-  // The button named the job: write one document. Nothing else is logged.
-  if (options?.workspace?.mode === "document") {
-    const drafted = await draftDocumentFromButton(userMessage);
-    const domains = domainsForActionTypes(drafted.actions.map((a) => a?.type));
-    return {
-      reply: drafted.reply,
-      actions: drafted.actions.map((a) => ({
-        ...a,
-        data: { ...(a.data || {}), _turnId: turnId, ...(sourceMessageId ? { _sourceMessageId: sourceMessageId } : {}) },
-      })),
-      results: drafted.results,
-      turnId, sourceMessageId,
-      ...(domains.length > 0 ? { mutations: [{ op: "create" as const, entityType: null, domains, tool: "workspace:document" }] } : {}),
       meta: { timings: { aiMs: Date.now() - turnStartedAt, tools: [] } },
     };
   }

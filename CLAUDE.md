@@ -392,14 +392,14 @@ labelled as one. An entry's "last written" time is `updatedAt`, never its
 bare `date` ("Last 18h ago" for an entry saved minutes earlier).
 *Guard:* `tests/info-tab-editable.dom.test.tsx`.
 
-**J6. The Journal and Note buttons save; they do not interpret.** With a
-button on, the chat box sends `capture: { kind, profileId? }` and the server
-saves the message as that object, word for word (`captureFromButton`,
-`server/ai-engine.ts`): the chat model does not run, a line shaped like a
-question is still an entry, and nothing the text mentions is logged. The mode
-is never persisted across a reload. Without a button, the word "journal" /
-"note" still routes as before.
-*Guards:* `tests/chat-capture-buttons.test.ts`, `tests/chat-capture-buttons.dom.test.tsx`.
+**J6. A capture request saves; it does not interpret.** A chat request that
+carries `capture: { kind, profileId? }` is saved as that object, word for word
+(`captureFromButton`, `server/ai-engine.ts`): the chat model does not run, a
+line shaped like a question is still an entry, and nothing the text mentions
+is logged. The chat box no longer sends it (its Journal / Notes buttons open
+workspaces — see "Workspace rules"); the server path stays for requests that
+do. Without it, the word "journal" / "note" still routes as before.
+*Guard:* `tests/chat-capture-buttons.test.ts`.
 
 **J7. An entry belongs to one person.** "Bob's journal: …", "Note for Bob: …"
 (`parseCaptureTarget`, `shared/capture-target.ts`) or the "For" menu files the
@@ -419,23 +419,59 @@ the buttons and the manual forms); else the first clause of the text
 not mid-sentence.
 *Guards:* `tests/journal-entries-routes.test.ts`, `tests/chat-capture-buttons.test.ts`.
 
-**J9. The Document button writes from what is on file, and never guesses.**
-With Document on, the chat box sends `workspace: { mode: "document" }` and the
-server drafts ONE document (`draftDocumentFromButton`,
-`server/workspace-document.ts`): one bounded model call, no tool loop, nothing
-else logged from the text. A personal fact that is not on file is written as
-`[Missing: …]`; the blanks the reply lists are read back from the saved text
-(`documentBlanks`, `shared/workspace-document.ts`), not from the model. The
-saved HTML is only what the editor holds (`sanitizeDocumentHtml`). A failed or
-empty draft saves nothing. The doc is an ordinary `doc` artifact: editing and
-PDF / Word export are the editor's (`/editor/:id`). **Fill & Edit** is an
-action, not a mode: it opens a file picker and hands a PDF or photo of a form
-to Smart Fill, whose review screen is the approval step. (Owner, 2026-11-22.
-Not built: a Computer mode, spreadsheet and Word form filling.)
-*Guards:* `tests/chat-document-button.test.ts`, `tests/chat-capture-buttons.dom.test.tsx`.
+*Live check for J1–J8 (deployed app, smoke account):* `npx tsx tests/live-journal-check.ts` (server).
 
-*Live checks for J1–J8 (deployed app, smoke account):* `npx tsx tests/live-journal-check.ts` (server),
-`npx tsx tests/live-journal-ui-check.ts` (real browser: the buttons, the For menu, the Journal page).
+## Workspace rules (four full-screen tools opened from AI Chat)
+
+Owner request 2026-11-22: "each opens its own dedicated, full-screen workspace
+… not four versions of the same chat box". The chat box's **Notes, Journal,
+Document and Fill In** buttons navigate (`WORKSPACES`,
+`client/src/components/workspace/WorkspaceShell.tsx`); they are not modes of
+the chat box. Read these before touching that file, `pages/workspace-*.tsx`,
+the workspace branch of `pages/journal.tsx`, `pages/editor.tsx` or
+`server/workspace-ai.ts`.
+*Guards:* `tests/chat-workspace-buttons.dom.test.tsx`, `tests/workspace-notes.dom.test.tsx`,
+`tests/workspace-ai.test.ts`.
+*Live check (deployed app, smoke account, real browser):* `npx tsx tests/live-workspaces-ui-check.ts`.
+
+**W1. Full screen means the whole window.** A workspace is mounted on
+`<body>` (`WorkspacePortal`): the app's layout is a centred max-width column,
+and a fixed box inside it does not reach the window's edges. While one is open
+`useFullScreenWorkspace` marks `<html>`/`<body>`, which hides the floating
+chrome (`data-app-floating`) and releases the desktop scrollbar gutters. Stay
+at `z-40`: menus and dialogs opened inside a workspace portal at `z-50`.
+**W2. The X saves, then leaves; it never asks and never discards.** Each
+workspace hands `WorkspaceCloseButton` a function that flushes what is pending
+and then goes to `/chat`. A failed save keeps the workspace open. The
+editor's Back does the same (the old "Unsaved changes. Leave anyway?" is gone).
+**W3. Opening writes nothing (Rule 3); typing does.** Notes creates the note on
+the first text and updates THAT note after; Journal is the Journal page's
+draft autosave; a new document saves itself once it has content, WITHOUT
+moving the URL (`quietSaveRef`: the route change remounts the editor and drops
+the caret). A new sheet still waits for its first Save.
+**W4. A save never adopts another record (J1).** When `POST /api/notes`
+answers `deduped`, the Notes workspace does not take that id: it would
+overwrite the other note with whatever is typed next.
+**W5. The AI proposes; the user applies.** `POST /api/workspace/document/assist`,
+`/notes/assist` and `/journal/reflect` (`server/workspace-routes.ts`, on
+`READONLY_POST_PATHS`, served by the AI function) write nothing. The workspace
+shows the proposal with Use / Add / Discard. The Journal AI only READS: it
+returns an answer for a side panel, never a replacement entry, and reads the
+writer's own entries (`journalEntriesFor`).
+**W6. A document never invents a personal fact.** What is not on file is
+written `[Missing: …]`; the blanks shown are read back from the returned text
+(`documentBlanks`, `shared/workspace-document.ts`), and the HTML is only what
+the editor holds (`sanitizeDocumentHtml`). Secrets (password, SSN, card,
+passport keys) are never sent to the model; another person's profile only when
+the request names them.
+**W7. Fill In is Smart Fill, full screen.** Its review (sources, every field,
+what is missing) is the approval step; nothing is saved before it and nothing
+is ever submitted anywhere. In the workspace the dialog is not modal and sits
+under the workspace header, so the X stays in reach.
+*Not built (2026-11-23):* tables, images and page-layout controls in the
+document editor; note attachments and rich text (a note is markdown text);
+journal photos; Word and spreadsheet forms, and online (browser) form filling,
+in Fill In; a Computer mode.
 
 ## Auto Pay rules (routine payments record themselves; the books stay honest)
 

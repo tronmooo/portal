@@ -77,6 +77,9 @@ const _goalsImport = () => import("@/pages/goals");
 const _privImport  = () => import("@/pages/privacy");
 const _termsImport = () => import("@/pages/terms");
 const _editImport  = () => import("@/pages/editor");
+const _wsNotesImport = () => import("@/pages/workspace-notes");
+const _wsJournalImport = () => import("@/pages/workspace-journal");
+const _wsFillImport = () => import("@/pages/workspace-fill");
 const _insightsImport = () => import("@/pages/insights");
 const _shareViewImport = () => import("@/pages/share-view");
 const _detailsImport = () => import("@/pages/details");
@@ -104,6 +107,9 @@ const GoalsPage        = lazyWithRetry(_goalsImport);
 const PrivacyPage      = lazyWithRetry(_privImport);
 const TermsPage        = lazyWithRetry(_termsImport);
 const EditorPage       = lazyWithRetry(_editImport);
+const NotesWorkspacePage = lazyWithRetry(_wsNotesImport);
+const JournalWorkspacePage = lazyWithRetry(_wsJournalImport);
+const FillWorkspacePage = lazyWithRetry(_wsFillImport);
 const InsightsPage     = lazyWithRetry(_insightsImport);
 const ShareViewPage    = lazyWithRetry(_shareViewImport);
 const DetailsPage      = lazyWithRetry(_detailsImport);
@@ -635,6 +641,10 @@ function AppRouter() {
         {/* Legacy singular alias: anywhere /profile/:id was bookmarked, route it
             through the dispatcher (normalizes to /profiles/:id) so we never 404. */}
         <Route path="/profile/:id" component={ProfileRouteDispatch} />
+        {/* Full-screen AI workspaces, opened from the chat box. */}
+        <Route path="/workspace/notes" component={NotesWorkspacePage} />
+        <Route path="/workspace/journal" component={JournalWorkspacePage} />
+        <Route path="/workspace/fill" component={FillWorkspacePage} />
         <Route path="/editor/new/:type" component={EditorPage} />
         <Route path="/editor/:id" component={EditorPage} />
         <Route path="/insights" component={InsightsPage} />
