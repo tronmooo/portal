@@ -1,25 +1,23 @@
 /**
- * SmartFillTrigger — reusable "Smart Fill PDF" button.
+ * SmartFillTrigger — a "Fill a form" button for pages outside the workspace
+ * (Documents, a profile's Documents tab).
  *
- * Renders a button. On click, opens a hidden file picker for PDFs.
- * When a PDF is chosen, opens SmartFillDialog with the file pre-loaded.
- *
- * Used by:
- *  - Documents (Artifacts) page header
- *  - Profile detail (Documents tab)
- *  - Asset detail (Documents tab)
- *  - Liability detail (Documents tab)
- *
- * Optional `preselectedSources` pre-checks the current entity in the source picker.
+ * Picking a file hands it to the Fill In workspace and opens it there: there
+ * is one place a form is filled (pages/workspace-fill.tsx), and it uses
+ * everything on file, so `preselectedSources` is accepted for the existing
+ * call sites but no longer narrows anything.
  */
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Sparkles } from "lucide-react";
-import { SmartFillDialog, type SmartFillSource } from "./SmartFillDialog";
 import { useToast } from "@/hooks/use-toast";
+import { hashNavigate } from "@/lib/hashNavigate";
+import { setPendingFillFile } from "@/lib/fill-handoff";
+
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 interface Props {
-  preselectedSources?: SmartFillSource[];
+  preselectedSources?: Array<{ id: string; kind: string; name: string }>;
   label?: string;
   size?: "default" | "sm" | "lg" | "icon";
   variant?: "default" | "outline" | "secondary" | "ghost";
@@ -29,8 +27,7 @@ interface Props {
 }
 
 export function SmartFillTrigger({
-  preselectedSources,
-  label = "Smart Fill PDF",
+  label = "Fill a form",
   size = "sm",
   variant = "outline",
   className,
@@ -39,7 +36,6 @@ export function SmartFillTrigger({
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
-  const [file, setFile] = useState<{ name: string; mimeType: string; base64: string } | null>(null);
 
   const onPick = () => inputRef.current?.click();
 
@@ -47,8 +43,9 @@ export function SmartFillTrigger({
     const f = e.target.files?.[0];
     e.target.value = ""; // allow re-pick same file
     if (!f) return;
-    if (f.type !== "application/pdf" && !f.name.toLowerCase().endsWith(".pdf")) {
-      toast({ title: "PDF only", description: "Smart Fill only works with PDF files.", variant: "destructive" });
+    const ok = f.type === "application/pdf" || f.type.startsWith("image/") || f.type === DOCX_MIME || /\.(pdf|docx)$/i.test(f.name);
+    if (!ok) {
+      toast({ title: "That file can't be filled in", description: "Fill In takes PDF forms, Word (.docx) forms, and photos or screenshots of a form.", variant: "destructive" });
       return;
     }
     const MAX = 10 * 1024 * 1024;
@@ -57,7 +54,8 @@ export function SmartFillTrigger({
       return;
     }
     const base64 = await fileToBase64(f);
-    setFile({ name: f.name, mimeType: "application/pdf", base64 });
+    setPendingFillFile({ name: f.name, mimeType: f.type || (/\.docx$/i.test(f.name) ? DOCX_MIME : "application/pdf"), base64 });
+    hashNavigate("/workspace/fill");
   };
 
   return (
@@ -65,7 +63,7 @@ export function SmartFillTrigger({
       <input
         ref={inputRef}
         type="file"
-        accept="application/pdf,.pdf"
+        accept="application/pdf,.pdf,.docx,image/*"
         onChange={onFileChange}
         className="hidden"
         data-testid={`${testId}-input`}
@@ -81,12 +79,6 @@ export function SmartFillTrigger({
         <Sparkles className={iconOnly ? "h-4 w-4" : "h-4 w-4 mr-1.5"} />
         {!iconOnly && label}
       </Button>
-      <SmartFillDialog
-        open={!!file}
-        onOpenChange={(o) => { if (!o) setFile(null); }}
-        file={file}
-        preselectedSources={preselectedSources}
-      />
     </>
   );
 }

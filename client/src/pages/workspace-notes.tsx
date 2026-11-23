@@ -585,7 +585,7 @@ export default function NotesWorkspacePage() {
               <div className="mt-2 flex-1 flex flex-col min-h-[50vh]">
                 {mode === "rich" ? (
                   <div className="relative flex-1 flex flex-col">
-                    {!content.trim() && <p className="absolute top-0 left-0 text-base text-muted-foreground/60 pointer-events-none">Start typing, paste, or drop a file here…</p>}
+                    {!content.trim() && <p className="absolute top-0 left-0 text-base text-muted-foreground/80 pointer-events-none">Start typing, paste, or drop a file here…</p>}
                     <EditorContent editor={editor} className="workspace-writing prose prose-sm max-w-none flex-1 flex flex-col [&>.ProseMirror]:flex-1" />
                   </div>
                 ) : (

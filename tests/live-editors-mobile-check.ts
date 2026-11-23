@@ -78,6 +78,30 @@ async function layoutOk(page: any, surface: string) {
   }, { surface });
 }
 
+/**
+ * Is the text people type readable? The contrast (WCAG ratio) between each
+ * matching element's text colour and the first solid background behind it.
+ * (2026-11-23: text typed in Notes was dark on the dark background.)
+ */
+async function contrast(page: any, selector: string): Promise<{ min: number; n: number }> {
+  return page.evaluate((selector: string) => {
+    const rgb = (c: string) => { const m = /rgba?\(([^)]+)\)/.exec(c); if (!m) return null; const p = m[1].split(/[ ,/]+/).filter(Boolean).map(Number); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; };
+    const lum = (c: { r: number; g: number; b: number }) => { const f = (v: number) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
+    let min = 99, n = 0;
+    for (const el of Array.from(document.querySelectorAll(selector)) as HTMLElement[]) {
+      if (el.offsetParent === null) continue;
+      const fg = rgb(getComputedStyle(el).color);
+      let bg: any = null;
+      for (let p: HTMLElement | null = el; p; p = p.parentElement) { const c = rgb(getComputedStyle(p).backgroundColor); if (c && c.a > 0.6) { bg = c; break; } }
+      if (!fg || !bg) continue;
+      const a = lum(fg), b = lum(bg);
+      min = Math.min(min, (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05));
+      n++;
+    }
+    return { min: n ? Math.round(min * 10) / 10 : 0, n };
+  }, selector);
+}
+
 async function scrollEnds(page: any) {
   return page.evaluate(async () => {
     const sc = Array.from(document.querySelectorAll("[data-workspace-scroll]")).find((e) => (e as HTMLElement).offsetParent !== null) as HTMLElement | undefined;
@@ -99,7 +123,9 @@ async function main() {
   const browser = await chromium.launch();
   try {
     for (const [w, h] of [[320, 568], [375, 667], [390, 844]] as const) {
-      const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: SHOTS ? 2 : 1, hasTouch: true, isMobile: true, timezoneId: "America/Los_Angeles" });
+      // Dark on the smallest and the largest phone, light on the middle one.
+      const scheme = w === 375 ? "light" : "dark";
+      const ctx = await browser.newContext({ colorScheme: scheme, viewport: { width: w, height: h }, deviceScaleFactor: SHOTS ? 2 : 1, hasTouch: true, isMobile: true, timezoneId: "America/Los_Angeles" });
       const page = await ctx.newPage();
       // tsx names inner functions with a helper the page does not have.
       await page.addInitScript("window.__name = (f) => f;");
@@ -132,6 +158,8 @@ async function main() {
       await page.tap(t("button-workspace-save"));
       await page.waitForSelector(`${t("button-workspace-save")}[data-state="saved"]`, { timeout: 30000 });
       check(true, `${w}px Journal: Save says Saved`);
+      let c = await contrast(page, t("input-journal-free-text"));
+      check(c.n === 1 && c.min >= 4.5, `${w}px Journal (${scheme}): typed text is readable (contrast ${c.min})`);
       const s = await scrollEnds(page);
       check(s.ok && s.tall, `${w}px Journal: a long entry scrolls to its end and back (${s.h}/${s.c})`);
       l = await layoutOk(page, "workspace-journal");
@@ -165,6 +193,9 @@ async function main() {
       await shot("notes-empty");
       await page.tap(t("note-rich-editor"));
       await page.keyboard.type(`Note check ${tag}`);
+      await page.tap('[data-testid="note-toolbar"] [aria-label="Heading"]'); // the first line is a heading
+      await page.tap(t("note-rich-editor"));
+      await page.keyboard.press("End");
       await page.keyboard.press("Enter");
       await page.evaluate((text: string) => {
         const el = document.querySelector('[data-testid="note-rich-editor"]') as HTMLElement;
@@ -173,6 +204,8 @@ async function main() {
       }, LONG);
       await page.tap(t("button-workspace-save"));
       await page.waitForSelector(`${t("button-workspace-save")}[data-state="saved"]`, { timeout: 30000 });
+      c = await contrast(page, `${t("note-rich-editor")} h1, ${t("note-rich-editor")} p`);
+      check(c.n >= 2 && c.min >= 4.5, `${w}px Notes (${scheme}): typed text and headings are readable (contrast ${c.min} over ${c.n} blocks)`);
       const ns = await scrollEnds(page);
       check(ns.ok && ns.tall, `${w}px Notes: a long note scrolls to its end and back (${ns.h}/${ns.c})`);
       await page.locator(t("input-note-attach-library")).setInputFiles({ name: "check.png", mimeType: "image/png", buffer: PNG });
@@ -184,7 +217,7 @@ async function main() {
       await page.tap(t("button-workspace-save"));
       await page.waitForSelector(`${t("button-workspace-save")}[data-state="saved"]`, { timeout: 30000 });
       await shot("notes-long");
-      const nRows = (await api("GET", "/notes")).data.filter((n: any) => String(n.content || "").startsWith(`Note check ${tag}`));
+      const nRows = (await api("GET", "/notes")).data.filter((n: any) => String(n.content || "").includes(`Note check ${tag}`));
       made.notes.push(...nRows.map((n: any) => n.id));
       for (const n of nRows) for (const m of String(n.content).matchAll(/#\/documents\/([\w-]+)/g)) made.documents.push(m[1]);
       check(nRows.length === 1, `${w}px Notes: autosave and Save made one note (${nRows.length})`);
@@ -203,6 +236,12 @@ async function main() {
         const dt = new DataTransfer(); dt.setData("text/plain", text);
         el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
       }, LONG);
+      await page.tap(t("button-workspace-save"));
+      await page.waitForSelector(`${t("button-workspace-save")}[data-state="saved"]`, { timeout: 30000 });
+      await page.tap('[data-testid="toolbar-doc-mobile"] [aria-label="Bold"]');
+      await page.keyboard.type(" bold words");
+      c = await contrast(page, ".ProseMirror p, .ProseMirror strong");
+      check(c.n >= 2 && c.min >= 4.5, `${w}px Document (${scheme}): typed text and bold text are readable (contrast ${c.min} over ${c.n} blocks)`);
       await page.tap(t("button-workspace-save"));
       await page.waitForSelector(`${t("button-workspace-save")}[data-state="saved"]`, { timeout: 30000 });
       const ds = await scrollEnds(page);

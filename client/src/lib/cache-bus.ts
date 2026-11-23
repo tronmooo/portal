@@ -316,6 +316,11 @@ export const DERIVED_ENDPOINT_DEPENDENCIES: Readonly<Record<string, readonly Dom
   // shared/date-rules rulesFromAll + rulesFromSeries.
   "/api/date-rules": ["documents", "profiles", "assets", "liabilities", "people", "tasks", "obligations", "incomes", "events"],
   "/api/calendar/timeline": ["documents", "profiles", "assets", "liabilities", "people", "tasks", "obligations", "incomes", "events", "habits"],
+  // Fill In's "My Information" is derived from every profile, every document's
+  // extracted data and notes (shared/fill-info.ts buildFillFacts); its list of
+  // completed forms is documents.
+  "/api/smart-fill/information": ["documents", "profiles", "assets", "liabilities", "people", "artifacts"],
+  "/api/smart-fill/forms": ["documents"],
   // Account-wide aggregates (server cache prefixes declared "all").
   "/api/dashboard-enhanced": DATA_DOMAINS,
   "/api/stats": DATA_DOMAINS,

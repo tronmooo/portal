@@ -40,9 +40,6 @@ import { isInScope, ownerChainForProfile, selfIdsFrom } from "@shared/scope";
 const ArtifactPanel = lazy(() =>
   import("@/components/ArtifactPanel").then((m) => ({ default: m.ArtifactPanel }))
 );
-const SmartFillDialog = lazy(() =>
-  import("@/components/SmartFillDialog").then((m) => ({ default: m.SmartFillDialog }))
-);
 const DocumentWorkspace = lazy(() => import("@/pages/document-detail").then((m) => ({ default: m.DocumentWorkspace })));
 import { prefetchDocument } from "@/lib/document-preview";
 const ChatChartBody = lazy(() => import("@/components/ChatChartRenderer"));
@@ -53,18 +50,15 @@ const ChatChartBody = lazy(() => import("@/components/ChatChartRenderer"));
 // spends seconds in the file picker, so the chunk is parsed long before the
 // dialog can possibly mount. Repeat calls are no-ops (dynamic import dedupes,
 // and React.lazy resolves from the warm module cache).
-let smartFillDialogPreloaded = false;
-function preloadSmartFillDialog() {
-  if (smartFillDialogPreloaded) return;
-  smartFillDialogPreloaded = true;
-  import("@/components/SmartFillDialog").catch(() => { smartFillDialogPreloaded = false; });
-}
+/** Kept as the attach button's warm-up hook; Fill In is its own workspace now. */
+function preloadSmartFillDialog() { /* nothing to warm */ }
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ChatComposer, type ChatComposerHandle } from "@/components/chat/ChatComposer";
 import { WORKSPACES } from "@/components/workspace/WorkspaceShell";
+import { setPendingFillFile } from "@/lib/fill-handoff";
 import { streamChat } from "@/components/chat/chat-stream";
 import { isDuplicateResend, type LastSend } from "@shared/chat-progress";
 import { ThinkingBubble } from "@/components/chat/ThinkingBubble";
@@ -2551,7 +2545,12 @@ export default function ChatPage() {
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>("none");
   // Smart Fill PDF — staged PDF that will be passed to the dialog
-  const [smartFillFile, setSmartFillFile] = useState<{ name: string; mimeType: string; base64: string } | null>(null);
+  // "Smart Fill" on an attachment opens the Fill In workspace with that file.
+  const setSmartFillFile = useCallback((file: { name: string; mimeType: string; base64: string } | null) => {
+    if (!file) return;
+    setPendingFillFile(file);
+    hashNavigate(WORKSPACES.fill.route);
+  }, []);
 
   // Track batch processing progress
   const [batchProcessedCount, setBatchProcessedCount] = useState(0);
@@ -4010,17 +4009,6 @@ export default function ChatPage() {
         />
       )}
 
-      {/* Smart Fill PDF dialog — lazy: only fetch/mount the 600-line dialog once
-          the user actually stages a file for Smart Fill */}
-      {smartFillFile && (
-        <Suspense fallback={null}>
-          <SmartFillDialog
-            open={!!smartFillFile}
-            onOpenChange={(o) => { if (!o) setSmartFillFile(null); }}
-            file={smartFillFile}
-          />
-        </Suspense>
-      )}
 
       {/* Text input area (only shown when no attachment pending). The composer
           owns its draft state — keystrokes no longer re-render this page. */}

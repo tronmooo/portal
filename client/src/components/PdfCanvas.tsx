@@ -16,7 +16,7 @@ import { Loader2, AlertCircle } from "lucide-react";
 
 // Lazy, memoized PDF.js loader. Resolves the library with its worker wired up.
 let pdfjsPromise: Promise<typeof import("pdfjs-dist")> | null = null;
-function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
+export function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
   if (!pdfjsPromise) {
     pdfjsPromise = (async () => {
       const pdfjs = await import("pdfjs-dist");

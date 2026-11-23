@@ -496,10 +496,9 @@ export function EditSeriesScreen({
 
                 <div>
                   <label className={labelCls} htmlFor="cal-edit-notes">Notes <span className="font-normal text-muted-foreground">(optional)</span></label>
-                  <textarea id="cal-edit-notes" rows={3} maxLength={500}
+                  <textarea id="cal-edit-notes" rows={3}
                     className={`${fieldCls} h-auto py-2.5 resize-none`} value={form.notes}
                     onChange={(e) => set("notes", e.target.value)} data-testid="cal-edit-notes" />
-                  <p className="mt-1 text-right text-[11px] text-muted-foreground tabular-nums">{form.notes.length}/500</p>
                 </div>
 
                 <div>

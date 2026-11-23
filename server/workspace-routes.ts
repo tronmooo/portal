@@ -34,7 +34,7 @@ export function registerWorkspaceRoutes(app: Express, rateLimit: Limiter): void 
     instruction: str(req.body?.instruction, 5000), html: str(req.body?.html, 200_000), title: str(req.body?.title, 200),
   })));
   app.post(WORKSPACE_AI_PATHS[1], guard(async (req) => (await ai()).assistNote({
-    instruction: str(req.body?.instruction, 2000), content: str(req.body?.content, 60_000),
+    instruction: str(req.body?.instruction, 2000), content: str(req.body?.content, 1_000_000),
   })));
   app.post(WORKSPACE_AI_PATHS[2], guard(async (req) => (await ai()).reflectOnJournal({
     instruction: str(req.body?.instruction, 2000), draft: str(req.body?.draft, 10_000),

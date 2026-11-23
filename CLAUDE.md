@@ -526,6 +526,16 @@ its text (W8; `removeAttachmentLink` takes one out); a document puts a
 picture in the page and links any other file, listed under the text.
 *Guards:* `tests/workspace-editors-mobile.dom.test.tsx`, `tests/journal-entries-routes.test.ts`.
 *Live check (three phone widths, touch, smoke account):* `npx tsx tests/live-editors-mobile-check.ts`.
+**W12. Written text is readable in both themes.** The typography plugin's
+`prose` colours are pointed at the theme tokens once, in `index.css`
+(`.prose:not(.prose-invert)`), so no editor needs to remember
+`dark:prose-invert` (2026-11-23: text typed in Notes was dark on the dark
+background). The phone document canvas follows the theme too; never force a
+fixed text or canvas colour on a place a person types. Written bodies have no
+small cap: task notes, artifact descriptions and journal find/replace use
+`sanitizeLongText`; the AI note rewrite refuses a note longer than one reply
+can return (`NOTE_ASSIST_MAX_CHARS`) rather than hand back a cut one.
+*Live check:* `npx tsx tests/live-editors-mobile-check.ts` (dark-mode contrast).
 **W3. Opening writes nothing (Rule 3); typing does.** Notes creates the note on
 the first text and updates THAT note after; Journal creates one DRAFT entry,
 then updates it, and titles an untitled entry only if it was written in this
@@ -549,10 +559,55 @@ written `[Missing: …]`; the blanks shown are read back from the returned text
 the editor holds (`sanitizeDocumentHtml`). Secrets (password, SSN, card,
 passport keys) are never sent to the model; another person's profile only when
 the request names them.
-**W7. Fill In is Smart Fill, full screen.** Its review (sources, every field,
-what is missing) is the approval step; nothing is saved before it and nothing
-is ever submitted anywhere. In the workspace the dialog is not modal and sits
-under the workspace header, so the X stays in reach.
+**W7. Fill In writes the form, and proves it** (owner, 2026-11-23: "the
+feature appears to run but does not actually populate the uploaded file" — the
+old renderer appended a summary page and left the form blank). Read these
+before touching `pages/workspace-fill.tsx`, `server/fill-*.ts` or
+`shared/fill-*.ts`.
+- *One list of facts.* "My Information" is `buildFillFacts`
+  (`shared/fill-info.ts`): every profile, every document's extracted data and
+  notes, each fact with its SOURCE. It is derived on each read and stores
+  nothing (Rule 1). An upload Fill In has never read is read once when a fill
+  starts (`indexNextDocuments`) and kept as ONE JSON string
+  (`extractedData.fillIndex.data`), so reading an old upload adds no field,
+  row or alert anywhere else. Completed forms and their blank originals
+  (`FILL_ORIGINAL_TAG`) are never sources. The journal is not a source.
+- *Never invent.* The model matches fields to facts by id; a value is kept
+  only when `groundValue` finds every word of it in the facts it cites, else
+  the field stays blank. With no model the structured match
+  (`matchLabelToFacts`) still fills what a label plainly names, and the answer
+  says the AI was not used.
+- *Sensitive is confirmed.* ID and account numbers (`isSensitiveLabel`) are
+  never sent to the model (it sees "[on file]"), are masked on screen, and a
+  field filled from one is not written or stored until the user taps to
+  include it (`isWritable`). Passwords, PINs and card codes are never facts.
+- *Conflicts are shown.* `rankFacts`: the person's own profile and identity
+  documents, then other documents, then notes; newer first. The field carries
+  the other values (`alternatives`).
+- *Whose form.* Facts carry `ownerProfileId`; another person's details are
+  listed under their name and never answer a plain "Phone". Everything is
+  read through the request's storage (account boundary).
+- *The file.* `renderFilledPdf` writes an interactive PDF's fields by exact
+  name (text, checkbox, radio, dropdown; left editable) and draws every other
+  value at its box (a fraction of its page, `FillField.box`); a photo becomes
+  a PDF page; `renderFilledDocx` fills a Word form in place. Signatures are
+  never written. The original is kept as its own document; the completed copy
+  is a second one (`saveFilledForm`).
+- *Success is the reopened file.* render → `verifyFilledPdf` /
+  `verifyFilledDocx` REOPEN the bytes and read each value back → store → read
+  the STORED file back and check again. Any failure is an error naming the
+  fields and nothing is left saved. Never report a fill from the preview, and
+  never bring back a summary page.
+- *The screen.* The form with its fields on it; a field is tapped and edited
+  in the bar under the tools; a fact is tapped or dragged onto a field or the
+  page; drawn values move and resize; undo / redo; List view; Save in the
+  header (W11). Opening writes nothing (Rule 3): reading uploads, analysing
+  and saving start from the user's action.
+*Guards:* `tests/fill-info.test.ts`, `tests/fill-pdf.test.ts` (saved bytes read
+with PDF.js, not the writer), `tests/fill-routes.test.ts`,
+`tests/fill-workspace.dom.test.tsx`.
+*Live check (deployed app, smoke account, real browser, real model):*
+`npx tsx tests/live-fill-check.ts`.
 **W8. A note is markdown; the rich editor is a view of it.** Chat, search and
 every list read a note's text, so it stays markdown. The Notes workspace
 edits it as rich text through `markdownToNoteHtml` / `noteDocToMarkdown`
@@ -579,8 +634,9 @@ goes to the AI: it travels as a `[[PICTURE n]]` marker and is put back, or
 appended if the model dropped it (`picturesToMarkers` / `markersToPictures`).
 *Not built (2026-11-23):* resizing pictures and column widths, headers/footers
 and page breaks in the editor; a table button on the phone toolbar;
-pictures inside notes; Word and spreadsheet forms, and online (browser) form
-filling, in Fill In; a Computer mode.
+pictures inside notes; spreadsheet forms, old Word (.doc) files, and online
+(browser) form filling, in Fill In; a Unicode font in filled PDFs (letters
+Helvetica lacks are written in their plain form); a Computer mode.
 
 ## Auto Pay rules (routine payments record themselves; the books stay honest)
 

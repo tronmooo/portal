@@ -470,7 +470,7 @@ export default function JournalWorkspacePage() {
               {/* The page: a title, then the writing — one continuous sheet. */}
               <input value={title} onChange={(e) => { setTitle(e.target.value); touch(); }} placeholder="Title (optional)"
                 aria-label="Entry title" maxLength={120}
-                className="mt-2 w-full bg-transparent text-lg font-semibold outline-none placeholder:text-muted-foreground/50 border-b border-border/50 pb-1" data-testid="input-journal-title" />
+                className="mt-2 w-full bg-transparent text-lg font-semibold outline-none placeholder:text-muted-foreground/70 border-b border-border/50 pb-1" data-testid="input-journal-title" />
               {!text.trim() && (
                 <div className="flex gap-1.5 overflow-x-auto py-2 -mx-3 px-3 sm:mx-0 sm:px-0" data-swipe-ignore data-testid="journal-prompts">
                   {JOURNAL_PROMPTS.map((prompt) => (
@@ -484,7 +484,7 @@ export default function JournalWorkspacePage() {
               )}
               <textarea ref={textRef} value={text} onChange={(e) => { setText(e.target.value); touch(); }}
                 placeholder="Whatever is on your mind…" aria-label="Journal entry" rows={8}
-                className="workspace-writing block w-full flex-[1_0_auto] min-h-[45vh] mt-2 bg-transparent text-base leading-7 outline-none resize-none overflow-hidden placeholder:text-muted-foreground/40"
+                className="workspace-writing block w-full flex-[1_0_auto] min-h-[45vh] mt-2 bg-transparent text-base leading-7 outline-none resize-none overflow-hidden placeholder:text-muted-foreground/70"
                 data-testid="input-journal-free-text" />
 
               {/* Attachments: small thumbnails and file rows. */}
@@ -506,7 +506,7 @@ export default function JournalWorkspacePage() {
                 </div>
               )}
               <input value={labels} onChange={(e) => { setLabels(e.target.value); touch(); }} placeholder="Tags, comma separated (optional)" aria-label="Tags"
-                className="ws-field mt-2 w-full bg-transparent border-b border-border/50 text-sm py-1 outline-none placeholder:text-muted-foreground/40" data-testid="input-journal-tags" />
+                className="ws-field mt-2 w-full bg-transparent border-b border-border/50 text-sm py-1 outline-none placeholder:text-muted-foreground/70" data-testid="input-journal-tags" />
             </div>
           </div>
           {reflection && (

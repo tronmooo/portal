@@ -1684,8 +1684,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   <FieldRow icon={FileText} label="Notes" wide alignTop htmlFor="liability-notes">
                     {editing ? (
                       <div className="relative">
-                        <Textarea id="liability-notes" value={editNotes} onChange={(e) => setEditNotes(e.target.value.slice(0, 500))} onBlur={() => void commitNameNotes()} rows={2} className="text-[14px] pr-14" data-testid="input-edit-notes" />
-                        <span className="absolute bottom-1.5 right-2 text-[11px] text-muted-foreground tabular-nums">{editNotes.length}/500</span>
+                        <Textarea id="liability-notes" value={editNotes} onChange={(e) => setEditNotes(e.target.value)} onBlur={() => void commitNameNotes()} rows={2} className="text-[14px]" data-testid="input-edit-notes" />
                       </div>
                     ) : <ReadValue value={profileNotes.trim()} onClick={startEditing} actionLabel="Edit notes" testId="detail-notes" multiline />}
                   </FieldRow>

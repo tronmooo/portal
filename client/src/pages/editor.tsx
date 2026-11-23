@@ -1630,7 +1630,7 @@ export default function EditorPage() {
               data-testid="doc-editor-canvas"
             >
               {!(editor?.getText() || "").trim() && !docFocused && (
-                <p className="absolute right-3 md:right-auto pointer-events-none text-muted-foreground/60 text-sm" data-testid="doc-empty-hint">
+                <p className="absolute right-3 md:right-auto pointer-events-none text-muted-foreground/80 text-sm" data-testid="doc-empty-hint">
                   Start typing, choose a template, or ask AI to create something…
                 </p>
               )}

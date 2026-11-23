@@ -842,14 +842,16 @@ textarea:focus, input[type="text"]:focus, input[type="email"]:focus, input[type=
   display: none !important;
 }
 
-/* ── Doc editor mobile black canvas ────────────────────────────────────────
-   When .doc-mobile-black is applied to the doc wrapper, the writing area
-   becomes pure black like IMG_0420. */
+/* ── Doc editor phone canvas ────────────────────────────────────────────────
+   The page follows the THEME (owner, 2026-11-23: "white or light-colored text
+   in dark mode and dark text in light mode"). It used to force a black canvas
+   with white text whatever the theme, while headings, bold text and links
+   kept the typography plugin's own dark colours — black on black. */
 .doc-mobile-black,
 .doc-mobile-black .ProseMirror {
-  background: #000 !important;
-  color: #fff !important;
-  caret-color: #fff !important;
+  background: hsl(var(--background)) !important;
+  color: hsl(var(--foreground)) !important;
+  caret-color: hsl(var(--foreground)) !important;
 }
 .doc-mobile-black .ProseMirror::selection,
 .doc-mobile-black .ProseMirror *::selection {
@@ -1497,6 +1499,56 @@ html[data-workspace], body[data-workspace] { scrollbar-gutter: auto; overflow: h
 .workspace-surface textarea:focus-visible,
 .workspace-surface input:focus-visible,
 .workspace-surface .ProseMirror:focus-visible { outline: none; box-shadow: none; }
+/* ── Written text is always readable (owner, 2026-11-23: typed text in Notes
+   was dark on the dark background) ──────────────────────────────────────────
+   The typography plugin's `prose` paints body text, headings, bold, links,
+   quotes, code and table headers in FIXED dark greys unless every use
+   remembers `dark:prose-invert` — the Notes and Document editors did not.
+   Its colours are variables, so they are pointed at the theme's own tokens
+   here, once, for every `prose` in the app: the text follows the theme in
+   light and dark, on a theme switch, for pasted text and for reopened
+   content, with nothing for a new editor to remember. (`prose-invert`, used
+   by the always-dark legal pages, keeps its own colours.) */
+.prose:not(.prose-invert) {
+  --tw-prose-body: hsl(var(--foreground));
+  --tw-prose-headings: hsl(var(--foreground));
+  --tw-prose-lead: hsl(var(--foreground));
+  --tw-prose-bold: hsl(var(--foreground));
+  --tw-prose-counters: hsl(var(--muted-foreground));
+  --tw-prose-bullets: hsl(var(--muted-foreground));
+  --tw-prose-hr: hsl(var(--border));
+  --tw-prose-quotes: hsl(var(--foreground));
+  --tw-prose-quote-borders: hsl(var(--border));
+  --tw-prose-captions: hsl(var(--muted-foreground));
+  --tw-prose-kbd: hsl(var(--foreground));
+  --tw-prose-code: hsl(var(--foreground));
+  --tw-prose-pre-code: hsl(var(--foreground));
+  --tw-prose-pre-bg: hsl(var(--muted));
+  --tw-prose-th-borders: hsl(var(--border));
+  --tw-prose-td-borders: hsl(var(--border));
+  --tw-prose-links: hsl(var(--primary));
+  --tw-prose-invert-body: hsl(var(--foreground));
+  --tw-prose-invert-headings: hsl(var(--foreground));
+  --tw-prose-invert-bold: hsl(var(--foreground));
+  --tw-prose-invert-quotes: hsl(var(--foreground));
+  --tw-prose-invert-code: hsl(var(--foreground));
+  --tw-prose-invert-pre-code: hsl(var(--foreground));
+  --tw-prose-invert-pre-bg: hsl(var(--muted));
+  --tw-prose-invert-links: hsl(var(--primary));
+  color: hsl(var(--foreground));
+}
+/* Every place a person types: the text, the caret and the selection are the
+   theme's, whatever an ancestor or a pasted fragment says. */
+.ProseMirror, .workspace-surface textarea, .workspace-surface input, .workspace-surface select {
+  color: hsl(var(--foreground));
+  caret-color: hsl(var(--foreground));
+}
+.ProseMirror ::selection, .workspace-surface textarea::selection, .workspace-surface input::selection {
+  background: hsl(var(--primary) / 0.35);
+  color: hsl(var(--foreground));
+}
+.ProseMirror [style*="color"] { color: inherit !important; background-color: transparent !important; }
+
 /* The editors on a phone (owner, 2026-11-23): nothing wider than the screen,
    long words and links wrap, the writing is a comfortable 16px. (Focus-zoom
    into the small option fields is stopped by useFullScreenWorkspace.) */

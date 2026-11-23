@@ -219,17 +219,16 @@ async function main() {
     check(await tid("fill-drop-zone").isVisible(), "Fill In: there is a place to drop a form");
     await shot("4-fill");
     await tid("input-fill-file").setInputFiles({ name: `form-${tag}.pdf`, mimeType: "application/pdf", buffer: tinyPdf() });
-    const dialog = tid("smart-fill-dialog");
-    const opened = await dialog.waitFor({ timeout: 30000 }).then(() => true).catch(() => false);
-    check(opened, "Fill In: a chosen form opens the field-by-field review");
+    // The form opens ON the screen, with My Information beside it (the full
+    // flow is checked by tests/live-fill-check.ts).
+    const opened = await tid("fill-toolbar").waitFor({ timeout: 120000 }).then(() => true).catch(() => false);
+    check(opened, "Fill In: a chosen form opens in the workspace with its tools");
     if (opened) {
-      await page.waitForTimeout(600); // the open animation scales the panel
-      const box = await dialog.boundingBox();
-      check(!!box && box.width >= 1270 && box.y <= 60 && box.y + box.height >= 890, "…and the review takes the whole screen under the workspace header");
+      check(await tid("fill-panel").isVisible(), "…with My Information beside the form");
       check(await page.locator('[data-testid="button-workspace-close"]:visible').first().isEnabled() && !(await tid("fill-drop-zone").isVisible()), "…with the workspace's X still in reach");
       await shot("5-fill-review");
     }
-    // Straight out from the review: the X does not need the review closed first.
+    // Straight out: the X does not need the form closed first.
     await closeToChat("Fill In");
 
     // ── drag and drop into the chat box ──────────────────────────────────

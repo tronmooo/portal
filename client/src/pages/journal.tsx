@@ -712,7 +712,7 @@ export default function JournalPage() {
                     onChange={(e) => setFreeText(e.target.value)}
                     placeholder="Whatever is on your mind — no length limits."
                     rows={12}
-                    className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/35 resize-y text-foreground leading-relaxed min-h-[220px]"
+                    className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/70 resize-y text-foreground leading-relaxed min-h-[220px]"
                     data-testid="input-journal-free-text"
                   />
                 </div>
@@ -727,7 +727,7 @@ export default function JournalPage() {
                     value={freeTags}
                     onChange={(e) => setFreeTags(e.target.value)}
                     placeholder="e.g. work, family, ideas"
-                    className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/35 text-foreground"
+                    className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/70 text-foreground"
                     data-testid="input-journal-free-tags"
                   />
                 </div>
@@ -780,7 +780,7 @@ export default function JournalPage() {
                       value={value}
                       onChange={e => onChange(e.target.value)}
                       placeholder={num === 1 ? "Someone or something that made you smile..." : num === 2 ? "A small win or moment of joy..." : "Something easy to overlook but valuable..."}
-                      className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/35 text-foreground"
+                      className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/70 text-foreground"
                       data-testid={`input-grateful-${num}`}
                     />
                   </div>
@@ -798,7 +798,7 @@ export default function JournalPage() {
                 onChange={e => setMakeAmazing(e.target.value)}
                 placeholder="One thing that would make today great..."
                 rows={3}
-                className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/35 resize-none text-foreground leading-relaxed"
+                className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/70 resize-none text-foreground leading-relaxed"
                 data-testid="input-make-amazing"
               />
             </div>
@@ -813,7 +813,7 @@ export default function JournalPage() {
                 value={affirmation}
                 onChange={e => setAffirmation(e.target.value)}
                 placeholder="I am capable, confident, and worthy of..."
-                className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/35 text-foreground"
+                className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/70 text-foreground"
                 data-testid="input-affirmation"
               />
             </div>
