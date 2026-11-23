@@ -62,7 +62,7 @@ const TILES: Tile[] = [
 
 // Routes where the FAB must stay hidden
 function shouldHideOn(pathname: string): boolean {
-  if (pathname.startsWith("/editor")) return true;
+  if (pathname.startsWith("/editor") || pathname.startsWith("/workspace")) return true;
   if (pathname === "/" || pathname === "/chat") return true; // chat already uses bottom space
   if (pathname.startsWith("/share/")) return true;
   if (pathname === "/auth" || pathname === "/login" || pathname === "/signup") return true;

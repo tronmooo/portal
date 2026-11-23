@@ -48,6 +48,7 @@ import { isAutoValuationEnabled } from "@shared/valuation/context";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
 import { registerRecordDetailRoutes } from "./record-details-routes";
+import { registerWorkspaceRoutes, WORKSPACE_AI_PATHS } from "./workspace-routes";
 import { appendDetailSearchHits } from "./record-details";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
@@ -981,6 +982,8 @@ const READONLY_POST_PATHS = new Set<string>([
   "/api/wellness/insights",
   "/api/finance-import/prompt",
   "/api/finance-import/preview",
+  // The workspaces' AI boxes return proposals; the workspace saves.
+  ...WORKSPACE_AI_PATHS,
 ]);
 function isReadOnlyPost(req: any): boolean {
   return req.method === "POST" && READONLY_POST_PATHS.has(req.path);
@@ -2054,8 +2057,6 @@ export async function registerRoutes(
         ...(req.body?.capture && (req.body.capture.kind === "journal" || req.body.capture.kind === "note")
           ? { capture: { kind: req.body.capture.kind, ...(typeof req.body.capture.profileId === "string" && req.body.capture.profileId ? { profileId: req.body.capture.profileId } : {}) } }
           : {}),
-        // The composer's Document button: draft a document from this request.
-        ...(!req.body?.capture && req.body?.workspace?.mode === "document" ? { workspace: { mode: "document" } } : {}),
         // Forward engine progress frames (round / assistant_delta /
         // tool_start / tool_result) straight onto the SSE stream.
         ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),
@@ -12995,6 +12996,7 @@ No emojis. No prose outside the JSON.`,
   // exempted from bearer auth in server/auth.ts and authenticates by signature.
   registerFinanceRoutes(app);
   registerRecordDetailRoutes(app);
+  registerWorkspaceRoutes(app, rateLimit);
 
   // Unknown API paths are 404 JSON, never the SPA shell. Without this the
   // static fallback answered `POST /api/profiles/:id/restore` (no such

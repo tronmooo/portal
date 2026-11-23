@@ -25,6 +25,7 @@ import { useSheetSnapshot, buildSheetFunctions } from "@/lib/sheet-functions";
 import { SLASH_ITEMS, filterSlashItems, type SlashItem } from "@/lib/editor-slash-commands";
 import DOMPurify from "dompurify";
 import { apiRequest } from "@/lib/queryClient";
+import { useFullScreenWorkspace, WorkspaceAiBar, WorkspaceCloseButton, WorkspacePortal, aiErrorText } from "@/components/workspace/WorkspaceShell";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -189,6 +190,8 @@ export default function EditorPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const { resolvedMode } = useTheme();
+  // The editor is the Document workspace: it takes the whole screen.
+  useFullScreenWorkspace();
 
   // Determine mode from URL: ?source=chat lets us post a chat card on save.
   const search = typeof window !== "undefined" ? window.location.hash.split("?")[1] || "" : "";
@@ -571,6 +574,9 @@ export default function EditorPage() {
     return { type: "sheet" as const, title: t, content: "", sheetData: safe, source: fromChat ? "chat" : "manual", ...(linkedProfiles ? { linkedProfiles } : {}) };
   };
 
+  // An autosave, or the save the X does on its way out, must not move the URL
+  // (the route change remounts the editor and drops the caret mid-sentence).
+  const quietSaveRef = useRef(false);
   const saveMut = useMutation({
     mutationFn: async () => {
       // Cancel any in-flight save so the latest payload wins.
@@ -598,22 +604,75 @@ export default function EditorPage() {
       qc.invalidateQueries({ queryKey: ["/api/documents"] });
       qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       // Update URL so refresh re-opens the right artifact.
-      if (isNew) {
+      if (isNew && !quietSaveRef.current) {
         const qs = fromChat ? "?source=chat" : "";
         setLocation(`/editor/${saved.id}${qs}`);
       }
+      quietSaveRef.current = false;
     },
     onError: (err: any) => {
+      quietSaveRef.current = false;
       toast({ title: "Save failed", description: err?.message || String(err), variant: "destructive" });
     },
   });
+
+  /** Is there anything worth keeping in a document that was never saved? */
+  const hasUnsavedWork = () => type === "doc"
+    ? !!(title.trim() || (editor?.getText() || "").trim())
+    : dirty;
+
+  // The X (and Back): save what is pending, then leave. Never asks, never discards.
+  const closeWorkspace = async () => {
+    if (dirty && (savedId || hasUnsavedWork())) {
+      quietSaveRef.current = true;
+      try { await saveMut.mutateAsync(); } catch { return; } // the toast says why; stay so nothing is lost
+    }
+    if (fromChat) setLocation("/chat"); else setLocation("/artifacts");
+  };
+
+  // ── AI Assist (documents) ──────────────────────────────────────────────────
+  // The AI returns a PROPOSAL. Nothing changes in the document until the user
+  // picks "Use this document" or "Add to the end"; Discard drops it.
+  const [assistBusy, setAssistBusy] = useState(false);
+  const [aiProposal, setAiProposal] = useState<{ html: string; title: string | null; blanks: string[]; sources: string[]; revised: boolean } | null>(null);
+  const [openBlanks, setOpenBlanks] = useState<string[]>([]);
+  const askDocumentAi = async (instruction: string) => {
+    setAssistBusy(true);
+    try {
+      const r = await apiRequest("POST", "/api/workspace/document/assist", { instruction, html: docHtml, title });
+      const j = await r.json();
+      if (typeof j?.html !== "string" || !j.html.trim()) throw new Error("The AI returned nothing.");
+      setAiProposal({
+        html: j.html, title: typeof j.title === "string" ? j.title : null,
+        blanks: Array.isArray(j.blanks) ? j.blanks.map(String) : [],
+        sources: Array.isArray(j.sources) ? j.sources.map(String) : [],
+        revised: !!j.revised,
+      });
+    } catch (err) {
+      toast({ title: "AI couldn't do that", description: aiErrorText(err), variant: "destructive" });
+    } finally {
+      setAssistBusy(false);
+    }
+  };
+  const applyAiProposal = (how: "replace" | "append") => {
+    if (!aiProposal || !editor) return;
+    if (how === "replace") editor.commands.setContent(aiProposal.html);
+    else editor.chain().focus("end").insertContent(aiProposal.html).run();
+    setDocHtml(editor.getHTML());
+    if (!title.trim() && aiProposal.title) setTitle(aiProposal.title);
+    setDirty(true);
+    setOpenBlanks(aiProposal.blanks);
+    setAiProposal(null);
+  };
 
   // Autosave debounce — only after the user has saved at least once OR is editing
   // an existing artifact. Avoids creating empty drafts.
   useEffect(() => {
     if (!dirty) return;
-    if (!savedId) return; // require explicit first save
-    const t = setTimeout(() => { saveMut.mutate(); }, 5000);
+    // A new document saves itself once there is something in it (an empty
+    // one creates no row); a new sheet still waits for its first Save.
+    if (!savedId && !(type === "doc" && hasUnsavedWork())) return;
+    const t = setTimeout(() => { quietSaveRef.current = !savedId; saveMut.mutate(); }, savedId ? 5000 : 2500);
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dirty, docHtml, sheet, title, savedId]);
@@ -1106,11 +1165,12 @@ export default function EditorPage() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   if (loadingExisting && !isNew) {
-    return <div className="h-dvh flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
+    return <WorkspacePortal><div className="fixed inset-0 z-40 bg-background flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div></WorkspacePortal>;
   }
 
   return (
-    <div className="h-dvh flex flex-col bg-background">
+    <WorkspacePortal>
+    <div className="workspace-surface fixed inset-0 z-40 flex flex-col bg-background" data-testid="workspace-document" aria-label="Document workspace">
       {/* ───────────────────── Mobile-only top bar ─────────────────────
           Matches Google Sheets / Google Docs mobile chrome (IMG_0418-0420).
           For SHEETS: ‹ ↶ ↷ 👤+ 💬 ⋯
@@ -1139,10 +1199,7 @@ export default function EditorPage() {
             variant="ghost"
             size="icon"
             className="h-9 w-9"
-            onClick={() => {
-              if (dirty && !confirm("Unsaved changes. Leave anyway?")) return;
-              if (fromChat) setLocation("/"); else setLocation("/artifacts");
-            }}
+            onClick={() => void closeWorkspace()}
             aria-label="Back"
             data-testid="button-mobile-back"
           >
@@ -1234,15 +1291,12 @@ export default function EditorPage() {
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+        <WorkspaceCloseButton onClose={closeWorkspace} className="ml-1" />
       </div>
 
-      {/* Desktop header (unchanged) */}
+      {/* Desktop header */}
       <div className="hidden md:flex border-b bg-card items-center gap-2 px-3 py-2 shrink-0">
-        <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => {
-          if (dirty && !confirm("Unsaved changes. Leave anyway?")) return;
-          // If launched from chat, hop straight back to chat for continuity.
-          if (fromChat) setLocation("/"); else setLocation("/artifacts");
-        }} aria-label="Back" data-testid="button-editor-back">
+        <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => void closeWorkspace()} aria-label="Back" data-testid="button-editor-back">
           <ArrowLeft className="h-4 w-4" />
         </Button>
         {/* BUG-RTE03: make the title obviously editable. The previous default
@@ -1396,6 +1450,7 @@ export default function EditorPage() {
           {saveMut.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
           <span className="hidden sm:inline">Save</span>
         </Button>
+        <WorkspaceCloseButton onClose={closeWorkspace} className="ml-1" />
       </div>
 
       {/* Body */}
@@ -1477,16 +1532,56 @@ export default function EditorPage() {
           {/* Tiptap content — on mobile we apply doc-mobile-black so the canvas
               renders as pure black like IMG_0420. Desktop keeps the standard
               white/themed background. */}
-          <div className="flex-1 overflow-auto md:bg-transparent">
+          <div className="flex-1 overflow-auto doc-page-desk">
             <div
-              className="max-w-3xl mx-auto px-4 md:px-6 py-4 md:py-8 doc-mobile-black md:!bg-transparent md:!text-foreground min-h-full"
+              className="doc-page relative px-4 py-4 doc-mobile-black md:!text-foreground min-h-full"
               data-testid="doc-editor-canvas"
             >
+              {!(editor?.getText() || "").trim() && !docFocused && (
+                <p className="absolute pointer-events-none text-muted-foreground/60 text-sm" data-testid="doc-empty-hint">
+                  Start typing, choose a template, or ask AI to create something…
+                </p>
+              )}
               <SectionErrorBoundary name="editor-doc" inline>
                 <EditorContent editor={editor} className="prose prose-sm max-w-none focus:outline-none [&_.ProseMirror]:min-h-[60vh] [&_.ProseMirror]:outline-none" />
               </SectionErrorBoundary>
             </div>
           </div>
+          {/* AI Assist: the proposal, then the box that asks for one. */}
+          {aiProposal && (
+            <div className="border-t bg-card px-4 py-3 shrink-0 max-h-[45vh] overflow-y-auto" data-testid="doc-ai-proposal">
+              <p className="text-xs font-semibold mb-1">
+                AI {aiProposal.revised ? "revision" : "draft"}{aiProposal.title ? ` · ${aiProposal.title}` : ""} — your document is unchanged until you choose
+              </p>
+              <p className="text-[11px] text-muted-foreground mb-2">
+                {aiProposal.sources.length > 0 ? `Written from ${aiProposal.sources.join(", ")}.` : "No saved information was used."}
+                {aiProposal.blanks.length > 0 && ` Not on file, left as marked blanks (nothing was guessed): ${aiProposal.blanks.join(", ")}.`}
+              </p>
+              <div
+                className="prose prose-sm max-w-none rounded-md border bg-background p-3"
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(aiProposal.html, { ALLOWED_TAGS: ["p", "br", "strong", "b", "em", "i", "u", "s", "code", "pre", "h1", "h2", "h3", "ul", "ol", "li", "a", "blockquote", "hr"], ALLOWED_ATTR: ["href"] }) }}
+              />
+              <div className="flex flex-wrap gap-2 mt-2">
+                <Button size="sm" onClick={() => applyAiProposal("replace")} data-testid="button-doc-ai-replace">
+                  {aiProposal.revised ? "Replace my document with this" : "Use this document"}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => applyAiProposal("append")} data-testid="button-doc-ai-append">Add to the end</Button>
+                <Button size="sm" variant="ghost" onClick={() => setAiProposal(null)} data-testid="button-doc-ai-discard">Discard</Button>
+              </div>
+            </div>
+          )}
+          {openBlanks.length > 0 && !aiProposal && (
+            <div className="border-t bg-amber-500/10 px-4 py-2 text-xs flex items-center gap-2 shrink-0" data-testid="doc-open-blanks">
+              <span className="flex-1">Still to fill in — look for [Missing: …]: {openBlanks.join(", ")}</span>
+              <button type="button" className="underline" onClick={() => setOpenBlanks([])}>Hide</button>
+            </div>
+          )}
+          <WorkspaceAiBar
+            placeholder="Ask AI to help with this document…"
+            busy={assistBusy}
+            onAsk={(i) => void askDocumentAi(i)}
+            testId="doc-ai"
+          />
           {/* Mobile-only sticky bottom formatting toolbar — redesigned to match
               IMG_0420 exactly: @  |  B  I  U  S  |  A(color)  highlight  |  align  A.
               Sits above the iOS keyboard. Single row, no wrap. */}
@@ -2168,6 +2263,7 @@ export default function EditorPage() {
       </Dialog>
 
     </div>
+    </WorkspacePortal>
   );
 }
 

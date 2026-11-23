@@ -63,7 +63,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ChatComposer, type ChatComposerHandle, type CaptureMode } from "@/components/chat/ChatComposer";
+import { ChatComposer, type ChatComposerHandle } from "@/components/chat/ChatComposer";
+import { WORKSPACES } from "@/components/workspace/WorkspaceShell";
 import { streamChat } from "@/components/chat/chat-stream";
 import { isDuplicateResend, type LastSend } from "@shared/chat-progress";
 import { ThinkingBubble } from "@/components/chat/ThinkingBubble";
@@ -2549,35 +2550,8 @@ export default function ChatPage() {
   // Attachments: array supports both single and batch
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>("none");
-  // Journal / Note button. The mode stays on until tapped off, so several
-  // entries can be written in a row; it is never persisted (a reload starts
-  // in ordinary chat, so a question is never silently saved as a journal).
-  const [captureMode, setCaptureMode] = useState<CaptureMode>(null);
-  const [captureProfileId, setCaptureProfileId] = useState<string>("");
-
   // Smart Fill PDF — staged PDF that will be passed to the dialog
   const [smartFillFile, setSmartFillFile] = useState<{ name: string; mimeType: string; base64: string } | null>(null);
-  const fillEditInputRef = useRef<HTMLInputElement>(null);
-  const handleFillEditSelect = (e: { target: HTMLInputElement }) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const isForm = file.type === "application/pdf" || file.type.startsWith("image/");
-    if (!isForm) {
-      toast({ title: "That file can't be filled in yet", description: "Fill & Edit reads PDF forms and photos of forms.", variant: "destructive" });
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      toast({ title: "File too large", description: "Fill & Edit takes files up to 10 MB.", variant: "destructive" });
-      return;
-    }
-    const reader = new FileReader();
-    reader.onerror = () => toast({ title: "Couldn't read that file", variant: "destructive" });
-    reader.onload = () => {
-      const data = String(reader.result || "");
-      setSmartFillFile({ name: file.name, mimeType: file.type, base64: data.includes(",") ? data.split(",").pop() || "" : data });
-    };
-    reader.readAsDataURL(file);
-  };
 
   // Track batch processing progress
   const [batchProcessedCount, setBatchProcessedCount] = useState(0);
@@ -2748,7 +2722,7 @@ export default function ChatPage() {
   }, [profiles, selectedProfileId]);
 
   const chatMutation = useMutation({
-    mutationFn: async ({ message, userMsgId, capture, workspace }: { message: string; userMsgId: string; capture?: ChatMessage["capture"]; workspace?: ChatMessage["workspace"] }) => {
+    mutationFn: async ({ message, userMsgId, capture }: { message: string; userMsgId: string; capture?: ChatMessage["capture"] }) => {
       // Build conversation history for multi-step context.
       // Bug fix: setMessages is async, so the `messages` closure here still reflects state
       // BEFORE the user message was appended in handleSend. So we DON'T need slice(0,-1) —
@@ -2797,8 +2771,6 @@ export default function ChatPage() {
           sourceMessageId: userMsgId,
           // Journal / Note button: the server saves the message as that.
           ...(capture ? { capture } : {}),
-          // Document button: the server drafts a document from the request.
-          ...(workspace ? { workspace } : {}),
         },
         {
           onRound: () => { markFirstFrame(); liveResetPendingRef.current = true; },
@@ -2882,7 +2854,7 @@ export default function ChatPage() {
     if (sendingRef.current) return;
     setMessages((prev) => prev.map((m) => (m.id === msg.id ? ({ ...m, failed: false, pending: true } as ChatMessage) : m)));
     sendingRef.current = true;
-    chatMutation.mutate({ message: msg.content, userMsgId: msg.id, capture: msg.capture, workspace: msg.workspace });
+    chatMutation.mutate({ message: msg.content, userMsgId: msg.id, capture: msg.capture });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setMessages, chatMutation.mutate]);
 
@@ -3653,13 +3625,6 @@ export default function ChatPage() {
     return null;
   };
 
-  // Who a journal entry or note can be written for: me, then people and pets.
-  const captureProfiles = useMemo(() => {
-    const ppl = profiles.filter((p) => ["self", "person", "pet"].includes(p.type));
-    return [...ppl.filter((p) => p.type === "self"), ...ppl.filter((p) => p.type !== "self")]
-      .map((p) => ({ id: p.id, name: p.name, isSelf: p.type === "self" }));
-  }, [profiles]);
-
   // Called by <ChatComposer/> with the draft text. Push-first (defect #1): the
   // user bubble is appended synchronously BEFORE the POST fires, so it paints
   // within the same frame as the tap; the pending/typing indicator keys off
@@ -3684,13 +3649,10 @@ export default function ChatPage() {
       // Rule 22: pending until the run settles. Survives navigation and reload
       // through the chat cache, so the page can restore the run on return.
       pending: true,
-      ...(captureMode === "document"
-        ? { workspace: { mode: "document" as const } }
-        : captureMode ? { capture: { kind: captureMode, ...(captureProfileId ? { profileId: captureProfileId } : {}) } } : {}),
     };
 
     // ✨ Smart Fill in-thread: if intent + recent PDF/image attached, surface chip.
-    if (!captureMode && SMART_FILL_INTENT_RE.test(msg)) {
+    if (SMART_FILL_INTENT_RE.test(msg)) {
       const recent = findRecentFormAttachment();
       if (recent) {
         const stripped = recent.data.includes(",") ? recent.data.split(",").pop() || recent.data : recent.data;
@@ -3719,7 +3681,7 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, userMsg]);
     sendingRef.current = true; // lock BEFORE mutate so a rapid second send can't slip through
     lastSendRef.current = { text: msg, at: Date.now() };
-    chatMutation.mutate({ message: msg, userMsgId: userMsg.id, capture: userMsg.capture, workspace: userMsg.workspace });
+    chatMutation.mutate({ message: msg, userMsgId: userMsg.id, capture: userMsg.capture });
     return true;
   };
 
@@ -3812,17 +3774,6 @@ export default function ChatPage() {
         className="hidden"
         onChange={handleFileSelect}
         data-testid="input-file-add-more"
-      />
-      {/* Fill & Edit: a form (PDF or a photo of one) goes straight to Smart
-          Fill, which shows every field and where its value came from before
-          anything is saved. */}
-      <input
-        ref={fillEditInputRef}
-        type="file"
-        accept="application/pdf,image/*"
-        className="hidden"
-        onChange={handleFillEditSelect}
-        data-testid="input-fill-edit"
       />
       {/* Camera capture input (mobile) */}
       <input
@@ -4086,12 +4037,8 @@ export default function ChatPage() {
           onReset={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}
           onEmptyChange={setComposerEmpty}
           newDocButton={<NewDocSheetButton disabled={isPending} />}
-          capture={captureMode}
-          onCaptureChange={setCaptureMode}
-          captureProfileId={captureProfileId}
-          onCaptureProfileChange={setCaptureProfileId}
-          captureProfiles={captureProfiles}
-          onFillEdit={() => { preloadSmartFillDialog(); const el = fillEditInputRef.current; if (el) { el.value = ""; el.click(); } }}
+          onOpenWorkspace={(kind) => hashNavigate(WORKSPACES[kind].route)}
+          onDropFiles={(files) => { void handleFileSelect({ target: { files } } as any); }}
         />
       )}
       </div>

@@ -168,6 +168,7 @@ export async function __traceSharp() { return import("sharp"); }
       { source: "/api/upload", destination: "/api/ai" },
       { source: "/api/smart-fill/:path*", destination: "/api/ai" },
       { source: "/api/smart-fill", destination: "/api/ai" },
+      { source: "/api/workspace/:path*", destination: "/api/ai" },
       { source: "/api/:path*", destination: "/api" },
       // SPA fallback: any non-asset, non-api, non-file path → index.html
       // Lets users refresh /dashboard, /trackers, /profiles/abc directly without hitting Vercel 404.

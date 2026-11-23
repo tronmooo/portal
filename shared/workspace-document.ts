@@ -1,15 +1,15 @@
-// The chat box's Document button (owner request 2026-11-22: "Portol already
-// knows about you"): the message is a request for a document, drafted from
-// the facts on file and saved as an editable doc.
+// The Document workspace's AI (owner request 2026-11-22: "Portol already
+// knows about you"): a document is written or revised from the facts on file
+// and shown as a proposal the user accepts into the editor.
 //
 // The rules here are the ones that keep the draft honest:
 //  - A fact the records do not hold is never made up. The model is told to
 //    write a marked blank, `[Missing: phone number]`, and the list of blanks
-//    the reply shows is READ BACK from the saved text (`documentBlanks`), not
+//    the workspace shows is READ BACK from the returned text (`documentBlanks`), not
 //    taken from what the model says it left out.
 //  - The saved HTML is only what the editor can hold (`sanitizeDocumentHtml`).
 //
-// Pure. Pinned by tests/chat-document-button.test.ts.
+// Pure. Pinned by tests/workspace-ai.test.ts.
 
 /** The marker a missing fact is written as. */
 export const MISSING_MARK_RE = /\[Missing:\s*([^\]\n]{1,80})\]/gi;
@@ -97,19 +97,4 @@ export function parseDraftReply(raw: string): ParsedDraft | null {
   const html = sanitizeDocumentHtml(text);
   if (documentPlainText(html).length < 20) return null;
   return { title, html };
-}
-
-/** "a, b and c" */
-export function joinList(items: string[]): string {
-  if (items.length <= 1) return items.join("");
-  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
-}
-
-/** The confirmation line, from the saved document. */
-export function draftReply(title: string, blanks: string[], sources: string[]): string {
-  const from = sources.length > 0 ? ` I used ${joinList(sources)}.` : " I had no saved information that fit, so nothing personal was filled in.";
-  const missing = blanks.length > 0
-    ? ` ${blanks.length === 1 ? "One blank is" : `${blanks.length} blanks are`} marked [Missing: …] because I don't have ${blanks.length === 1 ? "it" : "them"} on file: ${joinList(blanks)}. I did not guess.`
-    : "";
-  return `Drafted "${title}" and saved it to your documents.${from}${missing} Open it to edit, or to export it as PDF or Word.`;
 }
