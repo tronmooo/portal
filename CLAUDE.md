@@ -739,6 +739,11 @@ Asset Details → Quick Info → linked things → AI Summary → Characteristic
 the page's own cards (trackers, saved cells: `tailSlot`) → Recent activity,
 always last.** On a wide screen Asset Details sits beside Value + Quick Info.
 Card titles are 14px and rows 32px; do not scale them back up.
+The AI summary on this page is the COMPACT card (`AISummaryCard compact`;
+owner: "too much … redundancy, make it much smaller"): up to three things to
+do, or — with none — two lines of the summary; the rest opens under "More".
+No figure tiles (the Value card has them), no Look up value (the Value card's
+Refresh), no "generated" line, and no card at all when there is no summary.
 
 **P1. The layout owns no data.** Rows, dates and "Not set" suggestions are the
 composed `OverviewSpec` (through `DynamicOverview`'s `renderBody`, which keeps

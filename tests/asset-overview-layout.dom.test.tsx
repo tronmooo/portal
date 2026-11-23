@@ -111,6 +111,30 @@ function mount(over: { onEdit?: () => void; onDelete?: () => void; onOpenOwnersh
   );
 }
 
+describe("the asset page's AI summary is the small one", () => {
+  // profile-detail.tsx is ~14k lines behind auth and routing, so this is a
+  // source read (as tests/detail-hero.test.ts does): the asset Overview must
+  // ask for the compact card, and the compact card must not draw the figure
+  // tiles or the value lookup the Value card already has.
+  const src = require("node:fs").readFileSync(require("node:path").resolve(__dirname, "../client/src/pages/profile-detail.tsx"), "utf8") as string;
+  it("the asset Overview renders the compact summary", () => {
+    expect(src).toMatch(/<AISummaryCard compact /);
+  });
+  it("the compact summary is to-dos and a clamped paragraph, nothing else", () => {
+    const start = src.indexOf("  if (compact) {");
+    const end = src.indexOf("  // No summary to show", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const block = src.slice(start, end);
+    expect(block).toContain("ai-summary-actions");
+    expect(block).toContain("line-clamp-2");
+    expect(block).not.toContain("ai-summary-highlights");
+    expect(block).not.toContain("headerActions");
+    expect(block).not.toContain("lookupBanners");
+    expect(block).toContain("if (!aiSummary) return null;"); // nothing to say: no card
+  });
+});
+
 describe("asset profile layout", () => {
   it("opening the page writes nothing", async () => {
     mount();

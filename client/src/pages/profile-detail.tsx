@@ -1952,7 +1952,15 @@ interface AISummaryData {
   fingerprint?: string;
 }
 
-function AISummaryCard({ profileId, profileType, profileUpdatedAt, valueFingerprint, fields }: { profileId: string; profileType: string; profileUpdatedAt?: string; valueFingerprint?: string; fields?: Record<string, any> | null }) {
+function AISummaryCard({ profileId, profileType, profileUpdatedAt, valueFingerprint, fields, compact = false }: {
+  profileId: string; profileType: string; profileUpdatedAt?: string; valueFingerprint?: string; fields?: Record<string, any> | null;
+  /** The asset page's version (owner, 2026-11-23: "too much … redundancy, make
+   *  it much smaller"): what to do, then two lines of summary that open on a
+   *  tap. No figure tiles (the Value card has them), no Look up value (its
+   *  Refresh does that), no card when there is nothing to say. */
+  compact?: boolean;
+}) {
+  const [summaryOpen, setSummaryOpen] = useState(false);
   // When set, the next fetch appends ?force=true so the server regenerates
   // instead of serving its 2h cache. Kept as a ref so the single useQuery
   // queryFn stays the only fetch path (see handleRefresh).
@@ -2171,6 +2179,57 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt, valueFingerpr
       </CardContent>
     </Card>
   );
+
+  if (compact) {
+    if (isLoading) {
+      return (
+        <p className="flex items-center gap-2 px-1 text-[12px] text-muted-foreground" data-testid="ai-summary-generating">
+          <RefreshCw className="h-3 w-3 animate-spin" /> Summarizing…
+        </p>
+      );
+    }
+    if (!aiSummary) return null;
+    const todo = (aiSummary.actionItems || []).filter(Boolean).slice(0, 3);
+    const when = aiSummary.generatedAt ? formatTimeAgo(new Date(aiSummary.generatedAt)) : "just now";
+    return (
+      <div className="bubble !rounded-2xl px-3 py-2 flex items-start gap-2" data-testid="card-ai-summary">
+        <Sparkles className="h-3.5 w-3.5 mt-[3px] shrink-0 text-primary" />
+        <div className="flex-1 min-w-0 space-y-1">
+          {todo.length > 0 && (
+            <ul className="space-y-0.5" data-testid="ai-summary-actions">
+              {todo.map((item, i) => (
+                <li key={i} className="flex items-start gap-1.5 text-[13px] leading-snug" data-testid={`ai-action-${i}`}>
+                  <Circle className="h-2.5 w-2.5 mt-[5px] shrink-0 text-muted-foreground" />
+                  <span className="min-w-0">{item}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* With things to do, those ARE the summary; the paragraph waits
+              behind "More". With none, two lines of it, opened by a tap.
+              (`line-clamp` sets its own display, so no `block` beside it.) */}
+          {aiSummary.summary && (todo.length === 0 || summaryOpen) && (
+            <p
+              className={`text-[12px] leading-snug text-muted-foreground${valueStale ? " opacity-60" : ""} ${summaryOpen ? "" : "line-clamp-2"}`}
+              data-testid="text-ai-summary"
+            >
+              {aiSummary.summary}
+            </p>
+          )}
+          {aiSummary.summary && (
+            <button type="button" className="text-[11px] text-muted-foreground/80 hover:text-foreground underline-offset-2 hover:underline"
+              onClick={() => setSummaryOpen((o) => !o)} aria-expanded={summaryOpen} data-testid="ai-summary-toggle">
+              {summaryOpen ? "Less" : "More"}
+            </button>
+          )}
+        </div>
+        <button type="button" className="h-6 w-6 shrink-0 grid place-items-center rounded text-muted-foreground hover:text-foreground disabled:opacity-50"
+          onClick={handleRefresh} disabled={isFetching} aria-label="Refresh summary" title={`Summary written ${when}. Tap to refresh.`} data-testid="button-refresh-ai-summary">
+          <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
+        </button>
+      </div>
+    );
+  }
 
   // No summary to show (initial error or empty result). A refresh error while a
   // summary is already loaded keeps `aiSummary`, so this falls through to the
@@ -13628,7 +13687,7 @@ export default function ProfileDetailPage() {
                     ) : undefined}
                     summarySlot={assetLayout ? (
                       <SectionErrorBoundary name="profile-ai-summary" inline>
-                        <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} valueFingerprint={profileValueFingerprint(profile)} fields={profile.fields} />
+                        <AISummaryCard compact profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} valueFingerprint={profileValueFingerprint(profile)} fields={profile.fields} />
                       </SectionErrorBoundary>
                     ) : undefined}
                   />
