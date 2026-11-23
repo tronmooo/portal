@@ -858,6 +858,23 @@ a task are edited in the sheet; a bill, a profile's birthday and a document
 date open their source. The edit form has a Save button (owner's design); it
 writes nothing on open (Rule 3) and sends only what changed.
 
+## Touch rules (the app is used on a phone; a mouse click proves nothing about a finger)
+
+**T1. A drag on a control never navigates.** The shell turns a quick sideways
+swipe into "next tab" (`SwipeNav`, `client/src/App.tsx`). A touch that starts
+on a control, a slider, a tab strip or inside anything that scrolls sideways
+is that thing's own drag (`touchOwnsHorizontalDrag`,
+`client/src/lib/swipe-guard.ts`; every `Slider` carries `data-swipe-ignore`).
+A new draggable thing (a chart you scrub, a reorder handle, a carousel) gets
+`data-swipe-ignore`. (Owner, 2026-11-23: dragging the ownership slider to
+100% left the asset profile for the Dashboard with the change unsaved; every
+existing check had clicked with a mouse.)
+**T2. A screen with a control is checked by touch.** A live check of a form
+runs in a touch context (`hasTouch`, `isMobile`, `tap()`, real touch drags)
+at phone width, not only with a desktop mouse.
+*Guard:* `tests/swipe-guard.dom.test.tsx`.
+*Live check (phone, real touch events, smoke account):* `npx tsx tests/live-touch-gestures-check.ts`.
+
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
 
