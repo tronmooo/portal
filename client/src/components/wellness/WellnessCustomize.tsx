@@ -101,7 +101,7 @@ function Switch({ on, onChange, label, testId }: { on: boolean; onChange: (v: bo
 }
 
 const field = "h-8 rounded-lg border border-border bg-background/60 px-2 text-[13px]";
-const chip = (on: boolean) => `rounded-full px-2.5 py-1 text-[12px] font-semibold ${on ? "text-white" : "border border-border text-muted-foreground hover:bg-muted"}`;
+const chip = (on: boolean) => `rounded-full px-2.5 py-1 text-[12px] font-semibold ${on ? "text-foreground" : "border border-border text-muted-foreground hover:bg-muted"}`;
 const chipStyle = (on: boolean) => (on ? { background: `hsl(${PURPLE} / 0.35)`, boxShadow: `inset 0 0 0 1px hsl(${PURPLE} / 0.7)` } : undefined);
 
 // ── A widget, drawn from the records (card and preview share this) ───────────

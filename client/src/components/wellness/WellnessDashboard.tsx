@@ -208,7 +208,7 @@ export function WellnessDashboard(p: WellnessDashboardProps) {
     }
   };
 
-  const chipCls = (on: boolean) => `shrink-0 rounded-full px-3 py-1.5 text-[12px] font-semibold ${on ? "text-white" : "border border-border text-muted-foreground hover:bg-muted"}`;
+  const chipCls = (on: boolean) => `shrink-0 rounded-full px-3 py-1.5 text-[12px] font-semibold ${on ? "text-foreground" : "border border-border text-muted-foreground hover:bg-muted"}`;
   const chipOn = { background: `hsl(${T.purple} / 0.35)`, boxShadow: `inset 0 0 0 1px hsl(${T.purple} / 0.7)` };
 
   return (
@@ -235,7 +235,7 @@ export function WellnessDashboard(p: WellnessDashboardProps) {
       <div role="tablist" aria-label="Time range" className="grid grid-cols-5 gap-1 rounded-full border border-border/70 p-1" data-swipe-ignore data-testid="wellness-range">
         {WELLNESS_RANGES.map((r) => (
           <button key={r} type="button" role="tab" aria-selected={r === range} onClick={() => setPicked(r)}
-            className={`rounded-full py-1.5 text-[12px] font-semibold ${r === range ? "text-white" : "text-muted-foreground hover:bg-muted"}`}
+            className={`rounded-full py-1.5 text-[12px] font-semibold ${r === range ? "text-foreground" : "text-muted-foreground hover:bg-muted"}`}
             style={r === range ? chipOn : undefined} data-testid={`wellness-range-${r}`}>{RANGE_LABEL[r]}</button>
         ))}
       </div>
