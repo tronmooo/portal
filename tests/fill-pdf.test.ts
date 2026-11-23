@@ -108,6 +108,8 @@ describe("an interactive PDF", () => {
     expect(seen.fields["applicant.state"]).toEqual(["IL"]);
     // No summary page was bolted on: the form is still one page, and still editable.
     const reopened = await PDFDocument.load(out.bytes);
+    // The multi-line answer is set in a normal reading size, not auto-sized to fill its box.
+    expect(reopened.getForm().getTextField("applicant.notes").acroField.getDefaultAppearance()).toMatch(/ 10 Tf/);
     expect(reopened.getPageCount()).toBe(1);
     expect(reopened.getForm().getTextField("applicant.fullName").isReadOnly()).toBe(false);
     // The original is untouched.

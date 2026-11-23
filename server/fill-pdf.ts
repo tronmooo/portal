@@ -209,6 +209,10 @@ export async function renderFilledPdf(original: Uint8Array, fields: FillField[])
           const text = filled ? drawable(font, writtenValue(f)) : "";
           const max = field.getMaxLength();
           if (max !== undefined && text.length > max) field.setMaxLength(undefined);
+          // A multi-line field with no font size of its own is auto-sized by
+          // the library to FILL the box — a few words in giant type. Give it a
+          // normal reading size; the text wraps inside the field.
+          if (field.isMultiline()) { try { field.setFontSize(10); } catch { /* keeps the form's own size */ } }
           field.setText(text || undefined);
         } else if (field instanceof PDFCheckBox) {
           if (filled && isYes(f.value)) field.check(); else field.uncheck();

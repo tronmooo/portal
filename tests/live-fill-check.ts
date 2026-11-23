@@ -123,7 +123,7 @@ async function main() {
     check(lic.ok && cv.ok, "seed: a picture of a licence and a résumé are saved to Documents, unread");
     const before = (await api("GET", "/smart-fill/information")).data;
     check(before.unindexed >= 2, `before filling, the uploads are waiting to be read (${before.unindexed})`);
-    check(!JSON.stringify(before.facts).includes("Juniper Hollow"), "…and the licence's address is not on file anywhere yet");
+    check(!/juniper hollow/i.test(JSON.stringify(before.facts)), "…and the licence's address is not on file anywhere yet");
 
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, timezoneId: "America/Los_Angeles" });
     const page = await ctx.newPage();
@@ -162,7 +162,7 @@ async function main() {
     await page.waitForSelector(fieldSel("Full Name"), { timeout: 30000 });
     await shot(page, "1-interactive");
     const after = (await api("GET", "/smart-fill/information")).data;
-    check(JSON.stringify(after.facts).includes("Juniper Hollow"), "choosing a form read the licence picture: its address is now on file, with the licence as its source");
+    check(/juniper hollow/i.test(JSON.stringify(after.facts)), "choosing a form read the licence picture: its address is now on file, with the licence as its source");
     check(/4821 Juniper Hollow R(oa)?d/i.test(await value(page, "Street Address")), `Street Address is filled from the licence ("${await value(page, "Street Address")}")`);
     check(/flagstaff/i.test(await value(page, "City")) && /^AZ$/i.test(await value(page, "State")) && (await value(page, "ZIP Code")) === "86004", "City, State and ZIP are filled from the same address");
     check((await value(page, "Date of Birth")) === "07/19/1988", `Date of Birth is filled from the licence ("${await value(page, "Date of Birth")}")`);
@@ -175,7 +175,7 @@ async function main() {
     await page.fill(t("input-fill-search"), "Juniper");
     const fact = page.locator('[data-testid^="fill-fact-"]').filter({ hasText: "Juniper Hollow" }).first();
     await fact.dragTo(page.locator(fieldSel("Mailing Address")).first());
-    check(/Juniper Hollow/.test(await value(page, "Mailing Address")), "a detail dragged from My Information onto a field fills that field");
+    check(/juniper hollow/i.test(await value(page, "Mailing Address")), "a detail dragged from My Information onto a field fills that field");
     await page.fill(t("input-fill-search"), "");
     // A tick box, a multi-line answer typed by hand, undo and redo.
     await page.locator(fieldSel("Weekends")).first().click();
@@ -194,7 +194,7 @@ async function main() {
     const get = (n: string) => form.getTextField(n).getText() || "";
     check(/4821 Juniper Hollow R(oa)?d/i.test(get("Street Address")) && get("ZIP Code") === "86004", `DOWNLOADED file: the form's own Street Address and ZIP fields hold the values ("${get("Street Address")}")`);
     check(get("Current Employer").includes("Kestrel Ridge Logistics") && get("Date of Birth") === "07/19/1988", "DOWNLOADED file: employer and date of birth are in their fields");
-    check(/Juniper Hollow/.test(get("Mailing Address")), "DOWNLOADED file: the dragged value is in its field");
+    check(/juniper hollow/i.test(get("Mailing Address")), "DOWNLOADED file: the dragged value is in its field");
     check(get("Describe your experience").replace(/\r/g, "") === story, "DOWNLOADED file: the multi-line answer is whole");
     check(form.getCheckBox("Weekends").isChecked(), "DOWNLOADED file: the tick box is ticked");
     check(pdf.getPageCount() === 1, "DOWNLOADED file: still one page — no summary page was added");
@@ -256,7 +256,7 @@ async function main() {
     await mp.locator('[data-testid^="fill-fact-"]').filter({ hasText: "Juniper Hollow" }).first().locator("button").first().tap();
     await mp.waitForSelector(t("fill-placing"));
     await mp.locator(fieldSel("Full name")).first().tap();
-    check(/Juniper Hollow/.test(await value(mp, "Full name")), "phone: a detail is placed by tapping it, then tapping a field");
+    check(/juniper hollow/i.test(await value(mp, "Full name")), "phone: a detail is placed by tapping it, then tapping a field");
     await shot(mp, "5-phone");
     await mp.tap(t("button-workspace-save"));
     await mp.waitForSelector(t("fill-saved"), { timeout: 120000 });
