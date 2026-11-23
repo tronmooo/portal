@@ -194,7 +194,7 @@ import { storage, type IStorage } from "./storage";
 import { ProfileLinkFailure } from "./profile-link-failure";
 import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
-import { withAssetSummaryShape } from "@shared/asset-summary-prompt";
+import { withAssetSummaryShape, ASSET_SUMMARY_TYPES, ASSET_SUMMARY_FAST_MODEL, ASSET_SUMMARY_MAX_TOKENS, ASSET_SUMMARY_OUTPUT_RULE, slimAssetSummaryData } from "@shared/asset-summary-prompt";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { shownOccurrenceToPay, rollBillsForward } from "@shared/bills-timeline";
 import { buildWidgetFromPrompt } from "./exec-widget-builder";
@@ -6321,12 +6321,19 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       // An owned thing's summary is three short sentences (worth, change, what
       // needs attention): the asset page shows that text and nothing else.
       typePrompt = withAssetSummaryShape(detail.type, typePrompt);
-      const userPrompt = `${typePrompt}\n\nProfile data:\n${JSON.stringify(profileData, null, 1)}`;
+      // The asset page shows the text alone: ask a fast model for just that,
+      // from the recent part of the record (an account keeps the full card).
+      const slim = ASSET_SUMMARY_TYPES.has(detail.type) && !isAccountProfile(detail);
+      const userPrompt = slim
+        ? `${typePrompt}\n${ASSET_SUMMARY_OUTPUT_RULE}\n\nProfile data:\n${JSON.stringify(slimAssetSummaryData(profileData))}`
+        : `${typePrompt}\n\nProfile data:\n${JSON.stringify(profileData, null, 1)}`;
 
       const client = await getAnthropicClient();
       const response = await client.messages.create({
-        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
-        max_tokens: 1024,
+        model: slim
+          ? (process.env.ANTHROPIC_SUMMARY_FAST_MODEL || ASSET_SUMMARY_FAST_MODEL)
+          : (process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6"),
+        max_tokens: slim ? ASSET_SUMMARY_MAX_TOKENS : 1024,
         messages: [
           { role: "user", content: userPrompt },
         ],

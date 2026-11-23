@@ -14,6 +14,33 @@ export const ASSET_SUMMARY_SHAPE = [
   "Do not list its characteristics, do not restate the fields, no preamble, no closing remark. This is guidance from the record, not a professional appraisal — do not claim certainty.",
 ].join(" ");
 
+/**
+ * The asset page prints the summary text and nothing else, so its request is
+ * the small one (owner, 2026-11-23: "everything is just taking way too long"):
+ * a fast model, no highlight tiles or to-do list to write, and a trimmed
+ * record. Measured on production the full request took 8–10 s.
+ */
+export const ASSET_SUMMARY_FAST_MODEL = "claude-haiku-4-5-20251001";
+export const ASSET_SUMMARY_MAX_TOKENS = 400;
+export const ASSET_SUMMARY_OUTPUT_RULE =
+  'Only the `summary` text is shown for this record: return "actionItems": [] and "highlights": [] and put anything that needs attention in the summary itself.';
+
+const lastN = <T,>(list: T[] | undefined, n: number): T[] => (Array.isArray(list) ? list.slice(-n) : []);
+
+/** The record the asset summary is written from: the recent part of each list. */
+export function slimAssetSummaryData(data: Record<string, any>): Record<string, any> {
+  return {
+    ...data,
+    documents: lastN(data.documents, 8),
+    expenses: lastN(data.expenses, 20),
+    trackers: lastN(data.trackers, 4).map((t: any) => ({ ...t, entries: lastN(t?.entries, 5) })),
+    tasks: lastN(data.tasks, 10),
+    events: lastN(data.events, 10),
+    obligations: lastN(data.obligations, 10),
+    timeline: lastN(data.timeline, 8),
+  };
+}
+
 /** The type prompt with the asset shape appended, for the types it applies to. */
 export function withAssetSummaryShape(type: string | null | undefined, typePrompt: string): string {
   return ASSET_SUMMARY_TYPES.has(String(type ?? "")) ? `${typePrompt}\n\n${ASSET_SUMMARY_SHAPE}` : typePrompt;

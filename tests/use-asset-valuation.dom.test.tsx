@@ -309,7 +309,7 @@ describe("Assets-tab sweep (useAssetsValuationSweep)", () => {
   });
 
   it("a tracked asset not checked recently is refreshed when its profile opens, once", async () => {
-    const old = new Date(Date.now() - 60 * 60_000).toISOString();
+    const old = new Date(Date.now() - 25 * 60 * 60_000).toISOString();
     queryClient.setQueryData(valuationQueryKey("a"), { ...snapshot(record(20000, { checkedAt: old, valuedAt: old }), true), mode: "auto" });
     mount("a");
     expect(screen.getByTestId("current-value-amount").textContent).toBe("$20,000"); // the saved value shows at once

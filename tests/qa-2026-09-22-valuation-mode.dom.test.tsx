@@ -114,7 +114,7 @@ describe("CurrentValueCard — automatic value tracking switch", () => {
 
   it("turning it OFF never fires a refresh", async () => {
     // Checked a moment ago, so merely opening the card asks for nothing
-    // (a tracked asset not checked in ten minutes is refreshed on open).
+    // (a tracked asset not checked in the last day is refreshed on open).
     const seeded = snapshot("auto");
     queryClient.setQueryData(valuationQueryKey("a"), { ...seeded, record: { ...seeded.record!, checkedAt: new Date().toISOString() } });
     mount();

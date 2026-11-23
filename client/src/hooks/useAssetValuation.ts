@@ -131,8 +131,8 @@ export function refreshAssetValuation(profileId: string, opts: { force?: boolean
 // automatically" on is re-valued, all at once (bounded) → each completion
 // patches its own row and the aggregates as it lands, never waiting for the
 // rest. Opening the tab is the request for current values; nobody has to open
-// each asset. Only an asset checked within the last few minutes is skipped,
-// so reloading the tab doesn't re-buy the same lookups.
+// each asset. Only an asset checked within the last day is skipped, so
+// reloading the tab doesn't re-buy the same lookups.
 
 /** How many AI summaries are re-written at once after a sweep. */
 export const SUMMARY_CONCURRENCY = 2;
@@ -158,8 +158,14 @@ async function refreshSummaries(ids: string[]): Promise<void> {
 
 /** How many valuations run at once from one tab. */
 export const SWEEP_CONCURRENCY = 8;
-/** An asset the estimator looked at more recently than this is not re-run. */
-export const SWEEP_RECHECK_MS = 10 * 60_000;
+/**
+ * An asset the estimator looked at more recently than this is not re-run.
+ * A day (owner, 2026-11-23: "everything is just taking way too long"): one
+ * estimate is ~40 s of live web research, and re-running it every ten minutes
+ * made every open slow while the value only wobbled. Opening still refreshes
+ * on its own, once a day; the Refresh button runs one now.
+ */
+export const SWEEP_RECHECK_MS = 24 * 60 * 60_000;
 /** Don't re-sweep the same list more often than this from one tab. */
 const SWEEP_THROTTLE_MS = 60_000;
 let lastSweepAt = 0;
@@ -248,8 +254,9 @@ export function useAssetsValuationSweep(enabled: boolean): SweepProgress {
 /**
  * Should opening this asset ask for a current estimate? Yes when the server
  * says the stored one is stale — and, for an asset Portol tracks, whenever it
- * has not been checked in the last few minutes (owner, 2026-11-23: "check for
- * updated market values whenever an asset profile opens"). The same window
+ * has not been checked in the last day (owner, 2026-11-23: "check for
+ * updated market values whenever an asset profile opens"; then, same day, a
+ * day and not ten minutes — see SWEEP_RECHECK_MS). The same window
  * the Assets-tab sweep uses, so opening the tab and then a profile asks once.
  * `force` says the server's own freshness window should not hold it back.
  */

@@ -10,6 +10,9 @@ vi.mock("@/lib/queryClient", async () => {
 
 import { refreshOnOpen, SWEEP_RECHECK_MS } from "@/hooks/useAssetValuation";
 import { appendValuationHistory } from "../server/valuation/storage-codec";
+import { holdStoredEstimate, isValuationNoise } from "../server/valuation/service";
+import { ASSET_SUMMARY_FAST_MODEL, slimAssetSummaryData } from "@shared/asset-summary-prompt";
+import { readFileSync } from "node:fs";
 import { projectDepreciation, recentChange, seriesInRange, valueSeries } from "@shared/asset-depreciation";
 
 const NOW = Date.parse("2026-11-23T12:00:00Z");
@@ -19,8 +22,13 @@ const snap = (over: any = {}) => ({
 }) as any;
 
 describe("opening an asset asks for a current value", () => {
-  it("a tracked asset not checked in the last few minutes is refreshed, forcing past the server's window", () => {
-    expect(refreshOnOpen(snap(), NOW)).toEqual({ refresh: true, force: true });
+  it("a tracked asset not checked in the last day is refreshed, forcing past the server's window", () => {
+    const old = snap({ record: { status: "valued", value: 300, checkedAt: new Date(NOW - 25 * 3_600_000).toISOString() } });
+    expect(refreshOnOpen(old, NOW)).toEqual({ refresh: true, force: true });
+  });
+  it("one checked an hour ago is NOT re-researched: an estimate is ~40 s of web research, and the window is a day", () => {
+    expect(SWEEP_RECHECK_MS).toBe(24 * 60 * 60_000);
+    expect(refreshOnOpen(snap(), NOW)).toEqual({ refresh: false, force: false });
   });
   it("one checked moments ago is left alone — opening the tab and then the profile asks once", () => {
     const fresh = snap({ record: { status: "valued", value: 300, checkedAt: new Date(NOW - (SWEEP_RECHECK_MS - 1000)).toISOString() } });
@@ -98,5 +106,64 @@ describe("the value graph, the latest change and the projection", () => {
   it("the projection never goes under the salvage value", () => {
     const p = projectDepreciation({ purchasePrice: 899, purchaseDate: "2024-03-02", currentValue: 306, salvageValue: 290, now });
     expect(p!.inOneYear).toBe(290);
+  });
+});
+
+describe("research noise is not a change in value", () => {
+  const rec = (value: number, over: any = {}) => ({
+    status: "valued", value, low: value * 0.9, high: value * 1.1, confidence: 0.9, confidenceLabel: "high",
+    valuedAt: "2026-11-23T10:00:00Z", checkedAt: "2026-11-23T10:00:00Z", inputFingerprint: "fp", ...over,
+  }) as any;
+  it("a move under 2% with the same inputs is noise; 2% and over is a move", () => {
+    expect(isValuationNoise(rec(18000), rec(17820))).toBe(true); // 1%
+    expect(isValuationNoise(rec(18000), rec(18200))).toBe(true);
+    expect(isValuationNoise(rec(18000), rec(17600))).toBe(false); // 2.2%
+    expect(isValuationNoise(rec(483), rec(510))).toBe(false);
+  });
+  it("changed inputs, a first estimate or a failed run are never noise", () => {
+    expect(isValuationNoise(rec(18000), rec(17900, { inputFingerprint: "other" }))).toBe(false);
+    expect(isValuationNoise(null, rec(17900))).toBe(false);
+    expect(isValuationNoise(rec(18000, { status: "error" }), rec(17900))).toBe(false);
+    expect(isValuationNoise(rec(18000), rec(17900, { status: "error" }))).toBe(false);
+  });
+  it("holding keeps the stored figures and their date, with the new run's check time", () => {
+    const held = holdStoredEstimate(rec(18000), rec(17820, { valuedAt: "2026-11-24T10:00:00Z", checkedAt: "2026-11-24T10:00:00Z" }));
+    expect(held.value).toBe(18000);
+    expect(held.low).toBe(16200);
+    expect(held.valuedAt).toBe("2026-11-23T10:00:00Z");
+    expect(held.checkedAt).toBe("2026-11-24T10:00:00Z");
+  });
+  it("the refresh applies the rule before deciding whether anything changed", () => {
+    const src = readFileSync("server/valuation/service.ts", "utf8");
+    const at = src.indexOf("if (isValuationNoise(previous, record))");
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(src.indexOf("const changed = record.status"));
+  });
+});
+
+describe("the asset summary is the small, fast request", () => {
+  it("keeps the recent part of each list and every other key", () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ({ i }));
+    const slim = slimAssetSummaryData({ name: "CR-V", fields: { year: 2019 }, documents: many(30), expenses: many(50), timeline: many(40), trackers: [{ name: "Miles", entries: many(15) }], tasks: many(3), events: undefined });
+    expect(slim.name).toBe("CR-V");
+    expect(slim.fields).toEqual({ year: 2019 });
+    expect(slim.documents).toHaveLength(8);
+    expect(slim.documents[7]).toEqual({ i: 29 });
+    expect(slim.expenses).toHaveLength(20);
+    expect(slim.timeline).toHaveLength(8);
+    expect(slim.trackers[0].entries).toHaveLength(5);
+    expect(slim.tasks).toHaveLength(3);
+    expect(slim.events).toEqual([]);
+  });
+  it("the route uses the fast model and the slim record for an owned thing, never for an account", () => {
+    const src = readFileSync("server/routes.ts", "utf8");
+    expect(src).toContain("const slim = ASSET_SUMMARY_TYPES.has(detail.type) && !isAccountProfile(detail);");
+    expect(src).toContain("process.env.ANTHROPIC_SUMMARY_FAST_MODEL || ASSET_SUMMARY_FAST_MODEL");
+    expect(src).toContain("slimAssetSummaryData(profileData)");
+    expect(ASSET_SUMMARY_FAST_MODEL).toMatch(/haiku/);
+  });
+  it("the card says a rewrite is under way while the old text stays", () => {
+    const src = readFileSync("client/src/pages/profile-detail.tsx", "utf8");
+    expect(src).toContain('{isFetching && <span className="text-[11px] text-primary" data-testid="ai-summary-updating">Updating summary…</span>}');
   });
 });

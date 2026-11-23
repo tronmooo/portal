@@ -142,6 +142,37 @@ function sameEstimate(a: ValuationRecord | null, b: ValuationRecord): boolean {
     && a.confidenceLabel === b.confidenceLabel;
 }
 
+/**
+ * Two runs of the same live research on an unchanged asset land a little
+ * apart ($18,000 then $17,600 a minute later, measured 2026-11-23). A move
+ * smaller than this share of the stored value, with the same inputs, is that
+ * noise and not a change in what the thing is worth.
+ */
+export const VALUATION_NOISE_SHARE = 0.02;
+
+/** Is `next` the stored estimate again, give or take research noise? */
+export function isValuationNoise(previous: ValuationRecord | null | undefined, next: ValuationRecord): boolean {
+  if (!previous || previous.status !== "valued" || next.status !== "valued") return false;
+  const was = Number(previous.value), now = Number(next.value);
+  if (!(was > 0) || !Number.isFinite(now)) return false;
+  if (previous.inputFingerprint !== next.inputFingerprint) return false;
+  return Math.abs(now - was) / was < VALUATION_NOISE_SHARE;
+}
+
+/**
+ * `next` with the stored estimate's figures: the check happened (checkedAt,
+ * schedule and evidence are the new run's) but the value did not move, so no
+ * history point, no mirrored write and no summary rewrite follow from it.
+ */
+export function holdStoredEstimate(previous: ValuationRecord, next: ValuationRecord): ValuationRecord {
+  return {
+    ...next,
+    value: previous.value, low: previous.low, high: previous.high,
+    confidence: previous.confidence, confidenceLabel: previous.confidenceLabel,
+    valuedAt: previous.valuedAt,
+  };
+}
+
 function evidenceSources(record: ValuationRecord): string[] {
   const urls: string[] = [];
   for (const e of record.evidence) {
@@ -421,6 +452,10 @@ export async function refreshValuation(
       return { ...none, snapshot: await getValuationSnapshot(storage, profileId, { record: current, now }) };
     }
 
+    if (isValuationNoise(previous, record)) {
+      record = holdStoredEstimate(previous!, record);
+      trace.set("held", "within_noise");
+    }
     const changed = record.status !== "error" && !sameEstimate(previous, record);
     let wrote = false;
     let previousValue: number | null = null;

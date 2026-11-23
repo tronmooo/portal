@@ -2195,6 +2195,7 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt, valueFingerpr
         <div className="flex items-center gap-2">
           <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
           <h2 className="flex-1 text-[14px] font-semibold tracking-tight">AI Asset Summary</h2>
+          {isFetching && <span className="text-[11px] text-primary" data-testid="ai-summary-updating">Updating summary…</span>}
           <button type="button" className="h-6 w-6 shrink-0 grid place-items-center rounded text-muted-foreground hover:text-foreground disabled:opacity-50"
             onClick={handleRefresh} disabled={isFetching} aria-label="Refresh summary" title={`Written ${when}. Tap to refresh.`} data-testid="button-refresh-ai-summary">
             <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />

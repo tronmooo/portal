@@ -778,18 +778,27 @@ the estimate while Portol tracks the value, the user's own number once
 tracking is off — against the purchase price. Saved figures paint at once;
 then (owner, 2026-11-23: "automatically refresh whenever I open …"):
 - **Opening a profile** asks for a current estimate when the stored one is
-  stale OR the asset is tracked and has not been checked in the last ten
-  minutes (`refreshOnOpen`, `client/src/hooks/useAssetValuation.ts`).
+  stale OR the asset is tracked and has not been checked in the last DAY
+  (`refreshOnOpen`, `SWEEP_RECHECK_MS`, `client/src/hooks/useAssetValuation.ts`).
+  A day, not minutes (owner, 2026-11-23: "everything is just taking way too
+  long"): one estimate is ~40 s of live web research. Refresh runs one now.
 - **Opening the Assets tab** re-values every tracked asset
   (`useAssetsValuationSweep`: bounded concurrency, one run shared by every
   mount, each result patches its own card and the totals as it lands), then
   re-writes the AI summary of each asset whose estimate CHANGED
   (`refreshSummaries`, two at a time) so it is ready before its profile opens.
 - Both share one in-flight map, one per-asset attempt throttle and the same
-  ten-minute window, so the tab followed by a profile asks once. A manual
+  one-day window, so the tab followed by a profile asks once. A manual
   asset is never re-estimated; a failed run keeps the last estimate (Rule 7).
 - **History holds real moves** (`appendValuationHistory`): a run that reached
-  the same estimate as the last entry adds no point.
+  the same estimate as the last entry adds no point. Two runs of the same
+  research land a little apart, so a move under 2% with unchanged inputs is
+  noise (`isValuationNoise`, `server/valuation/service.ts`): the stored figures
+  are kept, and nothing is mirrored, charted or re-summarised.
+- **The asset summary is the small request** (`slimAssetSummaryData`,
+  `ASSET_SUMMARY_FAST_MODEL`, `shared/asset-summary-prompt.ts`): a fast model,
+  the text only, the recent part of the record. While one is being rewritten
+  the card says "Updating summary…" over the text it still shows.
 Never add a second refresh path, a per-screen timer or an unconditional
 summary regeneration: extend these.
 *Guards:* `tests/asset-value-refresh.test.ts`, `tests/use-asset-valuation.dom.test.tsx`.
