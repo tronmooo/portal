@@ -22,7 +22,6 @@ export const DEFAULT_SECTION_DEFS: DashboardSectionDef[] = [
 
   // ── Hidden by default (available via Customize / chat) ────────────────────
   { id: "hero-briefing",    label: "Briefing",              visible: false, column: "full" },
-  { id: "quick-actions",    label: "Quick Actions",         visible: false, column: "full" },
   { id: "needs-attention",  label: "Action Required",       visible: false, column: "full" },
   { id: "today",            label: "Today's Schedule",      visible: false, column: "full" },
   { id: "now-queue",        label: "Now",                   visible: false, column: "full" },
