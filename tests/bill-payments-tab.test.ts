@@ -40,28 +40,29 @@ function tabBody(src: string, value: string): string {
   return src.slice(start, next === -1 ? undefined : next);
 }
 
-describe("the payment schedule lives in the Payments tab", () => {
+describe("the payment schedule has its own tab", () => {
+  // It lived under Payments until the owner's design of 2026-11-23 gave the
+  // page a Schedule tab: Payments is what was paid, Schedule is what is owed.
   const src = code(LIABILITY);
 
-  it("mounts the schedule under Payments", () => {
-    expect(tabBody(src, "payments")).toMatch(/<BillScheduleSection/);
+  it("mounts the schedule under Schedule", () => {
+    expect(tabBody(src, "schedule")).toMatch(/<BillScheduleSection/);
   });
 
-  it("does not also leave it at the bottom of Overview", () => {
+  it("does not also leave it on the Overview or under Payments", () => {
     // Two copies of a list with Pay buttons on it is worse than the wrong tab.
     expect(tabBody(src, "overview")).not.toMatch(/<BillScheduleSection/);
+    expect(tabBody(src, "payments")).not.toMatch(/<BillScheduleSection/);
   });
 
   it("mounts it exactly once", () => {
     expect(src.match(/<BillScheduleSection/g)?.length ?? 0).toBe(1);
   });
 
-  it("puts the plan above the record", () => {
-    // "What do I still owe and when" is the question this tab is opened with;
-    // the history is the answer to a different one.
+  it("keeps the record of payments, and Auto Pay, under Payments", () => {
     const payments = tabBody(src, "payments");
-    expect(payments.indexOf("<BillScheduleSection"))
-      .toBeLessThan(payments.indexOf("Payment History"));
+    expect(payments).toMatch(/<AutoPaySection/);
+    expect(payments).toContain("Payment History");
   });
 });
 
@@ -69,9 +70,11 @@ describe("bill details are editable", () => {
   const src = code(LIABILITY);
 
   it("the Bill details card carries an Edit affordance", () => {
-    expect(src).toMatch(/data-testid="button-edit-bill"/);
-    expect(src).toMatch(/data-testid="bill-details-edit-card"/);
-    expect(src).toMatch(/data-testid="button-save-bill"/);
+    // One Liability Details card serves loans and bills, so the ids are
+    // chosen in code; tests/liability-profile-design.dom.test.tsx clicks them.
+    expect(src).toContain('"button-edit-bill"');
+    expect(src).toContain('"bill-details-edit-card"');
+    expect(src).toContain('"button-save-bill"');
   });
 
   it("every fact the read-only card states can be changed", () => {

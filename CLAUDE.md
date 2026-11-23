@@ -243,6 +243,56 @@ the Liabilities list in `client/src/pages/trackers.tsx`, the debt tools in
 *Live check (deployed app, smoke account):* `npx tsx tests/live-liability-forms-check.ts`
 and `npx tsx tests/live-assets-liabilities-check.ts`.
 
+**L0. The page is the owner's design.** (Owner, 2026-11-23: "let's make it
+look more like this"; it replaced the 2026-11-22 card layout.) The header is
+ONE card (`DetailHero`'s page layout, `pageTitle`): back, picture, the
+"Liability Profile" tag, the name, chips (type menu, lender, owner) and the
+four headline figures at the right — Balance / Payment / APR / Payoff for a
+debt, Amount / Next due / Frequency / Status for a bill (never APR or payoff
+on a bill). Six tabs — Overview, Payments (Auto Pay, quick actions, history),
+Schedule (every date, then the amortization table), Cost of Ownership (payoff
+outlook, cost of borrowing, calculator), Documents, History (activity, then
+record changes) — beside the quick-add row: + Payment, + Expense, + Task,
++ More (document, characteristic, owners & linked records, Ask Portol, delete).
+The Overview is Liability Details (a label | value form), Characteristics,
+Quick Info, and the AI Summary beside Balance & Payoff
+(`components/liability/LiabilityOverviewCards.tsx`, presentation only: every
+figure is one the page already derives, Rule 1).
+Nothing on it is a dead end or a blank (owner, 2026-11-22: "no empty spaces,
+everything editable, everything able to be added"):
+- Liability Details edits IN PLACE: Edit, a tap on any value, a header figure
+  or the name turns the card into inputs holding the stored values. The terms
+  save themselves (L7: `useAutosave`, only what changed, nothing on open); the
+  name and notes are written when their box is left and on Save, once. Save
+  finishes (it waits for the pending save); Undo puts back what the form
+  opened with. Starting an edit never resets a form that is already open.
+- A fact the record lacks reads "+ Add". The type is changed by writing
+  `type_key` (L4). The payoff date is calculated, so it has no input.
+- A payment the record does not store is never printed from the engine's
+  360-month assumption; with no rate or payment the payoff figures say what
+  to add instead of a guess (`canProject`).
+- Characteristics is the plain Add field (D7), drawn as label | value |
+  pencil | X lines (`AddFieldPanel` `list`). A field the user adds is always
+  listed: only a key the screens own, or a figure/date stored as text, is kept
+  out — never a name that merely sounds financial ("Loan number: HF-88213"
+  was saved and shown nowhere, `freeFormFieldEntries`). The app's own
+  bookkeeping (`source: "obligation"`, `obligationId`, any bare record id) is
+  never listed (`isProvenanceField`).
+- Owners, linked assets and people, nested debts and the composed facts open
+  from the owner chip / More menu (`dialog-links`). When the AI summary has
+  nothing to draw, the card beside it takes the row. A count or list from a
+  failed request reads "Couldn't load", never empty (Rule 7).
+- "Ask Portol about this" opens chat with the liability named
+  (`portol_chat_prefill`); + Expense files a cost under the liability and
+  + Task links the task to it.
+*Guards:* `tests/liability-profile-design.dom.test.tsx`, `tests/add-field-panel.dom.test.tsx`,
+`tests/bill-payments-tab.test.ts`.
+*Live check (real browser, smoke account; loads, edits in place, adds a
+characteristic / expense / task, Auto Pay, every tab, a change made from the
+app's chat, delete):* `npx tsx tests/live-liability-profile-check.ts` (to check
+an undeployed client against the deployed API:
+`SMOKE_UI_BASE=http://localhost:5199 LIVE_API_ORIGIN=https://portol.me`).
+
 **L1. One debt = one record.** A loan or card IS its own bill: its payment
 amount and due day are fields on it, and the schedule/calendar are derived
 from them (`deriveScheduleFields`, `shared/liability-schedule.ts`). Never

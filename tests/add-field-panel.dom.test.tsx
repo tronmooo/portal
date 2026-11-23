@@ -74,6 +74,22 @@ describe("AddFieldPanel", () => {
     expect(screen.queryByTestId("add-field-cell-interestRate")).toBeNull();
   });
 
+  it("lists what the user typed even when its NAME sounds financial or dated", () => {
+    // 2026-11-23, live: "Loan number: HF-88213" was saved and then shown
+    // nowhere, because the name alone classified it as a money field.
+    const typed = {
+      "Loan number": "HF-88213", loanNumber: "88213", "Payment method": "ACH from checking",
+      "Interest type": "Fixed", "Due date note": "call before the 12th", Owner: "Me and Dana",
+    };
+    expect(freeFormFieldEntries(typed).map(([k]) => k).sort()).toEqual(Object.keys(typed).sort());
+    // …while a figure or a date stored as TEXT still belongs to its own editor.
+    const owned = {
+      balance: "18250", "Current balance": "$18,250.00", apr: "6.25%", escrow: "310.50",
+      firstPaymentDate: "2025-03-15", "Maturity date": "2030-01-12", dueDay: "15",
+    };
+    expect(freeFormFieldEntries(owned)).toEqual([]);
+  });
+
   it("a listed field changes on tap and is removed with two taps", async () => {
     renderPanel();
     fireEvent.click(screen.getByTestId("add-field-cell-accountManager"));
