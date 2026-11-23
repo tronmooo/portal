@@ -732,7 +732,10 @@ touching it.
 **P0. A slim header, then three things.** `DetailHero layout="slim"`: back ·
 a 28px picture (still the photo picker) · the name · the current value
 (`AssetHeroValue`) · the ⋯ menu (Edit, Ownership, Documents, Clear / Restore
-alerts, Delete). The Overview is, in this order and nothing else:
+alerts, Delete). The Overview is these three things and nothing else, shown
+**Asset details first, then the AI summary, then Value & Depreciation**
+(owner, 2026-11-23: "Asset details should be the first thing you see … then
+summary then evaluation"):
 1. **Value & Depreciation** (`ValueCard`) — says HOW MUCH it has depreciated:
    one bar that is the purchase price, filled by what has been lost, with the
    amount and percent (with no purchase price it asks for one). Under it:

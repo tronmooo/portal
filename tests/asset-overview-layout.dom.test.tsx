@@ -217,10 +217,10 @@ describe("asset profile layout", () => {
     expect(writes()[0].body).toEqual({ fields: { salvageValue: 80 } });
   });
 
-  it("the Overview is three things in order: Value, the summary, Asset details", async () => {
+  it("the Overview is three things in order: Asset details, the summary, Value", async () => {
     mount();
     await screen.findByTestId("asset-details");
-    const order = ["asset-value-card", "summary", "asset-details", "tail"].map((id) => screen.getByTestId(id));
+    const order = ["asset-details", "summary", "asset-value-card", "tail"].map((id) => screen.getByTestId(id));
     const follows = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
     for (let i = 0; i < order.length - 1; i++) expect(follows(order[i], order[i + 1])).toBe(true);
     // What was taken off the Overview stays off.
