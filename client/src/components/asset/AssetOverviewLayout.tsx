@@ -25,7 +25,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { formatApiError } from "@/lib/formatError";
@@ -36,7 +36,6 @@ import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { useAssetValuation, useAssetValuationHistory } from "@/hooks/useAssetValuation";
 import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
 import { AddFieldPanel } from "@/components/AddFieldPanel";
-import { NewNoteForm } from "@/components/notes/NewNoteForm";
 import { CurrentValueCard } from "@/components/asset/CurrentValueCard";
 import {
   formatValue, useFieldWrite,
@@ -524,99 +523,22 @@ export function AssetOverviewBody({
   );
 }
 
-// ── Quick add: the buttons beside the tabs ───────────────────────────────────
+// ── "Add a date", opened from the header's ⋯ menu ────────────────────────────
 
-/**
- * + Task, + Expense, + Note and More. Each creates an ordinary record linked
- * to this asset through the route every other screen uses, so it shows on the
- * Tasks page, in Finance and under Notes as well as on this profile.
- */
-export function AssetQuickAdd({ profileId, fields, onOpenDocuments, onEdit }: {
+/** A dialog holding the add-a-date form (a warranty, a renewal, an expiration). */
+export function AssetAddDateDialog({ profileId, fields, open, onOpenChange }: {
   profileId: string;
-  /** The record's fields, so "Add a date" does not offer one it already has. */
+  /** The record's fields, so the form does not offer a date it already has. */
   fields?: Record<string, any> | null;
-  onOpenDocuments?: () => void; onEdit: () => void;
+  open: boolean; onOpenChange: (open: boolean) => void;
 }) {
-  const { toast } = useToast();
-  const [open, setOpen] = useState<null | "task" | "expense" | "note" | "date">(null);
-  const [title, setTitle] = useState("");
-  const [due, setDue] = useState("");
-  const [amount, setAmount] = useState("");
-  const [what, setWhat] = useState("");
-  const [day, setDay] = useState("");
-  const [saving, setSaving] = useState(false);
-  const close = () => { setOpen(null); setTitle(""); setDue(""); setAmount(""); setWhat(""); setDay(""); };
-
-  const post = async (url: string, body: Record<string, unknown>, done: string, ...domains: Array<"tasks" | "expenses" | "profiles">) => {
-    setSaving(true);
-    try {
-      await apiRequest("POST", url, body);
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      void invalidateDomains(...domains);
-      toast({ title: done });
-      close();
-    } catch (err: any) {
-      toast({ title: "Couldn't save", description: formatApiError(err), variant: "destructive" });
-    } finally {
-      setSaving(false);
-    }
-  };
-  const amt = parseMoney(amount);
-  const btn = "h-7 px-2.5 text-xs gap-1 shrink-0";
-
   return (
-    <div className="flex flex-nowrap items-center gap-1.5 w-max" data-testid="asset-quick-add">
-      <Button variant="outline" size="sm" className={btn} onClick={() => setOpen("task")} data-testid="quick-add-task"><Plus className="h-3.5 w-3.5 text-emerald-400" /> Task</Button>
-      <Button variant="outline" size="sm" className={btn} onClick={() => setOpen("expense")} data-testid="quick-add-expense"><Plus className="h-3.5 w-3.5 text-emerald-400" /> Expense</Button>
-      <Button variant="outline" size="sm" className={btn} onClick={() => setOpen("note")} data-testid="quick-add-note"><Plus className="h-3.5 w-3.5 text-emerald-400" /> Note</Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className={btn} data-testid="quick-add-more"><MoreHorizontal className="h-3.5 w-3.5" /> More</Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[180px]">
-          <DropdownMenuItem onSelect={() => setOpen("date")} data-testid="asset-add-date"><CalendarPlus className="h-4 w-4 mr-2" /> Add a date</DropdownMenuItem>
-          {onOpenDocuments && (
-            <DropdownMenuItem onSelect={onOpenDocuments} data-testid="quick-add-document"><FileText className="h-4 w-4 mr-2" /> Add a document</DropdownMenuItem>
-          )}
-          <DropdownMenuItem onSelect={onEdit} data-testid="quick-edit-details"><Pencil className="h-4 w-4 mr-2" /> Edit all details</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <Dialog open={open !== null} onOpenChange={(o) => { if (!o) close(); }}>
-        <DialogContent className="max-w-sm" data-testid="quick-add-dialog">
-          <DialogHeader>
-            <DialogTitle>{open === "task" ? "New task for this asset" : open === "expense" ? "New expense for this asset" : open === "date" ? "Add a date to this asset" : "New note for this asset"}</DialogTitle>
-          </DialogHeader>
-          {open === "task" && (
-            <div className="space-y-2">
-              <Input autoFocus placeholder="What needs doing?" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} data-testid="quick-task-title" />
-              <label className="text-[12px] text-muted-foreground block" htmlFor="quick-task-due">Due (optional)</label>
-              <Input id="quick-task-due" type="date" value={due} onChange={(e) => setDue(e.target.value)} data-testid="quick-task-due" />
-              <Button className="w-full" disabled={saving || !title.trim()} data-testid="quick-task-save"
-                onClick={() => void post("/api/tasks", { title: title.trim(), ...(due ? { dueDate: due } : {}), linkedProfiles: [profileId] }, "Task added", "tasks", "profiles")}>
-                {saving ? "Saving…" : "Add task"}
-              </Button>
-            </div>
-          )}
-          {open === "expense" && (
-            <div className="space-y-2">
-              <Input autoFocus inputMode="decimal" placeholder="Amount" value={amount} onChange={(e) => setAmount(e.target.value)} data-testid="quick-expense-amount" />
-              <Input placeholder="What was it for?" value={what} onChange={(e) => setWhat(e.target.value)} maxLength={200} data-testid="quick-expense-what" />
-              <label className="text-[12px] text-muted-foreground block" htmlFor="quick-expense-day">Date (today if blank)</label>
-              <Input id="quick-expense-day" type="date" value={day} onChange={(e) => setDay(e.target.value)} data-testid="quick-expense-day" />
-              <Button className="w-full" disabled={saving || !(amt > 0) || !what.trim()} data-testid="quick-expense-save"
-                onClick={() => void post("/api/expenses", { amount: amt, description: what.trim(), date: day || localTodayISO(), linkedProfiles: [profileId] }, "Expense added", "expenses", "profiles")}>
-                {saving ? "Saving…" : "Add expense"}
-              </Button>
-            </div>
-          )}
-          {open === "note" && <NewNoteForm profileId={profileId} onDone={close} />}
-          {open === "date" && (
-            <AddDateForm profileId={profileId} options={COMMON_DATES.filter((o) => !fields?.[o.key])} onDone={close} />
-          )}
-        </DialogContent>
-      </Dialog>
-    </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm" data-testid="asset-add-date-dialog">
+        <DialogHeader><DialogTitle>Add a date to this asset</DialogTitle></DialogHeader>
+        {open && <AddDateForm profileId={profileId} options={COMMON_DATES.filter((o) => !fields?.[o.key])} onDone={() => onOpenChange(false)} />}
+      </DialogContent>
+    </Dialog>
   );
 }
 

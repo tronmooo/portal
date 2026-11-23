@@ -8,7 +8,6 @@
 //   · the Overview is the Value card, the AI summary and one Asset details list;
 //     a line's pencil edits it in place
 //   · a characteristic is added, and removed with two taps
-//   · + Task creates an ordinary task linked to the asset
 //   · Money is merged into Financials, which lists the asset's expense
 //
 // Writes only to the smoke account, holds the gate lock while it does
@@ -128,14 +127,8 @@ async function main() {
       const noBrand = await until(stored, (p) => p.fields?.brand == null);
       check(noBrand.fields?.brand == null, "the second tap removes the characteristic");
 
-      // ── + Task: an ordinary task linked to this asset ──
-      await page.locator(t("quick-add-task")).click();
-      await page.locator(t("quick-task-title")).fill(`Renew warranty ${tag}`);
-      await page.locator(t("quick-task-save")).click();
-      const tasks = await until(() => read("/tasks") as Promise<any[]>, (list) => list.some((x) => x.title === `Renew warranty ${tag}`));
-      const task = tasks.find((x) => x.title === `Renew warranty ${tag}`);
-      if (task) created.tasks.push(task.id);
-      check(!!task && (task.linkedProfiles || []).includes(asset.id), "+ Task created a task linked to the asset");
+      // ── No quick-add row under the tabs ──
+      check((await page.locator(t("asset-quick-add")).count()) === 0, "there is no + Task / + Expense / + Note row");
 
       // ── Financials holds what Money did ──
       await page.locator(t("tab-financials")).click();

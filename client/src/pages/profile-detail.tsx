@@ -1,7 +1,7 @@
 import { NewNoteForm } from "@/components/notes/NewNoteForm";
 import { DetailValueCells } from "@/components/details/DetailValueCells";
 import { AddFieldPanel } from "@/components/AddFieldPanel";
-import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroValue, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
+import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroValue, AssetAddDateDialog } from "@/components/asset/AssetOverviewLayout";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { OverviewSpec } from "@shared/overview-spec";
 import { changedFieldsOnly } from "@shared/field-patch";
@@ -13035,6 +13035,7 @@ export default function ProfileDetailPage() {
 
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showAddDate, setShowAddDate] = useState(false);
   const [linkedFilter, setLinkedFilter] = useState<"all" | "profiles" | "trackers" | "documents">("all");
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
@@ -13534,6 +13535,9 @@ export default function ProfileDetailPage() {
                     <FileText className="h-4 w-4 mr-2" /> Documents
                   </DropdownMenuItem>
                 )}
+                <DropdownMenuItem onSelect={() => setShowAddDate(true)} data-testid="asset-add-date">
+                  <Calendar className="h-4 w-4 mr-2" /> Add a date
+                </DropdownMenuItem>
                 <AssetAlertMenuItems profileId={profile.id} />
                 <DropdownMenuItem onSelect={() => setShowDeleteDialog(true)} className="text-destructive focus:text-destructive" data-testid="button-delete-profile">
                   <Trash2 className="h-4 w-4 mr-2" /> Delete this asset
@@ -13637,16 +13641,6 @@ export default function ProfileDetailPage() {
                   ))}
                 </TabsList>
               </div>
-              {assetLayout && (
-                <div className="overflow-x-auto -mx-1 px-1 pb-1 shrink-0">
-                  <AssetQuickAdd
-                    profileId={profile.id}
-                    fields={profile.fields}
-                    onEdit={() => setShowEditDialog(true)}
-                    onOpenDocuments={tabValues.has("trackers") ? () => openTab("trackers") : undefined}
-                  />
-                </div>
-              )}
               </div>
 
               {/* What left the slim header and has no row of its own: where a
@@ -14285,6 +14279,10 @@ export default function ProfileDetailPage() {
           onClose={() => setShowEditDialog(false)}
           onSaved={handleSaved}
         />
+      )}
+
+      {assetLayout && (
+        <AssetAddDateDialog profileId={profile.id} fields={profile.fields} open={showAddDate} onOpenChange={setShowAddDate} />
       )}
 
       {/* Delete Confirmation */}

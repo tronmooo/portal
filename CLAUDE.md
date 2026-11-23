@@ -773,10 +773,12 @@ record's own); the remove button takes two taps (Rule 8); typing and opening
 write nothing (Rule 3). Category is the composition's label (read-only) and
 Ownership opens the Contained tab. A date stored as something other than a
 calendar day ("2024") is edited as text, so it cannot be lost.
-**P5. Quick add creates ordinary records.** + Task, + Expense and + Note post
-to `/api/tasks`, `/api/expenses` and `/api/notes` with this asset linked, so
-they show on the Tasks page, in Finance and under Notes too; More holds "Add
-a date" and "Add a document". Delete only opens the page's confirmation.
+**P5. No quick-add row.** The + Task / + Expense / + Note / More row under
+the tabs is gone (owner, 2026-11-23: "you can delete that"). A task, an
+expense or a note about an asset is added from chat or from the Tasks,
+Financials and Notes screens; "Add a date" is in the ⋯ menu
+(`AssetAddDateDialog`), beside Edit, Ownership, Documents, the alert actions
+and Delete (which only opens the page's confirmation).
 **P6. One finance tab.** Where a tab set has both, Money is merged into
 **Financials** (rollup, breakdown, linked liabilities, the loan, bills and
 expenses); a saved `/money` link opens Financials. Subscriptions and the other

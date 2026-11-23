@@ -10,7 +10,6 @@
 //     "Clear document alerts" dismisses into the SERVER's dismiss list under
 //     the id the bell uses — never the browser-only snooze (Rule 8)
 //   · opening the page writes nothing (Rule 3)
-//   · + Task / + Expense create ordinary records linked to this asset
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -36,7 +35,7 @@ vi.mock("@/lib/cache-bus", () => ({
 }));
 
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
-import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroValue, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
+import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroValue, AssetAddDateDialog } from "@/components/asset/AssetOverviewLayout";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { __resetValuationRefreshState, valuationQueryKey } from "@/hooks/useAssetValuation";
 
@@ -100,7 +99,7 @@ function mount(over: { onEdit?: () => void; onDelete?: () => void; onOpenOwnersh
           )}
         />
         <AssetHeroValue profile={PROFILE} />
-        <AssetQuickAdd profileId={ID} onEdit={over.onEdit ?? (() => {})} />
+        <AssetAddDateDialog profileId={ID} fields={FIELDS} open onOpenChange={() => {}} />
         {/* The header's ⋯ menu, open, as the page renders it. */}
         <DropdownMenu open>
           <DropdownMenuTrigger>menu</DropdownMenuTrigger>
@@ -249,23 +248,20 @@ describe("asset profile layout", () => {
     expect(writes()[1]).toMatchObject({ url: "/api/notifications/restore", body: { ids: [ALERT_ID] } });
   });
 
-  it("+ Task and + Expense create ordinary records linked to this asset", async () => {
+  it("there is no + Task / + Expense / + Note row; a date is added from the menu's dialog", async () => {
     mount();
     await screen.findByTestId("asset-details");
-    fireEvent.click(screen.getByTestId("quick-add-task"));
-    fireEvent.change(screen.getByTestId("quick-task-title"), { target: { value: "Renew warranty" } });
-    fireEvent.change(screen.getByTestId("quick-task-due"), { target: { value: "2027-01-05" } });
-    fireEvent.click(screen.getByTestId("quick-task-save"));
+    for (const gone of ["asset-quick-add", "quick-add-task", "quick-add-expense", "quick-add-note", "quick-add-more"]) {
+      expect(screen.queryByTestId(gone)).toBeNull();
+    }
+    // The warranty date is already on the record, so the form does not offer it again.
+    const kind = screen.getByTestId("asset-add-date-kind") as HTMLSelectElement;
+    expect(Array.from(kind.options).map((o) => o.value)).not.toContain("warrantyExpiration");
+    fireEvent.change(kind, { target: { value: "insuranceExpiration" } });
+    fireEvent.change(screen.getByTestId("asset-add-date-day"), { target: { value: "2027-06-01" } });
+    fireEvent.click(screen.getByTestId("asset-add-date-save"));
     await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0]).toMatchObject({ method: "POST", url: "/api/tasks", body: { title: "Renew warranty", dueDate: "2027-01-05", linkedProfiles: [ID] } });
-
-    fireEvent.click(screen.getByTestId("quick-add-expense"));
-    fireEvent.change(screen.getByTestId("quick-expense-amount"), { target: { value: "39.99" } });
-    fireEvent.change(screen.getByTestId("quick-expense-what"), { target: { value: "Charger" } });
-    fireEvent.change(screen.getByTestId("quick-expense-day"), { target: { value: "2026-11-20" } });
-    fireEvent.click(screen.getByTestId("quick-expense-save"));
-    await waitFor(() => expect(writes()).toHaveLength(2));
-    expect(writes()[1]).toMatchObject({ method: "POST", url: "/api/expenses", body: { amount: 39.99, description: "Charger", date: "2026-11-20", linkedProfiles: [ID] } });
+    expect(writes()[0].body).toEqual({ fields: { insuranceExpiration: "2027-06-01" } });
   });
 
   it("Ownership opens its tab, and Add characteristic is the plain Field | Value form", async () => {
