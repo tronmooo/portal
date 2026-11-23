@@ -64,6 +64,7 @@ import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ChatComposer, type ChatComposerHandle } from "@/components/chat/ChatComposer";
+import { WORKSPACES } from "@/components/workspace/WorkspaceShell";
 import { streamChat } from "@/components/chat/chat-stream";
 import { isDuplicateResend, type LastSend } from "@shared/chat-progress";
 import { ThinkingBubble } from "@/components/chat/ThinkingBubble";
@@ -2549,12 +2550,6 @@ export default function ChatPage() {
   // Attachments: array supports both single and batch
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>("none");
-  // Journal / Note button. The mode stays on until tapped off, so several
-  // entries can be written in a row; it is never persisted (a reload starts
-  // in ordinary chat, so a question is never silently saved as a journal).
-  const [captureMode, setCaptureMode] = useState<"journal" | "note" | null>(null);
-  const [captureProfileId, setCaptureProfileId] = useState<string>("");
-
   // Smart Fill PDF — staged PDF that will be passed to the dialog
   const [smartFillFile, setSmartFillFile] = useState<{ name: string; mimeType: string; base64: string } | null>(null);
 
@@ -3630,13 +3625,6 @@ export default function ChatPage() {
     return null;
   };
 
-  // Who a journal entry or note can be written for: me, then people and pets.
-  const captureProfiles = useMemo(() => {
-    const ppl = profiles.filter((p) => ["self", "person", "pet"].includes(p.type));
-    return [...ppl.filter((p) => p.type === "self"), ...ppl.filter((p) => p.type !== "self")]
-      .map((p) => ({ id: p.id, name: p.name, isSelf: p.type === "self" }));
-  }, [profiles]);
-
   // Called by <ChatComposer/> with the draft text. Push-first (defect #1): the
   // user bubble is appended synchronously BEFORE the POST fires, so it paints
   // within the same frame as the tap; the pending/typing indicator keys off
@@ -3661,11 +3649,10 @@ export default function ChatPage() {
       // Rule 22: pending until the run settles. Survives navigation and reload
       // through the chat cache, so the page can restore the run on return.
       pending: true,
-      ...(captureMode ? { capture: { kind: captureMode, ...(captureProfileId ? { profileId: captureProfileId } : {}) } } : {}),
     };
 
     // ✨ Smart Fill in-thread: if intent + recent PDF/image attached, surface chip.
-    if (!captureMode && SMART_FILL_INTENT_RE.test(msg)) {
+    if (SMART_FILL_INTENT_RE.test(msg)) {
       const recent = findRecentFormAttachment();
       if (recent) {
         const stripped = recent.data.includes(",") ? recent.data.split(",").pop() || recent.data : recent.data;
@@ -4050,11 +4037,8 @@ export default function ChatPage() {
           onReset={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}
           onEmptyChange={setComposerEmpty}
           newDocButton={<NewDocSheetButton disabled={isPending} />}
-          capture={captureMode}
-          onCaptureChange={setCaptureMode}
-          captureProfileId={captureProfileId}
-          onCaptureProfileChange={setCaptureProfileId}
-          captureProfiles={captureProfiles}
+          onOpenWorkspace={(kind) => hashNavigate(WORKSPACES[kind].route)}
+          onDropFiles={(files) => { void handleFileSelect({ target: { files } } as any); }}
         />
       )}
       </div>

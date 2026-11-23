@@ -123,7 +123,12 @@ function useProfileFieldWrites(profileId: string) {
 
 export function AddFieldPanel({
   profileId, fields, showFields = false, title, openSignal, hideHeader = false, rows: rowLayout = false, list = false, leading, emptyHint,
+  inline = false, onAdded,
 }: {
+  /** The form itself, always open, with no "Add field" button of its own —
+   *  for a caller whose own control opens it (the asset's Profile actions). */
+  inline?: boolean;
+  onAdded?: () => void;
   /** The page draws its own heading and Add button (it bumps `openSignal`). */
   hideHeader?: boolean;
   /** List the fields as two-column rows, matching a page's detail rows. */
@@ -156,19 +161,19 @@ export function AddFieldPanel({
     setSaving(true);
     const ok = await save(k, v);
     setSaving(false);
-    if (ok) { setNewKey(""); setNewVal(""); setAdding(false); }
+    if (ok) { setNewKey(""); setNewVal(""); setAdding(false); onAdded?.(); }
   };
 
   return (
     <div className={hideHeader && !list && !adding && rows.length === 0 ? "hidden" : "space-y-2"} data-testid="add-field-panel">
-      {!hideHeader && <div className="flex items-center justify-between gap-2">
+      {!hideHeader && !inline && <div className="flex items-center justify-between gap-2">
         <p className="micro-label text-muted-foreground px-0.5">{title || ""}</p>
         <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAdding((a) => !a)} data-testid="add-field-button">
           <Plus className="h-3.5 w-3.5" /> Add field
         </Button>
       </div>}
 
-      {adding && (
+      {(adding || inline) && (
         <Card className="p-3 flex flex-wrap items-end gap-2" data-testid="add-field-form">
           <div className="flex-1 min-w-[120px]">
             <label className="micro-label text-muted-foreground" htmlFor={`add-field-key-${profileId}`}>Field</label>
@@ -182,9 +187,11 @@ export function AddFieldPanel({
           <Button size="sm" className="h-8 text-xs" disabled={saving || !newKey.trim() || !newVal.trim()} onClick={() => void add()} data-testid="add-field-save">
             {saving ? "…" : "Add"}
           </Button>
-          <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => { setAdding(false); setNewKey(""); setNewVal(""); }} data-testid="add-field-cancel">
-            Cancel
-          </Button>
+          {!inline && (
+            <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => { setAdding(false); setNewKey(""); setNewVal(""); }} data-testid="add-field-cancel">
+              Cancel
+            </Button>
+          )}
         </Card>
       )}
 

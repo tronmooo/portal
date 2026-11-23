@@ -1485,3 +1485,35 @@ button, a, [role="button"], .card-lift {
   box-shadow: 0 6px 16px -8px hsl(var(--accent-hsl) / 0.7);
 }
 .dark .cal-item-icon { color: hsl(var(--accent-hsl) / 1); filter: brightness(1.25); }
+
+/* A full-screen workspace is open (components/workspace/WorkspaceShell.tsx):
+   the app's floating chrome gets out of the way. */
+body[data-workspace] [data-app-floating] { display: none !important; }
+/* The page reserves scrollbar gutters on desktop (see "Round 9 fix" above);
+   a workspace never scrolls the page, so it takes that width back. */
+html[data-workspace], body[data-workspace] { scrollbar-gutter: auto; overflow: hidden; }
+/* Inside a workspace the writing surface is the page itself: no focus box
+   around the note, the document or a title while typing in it. */
+.workspace-surface textarea:focus-visible,
+.workspace-surface input:focus-visible,
+.workspace-surface .ProseMirror:focus-visible { outline: none; box-shadow: none; }
+/* The Document workspace's page: a sheet of paper on a desk, like a word processor. */
+@media (min-width: 768px) {
+  .doc-page-desk { background: hsl(var(--muted) / 0.6); }
+  .doc-page {
+    background: hsl(var(--card)) !important;
+    box-shadow: 0 1px 3px hsl(0 0% 0% / 0.18), 0 8px 24px -12px hsl(0 0% 0% / 0.25);
+    border: 1px solid hsl(var(--border));
+    max-width: 816px;
+    min-height: 1056px;
+    margin: 24px auto;
+    padding: 72px 84px;
+  }
+  /* The black phone canvas is for phones; on the page it is paper. */
+  .doc-page.doc-mobile-black,
+  .doc-page.doc-mobile-black .ProseMirror {
+    background: hsl(var(--card)) !important;
+    color: hsl(var(--foreground)) !important;
+    caret-color: auto !important;
+  }
+}

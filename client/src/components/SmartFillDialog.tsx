@@ -71,11 +71,13 @@ export interface SmartFillDialogProps {
   file: { name: string; mimeType: string; base64: string } | null;
   /** Pre-selected sources (e.g. when opened from an asset detail page, that asset is pre-checked) */
   preselectedSources?: SmartFillSource[];
+  /** Fill In workspace: take the whole screen instead of a centred dialog. */
+  fullScreen?: boolean;
 }
 
 type Step = "sources" | "analyzing" | "review" | "filling" | "done";
 
-export function SmartFillDialog({ open, onOpenChange, file, preselectedSources = [] }: SmartFillDialogProps) {
+export function SmartFillDialog({ open, onOpenChange, file, preselectedSources = [], fullScreen = false }: SmartFillDialogProps) {
   const { toast } = useToast();
   const [step, setStep] = useState<Step>("sources");
   const [search, setSearch] = useState("");
@@ -248,10 +250,16 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
     : 0;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    // Full screen (Fill In workspace): not modal, and placed under the
+    // workspace's own header so its X stays in reach.
+    <Dialog open={open} onOpenChange={onOpenChange} modal={!fullScreen}>
       <DialogContent
-        className="max-w-2xl p-0 gap-0 overflow-hidden"
-        style={{ maxHeight: 720 }}
+        hideCloseButton={fullScreen}
+        onInteractOutside={fullScreen ? (e) => e.preventDefault() : undefined}
+        className={fullScreen
+          ? "!left-0 !top-[52px] !translate-x-0 !translate-y-0 !w-screen !max-w-none !h-[calc(100dvh-52px)] !max-h-none !rounded-none !border-0 !shadow-none p-0 gap-0 overflow-y-auto flex flex-col"
+          : "max-w-2xl p-0 gap-0 overflow-hidden"}
+        style={fullScreen ? undefined : { maxHeight: 720 }}
         data-testid="smart-fill-dialog"
       >
         <DialogHeader className="px-5 pt-5 pb-3 border-b border-border">

@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Router } from "wouter";
-import { QuickActionsSection, WeeklySummarySection } from "../client/src/pages/dashboard";
+import { WeeklySummarySection } from "../client/src/pages/dashboard";
 
 // Auth is used by WeeklySummarySection.getAuthHeader; stub to a no-op header.
 vi.mock("../client/src/lib/auth", () => ({
@@ -44,22 +44,6 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchStub);
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
-
-describe("QuickActionsSection", () => {
-  it("renders all five quick-add buttons", () => {
-    wrap(<QuickActionsSection filterMode="everyone" filterIds={[]} />);
-    for (const k of ["expense", "income", "bill", "note", "task"]) {
-      expect(screen.getByTestId(`quick-action-${k}`)).toBeTruthy();
-    }
-  });
-
-  it("opens the quick-add dialog when a button is clicked", () => {
-    wrap(<QuickActionsSection filterMode="everyone" filterIds={[]} />);
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    fireEvent.click(screen.getByTestId("quick-action-expense"));
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-  });
-});
 
 describe("WeeklySummarySection", () => {
   it("renders the this-week snapshot cells from stats", () => {

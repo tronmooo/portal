@@ -1388,6 +1388,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       <div className="px-3 sm:px-4 md:px-6 pt-3 max-w-7xl mx-auto">
         <DetailHero
           testId="liability-header"
+          layout="card"
           pageTitle="Liability Profile"
           accent={profileVisual("liability").accent}
           icon={TypeIcon}

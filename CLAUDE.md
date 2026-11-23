@@ -138,8 +138,9 @@ green. After a push to `main`:
    the DEFAULT (Needs Attention, Tasks, Timeline, Money), and every card the
    preferences hide is named under the grid and opens on a tap
    (`exec-hidden-cards`) — hidden never reads as missing.
-   **Customize opens from the ⋮ menu at the top right, never from the tab
-   itself** (owner, 2026-11-22: "at the bottom, the customization shouldn't be
+   **Customize opens from the ⋮ menu at the end of the Next Important bar
+   (whenever the briefing is on the page), never from the tab itself; there
+   is no Quick Actions row** (owner, 2026-11-23; 2026-11-22: "at the bottom, the customization shouldn't be
    there"). It is the `ExecCustomizeDialog` (`components/dashboard/ExecCustomize.tsx`),
    built to the owner's design: tabs (Cards & Widgets, My Custom, AI Builder,
    Layout), Quiet Mode, a row per card (drag handle, size, switch, details),
@@ -442,14 +443,14 @@ labelled as one. An entry's "last written" time is `updatedAt`, never its
 bare `date` ("Last 18h ago" for an entry saved minutes earlier).
 *Guard:* `tests/info-tab-editable.dom.test.tsx`.
 
-**J6. The Journal and Note buttons save; they do not interpret.** With a
-button on, the chat box sends `capture: { kind, profileId? }` and the server
-saves the message as that object, word for word (`captureFromButton`,
-`server/ai-engine.ts`): the chat model does not run, a line shaped like a
-question is still an entry, and nothing the text mentions is logged. The mode
-is never persisted across a reload. Without a button, the word "journal" /
-"note" still routes as before.
-*Guards:* `tests/chat-capture-buttons.test.ts`, `tests/chat-capture-buttons.dom.test.tsx`.
+**J6. A capture request saves; it does not interpret.** A chat request that
+carries `capture: { kind, profileId? }` is saved as that object, word for word
+(`captureFromButton`, `server/ai-engine.ts`): the chat model does not run, a
+line shaped like a question is still an entry, and nothing the text mentions
+is logged. The chat box no longer sends it (its Journal / Notes buttons open
+workspaces — see "Workspace rules"); the server path stays for requests that
+do. Without it, the word "journal" / "note" still routes as before.
+*Guard:* `tests/chat-capture-buttons.test.ts`.
 
 **J7. An entry belongs to one person.** "Bob's journal: …", "Note for Bob: …"
 (`parseCaptureTarget`, `shared/capture-target.ts`) or the "For" menu files the
@@ -469,8 +470,59 @@ the buttons and the manual forms); else the first clause of the text
 not mid-sentence.
 *Guards:* `tests/journal-entries-routes.test.ts`, `tests/chat-capture-buttons.test.ts`.
 
-*Live checks for J1–J8 (deployed app, smoke account):* `npx tsx tests/live-journal-check.ts` (server),
-`npx tsx tests/live-journal-ui-check.ts` (real browser: the buttons, the For menu, the Journal page).
+*Live check for J1–J8 (deployed app, smoke account):* `npx tsx tests/live-journal-check.ts` (server).
+
+## Workspace rules (four full-screen tools opened from AI Chat)
+
+Owner request 2026-11-22: "each opens its own dedicated, full-screen workspace
+… not four versions of the same chat box". The chat box's **Notes, Journal,
+Document and Fill In** buttons navigate (`WORKSPACES`,
+`client/src/components/workspace/WorkspaceShell.tsx`); they are not modes of
+the chat box. Read these before touching that file, `pages/workspace-*.tsx`,
+the workspace branch of `pages/journal.tsx`, `pages/editor.tsx` or
+`server/workspace-ai.ts`.
+*Guards:* `tests/chat-workspace-buttons.dom.test.tsx`, `tests/workspace-notes.dom.test.tsx`,
+`tests/workspace-ai.test.ts`.
+*Live check (deployed app, smoke account, real browser):* `npx tsx tests/live-workspaces-ui-check.ts`.
+
+**W1. Full screen means the whole window.** A workspace is mounted on
+`<body>` (`WorkspacePortal`): the app's layout is a centred max-width column,
+and a fixed box inside it does not reach the window's edges. While one is open
+`useFullScreenWorkspace` marks `<html>`/`<body>`, which hides the floating
+chrome (`data-app-floating`) and releases the desktop scrollbar gutters. Stay
+at `z-40`: menus and dialogs opened inside a workspace portal at `z-50`.
+**W2. The X saves, then leaves; it never asks and never discards.** Each
+workspace hands `WorkspaceCloseButton` a function that flushes what is pending
+and then goes to `/chat`. A failed save keeps the workspace open. The
+editor's Back does the same (the old "Unsaved changes. Leave anyway?" is gone).
+**W3. Opening writes nothing (Rule 3); typing does.** Notes creates the note on
+the first text and updates THAT note after; Journal is the Journal page's
+draft autosave; a new document saves itself once it has content, WITHOUT
+moving the URL (`quietSaveRef`: the route change remounts the editor and drops
+the caret). A new sheet still waits for its first Save.
+**W4. A save never adopts another record (J1).** When `POST /api/notes`
+answers `deduped`, the Notes workspace does not take that id: it would
+overwrite the other note with whatever is typed next.
+**W5. The AI proposes; the user applies.** `POST /api/workspace/document/assist`,
+`/notes/assist` and `/journal/reflect` (`server/workspace-routes.ts`, on
+`READONLY_POST_PATHS`, served by the AI function) write nothing. The workspace
+shows the proposal with Use / Add / Discard. The Journal AI only READS: it
+returns an answer for a side panel, never a replacement entry, and reads the
+writer's own entries (`journalEntriesFor`).
+**W6. A document never invents a personal fact.** What is not on file is
+written `[Missing: …]`; the blanks shown are read back from the returned text
+(`documentBlanks`, `shared/workspace-document.ts`), and the HTML is only what
+the editor holds (`sanitizeDocumentHtml`). Secrets (password, SSN, card,
+passport keys) are never sent to the model; another person's profile only when
+the request names them.
+**W7. Fill In is Smart Fill, full screen.** Its review (sources, every field,
+what is missing) is the approval step; nothing is saved before it and nothing
+is ever submitted anywhere. In the workspace the dialog is not modal and sits
+under the workspace header, so the X stays in reach.
+*Not built (2026-11-23):* tables, images and page-layout controls in the
+document editor; note attachments and rich text (a note is markdown text);
+journal photos; Word and spreadsheet forms, and online (browser) form filling,
+in Fill In; a Computer mode.
 
 ## Auto Pay rules (routine payments record themselves; the books stay honest)
 
@@ -569,8 +621,10 @@ not dismiss it.
 *Live check:* `npx tsx tests/live-dashboard-consistency-check.ts`.
 *Known gaps (2026-11-22):* the bill page's schedule still lists unrecorded past
 dates as overdue (it is where one is recorded); chat's bill table and
-"I paid X" still read the stored date; a profile page's "Clear document alerts"
-still writes the browser-only 30-day snooze (`ProfileAlertsSection.tsx`).
+"I paid X" still read the stored date; on a person, pet or account page "Clear
+document alerts" still writes the browser-only 30-day snooze
+(`ProfileAlertsSection.tsx`) — an asset's dismisses into the server list
+(`AssetProfileActions`).
 
 ## Record details rules (a characteristic is a typed, reportable value on any record)
 
@@ -633,6 +687,42 @@ liability the free-form fields are listed under it. Money, rate, date, switch
 and schedule fields are never listed there as text (L2/L3).
 *Guards:* `tests/info-tab-editable.dom.test.tsx`, `tests/add-field-panel.dom.test.tsx`,
 `tests/overview-render.dom.test.tsx`.
+
+## Asset profile layout (the owner's mock-up; a drawing of stores other screens read)
+
+Owner, 2026-11-22: "make it look more like the second photo and connect
+everything so nothing loses connections". An owned thing's Overview
+(`usesAssetLayout`, `client/src/pages/profile-detail.tsx`; an account keeps
+`AccountOverview`) is `AssetOverviewBody` + `AssetProfileActions`
+(`client/src/components/asset/AssetOverviewLayout.tsx`), under the restyled
+`CurrentValueCard` and a `DetailHero` with `pageTitle`. Read this before
+touching either.
+*Guard:* `tests/asset-overview-layout.dom.test.tsx`.
+
+**P1. The layout owns no data.** Details, dates and "Not set" suggestions are
+the composed `OverviewSpec` (passed through `DynamicOverview`'s `renderBody`,
+which keeps the loading state and the fallback); Financial position is the
+purchase price (else the user's typed value, `userEnteredAssetValue`) against
+`currentAssetValue` (Rule 1); a tile writes ONE field with the page's PATCH.
+Add a section by reading a store that exists, never by storing a copy.
+**P2. Alerts are the rule engine's.** The Alerts card and "Clear document
+alerts" are `useRecordAlerts`: `rulesFromAll` over the UNFLATTENED profile row
+and its documents, filtered by `isAlertDateRule`, identified by `dateAlertId`
+(the bell's id), cleared and restored through `useDismissedAlerts` (Rule 8).
+Never the browser snooze.
+**P4. No empty halves, and everything shown is edited where it is shown.**
+The details grid is built as a list and an odd tile out takes the row; a single
+financial fact takes its row. Location, Notes (the record's `notes`), the
+user's entered value (written as `currentValue`, a number; it has no remove),
+every field tile and every alert date open an editor in place — the same
+fields the chat's `update_profile` writes, so a chat edit and a tile edit are
+the same write. Only what the app calculated is read-only.
+**P3. Nothing is reachable from one place only.** Edit and Delete are in the
+header's ⋯ menu and in Profile actions; Add field is a Profile action
+(`AddFieldPanel inline`); documents open the Documents tab; the owner pill
+opens Contained. Delete only opens the page's confirmation (Rule 8). Opening
+the page writes nothing (Rule 3); a failed documents load is not "No documents
+yet" (Rule 7).
 
 ## Recurring occurrence rules (one date at a time; the series keeps its schedule)
 
