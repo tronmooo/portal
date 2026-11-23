@@ -654,6 +654,7 @@ Info, then AI Summary | Value & Depreciation) and `AssetAlertMenuItems` in the
 Clear / Restore alerts and Delete are the ⋯ menu ("remove all that space, make
 it look exactly like the photo"). Read this before touching any of them.
 *Guard:* `tests/asset-overview-layout.dom.test.tsx`.
+*Live check (deployed app, smoke account, real browser):* `npx tsx tests/live-asset-overview-check.ts`.
 
 **P1. The layout owns no data.** Rows, dates and "Not set" suggestions are the
 composed `OverviewSpec` (through `DynamicOverview`'s `renderBody`, which keeps
