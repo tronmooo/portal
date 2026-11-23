@@ -4,7 +4,7 @@
 //   npx tsx tests/live-asset-overview-check.ts
 //
 // What it proves end to end (CLAUDE.md, "Asset profile layout"):
-//   · the header shows Current Value / Purchase Price / change
+//   · the header is the name and the current value; the Value card has the rest
 //   · Asset Details is typed into in place and ONE Save stores what changed
 //   · a characteristic is added, and removed with two taps
 //   · + Task creates an ordinary task linked to the asset
@@ -79,8 +79,9 @@ async function main() {
       await page.locator(t("asset-details")).waitFor({ timeout: 30000 });
 
       // ── Header ──
-      check((await page.locator(t("hero-stat-purchase-price")).innerText()).includes("$899"), "the header shows the purchase price ($899)");
-      check(/\$\d/.test(await page.locator(t("hero-stat-current-value")).innerText()), "the header shows a current value");
+      check(/\$\d/.test(await page.locator(t("hero-stat-current-value")).innerText()), "the header shows the current value");
+      check((await page.locator(t("hero-stat-purchase-price")).count()) === 0, "the header shows nothing but the name and the value");
+      check((await page.locator(t("asset-value-row-purchase-price")).innerText()).includes("$899"), "the Value card shows the purchase price ($899)");
       check((await page.locator(t("tab-money")).count()) === 0 && (await page.locator(t("tab-financials")).count()) === 1, "Money is merged into Financials (no Money tab)");
 
       // ── Asset Details: type in place, one Save ──
@@ -97,8 +98,8 @@ async function main() {
       check(Number(after.fields?.purchasePrice) === 950, `Save stored the purchase price as a number (${JSON.stringify(after.fields?.purchasePrice)})`);
       check(after.fields?.location === "Office", "Save stored the location");
       check(after.notes === `Checked ${tag}`, "Save stored the notes");
-      await page.waitForFunction((sel) => document.querySelector(sel)?.textContent?.includes("$950"), t("hero-stat-purchase-price"), { timeout: 20000 }).catch(() => undefined);
-      check((await page.locator(t("hero-stat-purchase-price")).innerText()).includes("$950"), "the header follows the saved purchase price without a reload");
+      await page.waitForFunction((sel) => document.querySelector(sel)?.textContent?.includes("$950"), t("asset-value-row-purchase-price"), { timeout: 20000 }).catch(() => undefined);
+      check((await page.locator(t("asset-value-row-purchase-price")).innerText()).includes("$950"), "the Value card follows the saved purchase price without a reload");
       check((await page.locator(t("text-profile-detail-name")).innerText()).endsWith(" Pro"), "the header follows the saved name without a reload");
 
       // ── Characteristics: add, then remove in two taps ──

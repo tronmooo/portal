@@ -1,7 +1,7 @@
 import { NewNoteForm } from "@/components/notes/NewNoteForm";
 import { DetailValueCells } from "@/components/details/DetailValueCells";
 import { AddFieldPanel } from "@/components/AddFieldPanel";
-import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroStats, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
+import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroValue, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { OverviewSpec } from "@shared/overview-spec";
 import { changedFieldsOnly } from "@shared/field-patch";
@@ -3219,10 +3219,10 @@ function usesAssetLayout(profile: any): boolean {
   return !!profile && isAssetTabProfile(profile) && !isAccountProfile(profile);
 }
 
-function InfoTab({ profile, onEdit, ownerLabel, onOpenOwnership, summarySlot }: {
+function InfoTab({ profile, onEdit, ownerLabel, onOpenOwnership, summarySlot, tailSlot }: {
   profile: ProfileDetail; onEdit: () => void;
   /** Asset layout only: who owns it, where ownership is changed, the AI summary card. */
-  ownerLabel?: string; onOpenOwnership?: () => void; summarySlot?: React.ReactNode;
+  ownerLabel?: string; onOpenOwnership?: () => void; summarySlot?: React.ReactNode; tailSlot?: React.ReactNode;
 }) {
   const dynamic = isAssetTabProfile(profile as any) || isLiabilityTabProfile(profile as any);
   const legacy = <StaticInfoTab profile={profile} onEdit={onEdit} />;
@@ -3243,6 +3243,7 @@ function InfoTab({ profile, onEdit, ownerLabel, onOpenOwnership, summarySlot }: 
             onOpenOwnership={onOpenOwnership}
             onEdit={onEdit}
             summarySlot={summarySlot}
+            tailSlot={tailSlot}
           />
         )}
       />
@@ -13298,16 +13299,8 @@ export default function ProfileDetailPage() {
     return `Shared · ${linked.length} people`;
   }, [currentPartyLinks, personOptions, profile]);
 
-  // The asset hero names what the thing is and its status from the same
-  // composition the Overview below is drawn from (one cache entry, one fetch).
+  // An owned thing's page: a slim header (name and value) over the Overview.
   const assetLayout = usesAssetLayout(profile);
-  const { data: heroSpec } = useQuery<OverviewSpec>({
-    queryKey: ["/api/profiles", id, "overview"],
-    queryFn: async () => (await apiRequest("GET", `/api/profiles/${id}/overview`)).json(),
-    enabled: assetLayout && !!id,
-    staleTime: 0,
-    retry: false,
-  });
 
   if (isLoading) {
     return (
@@ -13433,38 +13426,6 @@ export default function ProfileDetailPage() {
     if (owners.length === 1) return owners[0].id === self?.id ? "You own this" : `Owned by ${owners[0].name}`;
     return ownerButtonLabel;
   })();
-  const heroStatus = heroSpec?.identity?.status;
-  const statusTone = heroStatus?.tone === "positive" ? "good" : heroStatus?.tone === "critical" ? "critical"
-    : heroStatus?.tone === "warning" ? "warn" : "neutral";
-  const assetBadges = (
-    <>
-      <span data-testid="hero-entity-label">
-        <Pill tone="neutral" className="capitalize">
-          <visual.icon className="h-3 w-3" />
-          {heroSpec?.identity?.entityLabel || String(profile.type).replace(/_/g, " ")}
-        </Pill>
-      </span>
-      {ownerPillLabel === "You own this" && personOptions.find((p: any) => p.type === "self")?.name && (
-        <Pill tone="neutral">{personOptions.find((p: any) => p.type === "self")?.name}</Pill>
-      )}
-      {hasTab("contained") ? (
-        <button type="button" onClick={() => openTab("contained")} title="Open ownership" data-testid="hero-owner-pill">
-          <Pill tone="ai"><User className="h-3 w-3" />{ownerPillLabel}</Pill>
-        </button>
-      ) : (
-        <Pill tone="ai"><User className="h-3 w-3" />{ownerPillLabel}</Pill>
-      )}
-      {heroStatus && (
-        <span data-testid="hero-status-pill">
-          <Pill tone={statusTone} className="capitalize">
-            <span className="h-1.5 w-1.5 rounded-full bg-current" />{heroStatus.label}
-          </Pill>
-        </span>
-      )}
-      {tagPills}
-    </>
-  );
-
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="page-profile-detail">
       <div className="px-4 md:px-6 pt-4">
@@ -13473,9 +13434,10 @@ export default function ProfileDetailPage() {
           accent={visual.accent}
           icon={visual.icon}
           title={<span data-testid="text-profile-detail-name">{profile.name}</span>}
-          pageTitle={assetLayout ? "Asset Profile" : undefined}
-          typeLabel={assetLayout ? undefined : isAccountProfile(profile) ? accountKindMeta(accountKindOf(profile)).label : profile.type}
-          badges={assetLayout ? assetBadges : tagPills}
+          layout={assetLayout ? "slim" : undefined}
+          value={assetLayout ? <AssetHeroValue profile={profile as any} /> : undefined}
+          typeLabel={isAccountProfile(profile) ? accountKindMeta(accountKindOf(profile)).label : profile.type}
+          badges={tagPills}
           breadcrumb={
             /* Only renders when this profile has a parent chain. `omitCurrent`
                because the hero title directly above IS the current node — it was
@@ -13554,7 +13516,6 @@ export default function ProfileDetailPage() {
             </Button>
           </>}
           stats={heroStats}
-          aside={assetLayout ? <AssetHeroStats profile={profile as any} /> : undefined}
         />
       </div>
 
@@ -13574,6 +13535,31 @@ export default function ProfileDetailPage() {
         {(() => {
           const tabs = pageTabs;
           const tabValues = new Set(tabs.map(t => t.value));
+          const assetTrackersCard = ownTrackers.length > 0 ? (
+                        <Card>
+                          <CardContent className="p-3">
+                            <p className="micro-label text-muted-foreground mb-2">Trackers ({ownTrackers.length})</p>
+                            <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
+                              {ownTrackers.map((t: any) => {
+                                const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
+                                const latest = t.entries?.length > 0 ? t.entries[t.entries.length - 1]?.values?.[pf] : null;
+                                const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 })) : "—";
+                                return (
+                                  <div key={t.id} className="flex items-center gap-2 px-2.5 py-2 hover:bg-muted/30 transition-colors">
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs font-medium truncate">{t.name}</p>
+                                      <p className="text-xs text-muted-foreground">{t.category} · {t.entries?.length || 0} entries</p>
+                                    </div>
+                                    <span className="text-sm font-bold tabular-nums">{displayVal}</span>
+                                    {t.unit && <span className="text-xs text-muted-foreground">{t.unit}</span>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </CardContent>
+                        </Card>
+          ) : null;
+          const assetDocCount = Number((profile as any).relatedDocumentsTotal ?? (profile.relatedDocuments || []).length) || 0;
           // A saved link to the old Money tab opens Financials, where it went.
           const moneyMoved = urlTabSlug?.toLowerCase() === "money" && !tabValues.has("money") && tabValues.has("financials");
           const activeTab = moneyMoved ? "financials" : resolveProfileTab(tabs, urlTabSlug);
@@ -13596,6 +13582,10 @@ export default function ProfileDetailPage() {
                       data-testid={tab.testId}
                     >
                       {tab.label}
+                      {/* The header's "DOCS 6" tile, as a count on the tab that holds them. */}
+                      {assetLayout && tab.value === "trackers" && assetDocCount > 0 && (
+                        <span className="ml-1.5 rounded-full bg-muted px-1.5 text-[11px] tabular-nums text-muted-foreground" data-testid="tab-documents-count">{assetDocCount}</span>
+                      )}
                     </TabsTrigger>
                   ))}
                 </TabsList>
@@ -13612,13 +13602,30 @@ export default function ProfileDetailPage() {
               )}
               </div>
 
+              {/* What left the slim header and has no row of its own: where a
+                  nested asset sits, and its tags. */}
+              {assetLayout && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 empty:hidden" data-testid="asset-trail">
+                  {NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType) && (
+                    <RebuildBreadcrumb profile={profile as any} allProfiles={allProfilesPage as any} omitCurrent />
+                  )}
+                  {tagPills}
+                </div>
+              )}
+
               {tabValues.has("info") && (
-                <TabsContent value="info" className="mt-4 px-1 sm:px-0">
+                <TabsContent value="info" className={assetLayout ? "mt-3 px-1 sm:px-0" : "mt-4 px-1 sm:px-0"}>
                   <InfoTab
                     profile={profile}
                     onEdit={() => setShowEditDialog(true)}
                     ownerLabel={ownerPillLabel}
                     onOpenOwnership={tabValues.has("contained") ? () => openTab("contained") : undefined}
+                    tailSlot={assetLayout ? (
+                      <>
+                        {assetTrackersCard}
+                        <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 sm:grid-cols-3 gap-2" />
+                      </>
+                    ) : undefined}
                     summarySlot={assetLayout ? (
                       <SectionErrorBoundary name="profile-ai-summary" inline>
                         <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} valueFingerprint={profileValueFingerprint(profile)} fields={profile.fields} />
@@ -13663,30 +13670,7 @@ export default function ProfileDetailPage() {
                       {isAccountProfile(profile) && (
                         <AccountOverview profile={profile} />
                       )}
-                      {ownTrackers.length > 0 && (
-                        <Card>
-                          <CardContent className="p-3">
-                            <p className="micro-label text-muted-foreground mb-2">Trackers ({ownTrackers.length})</p>
-                            <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
-                              {ownTrackers.map((t: any) => {
-                                const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
-                                const latest = t.entries?.length > 0 ? t.entries[t.entries.length - 1]?.values?.[pf] : null;
-                                const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 })) : "—";
-                                return (
-                                  <div key={t.id} className="flex items-center gap-2 px-2.5 py-2 hover:bg-muted/30 transition-colors">
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-xs font-medium truncate">{t.name}</p>
-                                      <p className="text-xs text-muted-foreground">{t.category} · {t.entries?.length || 0} entries</p>
-                                    </div>
-                                    <span className="text-sm font-bold tabular-nums">{displayVal}</span>
-                                    {t.unit && <span className="text-xs text-muted-foreground">{t.unit}</span>}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )}
+                      {!assetLayout && assetTrackersCard}
                     </div>
                   )}
                   {/* Non-asset, non-person profiles (loan/subscription/insurance/medical/etc.)
@@ -13721,7 +13705,9 @@ export default function ProfileDetailPage() {
 
                   {/* Values saved as characteristics (chat, the earlier Details box)
                       show as plain editable/removable cards; new facts use Add field. */}
-                  <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-4" />
+                  {!assetLayout && (
+                    <DetailValueCells entityType="profile" entityId={profile.id} className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-4" />
+                  )}
 
                   {/* All the way down the Info tab: what you do TO this record
                       — silence the alerts it raises, or remove it. Both were

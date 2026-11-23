@@ -36,7 +36,7 @@ vi.mock("@/lib/cache-bus", () => ({
 }));
 
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
-import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroStats, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
+import { AssetOverviewBody, AssetAlertMenuItems, AssetHeroValue, AssetQuickAdd } from "@/components/asset/AssetOverviewLayout";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { __resetValuationRefreshState, valuationQueryKey } from "@/hooks/useAssetValuation";
 
@@ -95,10 +95,11 @@ function mount(over: { onEdit?: () => void; onDelete?: () => void; onOpenOwnersh
           profileId={ID}
           renderBody={(spec) => (
             <AssetOverviewBody spec={spec} profile={PROFILE} autoValuation ownerLabel="You own this"
-              onOpenOwnership={over.onOpenOwnership} onEdit={over.onEdit ?? (() => {})} />
+              onOpenOwnership={over.onOpenOwnership} onEdit={over.onEdit ?? (() => {})}
+              summarySlot={<div data-testid="summary">summary</div>} tailSlot={<div data-testid="tail">tail</div>} />
           )}
         />
-        <AssetHeroStats profile={PROFILE} />
+        <AssetHeroValue profile={PROFILE} />
         <AssetQuickAdd profileId={ID} onEdit={over.onEdit ?? (() => {})} />
         {/* The header's ⋯ menu, open, as the page renders it. */}
         <DropdownMenu open>
@@ -118,17 +119,33 @@ describe("asset profile layout", () => {
     expect(writes()).toEqual([]);
   });
 
-  it("the header shows the estimate as Current Value, against the purchase price", async () => {
+  it("the header shows only the value; the other figures are the Value card's", async () => {
     mount();
     await screen.findByTestId("asset-details");
-    expect(screen.getByTestId("hero-stat-current-value").textContent).toBe("Current Value$306");
-    expect(screen.getByTestId("hero-stat-purchase-price").textContent).toBe("Purchase Price$500");
-    expect(screen.getByTestId("hero-stat-change").textContent).toBe("Depreciation−$194 (39%)");
-    expect(screen.getByTestId("hero-stat-confidence").textContent).toBe("Confidence40%");
-    // The same numbers, as the Value & Depreciation table.
+    expect(screen.getByTestId("hero-stat-current-value").textContent).toBe("$306");
+    expect(screen.queryByTestId("hero-stat-purchase-price")).toBeNull();
     const card = screen.getByTestId("asset-value-card");
     expect(card.textContent).toContain("Value & Depreciation");
+    expect(screen.getByTestId("asset-value-row-purchase-price").textContent).toBe("Purchase Price$500");
+    expect(screen.getByTestId("asset-value-row-current-value").textContent).toBe("Current Value$306");
+    expect(screen.getByTestId("asset-value-row-depreciation").textContent).toBe("Depreciation−$194");
     expect(screen.getByTestId("asset-value-row-change").textContent).toBe("Change−38.8%");
+    expect(screen.getByTestId("asset-value-row-confidence").textContent).toBe("Confidence40%");
+  });
+
+  it("the page reads value, details, summary, characteristics — then the page's own cards", async () => {
+    mount();
+    await screen.findByTestId("asset-details");
+    const order = ["asset-value-card", "asset-details", "summary", "asset-characteristics", "tail"].map((id) => screen.getByTestId(id));
+    // Value comes first for a reader (CSS `order` on a phone); in the document
+    // it follows Asset Details, which a wide screen draws beside it.
+    const follows = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(order[1], order[2])).toBe(true);
+    expect(follows(order[0], order[2])).toBe(true);
+    expect(follows(order[2], order[3])).toBe(true);
+    expect(follows(order[3], order[4])).toBe(true);
+    expect(screen.getByTestId("asset-section-details").className).toContain("order-2");
+    expect(order[0].parentElement!.className).toContain("order-1");
   });
 
   it("the form saves what changed, in one write; money is stored as a number", async () => {

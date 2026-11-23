@@ -57,7 +57,7 @@ export interface AssetLayoutProfile {
   fields?: Record<string, any> | null;
 }
 
-const PANEL = "bubble px-3.5 py-3";
+const PANEL = "bubble !rounded-2xl px-3 py-2.5";
 /** The editor a row opens into. */
 const TILE_BOX = "rounded-xl bg-muted/30 px-3 py-2.5";
 const PURCHASE_PRICE_KEYS = ["purchasePrice", "originalPrice", "costBasis"];
@@ -89,7 +89,7 @@ function Panel({ title, action, children, testId, grow }: {
   return (
     <section className={`${PANEL} ${grow ? "flex-1" : ""}`} data-testid={testId}>
       <div className="flex items-center justify-between gap-2 min-h-[32px]">
-        <h2 className="text-[16px] font-semibold tracking-tight">{title}</h2>
+        <h2 className="text-[14px] font-semibold tracking-tight">{title}</h2>
         {action && <div className="flex items-center gap-1.5 shrink-0">{action}</div>}
       </div>
       {children}
@@ -195,7 +195,7 @@ function AssetDetailsForm({ profileId, rows, onEdit }: {
   return (
     <section className={`${PANEL} flex-1`} data-testid="asset-details">
       <div className="flex items-center justify-between gap-2 min-h-[32px] mb-1">
-        <h2 className="text-[16px] font-semibold tracking-tight">Asset Details</h2>
+        <h2 className="text-[14px] font-semibold tracking-tight">Asset Details</h2>
         <div className="flex items-center gap-1.5 shrink-0">
           {changed.length > 0 && (
             <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setEdits({})} data-testid="asset-details-undo">Undo</Button>
@@ -323,32 +323,20 @@ export function useValuePosition(profile: AssetLayoutProfile) {
 const signed = (n: number) => `${n >= 0 ? "+" : "−"}${formatMoneyCompact(Math.abs(n))}`;
 const signedPct = (n: number) => `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(1)}%`;
 
-/** The four numbers in the header: Current Value, Purchase Price, the change, Confidence. */
-export function AssetHeroStats({ profile }: { profile: AssetLayoutProfile }) {
+/** The header's one figure: what it is worth now (the same answer as the Value card). */
+export function AssetHeroValue({ profile }: { profile: AssetLayoutProfile }) {
   const v = useValuePosition(profile);
-  const cell = (label: string, value: React.ReactNode, tone: string, testId: string) => (
-    <div className="px-3 py-1.5 min-w-0 text-center" data-testid={testId}>
-      <p className="text-[11px] text-muted-foreground whitespace-nowrap">{label}</p>
-      <p className={`text-[17px] font-bold tabular-nums leading-tight whitespace-nowrap ${tone}`}>{value}</p>
-    </div>
-  );
-  const none = <span className="text-[14px] font-medium text-muted-foreground/70">Not set</span>;
+  if (!(v.now > 0)) return null;
   return (
-    <div className="bubble-row !rounded-2xl grid grid-cols-2 sm:grid-cols-4 divide-x divide-border/40" data-testid="asset-hero-stats">
-      {cell(v.auto ? "Current Value" : "Your Value", v.now > 0 ? formatMoneyCompact(v.now) : none, "text-emerald-400", "hero-stat-current-value")}
-      {cell("Purchase Price", v.paid > 0 ? formatMoneyCompact(v.paid) : none, "", "hero-stat-purchase-price")}
-      {cell(v.delta > 0 ? "Appreciation" : "Depreciation",
-        v.hasChange ? `${signed(v.delta)} (${Math.abs(v.pct).toFixed(0)}%)` : <span className="text-[14px] font-medium text-muted-foreground/70">—</span>,
-        v.delta > 0 ? "text-emerald-400" : "text-red-400", "hero-stat-change")}
-      {cell("Confidence", v.confidence != null ? `${v.confidence}%` : <span className="text-[14px] font-medium text-muted-foreground/70">—</span>,
-        v.confidence != null && v.confidence >= 70 ? "text-emerald-400" : v.confidence != null && v.confidence >= 45 ? "text-amber-400" : "", "hero-stat-confidence")}
-    </div>
+    <span className="text-[16px] font-bold tabular-nums text-emerald-400" title={v.auto ? "Estimated current value" : "Your value"} data-testid="hero-stat-current-value">
+      {formatMoneyCompact(v.now)}
+    </span>
   );
 }
 
 /** Value & Depreciation: the history as a line, the same four numbers as a
  *  table, and — one tap away — how the estimate was made and its switch. */
-function ValueCard({ profile, inset }: { profile: AssetLayoutProfile; inset?: boolean }) {
+function ValueCard({ profile }: { profile: AssetLayoutProfile }) {
   const v = useValuePosition(profile);
   const [details, setDetails] = useState(false);
   const history = useAssetValuationHistory(profile.id, v.supported);
@@ -376,12 +364,15 @@ function ValueCard({ profile, inset }: { profile: AssetLayoutProfile; inset?: bo
       [up ? "Appreciation" : "Depreciation", signed(v.delta), tone],
       ["Change", signedPct(v.pct), tone],
     ] as Array<[string, React.ReactNode, string]> : []),
+    ...(v.confidence != null ? [
+      ["Confidence", `${v.confidence}%`, v.confidence >= 70 ? "text-emerald-400" : v.confidence >= 45 ? "text-amber-400" : ""],
+    ] as Array<[string, React.ReactNode, string]> : []),
   ];
 
   return (
-    <section className={inset ? "rounded-xl ring-1 ring-border/50 bg-muted/20 px-3.5 py-3 min-w-0" : "min-w-0"} data-testid="asset-value-card">
+    <section className={`${PANEL} min-w-0`} data-testid="asset-value-card">
       <div className="flex items-center justify-between gap-2 min-h-[32px]">
-        <h2 className="text-[16px] font-semibold tracking-tight">{up ? "Value & Appreciation" : "Value & Depreciation"}</h2>
+        <h2 className="text-[14px] font-semibold tracking-tight">{up ? "Value & Appreciation" : "Value & Depreciation"}</h2>
         {v.auto && v.supported && (
           <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={() => { void v.refresh(); }} disabled={v.refreshing} data-testid="asset-value-refresh">
             <RefreshCw className={`h-3.5 w-3.5 ${v.refreshing ? "animate-spin" : ""}`} />
@@ -391,7 +382,7 @@ function ValueCard({ profile, inset }: { profile: AssetLayoutProfile; inset?: bo
       </div>
       <div className={`grid gap-3 items-center ${xy.length >= 2 ? "grid-cols-1 min-[420px]:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]" : "grid-cols-1"}`}>
         {xy.length >= 2 && (
-          <svg viewBox="0 0 200 80" className="w-full h-auto max-h-[110px]" preserveAspectRatio="none" role="img" aria-label={`Value from ${formatMoneyCompact(points[0])} to ${formatMoneyCompact(points[points.length - 1])}`}>
+          <svg viewBox="0 0 200 80" className="w-full h-auto max-h-[84px]" preserveAspectRatio="none" role="img" aria-label={`Value from ${formatMoneyCompact(points[0])} to ${formatMoneyCompact(points[points.length - 1])}`}>
             <defs>
               <linearGradient id={`val-fill-${profile.id}`} x1="0" x2="0" y1="0" y2="1">
                 <stop offset="0" stopColor="#8b5cf6" stopOpacity="0.38" /><stop offset="1" stopColor="#8b5cf6" stopOpacity="0.03" />
@@ -404,9 +395,9 @@ function ValueCard({ profile, inset }: { profile: AssetLayoutProfile; inset?: bo
         )}
         <div className="min-w-0">
           {rows.map(([label, value, cls]) => (
-            <div key={label} className="flex items-center justify-between gap-3 py-1" data-testid={`asset-value-row-${label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>
+            <div key={label} className="flex items-center justify-between gap-3 py-0.5" data-testid={`asset-value-row-${label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>
               <span className="text-[13px] text-muted-foreground">{label}</span>
-              <span className={`text-[14px] font-semibold tabular-nums ${cls}`}>{value}</span>
+              <span className={`text-[13px] font-semibold tabular-nums ${cls}`}>{value}</span>
             </div>
           ))}
           {!v.hasChange && v.paid <= 0 && (
@@ -534,7 +525,7 @@ function AddDateForm({ profileId, options, onDone }: {
 // ── The layout ───────────────────────────────────────────────────────────────
 
 export function AssetOverviewBody({
-  spec, profile, autoValuation, ownerLabel, onOpenOwnership, onEdit, summarySlot,
+  spec, profile, autoValuation, ownerLabel, onOpenOwnership, onEdit, summarySlot, tailSlot,
 }: {
   spec: OverviewSpec;
   profile: AssetLayoutProfile;
@@ -547,6 +538,9 @@ export function AssetOverviewBody({
   onEdit: () => void;
   /** The AI summary card — the page owns it. */
   summarySlot?: React.ReactNode;
+  /** The page's own cards (trackers, saved characteristic cells), drawn after
+   *  Characteristics and before Recent activity. */
+  tailSlot?: React.ReactNode;
 }) {
   const [addingField, setAddingField] = useState(false);
   const fields = profile.fields || {};
@@ -660,58 +654,64 @@ export function AssetOverviewBody({
   const sectionsOf = (...components: string[]) =>
     spec.sections.filter((s) => components.includes(s.component)).map((s) => renderSection(s, profile.id));
 
+  const linked = sectionsOf("progressIndicator", "relationshipSummary", "ownershipSummary", "maintenanceSummary", "aiInsight");
+  const activity = sectionsOf("miniTimeline");
+
+  // Top to bottom (owner, 2026-11-23): what it is worth, what it is, what the
+  // app worked out, what it is linked to, the summary — then the long tail:
+  // characteristics, and recent activity last. On a wide screen Asset Details
+  // sits beside Value + Quick Info; `order` puts Value first on a phone.
   return (
     <>
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] gap-3">
-        <div className="flex flex-col min-w-0">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] gap-2.5">
+        <div className="flex flex-col min-w-0 order-2 lg:order-1" data-testid="asset-section-details">
           <AssetDetailsForm profileId={profile.id} rows={formRows} onEdit={onEdit} />
         </div>
-
-        <div className="flex flex-col gap-3 min-w-0">
-          {/* ── Characteristics ── */}
-          <Panel
-            title="Characteristics"
-            testId="asset-characteristics"
-            grow={!hasQuick}
-            action={
-              <Button variant="outline" size="sm" className="h-8 text-xs gap-1 border-emerald-500/50" onClick={() => setAddingField((a) => !a)} data-testid="asset-add-characteristic">
-                <Plus className="h-3.5 w-3.5 text-emerald-400" /> Add Characteristic
-              </Button>
-            }
-          >
-            {charRows.length > 0
-              ? <div>{charRows}</div>
-              : !addingField && (
-                <p className="py-1.5 text-[13px] text-muted-foreground" data-testid="asset-characteristics-empty">
-                  Nothing here yet. Add a colour, a model, a serial number, a condition.
-                </p>
-              )}
-            {addingField && <div className="mt-2"><AddFieldPanel profileId={profile.id} inline onAdded={() => setAddingField(false)} /></div>}
-          </Panel>
-
-          {/* ── Quick Info: what the app worked out ── */}
+        {/* On a phone this column dissolves, so its two cards take their own
+            places in the one-column order: Value, Asset Details, Quick Info. */}
+        <div className="contents lg:flex lg:flex-col lg:gap-2.5 lg:min-w-0 lg:order-2">
+          <div className="order-1 min-w-0"><ValueCard profile={profile} /></div>
           {hasQuick && (
+            <div className="order-3 min-w-0 flex flex-col lg:flex-1">
             <Panel title="Quick Info" testId="asset-quick-info" grow>
               {age && quickRow(Calendar, "Age", age, "asset-quick-age")}
               {worked.map((m) => quickRow(iconFor(m.semanticKey), m.label, <span className={toneClass(m.tone)}>{formatValue(m)}</span>,
                 `overview-metric-${m.semanticKey}`, <ProvenanceMark value={m} />))}
               {nextAlert && quickRow(Bell, nextAlert.title, nextAlert.when, "asset-alert-row")}
             </Panel>
+            </div>
           )}
         </div>
       </div>
 
-      {sectionsOf("progressIndicator", "relationshipSummary", "ownershipSummary", "maintenanceSummary", "miniTimeline", "aiInsight")}
+      {linked}
 
-      {/* ── AI Summary and Value & Depreciation: one card ── */}
-      <section className={`${PANEL} grid grid-cols-1 gap-3 items-stretch ${summarySlot ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" : ""}`} data-testid="asset-summary-and-value">
-        {summarySlot && (
-          <div className="min-w-0 [&>*]:!border-0 [&>*]:!bg-transparent [&>*]:!shadow-none [&>*>.h-1]:hidden" data-testid="asset-summary-slot">
-            {summarySlot}
-          </div>
-        )}
-        <ValueCard profile={profile} inset={!!summarySlot} />
-      </section>
+      {summarySlot && <div className="min-w-0" data-testid="asset-summary-slot">{summarySlot}</div>}
+
+      {/* ── Characteristics ── */}
+      <Panel
+        title="Characteristics"
+        testId="asset-characteristics"
+        action={
+          <Button variant="outline" size="sm" className="h-7 text-xs gap-1 border-emerald-500/50" onClick={() => setAddingField((a) => !a)} data-testid="asset-add-characteristic">
+            <Plus className="h-3.5 w-3.5 text-emerald-400" /> Add Characteristic
+          </Button>
+        }
+      >
+        {charRows.length > 0
+          ? <div className="grid grid-cols-1 lg:grid-cols-2 lg:gap-x-6">{charRows}</div>
+          : !addingField && (
+            <p className="py-1 text-[13px] text-muted-foreground" data-testid="asset-characteristics-empty">
+              Nothing here yet. Add a colour, a model, a serial number, a condition.
+            </p>
+          )}
+        {addingField && <div className="mt-2"><AddFieldPanel profileId={profile.id} inline onAdded={() => setAddingField(false)} /></div>}
+      </Panel>
+
+      {/* Whatever the page adds (trackers, saved cells) comes here, then
+          recent activity, which is always last. */}
+      {tailSlot}
+      {activity.length > 0 && <div data-testid="asset-section-activity">{activity}</div>}
     </>
   );
 }
@@ -754,10 +754,10 @@ export function AssetQuickAdd({ profileId, fields, onOpenDocuments, onEdit }: {
     }
   };
   const amt = parseMoney(amount);
-  const btn = "h-8 text-xs gap-1 shrink-0";
+  const btn = "h-7 px-2.5 text-xs gap-1 shrink-0";
 
   return (
-    <div className="flex items-center gap-1.5" data-testid="asset-quick-add">
+    <div className="flex flex-nowrap items-center gap-1.5 w-max" data-testid="asset-quick-add">
       <Button variant="outline" size="sm" className={btn} onClick={() => setOpen("task")} data-testid="quick-add-task"><Plus className="h-3.5 w-3.5 text-emerald-400" /> Task</Button>
       <Button variant="outline" size="sm" className={btn} onClick={() => setOpen("expense")} data-testid="quick-add-expense"><Plus className="h-3.5 w-3.5 text-emerald-400" /> Expense</Button>
       <Button variant="outline" size="sm" className={btn} onClick={() => setOpen("note")} data-testid="quick-add-note"><Plus className="h-3.5 w-3.5 text-emerald-400" /> Note</Button>

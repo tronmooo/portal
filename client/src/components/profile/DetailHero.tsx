@@ -88,7 +88,14 @@ export interface DetailHeroProps {
    * phone). `menu` sits at its top right; `progress` is not drawn. Without
    * it, `pageTitle` keeps the centred-title layout the asset profile uses.
    */
-  layout?: "card";
+  layout?: "card" | "slim";
+  /**
+   * "slim" only: the one figure at the right of the row (the asset's value).
+   * A slim header is ONE row — back, a small picture, the name, this figure,
+   * `actions` — and draws nothing else (owner, 2026-11-23: "it's too big …
+   * just say Honda CRV and the value").
+   */
+  value?: React.ReactNode;
   /** The ⋯ control at the top right of the card layout. */
   menu?: React.ReactNode;
   /** The glyph beside `typeLabel` in the card layout. */
@@ -98,8 +105,50 @@ export interface DetailHeroProps {
 export function DetailHero({
   title, accent, icon: Icon, typeLabel, badges, subtitle, breadcrumb, notes,
   avatar, backHref, onBack, backLabel = "Back", actions, stats = [], progress, pageTitle, aside,
-  testId = "detail-hero", layout, menu, typeIcon: TypeIcon,
+  testId = "detail-hero", layout, menu, typeIcon: TypeIcon, value,
 }: DetailHeroProps) {
+  if (layout === "slim") {
+    const backCls = "grid h-8 w-8 -ml-1.5 shrink-0 place-items-center rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors";
+    const chevron = <><ChevronLeft className="h-5 w-5" /><span className="sr-only">{backLabel}</span></>;
+    return (
+      <div className="bubble px-2.5 py-2 flex items-center gap-2" style={{ ["--accent-hsl" as any]: accent }} data-testid={testId}>
+        {backHref && backHref.includes("?") ? (
+          // A query-carrying target stays inside the hash (see below).
+          <a href={`#${backHref}`} className={backCls} data-testid="button-back">{chevron}</a>
+        ) : backHref ? (
+          <Link href={backHref} className={backCls} data-testid="button-back">{chevron}</Link>
+        ) : onBack ? (
+          <button type="button" onClick={onBack} className={backCls} data-testid="button-back">{chevron}</button>
+        ) : null}
+        {avatar && (
+          <>
+            {avatar.inputRef && (
+              <input ref={avatar.inputRef} type="file" accept="image/*" className="hidden" onChange={avatar.onChange} data-testid="input-avatar-upload" />
+            )}
+            <button
+              type="button"
+              className="medallion pressable relative !w-7 !h-7 !rounded-lg overflow-hidden shrink-0"
+              style={{ ["--accent-hsl" as any]: accent }}
+              onClick={avatar.onPick}
+              disabled={avatar.busy}
+              title="Change picture"
+              data-testid="button-avatar-upload"
+            >
+              {avatar.src
+                ? <img src={avatar.src} alt="" className="w-full h-full object-cover" />
+                : <Icon className="h-4 w-4" strokeWidth={2.1} />}
+              {avatar.busy && (
+                <span className="absolute inset-0 bg-black/50 grid place-items-center"><RefreshCw className="h-3 w-3 text-white animate-spin" /></span>
+              )}
+            </button>
+          </>
+        )}
+        <h1 className="flex-1 min-w-0 truncate text-[16px] font-bold tracking-tight" data-testid="detail-hero-title">{title}</h1>
+        {value && <div className="shrink-0">{value}</div>}
+        {actions && <div className="flex items-center shrink-0">{actions}</div>}
+      </div>
+    );
+  }
   if (layout === "card" && pageTitle) {
     // The owner's profile header (2026-11-23): ONE card — the picture, a tag
     // naming the page, the name, the chips, and the headline figures at the

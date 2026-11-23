@@ -715,23 +715,30 @@ and schedule fields are never listed there as text (L2/L3).
 *Guards:* `tests/info-tab-editable.dom.test.tsx`, `tests/add-field-panel.dom.test.tsx`,
 `tests/overview-render.dom.test.tsx`.
 
-## Asset profile layout (the owner's mock-up; a drawing of stores other screens read)
+## Asset profile layout (the owner's design; a drawing of stores other screens read)
 
-Owner, 2026-11-23 (second mock-up, replacing the tile layout of 2026-11-22):
-"this is simpler and this is how I want the entire overview page", "the
-current value is the one the AI estimates", "nothing loses connections",
-"no empty spaces", "everything should be editable". An owned thing's page
+Owner, 2026-11-23, after three rounds: "everything's just too big … just say
+Honda CRV and the value", "any attached photo should be barely anything",
+"characteristics all the way at the bottom", "recent activity all the way at
+the bottom", "make logical sense out of this". An owned thing's page
 (`usesAssetLayout`, `client/src/pages/profile-detail.tsx`; an account keeps
-`AccountOverview`) is built from `client/src/components/asset/AssetOverviewLayout.tsx`:
-`AssetHeroStats` in the `DetailHero` (`pageTitle`, `aside`: ONE header row —
-back, picture, name and chips, the four figures, the ⋯ menu), `AssetQuickAdd`
-beside the tabs, `AssetOverviewBody` (Asset Details | Characteristics + Quick
-Info, then AI Summary | Value & Depreciation) and `AssetAlertMenuItems` in the
-⋯ menu. Nothing sits under the two card rows: Edit, Ownership, Documents,
-Clear / Restore alerts and Delete are the ⋯ menu ("remove all that space, make
-it look exactly like the photo"). Read this before touching any of them.
+`AccountOverview`) is built from `client/src/components/asset/AssetOverviewLayout.tsx`.
+Read this before touching it.
 *Guard:* `tests/asset-overview-layout.dom.test.tsx`.
 *Live check (deployed app, smoke account, real browser):* `npx tsx tests/live-asset-overview-check.ts`.
+
+**P0. The header is one slim row and the page has one order.** `DetailHero
+layout="slim"`: back · a 28px picture (still the photo picker) · the name ·
+the current value (`AssetHeroValue`) · the ⋯ menu. No tag, chips, owner line,
+figures block or stat tiles — each of those has a home below: Category and
+Ownership are Asset Details rows; Purchase Price, the change and Confidence
+are the Value card; the document count is on the Documents tab label; the
+parent trail and tags are a small line under the tabs (`asset-trail`). Never
+grow the header again. The Overview reads, top to bottom: **Value →
+Asset Details → Quick Info → linked things → AI Summary → Characteristics →
+the page's own cards (trackers, saved cells: `tailSlot`) → Recent activity,
+always last.** On a wide screen Asset Details sits beside Value + Quick Info.
+Card titles are 14px and rows 32px; do not scale them back up.
 
 **P1. The layout owns no data.** Rows, dates and "Not set" suggestions are the
 composed `OverviewSpec` (through `DynamicOverview`'s `renderBody`, which keeps
@@ -740,12 +747,12 @@ PATCH — the same field the chat's `update_profile` writes. Add a section by
 reading a store that exists, never by storing a copy. Quick Info is only what
 the app worked out (age from the purchase date, the composition's calculated
 metrics, the next alert): never invent a figure such as a "useful life".
-**P2. One current value.** The header, Value & Depreciation and the AI summary
-all show `useValuePosition`: `currentAssetValue` (Rule 1) — the estimate while
-Portol tracks the value, the user's own number once tracking is off — against
-the purchase price. There is no separate value card at the top; how the
-estimate was made, Refresh and the "Track value automatically" switch are the
-`CurrentValueCard` under Value & Depreciation's disclosure.
+**P2. One current value.** The header and the Value card both show
+`useValuePosition`: `currentAssetValue` (Rule 1) — the estimate while Portol
+tracks the value, the user's own number once tracking is off — against the
+purchase price. How the estimate was made, Refresh and the "Track value
+automatically" switch are the `CurrentValueCard` under the Value card's
+disclosure.
 **P3. Alerts are the rule engine's.** Quick Info's alert row and the menu's
 "Clear alerts" are `useRecordAlerts`: `rulesFromAll` over the UNFLATTENED
 profile row and its documents, filtered by `isAlertDateRule`, identified by
@@ -762,8 +769,7 @@ once; **Undo** puts back what was there; typing and opening write nothing
 (Rule 3). **Edit** opens the full dialog. A date stored as something other
 than a calendar day ("2024") stays a text box, so the form cannot lose it. A
 characteristic (`CharRow`) has a pencil and an X (two taps, Rule 8). The page
-is dense (32px rows, tight cards) and AI Summary shares ONE card with Value &
-Depreciation. Only what the app calculated is read-only.
+is dense (32px rows, tight cards). Only what the app calculated is read-only.
 **P5. Quick add creates ordinary records.** + Task, + Expense and + Note post
 to `/api/tasks`, `/api/expenses` and `/api/notes` with this asset linked, so
 they show on the Tasks page, in Finance and under Notes too; More holds "Add
