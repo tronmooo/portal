@@ -482,7 +482,8 @@ the chat box. Read these before touching that file, `pages/workspace-*.tsx`,
 `pages/editor.tsx` or `server/workspace-ai.ts`.
 *Guards:* `tests/chat-workspace-buttons.dom.test.tsx`, `tests/workspace-notes.dom.test.tsx`,
 `tests/journal-workspace.dom.test.tsx`, `tests/note-markdown.test.ts`,
-`tests/doc-rich-content.test.ts`, `tests/workspace-ai.test.ts`.
+`tests/doc-rich-content.test.ts`, `tests/workspace-ai.test.ts`,
+`tests/workspace-editors-mobile.dom.test.tsx`.
 *Live check (deployed app, smoke account, real browser):* `npx tsx tests/live-workspaces-ui-check.ts`.
 
 **W1. Full screen means the whole window.** A workspace is mounted on
@@ -491,10 +492,40 @@ and a fixed box inside it does not reach the window's edges. While one is open
 `useFullScreenWorkspace` marks `<html>`/`<body>`, which hides the floating
 chrome (`data-app-floating`) and releases the desktop scrollbar gutters. Stay
 at `z-40`: menus and dialogs opened inside a workspace portal at `z-50`.
-**W2. The X saves, then leaves; it never asks and never discards.** Each
+**W2. The X saves, then leaves; it never discards on its own.** Each
 workspace hands `WorkspaceCloseButton` a function that flushes what is pending
-and then goes to `/chat`. A failed save keeps the workspace open. The
-editor's Back does the same (the old "Unsaved changes. Leave anyway?" is gone).
+and then goes to `/chat`. A failed save keeps the workspace open: the
+`onClose` answers `false` and the header shows `UnsavedLeaveBar` ("Keep
+editing" / "Leave without saving") — the only way out with unsaved work, and
+only after that warning. Closing the browser tab with work unsaved warns
+(`useUnsavedWarning`).
+**W11. One phone layout for the three editors** (owner, 2026-11-23: "compact,
+mobile-friendly, unlimited-length"). The header is `WorkspaceHeader` (the
+Document editor draws the same pieces): X at the LEFT, the title and its save
+status, then **Save** at the right (`WorkspaceSaveButton`: never hidden,
+disabled only while there is nothing to save, "Saved" when it lands; the
+tap and the autosave share one save chain, so they make ONE record). Under it
+ONE scroll area (`data-workspace-scroll`) holds the compact options (date,
+mood chips, category, tags, attach, delete) and a writing area that GROWS
+with the text (`useAutoGrow`; never a box with its own scrollbar, never
+`flex-1` on the textarea — that pins its height). A row of controls that can
+be wider than a phone scrolls sideways inside itself and carries
+`data-swipe-ignore` (T1). The frame follows the VISUAL viewport
+(`useVisualViewportBox`), so the header stays on screen and the bottom bars
+ride above the keyboard; the Ask AI bar steps aside while the keyboard is up
+for the writing. An open workspace adds `maximum-scale=1` to the viewport
+meta so iOS does not zoom into a small field (that zoom was the sideways
+scroll); option fields carry `ws-field` / `ws-title` to keep their size.
+No body text has a length cap: journal and note bodies are cleaned with
+`sanitizeLongText` (`LONG_TEXT_MAX`, `server/routes.ts`), never the 10,000-
+character `sanitize` (2026-11-23: a long entry was cut at 10,000 characters
+and the save reported success). Attach (`AttachMenu`) offers the photo
+library, the camera and any file, several at once: a journal entry points at
+photos (`photo:`) and files (`file:`, `journalFileIds`); a note links them in
+its text (W8; `removeAttachmentLink` takes one out); a document puts a
+picture in the page and links any other file, listed under the text.
+*Guards:* `tests/workspace-editors-mobile.dom.test.tsx`, `tests/journal-entries-routes.test.ts`.
+*Live check (three phone widths, touch, smoke account):* `npx tsx tests/live-editors-mobile-check.ts`.
 **W3. Opening writes nothing (Rule 3); typing does.** Notes creates the note on
 the first text and updates THAT note after; Journal creates one DRAFT entry,
 then updates it, and titles an untitled entry only if it was written in this
@@ -547,7 +578,7 @@ the page, the PDF and the Word file are all drawn from it. A picture never
 goes to the AI: it travels as a `[[PICTURE n]]` marker and is put back, or
 appended if the model dropped it (`picturesToMarkers` / `markersToPictures`).
 *Not built (2026-11-23):* resizing pictures and column widths, headers/footers
-and page breaks in the editor; table and picture buttons on the phone toolbar;
+and page breaks in the editor; a table button on the phone toolbar;
 pictures inside notes; Word and spreadsheet forms, and online (browser) form
 filling, in Fill In; a Computer mode.
 

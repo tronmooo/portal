@@ -16,6 +16,11 @@
 //  - A failed list is an error with a retry, never "no notes" (Rule 7).
 //  - The category filter hides rows, so it says so and is never stored (Rule 4).
 //  - Delete takes two taps (Rule 8).
+//
+// Phone layout (owner, 2026-11-23): the shared header (X | title | Save), one
+// formatting row that scrolls sideways (never off screen), then ONE scroll
+// area — the compact options (category, tags, profile), the note growing with
+// what is written, and its attachments as small thumbnails and file rows.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEditor, EditorContent } from "@tiptap/react";
@@ -24,14 +29,17 @@ import { TaskItem, TaskList } from "@tiptap/extension-list";
 import DOMPurify from "dompurify";
 import {
   Bold, CheckSquare, Code, Heading1, Heading2, Italic, Link as LinkIcon, List, ListOrdered, ListTodo, Loader2,
-  Paperclip, Plus, Quote, Search, Sparkles, Strikethrough, Trash2, FileText,
+  Plus, Quote, Search, Sparkles, Strikethrough, Trash2, FileText, X,
 } from "lucide-react";
+import { useDocumentBlobUrl } from "@/lib/document-preview";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
-import { WorkspaceShell, WorkspaceAiBar, aiErrorText, leaveWorkspace } from "@/components/workspace/WorkspaceShell";
+import {
+  AttachMenu, WorkspaceShell, WorkspaceAiBar, aiErrorText, leaveWorkspace, readFileAsDataUrl, useAutoGrow,
+} from "@/components/workspace/WorkspaceShell";
 import {
   attachmentLink, markdownToNoteHtml, noteAttachments, noteCategory, noteDocToMarkdown, noteLabels,
   noteNeedsPlainEditor, noteTagsFor, type NoteNode,
@@ -42,7 +50,34 @@ interface ProfileRow { id: string; name: string; type: string }
 
 export const NOTE_AUTOSAVE_MS = 900;
 export const NOTE_ATTACH_MAX_BYTES = 10 * 1024 * 1024;
-const ATTACH_ACCEPT = "image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,.doc,.docx";
+const IMAGE_NAME = /\.(jpe?g|png|gif|webp|heic|heif)$/i;
+
+/** Take one attachment's link out of a note's markdown (the file stays in Documents). */
+export function removeAttachmentLink(markdown: string, documentId: string): string {
+  const id = documentId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const link = new RegExp(`\\[(?:[^\\]\\\\]|\\\\.)*\\]\\(#/documents/${id}\\)`, "g");
+  return String(markdown || "")
+    .replace(new RegExp(`\\n?[ \\t]*${link.source}[ \\t]*(?=\\n|$)`, "g"), "")
+    .replace(link, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\s+|\s+$/g, "");
+}
+
+/** A picture attached to a note: a small thumbnail that opens it. */
+function AttachmentThumb({ id, name, onOpen, onRemove, armed }: { id: string; name: string; onOpen: () => void; onRemove: () => void; armed: boolean }) {
+  const blob = useDocumentBlobUrl(id, "image/jpeg");
+  return (
+    <div className="relative h-16 w-16 rounded-lg overflow-hidden border border-border bg-muted shrink-0" data-testid={`note-attachment-${id}`}>
+      <button type="button" className="h-full w-full flex items-center justify-center text-[11px] text-muted-foreground" onClick={onOpen} title={`Open ${name}`} aria-label={`Open ${name}`}>
+        {blob.url ? <img src={blob.url} alt={name} className="h-full w-full object-cover" /> : blob.error ? "Couldn't load" : <Loader2 className="h-4 w-4 animate-spin" />}
+      </button>
+      <button type="button" onClick={onRemove} aria-label={armed ? "Tap again to remove this attachment" : "Remove attachment"}
+        className={`absolute top-0.5 right-0.5 h-5 rounded-full text-[11px] px-1 flex items-center gap-0.5 ${armed ? "bg-destructive text-destructive-foreground" : "bg-background/85 text-foreground"}`}>
+        <X className="h-3 w-3" />{armed ? "Remove?" : ""}
+      </button>
+    </div>
+  );
+}
 
 /** A note with no typed title is named by its first line. */
 export function noteTitleFromText(content: string): string {
@@ -110,7 +145,9 @@ export default function NotesWorkspacePage() {
   const [mode, setMode] = useState<"rich" | "plain">("rich");
   const preferPlain = useRef(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  useAutoGrow(textRef, mode === "plain" ? content : "");
+  const latestContent = useRef(content);
+  latestContent.current = content;
 
   // Latest values for the save loop, which runs outside render.
   const latest = useRef({ noteId, title, titleTyped, content, tags, category, profileId });
@@ -183,7 +220,7 @@ export default function NotesWorkspacePage() {
       TaskItem.configure({ nested: true }),
     ],
     content: "<p></p>",
-    editorProps: { attributes: { class: "note-rich outline-none min-h-[45vh]", "data-testid": "note-rich-editor", "aria-label": "Note" } },
+    editorProps: { attributes: { class: "note-rich outline-none min-h-[45vh] text-base", "data-testid": "note-rich-editor", "aria-label": "Note" } },
     onUpdate: ({ editor: ed }) => {
       if (loading.current) return;
       setContent(noteDocToMarkdown(ed.getJSON() as NoteNode));
@@ -227,6 +264,7 @@ export default function NotesWorkspacePage() {
 
   /** Replace the whole note's text (AI suggestion, dropped text). */
   const replaceContent = (md: string) => {
+    latestContent.current = md;
     setContent(md);
     if (mode === "rich") {
       if (noteNeedsPlainEditor(md)) setMode("plain"); else loadIntoEditor(md);
@@ -284,38 +322,44 @@ export default function NotesWorkspacePage() {
   };
 
   // An attachment is a file saved to Documents and linked from the note.
-  const attach = async (file: File | undefined | null) => {
-    if (!file) return;
-    if (file.size > NOTE_ATTACH_MAX_BYTES) { toast({ title: "File too large", description: "Attachments can be up to 10 MB.", variant: "destructive" }); return; }
+  const attach = async (picked: File[] | File | undefined | null) => {
+    const list = (Array.isArray(picked) ? picked : picked ? [picked] : []);
+    if (list.length === 0) return;
     setAttaching(true);
     try {
-      const data: string = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(new Error("Couldn't read that file."));
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.readAsDataURL(file);
-      });
-      const r = await apiRequest("POST", "/api/upload/save-only", {
-        fileName: file.name, mimeType: file.type || "application/octet-stream", fileData: data,
-        ...(profileId ? { profileIds: [profileId] } : {}),
-      });
-      const j = await r.json();
-      if (!j?.documentId) throw new Error("The file was not saved.");
-      void invalidateDomain("documents");
-      appendMarkdown(attachmentLink({ name: file.name, documentId: String(j.documentId) }));
-    } catch (err) {
-      toast({ title: "Couldn't attach that file", description: aiErrorText(err), variant: "destructive" });
+      const links: string[] = [];
+      for (const file of list) {
+        if (file.size > NOTE_ATTACH_MAX_BYTES) { toast({ title: `${file.name || "That file"} is too large`, description: "Attachments can be up to 10 MB.", variant: "destructive" }); continue; }
+        try {
+          const data = await readFileAsDataUrl(file);
+          const r = await apiRequest("POST", "/api/upload/save-only", {
+            fileName: file.name || "photo.jpg", mimeType: file.type || "application/octet-stream", fileData: data,
+            ...(profileId ? { profileIds: [profileId] } : {}),
+          });
+          const j = await r.json();
+          if (!j?.documentId) throw new Error("The file was not saved.");
+          links.push(attachmentLink({ name: file.name || "photo.jpg", documentId: String(j.documentId) }));
+        } catch (err) {
+          toast({ title: `Couldn't attach ${file.name || "that file"}`, description: aiErrorText(err), variant: "destructive" });
+        }
+      }
+      if (links.length) {
+        void invalidateDomain("documents");
+        const now = latestContent.current;
+        replaceContent(now.trim() ? `${now.replace(/\s+$/, "")}\n\n${links.join("\n\n")}` : links.join("\n\n"));
+      }
     } finally {
       setAttaching(false);
     }
   };
+  const detach = (documentId: string) => replaceContent(removeAttachmentLink(latestContent.current, documentId));
 
   const onDropFile = async (e: React.DragEvent) => {
     const file = e.dataTransfer?.files?.[0];
     if (!file) return;
     e.preventDefault();
     if (file.type.startsWith("text/") || /\.(md|csv)$/i.test(file.name)) appendMarkdown(await file.text());
-    else await attach(file);
+    else await attach(Array.from(e.dataTransfer.files));
   };
 
   const categories = useMemo(() => {
@@ -335,7 +379,7 @@ export default function NotesWorkspacePage() {
   const attachments = useMemo(() => noteAttachments(content), [content]);
   const proposalHtml = useMemo(() => (proposal === null ? "" : DOMPurify.sanitize(markdownToNoteHtml(proposal))), [proposal]);
 
-  const tool = "h-8 w-8 rounded-md flex items-center justify-center hover:bg-muted text-muted-foreground hover:text-foreground aria-pressed:bg-primary/15 aria-pressed:text-primary";
+  const tool = "h-8 w-8 shrink-0 rounded-md flex items-center justify-center hover:bg-muted text-muted-foreground hover:text-foreground aria-pressed:bg-primary/15 aria-pressed:text-primary";
   const on = (name: string, attrs?: Record<string, any>) => (mode === "rich" && editor?.isActive(name, attrs)) || undefined;
 
   const list = (
@@ -414,95 +458,50 @@ export default function NotesWorkspacePage() {
     </div>
   );
 
+  const pending = () => dirty.current && !!latestContent.current.trim();
+  const optionInput = "ws-field h-7 rounded-full border border-border bg-background px-2.5 text-xs text-foreground outline-none min-w-0";
+
   return (
     <WorkspaceShell
       kind="notes"
       status={STATUS[state]}
-      onClose={async () => { await saveNow(); leaveWorkspace(); }}
+      unsaved={state === "dirty" || state === "error" || state === "saving"}
+      onClose={async () => { await saveNow(); if (pending()) return false; leaveWorkspace(); }}
+      save={{
+        state: state === "new" ? "empty" : state,
+        disabled: !content.trim(),
+        onSave: async () => { await saveNow(); return !pending(); },
+      }}
       title={
         <input
           value={titleTyped ? title : (title || noteTitleFromText(content))}
           onChange={(e) => { setTitle(e.target.value); setTitleTyped(true); touch(); }}
           placeholder="Untitled note"
           aria-label="Note title"
-          className="w-full bg-transparent text-base font-semibold outline-none truncate"
+          className="ws-title w-full bg-transparent text-sm font-semibold outline-none truncate"
           data-testid="input-note-title"
         />
       }
       actions={
-        <>
-          <button type="button" onClick={() => setListOpen((v) => !v)} className="md:hidden h-9 px-2.5 rounded-md border border-border text-xs" data-testid="button-notes-list">
-            {listOpen ? "Editor" : `Notes (${notes.length})`}
-          </button>
-          {noteId && (
-            <button
-              type="button"
-              onClick={() => confirm("delete", () => void removeNote())}
-              className={`h-9 px-2.5 rounded-md border text-xs flex items-center gap-1 ${isArmed("delete") ? "border-destructive text-destructive" : "border-border text-muted-foreground"}`}
-              data-testid="button-note-delete"
-            >
-              <Trash2 className="h-3.5 w-3.5" /> {isArmed("delete") ? "Tap again to delete" : <span className="hidden sm:inline">Delete</span>}
-            </button>
-          )}
-        </>
+        <button type="button" onClick={() => setListOpen((v) => !v)} className="md:hidden h-8 px-2.5 rounded-full border border-border text-xs shrink-0" data-testid="button-notes-list">
+          {listOpen ? "Editor" : `Notes (${notes.length})`}
+        </button>
       }
     >
-      <div className="flex-1 min-h-0 flex">
-        <aside className={`${listOpen ? "flex" : "hidden"} md:flex flex-col w-full md:w-80 border-r border-border bg-muted/30 min-h-0`}>{list}</aside>
+      <div className="flex-1 min-h-0 min-w-0 flex">
+        <aside className={`${listOpen ? "flex" : "hidden"} md:flex flex-col w-full md:w-72 border-r border-border bg-muted/30 min-h-0`}>{list}</aside>
         <div className={`${listOpen ? "hidden" : "flex"} md:flex flex-1 min-w-0 flex-col`}>
-          {/* What the note IS: category, tags, who it is linked to. */}
-          <div className="flex items-center gap-2 px-4 py-2 border-b border-border flex-wrap shrink-0">
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              {category.trim() && <span className="h-2.5 w-2.5 rounded-full" style={dot(category.trim())} />}
-              <input
-                list="note-categories"
-                value={category}
-                onChange={(e) => { setCategory(e.target.value); touch(); }}
-                placeholder="Category"
-                aria-label="Category"
-                className="h-8 w-36 rounded-full border border-border bg-background px-3 text-xs text-foreground outline-none"
-                data-testid="input-note-category"
-              />
-              <datalist id="note-categories">{categories.map(([name]) => <option key={name} value={name} />)}</datalist>
-            </label>
-            <input
-              value={tags}
-              onChange={(e) => { setTags(e.target.value); touch(); }}
-              placeholder="Tags, comma separated"
-              aria-label="Tags"
-              className="h-8 w-48 rounded-full border border-border bg-background px-3 text-xs outline-none"
-              data-testid="input-note-tags"
-            />
-            {!noteId && profiles.length > 1 && (
-              <select
-                value={profileId}
-                onChange={(e) => setProfileId(e.target.value)}
-                aria-label="Link this note to a profile"
-                title="Link this note to a profile"
-                className="h-8 rounded-full border border-border bg-background px-2 text-xs"
-                data-testid="select-note-profile"
-              >
-                <option value="">Not linked to a profile</option>
-                {profiles.map((p) => <option key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</option>)}
-              </select>
-            )}
-            <div className="flex-1" />
-            <button type="button" onClick={switchMode} className="h-8 px-3 rounded-full border border-border text-xs text-muted-foreground hover:text-foreground"
-              title={mode === "rich" ? "Edit the note as plain markdown text" : "Edit the note as formatted text"} data-testid="button-note-mode">
-              {mode === "rich" ? "Markdown" : "Rich text"}
-            </button>
-          </div>
-          {/* Formatting. */}
-          <div className="flex items-center gap-0.5 px-3 py-1 border-b border-border bg-muted/30 flex-wrap shrink-0" data-testid="note-toolbar">
+          {/* Formatting: one row that scrolls sideways on a phone, so nothing falls off screen. */}
+          <div className="flex items-center gap-0.5 px-1.5 py-0.5 border-b border-border bg-muted/30 overflow-x-auto overflow-y-hidden shrink-0 [scrollbar-width:none]" data-swipe-ignore data-testid="note-toolbar">
             {mode === "rich" ? (
               <>
                 <button type="button" className={tool} aria-label="Bold" aria-pressed={on("bold")} onClick={() => editor?.chain().focus().toggleBold().run()} data-testid="button-note-bold"><Bold className="h-4 w-4" /></button>
                 <button type="button" className={tool} aria-label="Italic" aria-pressed={on("italic")} onClick={() => editor?.chain().focus().toggleItalic().run()}><Italic className="h-4 w-4" /></button>
                 <button type="button" className={tool} aria-label="Strikethrough" aria-pressed={on("strike")} onClick={() => editor?.chain().focus().toggleStrike().run()}><Strikethrough className="h-4 w-4" /></button>
-                <span className="w-px h-5 bg-border mx-1" />
+                <span className="w-px h-5 bg-border mx-0.5 shrink-0" />
                 <button type="button" className={tool} aria-label="Heading" aria-pressed={on("heading", { level: 1 })} onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}><Heading1 className="h-4 w-4" /></button>
                 <button type="button" className={tool} aria-label="Subheading" aria-pressed={on("heading", { level: 2 })} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}><Heading2 className="h-4 w-4" /></button>
-                <span className="w-px h-5 bg-border mx-1" />
+                <span className="w-px h-5 bg-border mx-0.5 shrink-0" />
                 <button type="button" className={tool} aria-label="Checklist" aria-pressed={on("taskList")} onClick={() => editor?.chain().focus().toggleTaskList().run()} data-testid="button-note-checklist"><ListTodo className="h-4 w-4" /></button>
                 <button type="button" className={tool} aria-label="Bulleted list" aria-pressed={on("bulletList")} onClick={() => editor?.chain().focus().toggleBulletList().run()}><List className="h-4 w-4" /></button>
                 <button type="button" className={tool} aria-label="Numbered list" aria-pressed={on("orderedList")} onClick={() => editor?.chain().focus().toggleOrderedList().run()}><ListOrdered className="h-4 w-4" /></button>
@@ -517,66 +516,130 @@ export default function NotesWorkspacePage() {
               </>
             ) : (
               <>
-                <button type="button" onClick={() => insertPrefix("- [ ] ")} className="h-8 px-2 rounded-md text-xs flex items-center gap-1 hover:bg-muted" data-testid="button-note-checklist"><ListTodo className="h-4 w-4" /> Checklist</button>
-                <button type="button" onClick={() => insertPrefix("- ")} className="h-8 px-2 rounded-md text-xs flex items-center gap-1 hover:bg-muted"><List className="h-4 w-4" /> List</button>
-                <button type="button" onClick={() => insertPrefix("## ")} className="h-8 px-2 rounded-md text-xs flex items-center gap-1 hover:bg-muted"><Heading2 className="h-4 w-4" /> Heading</button>
+                <button type="button" onClick={() => insertPrefix("- [ ] ")} className="h-8 px-2 rounded-md text-xs flex items-center gap-1 hover:bg-muted shrink-0" data-testid="button-note-checklist"><ListTodo className="h-4 w-4" /> Checklist</button>
+                <button type="button" onClick={() => insertPrefix("- ")} className="h-8 px-2 rounded-md text-xs flex items-center gap-1 hover:bg-muted shrink-0"><List className="h-4 w-4" /> List</button>
+                <button type="button" onClick={() => insertPrefix("## ")} className="h-8 px-2 rounded-md text-xs flex items-center gap-1 hover:bg-muted shrink-0"><Heading2 className="h-4 w-4" /> Heading</button>
               </>
             )}
-            <span className="w-px h-5 bg-border mx-1" />
-            <button type="button" disabled={attaching} onClick={() => { const el = fileRef.current; if (el) { el.value = ""; el.click(); } }}
-              className="h-8 px-2 rounded-md text-xs flex items-center gap-1 hover:bg-muted disabled:opacity-50" data-testid="button-note-attach">
-              {attaching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />} Attach
+            <span className="w-px h-5 bg-border mx-0.5 shrink-0" />
+            <button type="button" onClick={() => void makeTask()} disabled={!content.trim() && !title.trim()} title="Make a task from this note"
+              className="h-8 px-2 rounded-md text-xs flex items-center gap-1 hover:bg-muted disabled:opacity-40 shrink-0 whitespace-nowrap" data-testid="button-note-to-task"><CheckSquare className="h-4 w-4" /> Task</button>
+            <button type="button" onClick={switchMode} className="h-8 px-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted shrink-0 whitespace-nowrap"
+              title={mode === "rich" ? "Edit the note as plain markdown text" : "Edit the note as formatted text"} data-testid="button-note-mode">
+              {mode === "rich" ? "Markdown" : "Rich text"}
             </button>
-            <input ref={fileRef} type="file" accept={ATTACH_ACCEPT} className="hidden" onChange={(e) => void attach(e.target.files?.[0])} data-testid="input-note-attach" />
-            <button type="button" onClick={() => void makeTask()} disabled={!content.trim() && !title.trim()} className="h-8 px-2 rounded-md text-xs flex items-center gap-1 hover:bg-muted disabled:opacity-40" data-testid="button-note-to-task"><CheckSquare className="h-4 w-4" /> Make a task</button>
           </div>
-          {/* The sheet. */}
-          <div className="flex-1 min-h-0 overflow-y-auto bg-muted/20" onDragOver={(e) => e.preventDefault()} onDrop={(e) => void onDropFile(e)}>
-            <div className="bubble max-w-3xl my-4 mx-3 md:mx-auto px-5 md:px-10 py-6 md:py-8 min-h-[60vh]" data-testid="note-sheet">
-              {mode === "rich" ? (
-                <div className="relative">
-                  {!content.trim() && <p className="absolute top-0 left-0 text-muted-foreground/60 pointer-events-none">Start typing, paste, or drop a file here…</p>}
-                  <EditorContent editor={editor} className="prose prose-sm max-w-none" />
-                </div>
-              ) : (
-                <textarea
-                  ref={textRef}
-                  value={content}
-                  onChange={(e) => { setContent(e.target.value); touch(); }}
-                  placeholder="Start typing, paste, or drop a file here…"
-                  aria-label="Note"
-                  className="block w-full min-h-[55vh] bg-transparent text-sm leading-relaxed outline-none resize-none font-mono"
-                  data-testid="input-note-content"
+          {/* One scroll area: options, the note (it grows with what is written), attachments. */}
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain" data-workspace-scroll onDragOver={(e) => e.preventDefault()} onDrop={(e) => void onDropFile(e)}>
+            <div className="max-w-3xl mx-auto px-3 sm:px-6 pt-2 pb-6 min-h-full flex flex-col" data-testid="note-sheet">
+              {/* What the note IS: category, tags, who it is linked to — one compact line. */}
+              <div className="flex items-center gap-1.5 flex-wrap" data-testid="note-options">
+                <label className="flex items-center gap-1 min-w-0">
+                  {category.trim() && <span className="h-2 w-2 rounded-full shrink-0" style={dot(category.trim())} />}
+                  <input
+                    list="note-categories"
+                    value={category}
+                    onChange={(e) => { setCategory(e.target.value); touch(); }}
+                    placeholder="Category"
+                    aria-label="Category"
+                    className={`${optionInput} w-24`}
+                    data-testid="input-note-category"
+                  />
+                  <datalist id="note-categories">{categories.map(([name]) => <option key={name} value={name} />)}</datalist>
+                </label>
+                <input
+                  value={tags}
+                  onChange={(e) => { setTags(e.target.value); touch(); }}
+                  placeholder="Tags"
+                  aria-label="Tags, comma separated"
+                  title="Tags, comma separated"
+                  className={`${optionInput} flex-1 basis-24`}
+                  data-testid="input-note-tags"
                 />
-              )}
-              {attachments.length > 0 && (
-                <div className="mt-6 pt-4 border-t border-border/60" data-testid="note-attachments">
-                  <p className="micro-label text-muted-foreground mb-2">Attachments</p>
-                  <div className="flex flex-wrap gap-2">
-                    {attachments.map((a) => (
-                      <button key={a.documentId} type="button" onClick={async () => { await saveNow(); hashNavigate(`/documents/${a.documentId}`); }}
-                        className="h-9 px-3 rounded-full border border-border bg-background text-xs flex items-center gap-1.5 hover:bg-muted" title="Open in Documents"
-                        data-testid={`note-attachment-${a.documentId}`}>
-                        <FileText className="h-3.5 w-3.5" /> {a.name}
-                      </button>
-                    ))}
+                {!noteId && profiles.length > 1 && (
+                  <select
+                    value={profileId}
+                    onChange={(e) => setProfileId(e.target.value)}
+                    aria-label="Link this note to a profile"
+                    title="Link this note to a profile"
+                    className={`${optionInput} max-w-[9rem] px-2`}
+                    data-testid="select-note-profile"
+                  >
+                    <option value="">No profile</option>
+                    {profiles.map((p) => <option key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</option>)}
+                  </select>
+                )}
+                <AttachMenu onFiles={(f) => void attach(f)} busy={attaching} testId="note-attach" />
+                {noteId && (
+                  <button
+                    type="button"
+                    onClick={() => confirm("delete", () => void removeNote())}
+                    aria-label={isArmed("delete") ? "Tap again to delete this note" : "Delete this note"}
+                    className={`h-7 px-2 rounded-full text-xs flex items-center gap-1 shrink-0 ${isArmed("delete") ? "bg-destructive text-destructive-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    data-testid="button-note-delete"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> {isArmed("delete") ? "Tap again" : ""}
+                  </button>
+                )}
+              </div>
+              <div className="mt-2 flex-1 flex flex-col min-h-[50vh]">
+                {mode === "rich" ? (
+                  <div className="relative flex-1 flex flex-col">
+                    {!content.trim() && <p className="absolute top-0 left-0 text-base text-muted-foreground/60 pointer-events-none">Start typing, paste, or drop a file here…</p>}
+                    <EditorContent editor={editor} className="workspace-writing prose prose-sm max-w-none flex-1 flex flex-col [&>.ProseMirror]:flex-1" />
                   </div>
+                ) : (
+                  <textarea
+                    ref={textRef}
+                    value={content}
+                    onChange={(e) => { setContent(e.target.value); touch(); }}
+                    placeholder="Start typing, paste, or drop a file here…"
+                    aria-label="Note"
+                    rows={10}
+                    className="workspace-writing block w-full flex-[1_0_auto] min-h-[50vh] bg-transparent text-base leading-relaxed outline-none resize-none overflow-hidden font-mono"
+                    data-testid="input-note-content"
+                  />
+                )}
+              </div>
+              {attachments.length > 0 && (
+                <div className="mt-3 pt-2 border-t border-border/60 space-y-1.5" data-testid="note-attachments">
+                  {attachments.some((a) => IMAGE_NAME.test(a.name)) && (
+                    <div className="flex gap-1.5 flex-wrap">
+                      {attachments.filter((a) => IMAGE_NAME.test(a.name)).map((a) => (
+                        <AttachmentThumb key={a.documentId} id={a.documentId} name={a.name} armed={isArmed(`att:${a.documentId}`)}
+                          onOpen={async () => { await saveNow(); hashNavigate(`/documents/${a.documentId}`); }}
+                          onRemove={() => confirm(`att:${a.documentId}`, () => detach(a.documentId))} />
+                      ))}
+                    </div>
+                  )}
+                  {attachments.filter((a) => !IMAGE_NAME.test(a.name)).map((a) => (
+                    <div key={a.documentId} className="flex items-center gap-2 h-9 pl-2 pr-1 rounded-lg border border-border bg-muted/30 min-w-0" data-testid={`note-attachment-${a.documentId}`}>
+                      <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <button type="button" onClick={async () => { await saveNow(); hashNavigate(`/documents/${a.documentId}`); }}
+                        className="flex-1 min-w-0 text-left text-xs truncate hover:underline" title="Open in Documents">{a.name}</button>
+                      <button type="button" onClick={() => confirm(`att:${a.documentId}`, () => detach(a.documentId))}
+                        aria-label={isArmed(`att:${a.documentId}`) ? "Tap again to remove this attachment" : "Remove attachment"}
+                        className={`h-7 rounded-full text-[11px] px-2 flex items-center gap-0.5 shrink-0 ${isArmed(`att:${a.documentId}`) ? "bg-destructive text-destructive-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+                        <X className="h-3 w-3" />{isArmed(`att:${a.documentId}`) ? "Remove?" : ""}
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
           </div>
           {proposal !== null && (
-            <div className="border-t border-border bg-card px-4 py-3 shrink-0 max-h-[40vh] overflow-y-auto" data-testid="note-ai-proposal">
-              <p className="text-xs font-semibold flex items-center gap-1.5 mb-2"><Sparkles className="h-3.5 w-3.5 text-primary" /> AI suggestion — your note is unchanged until you choose</p>
-              <div className="prose prose-sm max-w-none note-rich bg-muted/40 rounded-md p-3" dangerouslySetInnerHTML={{ __html: proposalHtml }} />
-              <div className="flex gap-2 mt-2">
-                <button type="button" className="h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-semibold" onClick={() => { const p = proposal; setProposal(null); replaceContent(p); }} data-testid="button-note-ai-use">Use this</button>
-                <button type="button" className="h-9 px-3 rounded-md border border-border text-sm" onClick={() => setProposal(null)} data-testid="button-note-ai-discard">Discard</button>
+            <div className="border-t border-border bg-card px-3 py-2 shrink-0 max-h-[40%] overflow-y-auto overscroll-contain" data-testid="note-ai-proposal">
+              <p className="text-[11px] font-semibold flex items-center gap-1.5 mb-1.5"><Sparkles className="h-3.5 w-3.5 text-primary" /> AI suggestion — your note is unchanged until you choose</p>
+              <div className="prose prose-sm max-w-none note-rich bg-muted/40 rounded-md p-2.5" dangerouslySetInnerHTML={{ __html: proposalHtml }} />
+              <div className="flex gap-2 mt-1.5">
+                <button type="button" className="h-8 px-3 rounded-full bg-primary text-primary-foreground text-xs font-semibold" onClick={() => { const p = proposal; setProposal(null); replaceContent(p); }} data-testid="button-note-ai-use">Use this</button>
+                <button type="button" className="h-8 px-3 rounded-full border border-border text-xs" onClick={() => setProposal(null)} data-testid="button-note-ai-discard">Discard</button>
               </div>
             </div>
           )}
           <WorkspaceAiBar
-            placeholder="Ask AI to organize, tidy or turn this note into a checklist…"
+            placeholder="Ask AI to organize or tidy this note…"
             busy={aiBusy}
             onAsk={(i) => void askAi(i)}
             suggestions={content.trim() ? ["Organize this note", "Turn this into a checklist", "Fix spelling and grammar"] : []}

@@ -1301,7 +1301,21 @@ function htmlEscape(input: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
-function sanitize(input: unknown): string {
+/**
+ * How long a WRITTEN text may be — a journal entry, a note (owner request
+ * 2026-11-23: "unlimited-length entries"). The general 10,000-character cap
+ * below silently cut a long entry at 10,000 characters and reported success;
+ * these bodies take this one instead, which no person writing reaches (about
+ * 150,000 words) and the 10 MB request limit still covers.
+ */
+export const LONG_TEXT_MAX = 1_000_000;
+
+/** `sanitize` for a journal entry's or a note's body: the same cleaning, the long cap. */
+function sanitizeLongText(input: unknown): string {
+  return sanitize(input, LONG_TEXT_MAX);
+}
+
+function sanitize(input: unknown, max = 10000): string {
   // A non-string (an array or object where a title was expected) is not
   // text to clean; returning "" lets the schema reject it as empty instead
   // of `.replace` throwing halfway through the handler (a 500).
@@ -1317,7 +1331,7 @@ function sanitize(input: unknown): string {
     .replace(/data:text\/html/gi, '')
     .replace(/vbscript:/gi, '')
     .trim()
-    .slice(0, 10000);
+    .slice(0, max);
 }
 
 /** Text fields of an account must be strings when present (an object or array is not a name). */
@@ -7090,7 +7104,7 @@ Rules:
     if (!req.body?.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
       return res.status(400).json({ error: "Note content is required" });
     }
-    const content = sanitize(req.body.content);
+    const content = sanitizeLongText(req.body.content);
     // A note with no title gets one written from its text.
     const title = (req.body.title ? sanitize(String(req.body.title)).trim() : "") || await generateTitle(content, "note");
     // Honour the active-profile scope header the same way every other create
@@ -7112,8 +7126,8 @@ Rules:
   app.patch("/api/notes/:id", asyncHandler(async (req, res) => {
     const changes: Record<string, any> = {};
     if (typeof req.body?.title === "string") changes.title = sanitize(req.body.title);
-    if (typeof req.body?.content === "string") changes.content = sanitize(req.body.content);
-    if (typeof req.body?.append === "string") changes.append = sanitize(req.body.append);
+    if (typeof req.body?.content === "string") changes.content = sanitizeLongText(req.body.content);
+    if (typeof req.body?.append === "string") changes.append = sanitizeLongText(req.body.append);
     if (Array.isArray(req.body?.tags)) changes.tags = req.body.tags.map(String);
     const updated = await updateNote(storage, req.params.id, changes);
     if (!updated) return res.status(404).json({ error: "Note not found" });
@@ -9650,7 +9664,7 @@ Rules:
     if (!req.body.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
       return res.status(400).json({ error: "Journal content is required" });
     }
-    req.body.content = sanitize(req.body.content);
+    req.body.content = sanitizeLongText(req.body.content);
     // Mood auto-detection (user request 2026-07-16): when the writer didn't
     // pick a mood, stamp one from the text — same shared detector the chat
     // fast-path and the journal composer use.
@@ -9717,7 +9731,7 @@ Rules:
     }
     if (req.body.content !== undefined) {
       if (typeof req.body.content !== "string") return res.status(400).json({ error: "Journal content must be a string" });
-      req.body.content = sanitize(req.body.content);
+      req.body.content = sanitizeLongText(req.body.content);
     }
     if (req.body.mood !== undefined) {
       const validMoods = ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"];

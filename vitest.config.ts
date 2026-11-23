@@ -72,6 +72,7 @@ export default defineConfig({
       'tests/note-markdown.test.ts',
       'tests/doc-rich-content.test.ts',
       'tests/journal-workspace.dom.test.tsx',
+      'tests/workspace-editors-mobile.dom.test.tsx',
       'tests/chat-journal-read.test.ts',
       'tests/tracker-card-calories.dom.test.tsx',
       'tests/profile-loan-sync.test.ts',

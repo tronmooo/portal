@@ -192,7 +192,7 @@ describe("Notes workspace", () => {
     type("Lease notes");
     await waitFor(() => expect(writes()).toHaveLength(1), { timeout: 3000 });
     const file = new File(["%PDF-1.4"], "lease.pdf", { type: "application/pdf" });
-    fireEvent.change(screen.getByTestId("input-note-attach"), { target: { files: [file] } });
+    fireEvent.change(screen.getByTestId("input-note-attach-file"), { target: { files: [file] } });
     await waitFor(() => expect(calls.some((c) => c.url === "/api/upload/save-only")).toBe(true));
     expect(calls.find((c) => c.url === "/api/upload/save-only")!.body).toMatchObject({ fileName: "lease.pdf", mimeType: "application/pdf" });
     await waitFor(() => expect(screen.getByTestId("note-attachment-doc-9").textContent).toContain("lease.pdf"));

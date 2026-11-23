@@ -1497,6 +1497,24 @@ html[data-workspace], body[data-workspace] { scrollbar-gutter: auto; overflow: h
 .workspace-surface textarea:focus-visible,
 .workspace-surface input:focus-visible,
 .workspace-surface .ProseMirror:focus-visible { outline: none; box-shadow: none; }
+/* The editors on a phone (owner, 2026-11-23): nothing wider than the screen,
+   long words and links wrap, the writing is a comfortable 16px. (Focus-zoom
+   into the small option fields is stopped by useFullScreenWorkspace.) */
+.workspace-surface { max-width: 100vw; overflow-x: hidden; }
+.workspace-surface .workspace-writing,
+.workspace-surface .workspace-writing .ProseMirror { overflow-wrap: anywhere; word-break: normal; }
+.workspace-surface .workspace-writing .ProseMirror pre { white-space: pre-wrap; }
+/* The small option fields (date, category, tags, title in the header) keep
+   their compact size inside an editor: the 16px rule above exists only to
+   stop iOS zooming on focus, and an open workspace stops that zoom itself. */
+.workspace-surface :is(input, select).ws-field.ws-field { font-size: 12px !important; }
+.workspace-surface :is(input, select).ws-title.ws-title { font-size: 14px !important; }
+@media (max-width: 767px) {
+  .workspace-surface .workspace-writing .ProseMirror,
+  .workspace-surface .workspace-writing.prose { font-size: 16px; line-height: 1.6; }
+  .workspace-surface .workspace-writing .ProseMirror table { table-layout: auto; }
+  .workspace-surface .workspace-writing .tableWrapper { overflow-x: auto; }
+}
 /* The Document workspace's page: a sheet of paper on a desk, like a word processor. */
 @media (min-width: 768px) {
   .doc-page-desk { background: hsl(var(--muted) / 0.6); }

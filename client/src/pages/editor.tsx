@@ -35,19 +35,22 @@ import { useSheetSnapshot, buildSheetFunctions } from "@/lib/sheet-functions";
 import { SLASH_ITEMS, filterSlashItems, type SlashItem } from "@/lib/editor-slash-commands";
 import DOMPurify from "dompurify";
 import { apiRequest } from "@/lib/queryClient";
-import { useFullScreenWorkspace, WorkspaceAiBar, WorkspaceCloseButton, WorkspacePortal, aiErrorText } from "@/components/workspace/WorkspaceShell";
+import {
+  AttachMenu, WorkspaceAiBar, WorkspaceCloseButton, WorkspaceKeyboardProvider, WorkspacePortal, WorkspaceSaveButton, UnsavedLeaveBar,
+  aiErrorText, readFileAsDataUrl, useFullScreenWorkspace, useVisualViewportBox, viewportBoxStyle, type WorkspaceSaveState,
+} from "@/components/workspace/WorkspaceShell";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  ArrowLeft, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered,
+  Bold, Italic, Underline as UnderlineIcon, List, ListOrdered,
   Heading1, Heading2, LinkIcon, Code, Save, Download, Trash2, Copy, Loader2, Plus, Minus,
   Share2, Printer, Check, BarChart3, LineChart as LineChartIcon, AreaChart as AreaChartIcon, PieChart as PieChartIcon,
   Link2, User as UserIcon, Activity, FileText, ListChecks, CheckCircle2, BookOpen, Receipt, ExternalLink, PanelRightOpen, PanelRightClose,
   DollarSign, Percent, Hash, AlignLeft, AlignCenter, AlignRight,
   Calendar as CalendarIcon, Eraser, ChevronDown, Pencil as PencilIcon, MoreHorizontal,
-  Undo2, Redo2, UserPlus, AtSign, Strikethrough, Type, Highlighter, PaintBucket, LogOut,
+  Undo2, Redo2, AtSign, Strikethrough, Type, Highlighter, PaintBucket, LogOut,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
@@ -202,6 +205,9 @@ export default function EditorPage() {
   const { resolvedMode } = useTheme();
   // The editor is the Document workspace: it takes the whole screen.
   useFullScreenWorkspace();
+  // Pinned to the visual viewport: the header stays on screen and the
+  // formatting bar sits above the phone's keyboard.
+  const viewportBox = useVisualViewportBox();
 
   // Determine mode from URL: ?source=chat lets us post a chat card on save.
   const search = typeof window !== "undefined" ? window.location.hash.split("?")[1] || "" : "";
@@ -342,7 +348,12 @@ export default function EditorPage() {
     extensions: [
       StarterKit,
       Underline,
-      Link.configure({ openOnClick: false, HTMLAttributes: { class: "text-primary underline" } }),
+      Link.configure({
+        openOnClick: false,
+        HTMLAttributes: { class: "text-primary underline" },
+        // An attached file is a link to a saved document inside the app.
+        isAllowedUri: (url, ctx) => String(url || "").startsWith("#/documents/") || !!ctx.defaultValidate(url),
+      }),
       TableKit.configure({ table: { resizable: false } }),
       TiptapImage.configure({ allowBase64: true, inline: false }),
       TextAlign.configure({ types: ["heading", "paragraph"] }),
@@ -638,12 +649,93 @@ export default function EditorPage() {
     : dirty;
 
   // The X (and Back): save what is pending, then leave. Never asks, never discards.
-  const closeWorkspace = async () => {
+  const leaveEditor = () => { if (fromChat) setLocation("/chat"); else setLocation("/artifacts"); };
+  const closeWorkspace = async (): Promise<boolean | void> => {
     if (dirty && (savedId || hasUnsavedWork())) {
       quietSaveRef.current = true;
-      try { await saveMut.mutateAsync(); } catch { return; } // the toast says why; stay so nothing is lost
+      // The toast says why; stay so nothing is lost, and the header offers
+      // "Keep editing" / "Leave without saving".
+      try { await saveMut.mutateAsync(); } catch { return false; }
     }
-    if (fromChat) setLocation("/chat"); else setLocation("/artifacts");
+    leaveEditor();
+  };
+  const [leaveWarn, setLeaveWarn] = useState(false);
+
+  // The header's Save: always shown; disabled only while there is nothing to keep.
+  const saveState: WorkspaceSaveState = saveMut.isPending ? "saving"
+    : saveMut.isError && dirty ? "error"
+    : dirty ? "dirty"
+    : savedId ? "saved" : "empty";
+  const saveButton = (
+    <WorkspaceSaveButton
+      state={saveState}
+      disabled={!savedId && !hasUnsavedWork() && !(type === "sheet" && dirty)}
+      onSave={async () => {
+        if (!dirty && savedId) return true;
+        try { await saveMut.mutateAsync(); return true; } catch { return false; }
+      }}
+    />
+  );
+
+  // Attachments: a picture goes into the page; any other file is saved to
+  // Documents and linked from the page, where it is listed under the text.
+  const [attaching, setAttaching] = useState(false);
+  const attachFiles = async (files: File[]) => {
+    if (!editor) return;
+    setAttaching(true);
+    try {
+      for (const file of files) {
+        if (file.type.startsWith("image/")) { await insertImageFile(file); continue; }
+        if (file.size > 10 * 1024 * 1024) { toast({ title: `${file.name} is too large`, description: "Attachments can be up to 10 MB.", variant: "destructive" }); continue; }
+        try {
+          const data = await readFileAsDataUrl(file);
+          const r = await apiRequest("POST", "/api/upload/save-only", { fileName: file.name, mimeType: file.type || "application/octet-stream", fileData: data });
+          const j = await r.json();
+          if (!j?.documentId) throw new Error("The file was not saved.");
+          const safeName = file.name.replace(/[<>&"]/g, "");
+          editor.chain().focus("end").insertContent(`<p><a href="#/documents/${String(j.documentId)}">📎 ${safeName}</a></p>`).run();
+          setDocHtml(editor.getHTML());
+          setDirty(true);
+          qc.invalidateQueries({ queryKey: ["/api/documents"] });
+        } catch (err) {
+          toast({ title: `Couldn't attach ${file.name}`, description: aiErrorText(err), variant: "destructive" });
+        }
+      }
+    } finally {
+      setAttaching(false);
+    }
+  };
+  /** The files linked from the page, once each, in order. */
+  const docAttachments = useMemo(() => {
+    const out: Array<{ id: string; name: string }> = [];
+    const seen = new Set<string>();
+    for (const m of String(docHtml || "").matchAll(/<a[^>]*href="#\/documents\/([^"#?/]+)"[^>]*>([\s\S]*?)<\/a>/g)) {
+      if (seen.has(m[1])) continue;
+      seen.add(m[1]);
+      out.push({ id: m[1], name: m[2].replace(/<[^>]+>/g, "").replace(/^📎\s*/, "").trim() || "Attached file" });
+    }
+    return out;
+  }, [docHtml]);
+  const [armedAttachment, setArmedAttachment] = useState<string | null>(null);
+  useEffect(() => {
+    if (!armedAttachment) return;
+    const t = setTimeout(() => setArmedAttachment(null), 3000);
+    return () => clearTimeout(t);
+  }, [armedAttachment]);
+  /** Take a file's link out of the page (the file stays in Documents). */
+  const detachFile = (id: string) => {
+    if (!editor) return;
+    const href = `#/documents/${id}`;
+    const ranges: Array<{ from: number; to: number }> = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.isText && node.marks.some((mk) => mk.type.name === "link" && mk.attrs.href === href)) ranges.push({ from: pos, to: pos + node.nodeSize });
+    });
+    if (ranges.length === 0) return;
+    let tr = editor.state.tr;
+    for (const r of ranges.reverse()) tr = tr.delete(r.from, r.to);
+    editor.view.dispatch(tr);
+    setDocHtml(editor.getHTML());
+    setDirty(true);
   };
 
   // ── AI Assist (documents) ──────────────────────────────────────────────────
@@ -1198,47 +1290,37 @@ export default function EditorPage() {
 
   return (
     <WorkspacePortal>
-    <div className="workspace-surface fixed inset-0 z-40 flex flex-col bg-background" data-testid="workspace-document" aria-label="Document workspace">
-      {/* ───────────────────── Mobile-only top bar ─────────────────────
-          Matches Google Sheets / Google Docs mobile chrome (IMG_0418-0420).
-          For SHEETS: ‹ ↶ ↷ 👤+ 💬 ⋯
-          For DOCS (idle):  same as sheets
-          For DOCS (focused/typing): ✓ ↶ ↷ + ⋯  (IMG_0420)
-          We render this on screens < md only; the existing desktop header
-          below is wrapped in `hidden md:flex`. */}
+    <WorkspaceKeyboardProvider value={viewportBox.keyboardOpen}>
+    <div className="workspace-surface fixed inset-0 z-40 flex flex-col bg-background overflow-hidden" style={viewportBoxStyle(viewportBox)}
+      data-keyboard={viewportBox.keyboardOpen ? "1" : undefined} data-testid="workspace-document" aria-label="Document workspace">
+      {/* ───────────────────── Phone header ─────────────────────
+          The editors' one header (owner, 2026-11-23): X at the left, the
+          title and its save status, undo/redo for a document, the ⋯ menu,
+          and Save at the right. It sits outside the scroll area, so it stays
+          put however long the document is. */}
       <div
-        className="md:hidden flex items-center gap-2 px-3 shrink-0 bg-card border-b"
-        style={{ height: 52, paddingTop: "env(safe-area-inset-top, 0px)" }}
+        className="md:hidden flex items-center gap-1 pl-1.5 pr-2 shrink-0 bg-card border-b min-w-0"
+        style={{ minHeight: 48, paddingTop: "env(safe-area-inset-top, 0px)" }}
         data-testid="mobile-editor-top-bar"
       >
-        {type === "doc" && docFocused ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 text-blue-500"
-            onClick={() => { (document.activeElement as HTMLElement | null)?.blur(); editor?.commands.blur(); }}
-            aria-label="Done editing"
-            data-testid="button-mobile-done"
-          >
-            <Check className="h-5 w-5" />
-          </Button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9"
-            onClick={() => void closeWorkspace()}
-            aria-label="Back"
-            data-testid="button-mobile-back"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
-        )}
-        <div className="flex-1" />
+        <WorkspaceCloseButton onClose={closeWorkspace} onSaveFailed={() => setLeaveWarn(true)} />
+        <div className="flex-1 min-w-0 flex flex-col justify-center leading-tight">
+          <input
+            value={title}
+            onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
+            placeholder={type === "doc" ? "Untitled doc" : "Untitled sheet"}
+            className="ws-title w-full min-w-0 bg-transparent text-sm font-semibold outline-none truncate"
+            data-testid="input-editor-title"
+            aria-label="Document title"
+          />
+          <span className="text-[11px] text-muted-foreground truncate" role="status" data-testid="text-editor-status-mobile">
+            {saveMut.isPending ? "Saving…" : saveState === "error" ? "Couldn't save — tap Retry" : dirty ? "Saving as you write" : (lastSavedAt || savedId ? "Saved" : "Not saved yet")}
+          </span>
+        </div>
         <Button
           variant="ghost"
           size="icon"
-          className="h-9 w-9"
+          className="h-8 w-8 shrink-0"
           onClick={() => {
             if (type === "doc") editor?.chain().focus().undo().run();
           }}
@@ -1247,12 +1329,12 @@ export default function EditorPage() {
           title={type === "sheet" ? "Undo is available from the spreadsheet engine on desktop" : undefined}
           data-testid="button-mobile-undo"
         >
-          <Undo2 className="h-5 w-5" />
+          <Undo2 className="h-4 w-4" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          className="h-9 w-9"
+          className="h-8 w-8 shrink-0"
           onClick={() => {
             if (type === "doc") editor?.chain().focus().redo().run();
           }}
@@ -1261,43 +1343,26 @@ export default function EditorPage() {
           title={type === "sheet" ? "Redo is available from the spreadsheet engine on desktop" : undefined}
           data-testid="button-mobile-redo"
         >
-          <Redo2 className="h-5 w-5" />
+          <Redo2 className="h-4 w-4" />
         </Button>
-        {type === "sheet" || !docFocused ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9"
-            onClick={() => savedId ? setShareOpen(true) : saveMut.mutate()}
-            disabled={saveMut.isPending}
-            aria-label="Share"
-            data-testid="button-mobile-share"
-          >
-            <UserPlus className="h-5 w-5" />
-          </Button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9"
-            onClick={() => saveMut.mutate()}
-            disabled={saveMut.isPending}
-            aria-label="Insert"
-            data-testid="button-mobile-insert"
-          >
-            <Plus className="h-5 w-5" />
-          </Button>
-        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-9 w-9" aria-label="More" data-testid="button-mobile-more">
-              <MoreHorizontal className="h-5 w-5" />
+            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" aria-label="More" data-testid="button-mobile-more">
+              <MoreHorizontal className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuItem onClick={() => saveMut.mutate()}>
-              <Save className="h-4 w-4 mr-2" /> Save now
-            </DropdownMenuItem>
+            {type === "doc" && (
+              <>
+                <DropdownMenuLabel>Templates</DropdownMenuLabel>
+                {getTemplatesByType(type).slice(0, 4).map((tpl) => (
+                  <DropdownMenuItem key={tpl.id} onClick={() => applyTemplate(tpl)}>
+                    <LayoutTemplate className="h-4 w-4 mr-2" /> {tpl.label}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+              </>
+            )}
             {type === "sheet" && (
               <DropdownMenuItem onClick={downloadSheet}>
                 <Download className="h-4 w-4 mr-2" /> Download CSV
@@ -1319,14 +1384,13 @@ export default function EditorPage() {
             )}
           </DropdownMenuContent>
         </DropdownMenu>
-        <WorkspaceCloseButton onClose={closeWorkspace} className="ml-1" />
+        {saveButton}
       </div>
+      {leaveWarn && <UnsavedLeaveBar onStay={() => setLeaveWarn(false)} onLeave={() => { setLeaveWarn(false); setDirty(false); leaveEditor(); }} />}
 
       {/* Desktop header */}
       <div className="hidden md:flex border-b bg-card items-center gap-2 px-3 py-2 shrink-0">
-        <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => void closeWorkspace()} aria-label="Back" data-testid="button-editor-back">
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
+        <WorkspaceCloseButton onClose={closeWorkspace} onSaveFailed={() => setLeaveWarn(true)} />
         {/* BUG-RTE03: make the title obviously editable. The previous default
             Input looked like a static label until hovered; users didn't realise
             they could click into it and rename their doc. Give it a hover/focus
@@ -1350,9 +1414,6 @@ export default function EditorPage() {
           {saveMut.isPending ? " · Saving…" : (dirty ? " · Unsaved" : (lastSavedAt ? ` · Saved ${formatRelative(lastSavedAt, nowTick)}` : ""))}
           {type === "doc" && docStats ? ` · ${docStats}` : ""}
           {type === "sheet" ? ` · ${sheetStats} filled` : ""}
-        </span>
-        <span className="md:hidden text-[11px] text-muted-foreground ml-1" data-testid="text-editor-status-mobile">
-          {saveMut.isPending ? "Saving…" : (dirty ? "Unsaved" : (lastSavedAt ? "Saved" : ""))}
         </span>
         <div className="flex-1" />
         {/* Desktop: full action row. Hidden on mobile (<md) — mobile uses the
@@ -1424,61 +1485,7 @@ export default function EditorPage() {
             </Button>
           )}
         </div>
-        {/* Mobile-only overflow menu: collapses Template/Download/Print/Share/Copy/Delete
-            into a single ⋯ button so the header stays clean like the reference. */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-9 w-9 md:hidden" data-testid="button-editor-more-mobile" aria-label="More actions">
-              <MoreHorizontal className="h-5 w-5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            {type === "doc" && (
-              <>
-                <DropdownMenuLabel>Templates</DropdownMenuLabel>
-                {getTemplatesByType(type).slice(0, 4).map((tpl) => (
-                  <DropdownMenuItem key={tpl.id} onClick={() => applyTemplate(tpl)}>
-                    <LayoutTemplate className="h-4 w-4 mr-2" /> {tpl.label}
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={downloadDocPdf}>
-                  <Download className="h-4 w-4 mr-2" /> Download PDF
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={downloadDoc}>
-                  <Download className="h-4 w-4 mr-2" /> Download Word
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => window.print()}>
-                  <Printer className="h-4 w-4 mr-2" /> Print
-                </DropdownMenuItem>
-              </>
-            )}
-            {type === "sheet" && (
-              <DropdownMenuItem onClick={downloadSheet}>
-                <Download className="h-4 w-4 mr-2" /> Download
-              </DropdownMenuItem>
-            )}
-            {savedId && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => setShareOpen(true)}>
-                  <Share2 className="h-4 w-4 mr-2" /> Share
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => duplicateMut.mutate()}>
-                  <Copy className="h-4 w-4 mr-2" /> Duplicate
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setDeleteOpen(true)} className="text-destructive focus:text-destructive">
-                  <Trash2 className="h-4 w-4 mr-2" /> Delete
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <Button size="sm" onClick={() => saveMut.mutate()} disabled={saveMut.isPending} data-testid="button-editor-save">
-          {saveMut.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
-          <span className="hidden sm:inline">Save</span>
-        </Button>
-        <WorkspaceCloseButton onClose={closeWorkspace} className="ml-1" />
+        {saveButton}
       </div>
 
       {/* Body */}
@@ -1583,6 +1590,7 @@ export default function EditorPage() {
             </DropdownMenu>
             <Button variant="ghost" size="sm" className="h-8 px-2 gap-1" onClick={() => { const el = imageInputRef.current; if (el) { el.value = ""; el.click(); } }} data-testid="button-doc-image"><ImagePlus className="h-4 w-4" /> Picture</Button>
             <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => void insertImageFile(e.target.files?.[0])} data-testid="input-doc-image" />
+            <AttachMenu onFiles={(f) => void attachFiles(f)} busy={attaching} testId="doc-attach" />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm" className="h-8 px-2 gap-1" data-testid="button-doc-page-setup"><FileCog className="h-4 w-4" /> Page</Button>
@@ -1607,9 +1615,9 @@ export default function EditorPage() {
           {/* Tiptap content — on mobile we apply doc-mobile-black so the canvas
               renders as pure black like IMG_0420. Desktop keeps the standard
               white/themed background. */}
-          <div className="flex-1 overflow-auto doc-page-desk">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden md:overflow-x-auto overscroll-contain doc-page-desk" data-workspace-scroll>
             <div
-              className="doc-page relative px-4 py-4 doc-mobile-black md:!text-foreground min-h-full"
+              className="doc-page relative px-3 pt-3 pb-8 doc-mobile-black md:!text-foreground min-h-full"
               style={{ "--page-w": `${page.widthPx}px`, "--page-h": `${page.heightPx}px`, "--page-pad": `${page.paddingPx}px` } as CSSProperties}
               data-page-setup={serializePageSetup(pageSetup)}
               onDragOver={(e) => { if (Array.from(e.dataTransfer?.types || []).includes("Files")) e.preventDefault(); }}
@@ -1622,13 +1630,33 @@ export default function EditorPage() {
               data-testid="doc-editor-canvas"
             >
               {!(editor?.getText() || "").trim() && !docFocused && (
-                <p className="absolute pointer-events-none text-muted-foreground/60 text-sm" data-testid="doc-empty-hint">
+                <p className="absolute right-3 md:right-auto pointer-events-none text-muted-foreground/60 text-sm" data-testid="doc-empty-hint">
                   Start typing, choose a template, or ask AI to create something…
                 </p>
               )}
               <SectionErrorBoundary name="editor-doc" inline>
-                <EditorContent editor={editor} className="prose prose-sm max-w-none focus:outline-none [&_.ProseMirror]:min-h-[60vh] [&_.ProseMirror]:outline-none" />
+                <EditorContent editor={editor} className="workspace-writing prose prose-sm max-w-none focus:outline-none [&_.ProseMirror]:min-h-[60vh] [&_.ProseMirror]:outline-none" />
               </SectionErrorBoundary>
+              {docAttachments.length > 0 && (
+                <div className="mt-4 pt-2 border-t border-border/60 space-y-1.5 not-prose" data-testid="doc-attachments">
+                  <p className="micro-label text-muted-foreground">Attached files</p>
+                  {docAttachments.map((a) => (
+                    <div key={a.id} className="flex items-center gap-2 h-9 pl-2 pr-1 rounded-lg border border-border bg-muted/30 min-w-0" data-testid={`doc-attachment-${a.id}`}>
+                      <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <button type="button" className="flex-1 min-w-0 text-left text-xs truncate hover:underline" title="Open in Documents"
+                        onClick={async () => { if (dirty) { quietSaveRef.current = true; try { await saveMut.mutateAsync(); } catch { return; } } setLocation(`/documents/${a.id}`); }}>
+                        {a.name}
+                      </button>
+                      <button type="button"
+                        onClick={() => { if (armedAttachment === a.id) { setArmedAttachment(null); detachFile(a.id); } else setArmedAttachment(a.id); }}
+                        aria-label={armedAttachment === a.id ? "Tap again to remove this file from the document" : "Remove file"}
+                        className={`h-7 rounded-full text-[11px] px-2 shrink-0 ${armedAttachment === a.id ? "bg-destructive text-destructive-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+                        {armedAttachment === a.id ? "Remove?" : "✕"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
           {/* AI Assist: the proposal, then the box that asks for one. */}
@@ -1666,65 +1694,38 @@ export default function EditorPage() {
             onAsk={(i) => void askDocumentAi(i)}
             testId="doc-ai"
           />
-          {/* Mobile-only sticky bottom formatting toolbar — redesigned to match
-              IMG_0420 exactly: @  |  B  I  U  S  |  A(color)  highlight  |  align  A.
-              Sits above the iOS keyboard. Single row, no wrap. */}
+          {/* Phone formatting bar: one row under the page that scrolls
+              sideways, so no control falls off a small screen; the frame
+              follows the visual viewport, so it rides above the keyboard. */}
           <div
-            className="md:hidden border-t bg-card flex items-center px-2 shrink-0"
-            style={{ height: 56, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+            className="md:hidden border-t bg-card flex items-center gap-0.5 px-1 shrink-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none]"
+            style={{ height: 44, paddingBottom: viewportBox.keyboardOpen ? 0 : "env(safe-area-inset-bottom, 0px)", boxSizing: "content-box" }}
+            data-swipe-ignore
             data-testid="toolbar-doc-mobile"
           >
-            {/* @-mention trigger — inserts "@" at the cursor so the existing
-                mention pipeline picks it up. */}
-            <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" onClick={() => editor?.chain().focus().insertContent("@").run()} aria-label="Mention" data-testid="button-doc-mention">
-              <AtSign className="h-5 w-5" />
-            </Button>
-            <div className="w-px h-7 bg-border mx-1 shrink-0" />
-            <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" onClick={() => editor?.chain().focus().toggleBold().run()} aria-pressed={editor?.isActive("bold")} aria-label="Bold"><Bold className="h-5 w-5" /></Button>
-            <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" onClick={() => editor?.chain().focus().toggleItalic().run()} aria-pressed={editor?.isActive("italic")} aria-label="Italic"><Italic className="h-5 w-5" /></Button>
-            <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" onClick={() => editor?.chain().focus().toggleUnderline().run()} aria-pressed={editor?.isActive("underline")} aria-label="Underline"><UnderlineIcon className="h-5 w-5" /></Button>
-            <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" onClick={() => editor?.chain().focus().toggleStrike().run()} aria-pressed={editor?.isActive("strike")} aria-label="Strikethrough"><Strikethrough className="h-5 w-5" /></Button>
-            <div className="w-px h-7 bg-border mx-1 shrink-0" />
-            {/* Text color — cycles through a small palette since we don't have a
-                color extension installed; clicking opens a native color picker. */}
-            <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" aria-label="Text color" data-testid="button-doc-color" onClick={() => {
-              const input = document.createElement("input");
-              input.type = "color";
-              input.value = "#ffffff";
-              input.oninput = () => {
-                // StarterKit doesn't ship TextStyle by default; wrap in <span style>.
-                editor?.chain().focus().insertContent(`<span style=\"color:${input.value}\">​</span>`).run();
-              };
-              input.click();
-            }}>
-              <span className="relative flex flex-col items-center">
-                <Type className="h-5 w-5" />
-                <span className="block h-[3px] w-5 rounded-sm bg-red-500" style={{ marginTop: 1 }} />
-              </span>
-            </Button>
-            <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" aria-label="Highlight" data-testid="button-doc-highlight" onClick={() => {
-              const input = document.createElement("input");
-              input.type = "color";
-              input.value = "#ffeb3b";
-              input.oninput = () => {
-                editor?.chain().focus().insertContent(`<span style=\"background-color:${input.value}\">​</span>`).run();
-              };
-              input.click();
-            }}>
-              <Highlighter className="h-5 w-5" />
-            </Button>
-            <div className="w-px h-7 bg-border mx-1 shrink-0" />
-            <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" onClick={() => editor?.chain().focus().toggleBulletList().run()} aria-label="List" data-testid="button-doc-list">
-              <AlignLeft className="h-5 w-5" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()} aria-label="Heading" data-testid="button-doc-heading">
-              <Type className="h-5 w-5" />
-            </Button>
-            <div className="flex-1" />
-            <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 relative" onClick={() => setLinksOpen(true)} aria-label="Linked entities" title="Show linked entities" data-testid="button-doc-links">
-              <Link2 className="h-5 w-5" />
+            <AttachMenu onFiles={(f) => void attachFiles(f)} busy={attaching} testId="doc-attach-mobile" label="" />
+            <div className="w-px h-6 bg-border mx-0.5 shrink-0" />
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().toggleBold().run()} aria-pressed={editor?.isActive("bold")} aria-label="Bold"><Bold className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().toggleItalic().run()} aria-pressed={editor?.isActive("italic")} aria-label="Italic"><Italic className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().toggleUnderline().run()} aria-pressed={editor?.isActive("underline")} aria-label="Underline"><UnderlineIcon className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().toggleStrike().run()} aria-pressed={editor?.isActive("strike")} aria-label="Strikethrough"><Strikethrough className="h-4 w-4" /></Button>
+            <div className="w-px h-6 bg-border mx-0.5 shrink-0" />
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()} aria-pressed={editor?.isActive("heading", { level: 1 })} aria-label="Heading" data-testid="button-doc-heading"><Heading1 className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} aria-pressed={editor?.isActive("heading", { level: 2 })} aria-label="Subheading"><Heading2 className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().toggleBulletList().run()} aria-pressed={editor?.isActive("bulletList")} aria-label="Bulleted list" data-testid="button-doc-list"><List className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().toggleOrderedList().run()} aria-pressed={editor?.isActive("orderedList")} aria-label="Numbered list"><ListOrdered className="h-4 w-4" /></Button>
+            <div className="w-px h-6 bg-border mx-0.5 shrink-0" />
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().setTextAlign("left").run()} aria-label="Align left"><AlignLeft className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().setTextAlign("center").run()} aria-label="Align center"><AlignCenter className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => {
+              const url = window.prompt("Link address");
+              if (url) editor?.chain().focus().setLink({ href: url }).run();
+            }} aria-label="Insert link"><LinkIcon className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().insertContent("@").run()} aria-label="Mention" data-testid="button-doc-mention"><AtSign className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 relative" onClick={() => setLinksOpen(true)} aria-label="Linked entities" title="Show linked entities" data-testid="button-doc-links">
+              <Link2 className="h-4 w-4" />
               {mentionTokens.length > 0 && (
-                <span className="absolute text-[11px] font-semibold bg-primary text-primary-foreground rounded-full" style={{ minWidth: 14, height: 14, lineHeight: "14px", textAlign: "center", top: 4, right: 4, paddingLeft: 3, paddingRight: 3 }}>
+                <span className="absolute text-[11px] font-semibold bg-primary text-primary-foreground rounded-full" style={{ minWidth: 14, height: 14, lineHeight: "14px", textAlign: "center", top: 2, right: 2, paddingLeft: 3, paddingRight: 3 }}>
                   {mentionTokens.length}
                 </span>
               )}
@@ -2347,6 +2348,7 @@ export default function EditorPage() {
       </Dialog>
 
     </div>
+    </WorkspaceKeyboardProvider>
     </WorkspacePortal>
   );
 }

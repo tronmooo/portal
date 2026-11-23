@@ -150,7 +150,7 @@ describe("Journal workspace", () => {
     fireEvent.change(screen.getByTestId("input-journal-tags"), { target: { value: "family" } });
     await waitFor(() => expect(writes()).toHaveLength(1), { timeout: 4000 });
     const file = new File(["jpeg"], "beach.jpg", { type: "image/jpeg" });
-    fireEvent.change(screen.getByTestId("input-journal-photo"), { target: { files: [file] } });
+    fireEvent.change(screen.getByTestId("input-journal-attach-library"), { target: { files: [file] } });
     await waitFor(() => expect(calls.some((c) => c.url === "/api/upload/save-only")).toBe(true));
     await waitFor(() => expect(screen.getByTestId("journal-photo-doc-7")).toBeTruthy());
     await waitFor(() => expect(writes()).toHaveLength(2), { timeout: 4000 });

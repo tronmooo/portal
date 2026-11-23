@@ -171,3 +171,27 @@ describe("entry date", () => {
     expect(journal.map((j) => j.date)).toEqual(["2026-11-01", "2026-11-01"]);
   });
 });
+
+describe("length (owner request 2026-11-23: unlimited-length entries)", () => {
+  // The general input cleaner cut every text at 10,000 characters and still
+  // answered 201: a long entry lost its end without a word.
+  const LONG = Array.from({ length: 6000 }, (_, i) => `word${i}`).join(" ") + "\n\nThe last line.";
+
+  it("a long journal entry is stored whole, on create and on every autosave", async () => {
+    const api = await boot();
+    expect(LONG.length).toBeGreaterThan(40_000);
+    const created = await api("POST", "/api/journal", { content: LONG, entryDate: getUserToday(TZ), tags: [], draft: true });
+    expect(created.status).toBe(201);
+    expect(journal[0].content).toBe(LONG);
+    const longer = `${LONG}\nOne more.`;
+    await api("PATCH", `/api/journal/${created.data.id}`, { content: longer, tags: [], mood: "neutral" });
+    expect(journal[0].content).toBe(longer);
+  });
+
+  it("a long note is stored whole", async () => {
+    const api = await boot();
+    const r = await api("POST", "/api/notes", { title: "Long", content: LONG, tags: [] });
+    expect(r.status).toBe(201);
+    expect(r.data.content).toBe(LONG);
+  });
+});
