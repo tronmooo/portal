@@ -127,13 +127,16 @@ export default function FillWorkspacePage() {
     setSaved(null); setShowSaved(false); setSaveError(null); setAiNote(null); setReplaces(undefined); setSelectedId(null);
     try {
       // 1. Read uploads Fill In has never read (old ones too), so they can be used.
-      let remaining = info?.unindexed ?? 0;
-      while (remaining > 0 && !skipIndex.current) {
-        setBusy({ text: `Reading your saved files so they can be used — ${remaining} left`, skippable: true });
+      // The server decides what is left: the count on screen may not have
+      // loaded yet when a file is chosen quickly, and a stale count skipped
+      // this step altogether.
+      setBusy({ text: "Checking your saved files…" });
+      for (let pass = 0; pass < 200 && !skipIndex.current; pass++) {
         const r = await apiRequest("POST", "/api/smart-fill/index", { max: 2 });
         const j = await r.json();
-        if (!(Number(j?.indexed) + Number(j?.failed) > 0)) break;
-        remaining = Number(j?.remaining) || 0;
+        const remaining = Number(j?.remaining) || 0;
+        if (remaining <= 0 || !(Number(j?.indexed) + Number(j?.failed) > 0)) break;
+        setBusy({ text: `Reading your saved files so they can be used — ${remaining} left`, skippable: true });
       }
       // 2. Find the form's fields and fill them.
       setBusy({ text: "Finding the fields and filling them from your information…" });

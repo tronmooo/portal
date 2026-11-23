@@ -58,7 +58,7 @@ vi.mock("@/lib/queryClient", () => ({
       if (infoFails) throw new Error("500: boom");
       data = { facts: FACTS, subject: { id: "p1", name: "Jordan" }, people: [{ id: "p1", name: "Jordan", self: true }], unindexed, counts: { profiles: 2, documents: 3, notes: 1 } };
     } else if (url === "/api/smart-fill/forms") data = [];
-    else if (url === "/api/smart-fill/index") { unindexed = Math.max(0, unindexed - 2); data = { indexed: 2, failed: 0, remaining: unindexed, names: [] }; }
+    else if (url === "/api/smart-fill/index") { const n = Math.min(2, unindexed); unindexed -= n; data = { indexed: n, failed: 0, remaining: unindexed, names: [] }; }
     else if (url === "/api/smart-fill/analyze") data = { format: "pdf", documentType: "Form", pages: [{ width: 612, height: 792 }], fields: FIELDS, detection: "text", aiUsed: true };
     else if (url === "/api/smart-fill/refill") data = { fields: body.fields.map((f: any) => (f.id === "t4" && !f.value ? { ...f, value: "Northwind Traders", source: "Résumé", filledBy: "ai" } : f)), aiUsed: true };
     else if (url === "/api/smart-fill/save") {
@@ -99,6 +99,15 @@ describe("Fill In workspace", () => {
     expect(screen.queryByTestId("button-workspace-save")).toBeNull(); // nothing to save before a form is open
   });
 
+  it("a form chosen before My Information has loaded still has the unread uploads read first (the server is asked, not the screen's count)", async () => {
+    unindexed = 2;
+    mount(); // no waiting for the information request
+    fireEvent.change(screen.getByTestId("input-fill-file"), { target: { files: [new File(["%PDF-1.4"], "form.pdf", { type: "application/pdf" })] } });
+    await waitFor(() => screen.getByTestId("fill-field-t1"), { timeout: 4000 });
+    expect(writes().map((c) => c.url)).toEqual(["/api/smart-fill/index", "/api/smart-fill/analyze"]);
+    expect(unindexed).toBe(0);
+  });
+
   it("a failed information request is an error with a retry, never 'nothing on file'", async () => {
     infoFails = true;
     mount();
@@ -110,6 +119,7 @@ describe("Fill In workspace", () => {
     unindexed = 3;
     await chooseForm();
     expect(writes().map((c) => c.url)).toEqual(["/api/smart-fill/index", "/api/smart-fill/index", "/api/smart-fill/analyze"]);
+    expect(unindexed).toBe(0);
     expect(field("t1").textContent).toBe("Jordan A. Lee");
     expect(field("t2").textContent).toBe("123 Main St, Springfield, IL 62704");
     expect(field("t2").getAttribute("title")).toBe("Address — from Driver's License");

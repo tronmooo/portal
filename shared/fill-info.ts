@@ -87,7 +87,7 @@ const NEVER_KEY = /pass(word|code|phrase)|\bpin\b|pin(code|number)|cvv|cvc|secur
 const SENSITIVE_KEY = /ssn|social.?security|tax.?(id|payer)|\bein\b|\bitin\b|passport.?(no|num|#)|passport$|licen[sc]e.?(no|num|#)|driver.?s?.?licen[sc]e$|\bdl\b|account.?(no|num|#)|routing|iban|swift|card.?(no|num|#)|member.?id|policy.?(no|num|#)|\bnid\b|national.?id|state.?id|alien|visa.?(no|num)/i;
 
 /** Bookkeeping, never a fact. */
-const INTERNAL_KEY = /^_|(^|[_.])id$|Id$|^ids?$|uuid|^source$|^provenance$|^smartFill$|^fillIndex$|^raw|^ocr|hash|^confidence$|^storagePath$|^thumbnail|^image|^photo$|^avatar|^icon$|^color$|^valuation|^aiSummary|^summary$|^note$|^_interestRateUnit$|^autopay|^tracked$|^history$/;
+const INTERNAL_KEY = /^_|(^|[_.])id$|Id$|^ids?$|uuid|^source$|^provenance$|^smartFill$|^fillIndex$|^raw|^ocr|hash|^confidence$|^storagePath$|^thumbnail|^image|^photo$|^avatar|^icon$|^color$|^valuation|^aiSummary|^summary$|^note$|^_interestRateUnit$|^autopay|^tracked$|^history$|^status$|^category$|^frequency$|^kind$|^type$|^subtype$|^typeKey$|^type_key$|^nextDue|^lastPaid|^leadTime|^isActive$|^archived$|^currency$|^sortOrder$|^createdAt$|^updatedAt$/;
 
 const CANON: Array<[string, RegExp]> = [
   ["firstName", /^(legal )?(first|given)( ?name)?$|^fname$|^forename$/],
@@ -463,6 +463,8 @@ export function buildFillFacts(input: BuildFactsInput): FillFact[] {
 
 // ── matching ────────────────────────────────────────────────────────────────
 
+const THING_KEYS = new Set(["vin", "licensePlate", "vehicleMake", "vehicleModel", "vehicleYear", "vehicleColor", "bankName", "accountNumber", "routingNumber"]);
+
 const normValue = (v: string) => String(v || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 /** Best first: reliability, then not-derived, then newest. */
@@ -488,8 +490,14 @@ export function matchLabelToFacts(label: string, facts: FillFact[], subjectId: s
   const key = canonicalKeyFor(label);
   if (!key) return null;
   let pool = facts.filter((f) => f.key === key && !f.subject && (f.ownerProfileId === subjectId || f.ownerProfileId === null));
-  // A thing's fact ("VIN") answers only when exactly one thing has it.
-  if (pool.length === 0) {
+  // "Street address" when the papers give the street as "Address" (no city in it).
+  if (pool.length === 0 && key === "street") {
+    pool = facts.filter((f) => f.key === "address" && !f.subject && !f.value.includes(",") && (f.ownerProfileId === subjectId || f.ownerProfileId === null));
+  }
+  // A thing's fact ("VIN") answers only when exactly one thing has it — and
+  // only for what is asked ABOUT things. A house's address is never the
+  // person's address, a lender's phone never their phone.
+  if (pool.length === 0 && THING_KEYS.has(key)) {
     const things = facts.filter((f) => f.key === key && !!f.subject);
     const subjects = new Set(things.map((f) => f.subject));
     if (subjects.size === 1) pool = things;

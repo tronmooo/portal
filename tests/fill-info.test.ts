@@ -93,6 +93,13 @@ describe("matching a form label", () => {
     expect(matchLabelToFacts("Current Employer", list, "p-me")!.fact.value).toBe("Northwind Traders");
     expect(matchLabelToFacts("VIN", list, "p-me")!.fact.value).toBe("2HKRW2H5XNH600001");
     expect(matchLabelToFacts("Blood type", list, "p-me")).toBeNull();
+    // A property's address is the PROPERTY's: it never answers the person's "Street address" or "Phone".
+    const house = buildFillFacts({ profiles: [{ id: "p-me", type: "self", name: "Jo Lee", fields: {} }, { id: "p-h", type: "asset", name: "Smoke House", fields: { street: "123 Test Lane", phone: "555-000-1111" } }], documents: [] });
+    expect(matchLabelToFacts("Street Address", house, "p-me")).toBeNull();
+    expect(matchLabelToFacts("Phone", house, "p-me")).toBeNull();
+    // A licence that prints the street as "Address" and the city separately answers "Street address".
+    const lic = buildFillFacts({ profiles: [{ id: "p-me", type: "self", name: "Jo Lee", fields: {} }], documents: [{ id: "d", name: "License", extractedData: { Address: "4821 JUNIPER HOLLOW RD", City: "FLAGSTAFF" } }] });
+    expect(matchLabelToFacts("Street Address", lic, "p-me")!.fact.value).toBe("4821 JUNIPER HOLLOW RD");
   });
 
   it("two different values on file: the person's own profile and identity papers outrank other papers, newer first — and the others are offered", () => {
