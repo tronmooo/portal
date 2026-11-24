@@ -342,6 +342,100 @@ const CASES: Case[] = [
     if (t.length !== 1) return `expected ONE candles task, got ${t.length}`;
     return t[0].status === "done" ? "" : `it is "${t[0].status}", expected done`;
   } },
+
+  // ══ A harder batch (2026-11-24, round 4) ═══════════════════════════════════
+  // ── Dates said the way people say them ────────────────────────────────────
+  { group: "dates", say: "remind me to pay the gardener in 2 weeks", expect: oneTask(["gardener"], dayIn(14)) },
+  { group: "dates", say: "add a task to file the expense report next Monday", expect: oneTask(["expense report"], nextWeekday(1)) },
+  { group: "dates", say: "task: renew car registration, due 12/5", expect: oneTask(["registration"], `${TODAY.slice(0, 4)}-12-05`) },
+  { group: "dates", say: "book club on the 3rd of next month at 7pm", expect: (c) => {
+    const [y, m] = TODAY.split("-").map(Number);
+    const next = m === 12 ? `${y + 1}-01-03` : `${y}-${String(m + 1).padStart(2, "0")}-03`;
+    return c.made.events.length ? oneEvent(["book club"], next, "19:00")(c) : oneTask(["book club"], next, "19:00")(c);
+  } },
+  { group: "dates", say: "yesterday I spent $45 on dinner", expect: expenses([[45, "dinner"]], YESTERDAY) },
+  { group: "dates", say: "I spent $11 on a sandwich two days ago", expect: expenses([[11, "sandwich"]], dayIn(-2)) },
+  { group: "dates", say: "team standup every Monday at 9am", expect: (c) => {
+    const e = c.made.events;
+    if (e.length !== 1) return `expected ONE repeating event, got ${e.length} (${names(e)}); tasks: ${names(c.made.tasks)}`;
+    if (e[0].recurrence !== "weekly") return `it repeats "${e[0].recurrence}", expected weekly`;
+    return String(e[0].time || "").slice(0, 5) === "09:00" ? "" : `it is at ${e[0].time}, expected 09:00`;
+  } },
+
+  // ── Amounts said in words, and odd shapes ─────────────────────────────────
+  { group: "amounts", say: "spent twenty bucks on a haircut tip", expect: expenses([[20, "tip"]], TODAY) },
+  { group: "amounts", say: "paid $1.5k for the new couch", expect: expenses([[1500, "couch"]], TODAY) },
+  { group: "amounts", say: "parking cost me 3.5", expect: expenses([[3.5, "parking"]], TODAY) },
+  { group: "amounts", say: "split a $90 dinner three ways, my share was $30", expect: expenses([[30, "dinner"]], TODAY) },
+  { group: "amounts", say: "got a $15 refund... actually no, ignore that", expect: nothingMade },
+
+  // ── Things that did NOT happen, or might ──────────────────────────────────
+  { group: "negations", say: "I didn't go to the gym today", expect: nothingMade },
+  { group: "negations", say: "I might buy a new laptop next month for around $1,200", expect: (c) => (c.made.expenses.length ? `it logged an expense for something not bought: ${c.made.expenses.map((e) => `${e.description} $${e.amount}`).join(" | ")}` : "") },
+  { group: "negations", say: "my sister spent $200 on shoes", expect: (c) => (c.made.expenses.length ? `it logged someone else's spending as mine: ${c.made.expenses.map((e) => `${e.description} $${e.amount}`).join(" | ")}` : (c.made.profiles.length ? `it created a profile: ${names(c.made.profiles, "name")}` : "")) },
+  { group: "negations", say: "how do I add an expense?", expect: nothingMade },
+  { group: "negations", say: "what would happen if I deleted my tasks?", expect: (c) => {
+    const gone = c.now.tasks.length < c.before.tasks.length;
+    return gone ? "tasks disappeared on a question" : nothingMade(c);
+  } },
+
+  // ── Paying what is owed ───────────────────────────────────────────────────
+  { group: "paying", say: "I have a $40 a month gym membership due on the 20th", then: "I paid the gym membership", expect: (c) => {
+    const p = c.now.profiles.filter((x) => has(x.name, "gym"));
+    if (p.length !== 1) return `expected ONE gym bill, got ${p.length}`;
+    const paid = c.made.expenses.filter((e) => money(e.amount, 40));
+    return paid.length === 1 ? "" : `expected one $40 expense for the payment, got ${c.made.expenses.map((e) => `${e.description} $${e.amount}`).join(" | ") || "none"}`;
+  } },
+  { group: "paying", say: "I owe $2,000 on a personal loan to my credit union at 9% APR, $180 a month", then: "I paid $180 toward the personal loan", expect: (c) => {
+    const p = c.now.profiles.filter((x) => ["liability", "loan"].includes(x.type) && has(x.name, "loan"));
+    if (p.length !== 1) return `expected ONE loan, got ${p.length} (${names(c.now.profiles.filter((x) => ["liability", "loan"].includes(x.type)), "name")})`;
+    const bal = Number(p[0].fields?.balance);
+    // $180 on $2,000 at 9%: $15 interest, $165 principal.
+    if (!(bal < 2000 && bal >= 1820 - 0.01)) return `the balance is ${bal}, expected it to fall by the principal (about 1835)`;
+    const cost = c.made.expenses.filter((e) => Number(e.amount) > 170);
+    return cost.length ? `the whole payment was logged as spending (${cost.map((e) => e.amount).join(", ")}): principal is not an expense` : "";
+  } },
+
+  // ── Someone else's records ────────────────────────────────────────────────
+  { group: "people", say: "create a pet profile named Biscuit, a beagle", then: "Biscuit weighs 24 pounds", expect: (c) => {
+    const pet = c.now.profiles.filter((x) => x.type === "pet" && has(x.name, "biscuit"));
+    if (pet.length !== 1) return `expected ONE pet named Biscuit, got ${pet.length}`;
+    const mine = c.made.entries.filter((e) => Object.values(e.values || {}).some((v) => money(v, 24)));
+    if (mine.length !== 1) return `expected one weight entry of 24, got ${mine.length} (${c.made.entries.map((e) => `${e.tracker} ${JSON.stringify(e.values)}`).join(" | ") || "none"})`;
+    const owner = mine[0].profileId || mine[0].forProfile;
+    return owner === pet[0].id ? "" : `the entry belongs to ${owner}, not to Biscuit (${pet[0].id})`;
+  } },
+  { group: "people", say: "Biscuit has a vet appointment next Friday at 4pm", expect: (c) => {
+    const e = [...c.made.events, ...c.made.tasks];
+    if (e.length !== 1) return `expected one appointment, got ${c.made.events.length} event(s) and ${c.made.tasks.length} task(s)`;
+    const pet = c.now.profiles.find((x) => x.type === "pet" && has(x.name, "biscuit"));
+    if (!pet) return "Biscuit's profile is missing";
+    return (e[0].linkedProfiles || []).includes(pet.id) ? "" : `the appointment is not Biscuit's (owners: ${JSON.stringify(e[0].linkedProfiles)})`;
+  } },
+
+  // ── Changing your mind ────────────────────────────────────────────────────
+  { group: "corrections", say: "coffee with Dana on Thursday at 10am", then: "no wait, make it Friday", expect: (c) => {
+    const e = [...c.now.events, ...c.now.tasks].filter((x) => has(x.title, "dana"));
+    if (e.length !== 1) return `expected ONE coffee-with-Dana item, got ${e.length}`;
+    const when = day(e[0].date ?? e[0].dueDate);
+    return when === nextWeekday(5) ? "" : `it is on ${when}, expected Friday ${nextWeekday(5)}`;
+  } },
+  { group: "corrections", say: "spent $25 on books", then: "undo that", expect: (c) => {
+    const e = c.now.expenses.filter((x) => has(x.description, "book"));
+    return e.length === 0 ? "" : `the books expense is still there after "undo that" (reply: ${c.reply.slice(0, 100)})`;
+  } },
+  { group: "corrections", say: "add a task to call the bank", then: "delete it", expect: (c) => {
+    const t = c.now.tasks.filter((x) => has(x.title, "bank"));
+    if (t.length === 0) return "";
+    // Asking first is allowed; saying it is gone while it is not is not.
+    return /\?/.test(c.reply) ? "" : `the task is still there and the reply did not ask: ${c.reply.slice(0, 120)}`;
+  } },
+  { group: "corrections", say: "log 2 cups of coffee", then: "sorry, it was 3 cups", expect: (c) => {
+    const e = c.now.entries.filter((x) => /coffee|caffeine/i.test(x.tracker) || Object.keys(x.values || {}).some((k) => /cup/i.test(k)));
+    const todays = e.filter((x) => day(x.timestamp) >= YESTERDAY);
+    if (todays.length !== 1) return `expected ONE coffee entry after the correction, got ${todays.length}: ${todays.map((x) => JSON.stringify(x.values)).join(" | ")}`;
+    return Object.values(todays[0].values || {}).some((v) => money(v, 3)) ? "" : `the entry reads ${JSON.stringify(todays[0].values)}, expected 3`;
+  } },
 ];
 
 (async () => {
