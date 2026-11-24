@@ -25,11 +25,13 @@
 
 export const NUTRIENT_KEYS = [
   "calories", "protein", "carbs", "fat", "saturatedFat", "transFat", "monoFat", "polyFat",
-  "fiber", "sugar", "addedSugar", "sugarAlcohol",
+  "fiber", "sugar", "addedSugar", "sugarAlcohol", "allulose",
   "sodium", "cholesterol", "potassium", "calcium", "iron", "magnesium", "zinc", "phosphorus", "selenium",
-  "caffeine", "fluidMl",
-  "vitaminA", "vitaminB6", "vitaminB12", "vitaminC", "vitaminD", "vitaminE", "vitaminK", "folate",
-  "omega3", "epa", "dha",
+  "copper", "manganese", "iodine", "chromium", "molybdenum", "chloride",
+  "caffeine", "alcohol", "fluidMl",
+  "vitaminA", "vitaminB1", "vitaminB2", "vitaminB3", "vitaminB5", "vitaminB6", "biotin", "vitaminB12",
+  "vitaminC", "vitaminD", "vitaminE", "vitaminK", "folate", "choline",
+  "omega3", "omega6", "epa", "dha",
 ] as const;
 export type NutrientKey = (typeof NUTRIENT_KEYS)[number];
 export type NutrientVector = Partial<Record<NutrientKey, number>>;
@@ -37,18 +39,23 @@ export type NutrientVector = Partial<Record<NutrientKey, number>>;
 /** Display unit per nutrient — one table, not a ladder. */
 export const NUTRIENT_UNITS: Record<NutrientKey, string> = {
   calories: "kcal", protein: "g", carbs: "g", fat: "g", saturatedFat: "g", transFat: "g", monoFat: "g", polyFat: "g",
-  fiber: "g", sugar: "g", addedSugar: "g", sugarAlcohol: "g",
+  fiber: "g", sugar: "g", addedSugar: "g", sugarAlcohol: "g", allulose: "g",
   sodium: "mg", cholesterol: "mg", potassium: "mg", calcium: "mg", iron: "mg",
   magnesium: "mg", zinc: "mg", phosphorus: "mg", selenium: "mcg",
-  caffeine: "mg", fluidMl: "ml",
-  vitaminA: "mcg", vitaminB6: "mg", vitaminB12: "mcg", vitaminC: "mg", vitaminD: "mcg", vitaminE: "mg", vitaminK: "mcg", folate: "mcg",
-  omega3: "mg", epa: "mg", dha: "mg",
+  copper: "mg", manganese: "mg", iodine: "mcg", chromium: "mcg", molybdenum: "mcg", chloride: "mg",
+  caffeine: "mg", alcohol: "g", fluidMl: "ml",
+  vitaminA: "mcg", vitaminB1: "mg", vitaminB2: "mg", vitaminB3: "mg", vitaminB5: "mg", vitaminB6: "mg", biotin: "mcg", vitaminB12: "mcg",
+  vitaminC: "mg", vitaminD: "mcg", vitaminE: "mg", vitaminK: "mcg", folate: "mcg", choline: "mg",
+  omega3: "mg", omega6: "mg", epa: "mg", dha: "mg",
 };
 
 export const NUTRIENT_LABELS: Record<NutrientKey, string> = {
   calories: "Calories", protein: "Protein", carbs: "Carbs", fat: "Fat", saturatedFat: "Saturated fat",
   transFat: "Trans fat", monoFat: "Monounsaturated fat", polyFat: "Polyunsaturated fat",
-  fiber: "Fiber", sugar: "Sugar", addedSugar: "Added sugar", sugarAlcohol: "Sugar alcohol",
+  fiber: "Fiber", sugar: "Sugar", addedSugar: "Added sugar", sugarAlcohol: "Sugar alcohol", allulose: "Allulose",
+  copper: "Copper", manganese: "Manganese", iodine: "Iodine", chromium: "Chromium", molybdenum: "Molybdenum", chloride: "Chloride",
+  alcohol: "Alcohol", vitaminB1: "Thiamin (B1)", vitaminB2: "Riboflavin (B2)", vitaminB3: "Niacin (B3)", vitaminB5: "Pantothenic acid (B5)",
+  biotin: "Biotin", choline: "Choline", omega6: "Omega-6",
   sodium: "Sodium", cholesterol: "Cholesterol",
   potassium: "Potassium", calcium: "Calcium", iron: "Iron", magnesium: "Magnesium", zinc: "Zinc",
   phosphorus: "Phosphorus", selenium: "Selenium", caffeine: "Caffeine", fluidMl: "Fluid",
@@ -64,8 +71,8 @@ export const NUTRIENT_LABELS: Record<NutrientKey, string> = {
  */
 export function netCarbsOf(vec: NutrientVector): number | null {
   if (typeof vec.carbs !== "number") return null;
-  if (typeof vec.fiber !== "number" && typeof vec.sugarAlcohol !== "number") return null;
-  return Math.max(0, roundNutrient(vec.carbs - (vec.fiber || 0) - (vec.sugarAlcohol || 0), "carbs"));
+  if (typeof vec.fiber !== "number" && typeof vec.sugarAlcohol !== "number" && typeof vec.allulose !== "number") return null;
+  return Math.max(0, roundNutrient(vec.carbs - (vec.fiber || 0) - (vec.sugarAlcohol || 0) - (vec.allulose || 0), "carbs"));
 }
 
 /**
@@ -105,7 +112,11 @@ const NUTRIENT_KEY_ALIASES: Record<string, NutrientKey> = {
   fluid: "fluidMl", fluidml: "fluidMl", water: "fluidMl",
   vitamina: "vitaminA", vitaminc: "vitaminC", vitamind: "vitaminD",
   vitaminb6: "vitaminB6", vitaminb12: "vitaminB12", vitamine: "vitaminE", vitamink: "vitaminK",
-  folate: "folate", folicacid: "folate",
+  folate: "folate", folicacid: "folate", vitaminb9: "folate",
+  allulose: "allulose", copper: "copper", manganese: "manganese", iodine: "iodine", chromium: "chromium",
+  molybdenum: "molybdenum", chloride: "chloride", alcohol: "alcohol", choline: "choline", biotin: "biotin", vitaminb7: "biotin",
+  thiamin: "vitaminB1", thiamine: "vitaminB1", vitaminb1: "vitaminB1", riboflavin: "vitaminB2", vitaminb2: "vitaminB2",
+  niacin: "vitaminB3", vitaminb3: "vitaminB3", pantothenicacid: "vitaminB5", vitaminb5: "vitaminB5", omega6: "omega6",
   omega3: "omega3", omega: "omega3", epa: "epa", dha: "dha",
 };
 
@@ -271,7 +282,7 @@ const SIZE_ADJECTIVES: Record<string, number> = { small: 0.75, medium: 1, large:
  * microgram quantities (and fluid) are whole numbers. The float noise of the
  * multiplication (5.6250000001) is trimmed first, so a half rounds up.
  */
-const WHOLE_NUMBER_NUTRIENTS = new Set<string>(["sodium", "potassium", "calcium", "caffeine", "cholesterol", "fluidMl", "omega3", "epa", "dha", "magnesium", "phosphorus", "selenium", "vitaminA", "vitaminK", "folate"]);
+const WHOLE_NUMBER_NUTRIENTS = new Set<string>(["sodium", "potassium", "calcium", "caffeine", "cholesterol", "fluidMl", "omega3", "omega6", "epa", "dha", "magnesium", "phosphorus", "selenium", "vitaminA", "vitaminK", "folate", "iodine", "chromium", "molybdenum", "chloride", "choline", "biotin"]);
 export function roundNutrient(v: number, key?: NutrientKey): number {
   if (!isFinite(v)) return 0;
   const clean = Number(v.toPrecision(12));
@@ -533,7 +544,8 @@ export function detectSpecificity(text: string): Specificity {
 const NUTRIENT_WORDS =
   "calories?|kcal|protein|net carbs?|total carbs?|total carbohydrates?|carbs?|carbohydrates?|total fat|saturated fat|sat fat|trans fat|" +
   "monounsaturated fat|polyunsaturated fat|fat|dietary fiber|fiber|fibre|sugar alcohols?|added sugars?|total sugars?|sugars?|sodium|salt|" +
-  "cholesterol|potassium|calcium|iron|magnesium|zinc|phosphorus|selenium|folate|folic acid|caffeine|omega[- ]?3|epa|dha|vitamin [a-z]\\d{0,2}";
+  "cholesterol|potassium|calcium|iron|magnesium|zinc|phosphorus|selenium|copper|manganese|iodine|chromium|molybdenum|chloride|choline|biotin|" +
+  "thiamine?|riboflavin|niacin|pantothenic acid|allulose|alcohol|folate|folic acid|caffeine|omega[- ]?3|omega[- ]?6|epa|dha|vitamin [a-z]\\d{0,2}";
 const USER_STATED_RE = new RegExp(
   "(\\d+(?:\\.\\d+)?)\\s*(kcal|calories?|cals?|g|grams?|mg|milligrams?|mcg|ml|fl\\.?\\s*oz|oz)?\\s*(?:of\\s+)?" +
   `(${NUTRIENT_WORDS})\\b`,
@@ -572,6 +584,7 @@ function nutrientFromWord(word: string): NutrientKey | null {
   if (w === "sodium" || w === "salt") return "sodium";
   if (w === "folicacid") return "folate";
   if (w === "omega3") return "omega3";
+  if (w === "omega6") return "omega6";
   const vitamin = w.match(/^vitamin([a-z]\d{0,2})$/);
   if (vitamin) return canonicalNutrientKey(`vitamin${vitamin[1]}`);
   return canonicalNutrientKey(w);
@@ -642,6 +655,10 @@ export interface NutritionComponent {
   isBeverage?: boolean;
   /** The user gave no quantity: the serving size is assumed (and said so). */
   servingAssumed?: boolean;
+  /** The record behind the figures, so it can be opened or re-read: a USDA FoodData Central id, an Open Food Facts barcode, an internal row. */
+  sourceRef?: { provider: "fdc" | "off" | "internal" | "label" | "scan"; id: string; barcode?: string; dataType?: string };
+  /** Percent Daily Values as printed on a scanned label (kept as printed, never computed). */
+  dailyValues?: Partial<Record<NutrientKey, number>>;
 }
 
 export interface LinkedEntryRef {
@@ -687,6 +704,8 @@ export interface NutritionEnrichment {
   enrichedAt: string;
   /** The whole entry comes from a label the user read out: nothing it omits is filled in. */
   fromLabel?: boolean;
+  /** Verified / reference / estimated, as decided when the entry was written (`verificationOf`). */
+  verification?: NutritionVerification;
 }
 
 export type EnrichmentMode = "off" | "auto" | "ask";
@@ -1068,8 +1087,12 @@ export function isNutritionTrackerLike(t: { name?: string | null; category?: str
 const COMPOSED_DISH_RE = /\b(smoothie|shake|milkshake|salad|bowl|sandwich|sub|burger|cheeseburger|burrito|wrap|taco|tacos|pizza|soup|stew|chili|curry|omelet|omelette|parfait|casserole|pasta|noodles|ramen|sushi|quesadilla|nachos|latte|frappuccino)\b/i;
 
 /** A fragment made only of preparation / state words and, at most, an amount. */
-const STATE_WORD = "raw|uncooked|cooked|dry|dried|fresh|frozen|roasted|grilled|baked|boiled|steamed|fried|poached|scrambled|plain|black|unsweetened|sweetened|skinless|boneless|peeled|unpeeled|drained|weighed|before|after|cooking|with|the|peel|skin|on|including|included|only|whole|flesh";
-const STATE_ONLY_RE = new RegExp(`^(?:(?:${STATE_WORD}|\\d+(?:\\.\\d+)?\\s*(?:g|grams?|oz|ml)?)\\s*)+$`, "i");
+const STATE_WORD = "raw|uncooked|cooked|dry|dried|fresh|frozen|thawed|canned|roasted|grilled|baked|boiled|steamed|fried|sauteed|sautéed|poached|scrambled|plain|black|unsweetened|sweetened|unsalted|salted|skinless|boneless|peeled|unpeeled|drained|rinsed|prepared|weighed|weight|before|after|cooking|cooked|with|without|the|peel|skin|on|including|included|only|whole|flesh|edible|portion|net|gross";
+const STATE_ONLY_RE = new RegExp(`^(?:(?:${STATE_WORD}|\\d+(?:\\.\\d+)?\\s*(?:g|grams?|kg|oz|ounces?|lbs?|ml|l|fl oz|cups?|tbsp|tsp)?)\\s*)+$`, "i");
+/** "dry (100 g)", "raw", "cooked, drained": says how the food before it was prepared or weighed, and names no food. */
+export function isStateOnlyFragment(text: string): boolean {
+  return STATE_ONLY_RE.test(String(text || "").replace(/[()~,]/g, " ").replace(/\s+/g, " ").trim());
+}
 
 /**
  * The state the user weighed the food in, when it changes the numbers: raw
@@ -1148,7 +1171,7 @@ export function splitComponentPhrases(text: string): string[] {
   // was left as an estimate).
   const merged: string[] = [];
   for (const p of parts) {
-    if (merged.length > 0 && STATE_ONLY_RE.test(p.replace(/[()]/g, " ").trim())) merged[merged.length - 1] = `${merged[merged.length - 1]}, ${p}`;
+    if (merged.length > 0 && isStateOnlyFragment(p)) merged[merged.length - 1] = `${merged[merged.length - 1]}, ${p}`;
     else merged.push(p);
   }
   return merged;

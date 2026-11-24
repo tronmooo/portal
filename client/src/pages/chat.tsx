@@ -46,6 +46,7 @@ const SmartFillDialog = lazy(() =>
 const DocumentWorkspace = lazy(() => import("@/pages/document-detail").then((m) => ({ default: m.DocumentWorkspace })));
 import { prefetchDocument } from "@/lib/document-preview";
 const ChatChartBody = lazy(() => import("@/components/ChatChartRenderer"));
+const NutritionScanDialog = lazy(() => import("@/components/nutrition/NutritionScanDialog").then((m) => ({ default: m.NutritionScanDialog })));
 
 // SmartFillDialog preload (QA audit, same-file fix): the lazy chunk otherwise
 // pays its fetch + JS-parse cost on first OPEN. Warm it on pointerdown of the
@@ -2545,6 +2546,7 @@ export default function ChatPage() {
   const [discardImage, setDiscardImage] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<any>(null);
 
   // Attachments: array supports both single and batch
@@ -4038,10 +4040,22 @@ export default function ChatPage() {
           onEmptyChange={setComposerEmpty}
           newDocButton={<NewDocSheetButton disabled={isPending} />}
           onOpenWorkspace={(kind) => hashNavigate(WORKSPACES[kind].route)}
+          onScanLabel={() => setScanOpen(true)}
           onDropFiles={(files) => { void handleFileSelect({ target: { files } } as any); }}
         />
       )}
       </div>
+
+      {/* Nutrition label / barcode scanner: mounted only while open, so its code loads on first use. */}
+      {scanOpen && (
+        <Suspense fallback={null}>
+          <NutritionScanDialog
+            open
+            onClose={() => setScanOpen(false)}
+            onLogged={(summary) => setMessages((prev) => [...prev, { id: `scan-${Date.now()}`, role: "assistant", content: summary, timestamp: new Date().toISOString() }])}
+          />
+        </Suspense>
+      )}
 
       {/* Artifact panel — lazy boundary only mounts when a chat has an artifact
           open, so recharts + the artifact rendering stack stay out of the

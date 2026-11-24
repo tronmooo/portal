@@ -22,7 +22,8 @@ import {
   type NutritionEnrichment,
 } from "@shared/nutrition-enrichment";
 import { getZonedParts, addDays, DEFAULT_TIMEZONE } from "@shared/timezone";
-import { itemTextOf } from "./nutrition-enrichment";
+import { enrichNutritionEntry, itemTextOf, type EnrichmentDeps } from "./nutrition-enrichment";
+import { normalizeQuantity } from "@shared/nutrition-enrichment";
 
 export type Meal = "breakfast" | "lunch" | "dinner" | "snack";
 const MEALS: readonly Meal[] = ["breakfast", "lunch", "dinner", "snack"];
@@ -192,4 +193,68 @@ export function repeatedMealInputs(
       return { ...rest, values, __repeatedFrom: fromDate };
     }),
   };
+}
+
+export interface ReplaceFoodResult {
+  ok: boolean;
+  /** No source knows the new food: the caller must supply its figures. */
+  needsValues?: boolean;
+  reason?: string;
+  entry?: any;
+  recap?: string;
+}
+
+/** The amount an entry records, in words a lookup can read again: "150 g", "2", "1.5 servings". */
+function amountWords(entry: any): string {
+  const e: NutritionEnrichment | undefined = entry?.computed?.nutrition;
+  const c = e && e.components.length === 1 ? e.components[0] : null;
+  const q = c?.normalizedQuantity;
+  if (!c || !q || c.servingAssumed) return "";
+  const r = (n: number) => String(Math.round(n * 100) / 100);
+  if (q.grams != null && !q.assumption) return `${r(q.grams)} g`;
+  if (q.ml != null && !q.assumption) return `${r(q.ml)} ml`;
+  if (q.count != null && q.unit && q.unit !== "serving") return `${r(q.count)} ${q.unit}`;
+  if (q.count != null) return r(q.count);
+  return "";
+}
+
+/**
+ * "Actually it was turkey, not chicken" / "it was fried, not grilled": the
+ * same entry, a different food. The item is renamed and the figures are
+ * looked up afresh for the new food at the amount already on record (unless
+ * the new wording states its own). Figures the old food had and the new one
+ * does not are removed — nothing of the old food is left behind. When no
+ * source knows the new food, nothing is changed and the caller is told to
+ * supply the figures.
+ */
+export async function replaceNutritionFood(
+  storage: IStorage,
+  opts: { trackerId: string; entry: any; newItem: string; deps?: EnrichmentDeps },
+): Promise<ReplaceFoodResult> {
+  const newItem = String(opts.newItem || "").trim().slice(0, 160);
+  if (!newItem) return { ok: false, reason: "no replacement food was named" };
+  const entry = opts.entry;
+  const itemKey = ["item", "food", "meal", "name", "description"].find((k) => typeof entry.values?.[k] === "string" && entry.values[k].trim()) || "item";
+  const before = { values: { ...(entry.values || {}) }, nutrition: entry.computed?.nutrition ?? null };
+  const own = normalizeQuantity(newItem);
+  const statesAmount = own.grams != null || own.ml != null || own.count != null || own.packageFraction != null;
+  const kept = statesAmount ? "" : amountWords(entry);
+  const label = newItem.charAt(0).toUpperCase() + newItem.slice(1);
+  const renamed = await storage.updateTrackerEntry(opts.trackerId, entry.id, { values: { [itemKey]: label } } as any);
+  if (!renamed) return { ok: false, reason: "the entry could not be updated" };
+  const out = await enrichNutritionEntry(storage, {
+    entryId: entry.id, trackerId: opts.trackerId, refresh: true, mode: "auto",
+    message: kept ? `${kept} of ${newItem}` : newItem,
+    ...(opts.deps ? { deps: opts.deps } : {}),
+  });
+  const sourced = out.status === "applied" && !!out.enrichment && out.enrichment.components.every((c) => c.sourceType !== "model_estimate");
+  if (!sourced) {
+    // Put the entry back exactly as it was: a rename with the old food's numbers would be a false record.
+    await storage.updateTrackerEntry(opts.trackerId, entry.id, { values: { [itemKey]: before.values[itemKey] }, computed: { nutrition: before.nutrition } } as any);
+    return { ok: false, needsValues: true, reason: `No food database I use has "${newItem}".` };
+  }
+  const totals = out.enrichment!.totals;
+  const stale = Object.keys(out.entry?.values || {}).filter((k) => { const key = canonicalNutrientKey(k); return !!key && key !== "fluidMl" && totals[key] == null; });
+  const final = stale.length ? await storage.updateTrackerEntry(opts.trackerId, entry.id, { valuesToDelete: stale } as any) : out.entry;
+  return { ok: true, entry: final || out.entry, recap: summarizeEnrichment(out.enrichment!) };
 }

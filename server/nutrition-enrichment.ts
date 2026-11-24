@@ -59,6 +59,9 @@ import {
 import { NUTRITION_DB, lookupNutritionDb, nutritionCandidates, phraseNamesDbItem, resolveServings, type NutritionDbItem } from "@shared/nutrition-db";
 import { ITEM_ENRICHMENT_PREF_KEY } from "@shared/item-identity";
 import { isFullLabel, parseStatedLabel, type StatedLabel } from "@shared/nutrition-label";
+import { barcodeIn, resolveFromSources, type SourceAsk } from "./nutrition-sources";
+import { verificationOf } from "@shared/nutrition-enrichment";
+import { consumedFromScan, scanItemName, type ScannedLabel } from "@shared/nutrition-scan";
 import { getAnthropicClient } from "./anthropic-client";
 import { logger } from "./logger";
 
@@ -226,6 +229,12 @@ export interface EnrichmentDeps {
    * sources in the asynchronous pass), no network, no model.
    */
   syncOnly?: boolean;
+  /**
+   * The food databases (server/nutrition-sources.ts): USDA FoodData Central and
+   * Open Food Facts, by name or barcode, for every phrase the internal table
+   * did not answer. A component or null per ask, in order.
+   */
+  sourceLookup?: (asks: SourceAsk[], opts: { deadlineMs: number; now: string }) => Promise<Array<NutritionComponent | null>>;
   /** Model estimate for the phrases nothing else matched. */
   modelEstimate?: (input: { item: string; message: string; phrases: string[] }) => Promise<ModelComponentEstimate[] | null>;
   now?: () => string;
@@ -571,6 +580,7 @@ function componentFromDb(match: NutritionDbItem, phrase: Phrase, now: string): N
     nutrients: componentNutrients(match.perServing, resolved.servings, { source: match.source, sourceType: match.sourceType, sourceItem: match.name, confidence, enrichedAt: now }),
     isBeverage: !!match.isBeverage,
     servingAssumed: !!resolved.assumed || phrase.userQuantityStated === false,
+    sourceRef: { provider: "internal", id: match.id },
   };
 }
 
@@ -624,6 +634,37 @@ function componentFromLabel(item: string, label: StatedLabel, now: string): Nutr
     nutrients: componentNutrients(label.values, label.factor, { source, sourceType: "user", sourceItem: item, confidence: "exact", enrichedAt: now }),
     isBeverage: false,
     servingAssumed: false,
+    sourceRef: { provider: "label", id: "stated" },
+  };
+}
+
+/** The food as a scanned label (or a barcode match) describes it, for the servings the user ate. */
+function componentFromScan(label: ScannedLabel, quantity: string, now: string): NutritionComponent {
+  const eaten = consumedFromScan(label, quantity);
+  const photo = label.origin === "photo";
+  const source = `${photo ? "nutrition label you scanned" : `${label.sourceName || "product database"} (barcode match)`} · ${eaten.method}`;
+  const sourceType: EnrichmentSourceType = photo ? "user" : "product_database";
+  const name = scanItemName(label);
+  const confidence: EnrichmentConfidence = eaten.assumed ? "medium" : "exact";
+  const dailyValues: Partial<Record<NutrientKey, number>> = {};
+  for (const [k, v] of Object.entries(label.dailyValues || {})) if (typeof v === "number") dailyValues[k as NutrientKey] = Math.round(v * eaten.servings * 10) / 10;
+  return {
+    name,
+    brand: label.brand,
+    userQuantity: eaten.method,
+    normalizedQuantity: { original: quantity, amount: eaten.servings, unit: "serving", grams: label.serving.grams ? label.serving.grams * eaten.servings : null, ml: label.serving.ml ? label.serving.ml * eaten.servings : null, count: eaten.servings, confidence: eaten.assumed ? "medium" : "high" },
+    servings: round3(eaten.servings),
+    matchedServing: { amount: 1, unit: "serving", grams: label.serving.grams ?? null, ml: label.serving.ml ?? null, label: label.serving.text },
+    sourceType,
+    source,
+    sourceItem: name,
+    confidence,
+    perServing: label.perServing,
+    nutrients: componentNutrients(label.perServing, eaten.servings, { source, sourceType, sourceItem: name, confidence, enrichedAt: now }),
+    isBeverage: !!label.serving.ml,
+    servingAssumed: eaten.assumed,
+    sourceRef: { provider: photo ? "scan" : "off", id: label.barcode || "photo", ...(label.barcode ? { barcode: label.barcode } : {}) },
+    ...(Object.keys(dailyValues).length ? { dailyValues } : {}),
   };
 }
 
@@ -711,7 +752,11 @@ export async function lookupComponents(
     if (!m) return;
     const spec = detectSpecificity(ph.text);
     const branded = spec.level === "brand" || spec.level === "product";
-    if (m.item.kind === "generic" && branded) fallback[i] = componentFromDb(m.item, ph, now);
+    // An averaged row ("cereal", "protein shake": low confidence) is likewise
+    // only what is left when no database knows the food. A barcode in the
+    // user's words outranks every name match.
+    const hasBarcode = !!barcodeIn(`${ph.text} ${ph.quantityText}`);
+    if ((m.item.kind === "generic" && branded) || m.item.confidence === "low" || hasBarcode) fallback[i] = componentFromDb(m.item, ph, now);
     else components[i] = componentFromDb(m.item, ph, now);
   });
   if (deps.syncOnly) {
@@ -733,6 +778,27 @@ export async function lookupComponents(
       } catch { /* optional source */ }
     });
     await Promise.all(jobs);
+  }
+
+  // 2b. the food databases, for every phrase still open (generic or branded)
+  if (deps.sourceLookup) {
+    const idx = components.map((c, i) => (c ? -1 : i)).filter((i) => i >= 0);
+    const left = deadline - Date.now();
+    if (idx.length > 0 && left > 1500) {
+      try {
+        const asks: SourceAsk[] = idx.map((i) => {
+          const spec = detectSpecificity(phrases[i].text);
+          return { phrase: phrases[i].text, quantityText: phrases[i].quantityText, branded: spec.level === "brand" || spec.level === "product" };
+        });
+        const found = await deps.sourceLookup(asks, { deadlineMs: Math.max(1500, left - 2500), now });
+        idx.forEach((i, k) => {
+          const c = found[k];
+          if (!c) return;
+          components[i] = phrases[i].userQuantityStated === false ? { ...c, servingAssumed: true } : c;
+          usedNetwork = true;
+        });
+      } catch { /* optional source */ }
+    }
   }
 
   // 3. one model call for everything still open
@@ -779,6 +845,10 @@ export interface EnrichOptions {
   deps?: EnrichmentDeps;
   /** The in-turn pass: deterministic tables only, applies only exact/high, never a proposal. */
   sync?: boolean;
+  /** Look the food up afresh even though the entry is already enriched (its food was replaced). */
+  refresh?: boolean;
+  /** The entry was logged from a scanned label (or a barcode match): the label is its whole source. */
+  scan?: { label: ScannedLabel; quantity?: string };
 }
 
 export interface EnrichOutcome {
@@ -794,8 +864,10 @@ export interface EnrichOutcome {
   ms: number;
 }
 
-const defaultDeps = (): EnrichmentDeps => ({
-  productLookup: (phrase, opts) => openFoodFactsLookup(phrase, { strict: opts?.strict }),
+// Under the test runner no default reaches the network: a test injects the
+// source it means to exercise.
+const defaultDeps = (): EnrichmentDeps => (process.env.VITEST ? { now: () => new Date().toISOString() } : {
+  sourceLookup: (asks, opts) => resolveFromSources(asks, { deadlineMs: opts.deadlineMs, now: () => opts.now }),
   modelEstimate: (input) => modelEstimateComponents(input),
   now: () => new Date().toISOString(),
 });
@@ -866,7 +938,7 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
       }
     }
   }
-  if (existing?.status === "applied" && intent === "auto") {
+  if (existing?.status === "applied" && intent === "auto" && !opts.refresh && !opts.scan) {
     return done({ status: "applied", enrichment: existing, entry, trackerId: tracker.id, trackerName: tracker.name, reason: "already enriched" });
   }
 
@@ -875,17 +947,19 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
   const text = item || message;
   const specificity = detectSpecificity(`${item} ${message}`.trim());
   const decision = decideEnrichment(mode === "off" ? "auto" : mode, specificity, text);
-  if (!decision.attempt && !labelFor(item, message)) return done({ status: "skipped", reason: decision.reason, trackerId: tracker.id, trackerName: tracker.name });
+  if (!opts.scan && !decision.attempt && !labelFor(item, message)) return done({ status: "skipped", reason: decision.reason, trackerId: tracker.id, trackerName: tracker.name });
 
   // What the user read off a label, scaled by how much of it they ate
   // (shared/nutrition-label). A full label is the entry's whole source: no
   // lookup runs beside it and nothing it omits is filled in from elsewhere.
-  const label = labelFor(item, message);
+  const label = opts.scan ? null : labelFor(item, message);
   const userValues = label ? label.consumed : {};
 
   let lookup: LookupResult;
   try {
-    lookup = isFullLabel(label)
+    lookup = opts.scan
+      ? { components: [componentFromScan(opts.scan.label, opts.scan.quantity || "", now)], unresolved: [], usedNetwork: false }
+      : isFullLabel(label)
       ? { components: [componentFromLabel(item || "Food", label, now)], unresolved: [], usedNetwork: false }
       : await lookupComponents(item || message, message, deps, now);
   } catch (e: any) {
@@ -925,15 +999,16 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
     linkedEntries: [],
     summary: summarizeEnrichment({ components: lookup.components, totals }),
     enrichedAt: now,
-    ...(isFullLabel(label) ? { fromLabel: true } : {}),
+    ...(isFullLabel(label) || opts.scan ? { fromLabel: true } : {}),
   };
+  enrichment.verification = verificationOf(enrichment);
 
   // The in-turn pass writes only what a label or a menu states (exact/high)
   // and never leaves a proposal behind; anything less waits for the full pass.
-  if (opts.sync && (confidence === "medium" || !appliesAutomatically(mode, confidence))) {
+  if (opts.sync && !opts.scan && (confidence === "medium" || !appliesAutomatically(mode, confidence))) {
     return done({ status: "skipped", reason: `sync pass: ${confidence} — left for the full lookup`, needsMore: true, trackerId: tracker.id, trackerName: tracker.name });
   }
-  const shouldApply = intent === "force" || (intent === "auto" && appliesAutomatically(mode, confidence));
+  const shouldApply = intent === "force" || !!opts.scan || (intent === "auto" && appliesAutomatically(mode, confidence));
   if (!shouldApply) {
     enrichment.reason = intent === "preview" ? "preview" : mode === "ask" ? "waiting for the user" : `confidence ${confidence} — kept the generic estimate`;
     const updated = await storage.updateTrackerEntry(tracker.id, entry.id, { computed: { nutrition: enrichment } } as any);

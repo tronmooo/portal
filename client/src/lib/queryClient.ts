@@ -134,7 +134,7 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const timeoutMs = (url.includes('/api/chat') || url.includes('/api/upload') || url.includes('/api/smart-fill') || url.includes('/api/workspace/')) ? CHAT_TIMEOUT_MS
+  const timeoutMs = (url.includes('/api/chat') || url.includes('/api/upload') || url.includes('/api/smart-fill') || url.includes('/api/workspace/') || url.includes('/api/nutrition/')) ? CHAT_TIMEOUT_MS
     : (url.includes('/api/documents/')) ? DOC_TIMEOUT_MS
     // Search must fail fast: a spinner that hangs for the full 60s default reads
     // as "search is broken". 15s is well beyond a healthy query yet bounded.

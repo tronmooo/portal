@@ -7,6 +7,8 @@
 // numbers. Pure — the server applies it before the call runs
 // (server/meal-split.ts), so every food gets its own entry, card and undo.
 
+import { isStateOnlyFragment } from "./nutrition-enrichment";
+
 /** "X and Y" that is ONE food. Matched across the "and", so it never splits. */
 const AND_DISHES = [
   "mac and cheese", "macaroni and cheese", "peanut butter and jelly", "pb and j",
@@ -80,7 +82,15 @@ function cut(text: string): Array<{ text: string; sep: "" | "+" | "," | "and" }>
 export function splitSeparateFoods(item: string): string[] {
   const whole = norm(String(item || ""));
   if (!whole) return [];
-  const parts = cut(whole);
+  // "White rice, dry (100 g)" / "Chicken breast, raw": a piece that only says
+  // how the food before it was prepared or weighed is part of that food. Cut
+  // as a food of its own it became a second entry with the same numbers
+  // (2026-11-25, real model: 100 g of dry rice logged as 730 kcal).
+  const parts: ReturnType<typeof cut> = [];
+  for (const p of cut(whole)) {
+    if (parts.length > 0 && isStateOnlyFragment(p.text)) parts[parts.length - 1] = { ...parts[parts.length - 1], text: `${parts[parts.length - 1].text}, ${p.text}` };
+    else parts.push(p);
+  }
   if (parts.length < 2) return [whole];
 
   // A dish named by its ingredients: the last piece is "<ingredient> <dish>"

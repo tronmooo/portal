@@ -34,7 +34,8 @@ import { rescaleNutritionEntry, enrichNutritionEntry } from "./nutrition-enrichm
 import { splitCombinedFoodLog } from "./meal-split";
 import { planTrackerEntryCandidate, planProfileCandidate, planObligationCandidate, enrichItem } from "./item-enrichment";
 import { recapLine, describeSources, VERIFICATION_LABEL, verificationOf, isNutritionTrackerLike } from "@shared/nutrition-enrichment";
-import { findNutritionEntry, removeNutritionComponent } from "./nutrition-edits";
+import { findNutritionEntry, removeNutritionComponent, replaceNutritionFood } from "./nutrition-edits";
+import { asksToLogPicturedFood } from "@shared/nutrition-scan";
 import { formatAttribute } from "@shared/item-identity";
 
 /**
@@ -51,9 +52,22 @@ import { formatAttribute } from "@shared/item-identity";
  * candidate is attached only when that pass could still improve the entry.
  * A failure anywhere here can never cost the log.
  */
+/** How long a food log may wait on the food databases inside the chat turn. */
+const IN_TURN_LOOKUP_MS = 9000;
 async function attachEnrichmentCandidate(entry: any, tracker: { id: string; name: string; category?: string | null } | null | undefined, input: any): Promise<void> {
   if (!entry || !tracker) return;
   try {
+    // A scanned label (or a barcode match) IS the entry's source: nothing is looked up.
+    if (input?.__scan?.label) {
+      const scanned = await enrichNutritionEntry(storage, { entryId: entry.id, trackerId: tracker.id, entry, tracker: tracker as any, message: "", mode: "auto", scan: input.__scan });
+      if (scanned.status === "applied" && scanned.enrichment && scanned.entry) {
+        entry.values = scanned.entry.values;
+        entry.computed = scanned.entry.computed;
+        entry._recapDetail = recapLine(scanned.enrichment);
+        entry.enrichmentNote = `${VERIFICATION_LABEL[verificationOf(scanned.enrichment)]} · ${describeSources(scanned.enrichment)}${scanned.enrichment.components.some((c) => c.servingAssumed) ? " · 1 serving assumed" : ""}`;
+      }
+      return;
+    }
     const candidate = planTrackerEntryCandidate(entry, tracker, String(input?.__userMessage || ""));
     if (!candidate) return;
     const isItem = !!(candidate as any).target;
@@ -71,6 +85,27 @@ async function attachEnrichmentCandidate(entry: any, tracker: { id: string; name
         needsMore = false;
       } else {
         needsMore = sync.needsMore !== false || sync.status === "failed";
+        // The tables could not pin it: ask the food databases NOW, inside the
+        // turn, so the reply quotes the figures that are stored. Bounded; when
+        // it runs out of time the after-reply pass still has its turn.
+        if (needsMore && sync.status !== "failed" && process.env.NUTRITION_INTURN_LOOKUP !== "0") {
+          const full = await enrichNutritionEntry(storage, { entryId: entry.id, trackerId: tracker.id, entry, tracker: tracker as any, message: candidate.message, deps: { deadlineMs: IN_TURN_LOOKUP_MS } }).catch(() => null);
+          if (full) logger.info("ai", `In-turn database lookup [${tracker.name}]: ${full.status}${full.reason ? ` (${full.reason})` : ""} in ${full.ms}ms`);
+          if (full?.status === "applied" && full.enrichment && full.entry) {
+            entry.values = full.entry.values;
+            entry.computed = full.entry.computed;
+            // An AI estimate never replaces the figures already on the entry
+            // (buildEntryValuePatch), so its totals are not what is stored:
+            // the reply keeps the entry's own numbers and says they are an estimate.
+            const sourced = full.enrichment.components.every((c) => c.sourceType !== "model_estimate");
+            if (sourced) entry._recapDetail = recapLine(full.enrichment);
+            const assumed = full.enrichment.components.some((c) => c.servingAssumed);
+            entry.enrichmentNote = sourced
+              ? `${VERIFICATION_LABEL[verificationOf(full.enrichment)]} · ${describeSources(full.enrichment)}${assumed ? " · amount assumed" : ""}`
+              : "Estimated · no database record matched, AI estimate";
+            needsMore = false;
+          }
+        }
       }
     } else {
       const sync = await enrichItem(storage, { target: "trackerEntry", id: entry.id, trackerId: tracker.id, message: candidate.message, sync: true });
@@ -2503,6 +2538,37 @@ export async function processFileUpload(
   const tUpload = Date.now();
   const actions: ParsedAction[] = [];
   const results: any[] = [];
+
+  // A picture sent with "I ate two servings of this" is a nutrition label to
+  // LOG, not a document to file (server/nutrition-label-scan.ts). The label
+  // is read; the entry's figures are the label's, times what was eaten. A
+  // picture that turns out not to be a label goes on through the document
+  // pipeline below, untouched.
+  if (mimeType.startsWith("image/") && asksToLogPicturedFood(userMessage)) {
+    try {
+      const { scanNutritionLabel, logScannedLabel } = await import("./nutrition-label-scan");
+      const scan = await scanNutritionLabel(base64Data, mimeType);
+      const label = scan.kind === "label" ? scan.label : scan.kind === "barcode" ? scan.label : null;
+      if (scan.kind === "barcode" && !label) {
+        return { reply: `I read the barcode ${scan.barcode}, but no product database I use has that product. Send a photo of its nutrition label and I'll log it from that.`, actions, results };
+      }
+      if (label) {
+        let forProfile: string | undefined;
+        if (profileId) { try { forProfile = (await storage.getProfiles()).find((p) => p.id === profileId)?.name; } catch { /* default owner */ } }
+        const logged = await logScannedLabel(storage, { label, quantity: userMessage, userMessage, forProfile });
+        if (!("error" in logged)) {
+          results.push(logged.entry);
+          actions.push({ type: "log_entry", category: "tracker", data: { trackerName: logged.trackerName, values: logged.entry.values, id: logged.entry.id } } as any);
+          const where = label.origin === "photo" ? "from the label in your photo" : `from ${label.sourceName || "the product database"} (barcode ${label.barcode})`;
+          const assumed = logged.consumption.assumed ? " You didn't say how much, so I logged one serving; tell me the amount and I'll correct it." : "";
+          return { reply: `Logged ${logged.recap || String(logged.entry.values?.item || "it")}. Figures are ${where}: ${logged.consumption.method}.${assumed}`, actions, results };
+        }
+        logger.warn("ai", `Label upload could not be logged: ${logged.error}`);
+      }
+    } catch (e: any) {
+      logger.warn("ai", `Label scan skipped: ${e?.message || e}`);
+    }
+  }
 
   // ── EXTRACT-ONLY MODE ("don't keep my photo") ──────────────────────────────
   // When the user ticks "Extract data, don't keep the photo", the bytes are
@@ -5369,6 +5435,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         entryIndex: { type: "number", description: "0 = most recent entry (default). 1 = second most recent, etc." },
         match: { type: "string", description: "Which entry, in the user's words, instead of entryIndex: a food ('protein bar', 'coke') picks the most recent entry naming it; a meal ('lunch', 'breakfast') picks from the most recent day with that meal. Use it whenever the user names the entry ('that protein bar', 'my lunch')." },
         at: { type: "string", description: "Move the entry to the day/time it really happened, keeping everything else: 'I drank that protein shake yesterday, not today' → at:'yesterday' as a YYYY-MM-DD date (or an ISO date-time). Never delete and re-log to change a date." },
+        replaceWith: { type: "string", description: "NUTRITION ONLY — the food the entry REALLY was, when the user corrects what it was or how it was prepared: 'actually it was a turkey sandwich, not chicken' → match:'chicken sandwich', replaceWith:'Turkey sandwich'; 'it was fried, not grilled' → match:'chicken', replaceWith:'Fried chicken breast'; 'that rice was weighed dry' → replaceWith:'White rice, dry'. Give the amount only if it changed. The server renames the entry and looks the new food's figures up for the amount on record. If it answers needsValues, call again with your own values instead. Never delete and re-log." },
         removeComponent: { type: "string", description: "NUTRITION ONLY — an ingredient to take OUT of the entry: 'remove the cheese from my lunch' → match:'lunch', removeComponent:'cheese'. The server subtracts that ingredient's own figures and re-sums the rest. If it answers needsValues, the entry has no separate figures for it: call again with the recalculated values instead." },
         scaleBy: { type: "number", description: "NUTRITION ONLY — a portion correction as a multiplier: 'actually I only ate half of it' → 0.5; 'I had two of those' → 2; 'I ate about a third' → 0.33. The server rescales every nutrient (calories, macros, sugar, sodium, caffeine), the meal's components, and any linked hydration/caffeine rows together. Do NOT recompute the numbers yourself and do NOT log a second entry." },
       },
@@ -6155,10 +6222,12 @@ BEHAVIOR:
   KEEP THE SPECIFICS IN "item": brand, product, flavor, restaurant, size and the user's quantity wording ("Quaker Instant Oatmeal Maple & Brown Sugar (1 packet) with 2% milk (1 cup)", "Coca-Cola (12 oz)", "Big Mac", "McDonald's Medium Fries"). The server's enrichment layer identifies specific products from that text AFTER the entry is saved and refines the numbers with label data — still pass your best estimate now; a generic estimate for a vague item ("cereal") is correct and stays.
   ONE FOOD = ONE ENTRY: every separate food or drink is its OWN log_tracker_entry with its OWN item and its OWN numbers. "Ate a banana and a doughnut" → TWO calls: { item: "Banana", calories: 105, ... } and { item: "Doughnut", calories: 250, ... }. "3 eggs, 2 wheat toast with butter, a banana and coffee with creamer" → FOUR calls (3 Eggs · 2 Wheat Toast with Butter · Banana · Coffee with Creamer). NEVER join foods into one item with "+", "and" or commas, and never send meal totals. What was added TO a food stays with it ("coffee with cream and sugar", "toast with butter", "oatmeal with milk"), and a single dish is one food however many ingredients name it ("mac and cheese", "bacon, egg and cheese sandwich", "chicken burrito bowl"). The server splits a combined item into separate entries anyway, with rougher numbers than yours.
   PORTION CORRECTIONS: "actually I only ate half" / "I had two of those" → update_tracker_entry(trackerName:"Nutrition", values:{}, scaleBy:0.5 or 2). When the user names the entry ("half of that protein bar"), add match:"protein bar". Never log a second entry and never halve the numbers yourself.
-  OTHER CORRECTIONS change the entry that exists, never a new one: "I drank that shake yesterday, not today" → update_tracker_entry(trackerName:"Nutrition", values:{}, match:"shake", at:"<yesterday as YYYY-MM-DD>"). "Remove the cheese from my lunch" → update_tracker_entry(trackerName:"Nutrition", values:{}, match:"lunch", removeComponent:"cheese"). "I had the same breakfast as yesterday" → log_tracker_entry(trackerName:"Nutrition", values:{}, repeatFrom:"yesterday", repeatMeal:"breakfast") — the server copies those entries; do not re-estimate them.
+  OTHER CORRECTIONS change the entry that exists, never a new one: "I drank that shake yesterday, not today" → update_tracker_entry(trackerName:"Nutrition", values:{}, match:"shake", at:"<yesterday as YYYY-MM-DD>"). "Remove the cheese from my lunch" → update_tracker_entry(trackerName:"Nutrition", values:{}, match:"lunch", removeComponent:"cheese"). "Actually it was turkey, not chicken" / "it was fried, not grilled" → update_tracker_entry(trackerName:"Nutrition", values:{}, match:"chicken", replaceWith:"<the food it really was>"). "I had the same breakfast as yesterday" → log_tracker_entry(trackerName:"Nutrition", values:{}, repeatFrom:"yesterday", repeatMeal:"breakfast") — the server copies those entries; do not re-estimate them.
   USER-STATED LABEL VALUES WIN: "it says 210 calories and 20g protein" → pass exactly calories:210, protein:20; the server keeps them even if a product lookup disagrees.
   A LABEL WITH A BASIS — THE SERVER DOES THE ARITHMETIC: when the user reads out a label and how much they ate ("75 grams of cereal, the label says 160 calories … per 40 grams"; "the entire bag, 3.5 servings per bag, each serving 150 calories…"; "half a bar containing 200 calories…"; "four portions of a recipe containing 800 calories, I ate one and a half"), log ONE entry for the food and the server scales the label by what was eaten, exactly. Use the server's figures (the tool result's "refined" line) in your reply; never restate your own multiplication.
-  SOURCE ORDER: a label the user gave or uploaded beats everything; a named brand means that product's own label (keep the brand, product and flavor in "item" so the server can match it); with no brand, a standard reference value for the food as described.
+  SOURCE ORDER (the server applies it; your job is to NAME the food precisely): a label the user gave or photographed → the named brand's own label → a barcode match → the food databases (USDA FoodData Central, Open Food Facts) → a standard reference → your estimate, last. So keep in "item" everything that identifies the record: brand, product line, flavor and variety ("zero sugar", "2%", "reduced fat"), restaurant, cut, and how it was prepared. Your numbers are the fallback only; when the tool result carries a "refined" line, those are the stored figures — quote them, not yours.
+  BARCODE: when the user gives a barcode / UPC number for what they ate, put the digits in "item" exactly ("Barcode 3017620422003 (30 g)"); the server finds the product. Do not guess what the product is.
+  SUPPLEMENTS, RESTAURANT ORDERS AND RECIPES are food logs too: a restaurant item keeps the restaurant and every modification in "item" ("Chipotle Chicken Burrito Bowl, no rice, extra fajita veggies"); a homemade recipe is ONE entry named for the dish with the portion eaten; a supplement keeps brand, product and count ("Nature Made Vitamin D3 2000 IU (1 softgel)") and is never given calories or macros it does not have.
   UNKNOWN IS NOT ZERO: pass a nutrient only when you know it. Pass 0 only when the food truly has none (0 g fat in a soda). If a label or the user did not state a nutrient, leave the key out; never fill it with 0.
   NEVER RECOMPUTE CALORIES FROM MACROS: fiber, sugar alcohols, allulose and label rounding make protein×4 + carbs×4 + fat×9 differ from the printed calories legitimately. The printed or stated calories are the calories.
   KEEP HOW IT WAS MEASURED IN "item": raw vs cooked and dry vs cooked change the numbers ("Chicken breast, raw (200 g)", "White rice, dry (100 g)"); a weight that includes peel, skin, pit or bone is not all food ("Banana (250 g with peel)" → estimate the edible part); "3 eggs but only 2 of the yolks" is 3 whites and 2 yolks, logged as ONE entry ("3 Eggs (only 2 yolks)"); oil, butter or dressing a food was cooked or served with is counted, with its amount ("Chicken (100 g) with Olive Oil (15 g)"); "two coffees, one black and one with 30 ml of whole milk" is two entries ("Black Coffee", "Coffee with Whole Milk (30 ml)"). When only part of something was eaten ("made two sandwiches, ate three quarters of one"), log what was EATEN (0.75 sandwich).
@@ -13812,6 +13881,20 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         }
         return { error: out.reason || `Couldn't update the ${uTracker.name} entry` };
       }
+      // "It was turkey, not chicken" / "fried, not grilled": the same entry, a
+      // different food, looked up afresh at the amount on record.
+      const uReplace = String((input as any).replaceWith || "").trim();
+      if (uReplace) {
+        const out = await replaceNutritionFood(storage, { trackerId: uTracker.id, entry: uEntry, newItem: uReplace });
+        if (out.ok) return { updated: true, trackerName: uTracker.name, oldValues: uEntry.values, newValues: out.entry?.values, newEntry: out.entry, replacedWith: uReplace, refined: out.recap };
+        if (out.needsValues) {
+          return {
+            error: `${out.reason} Call update_tracker_entry again for the same entry${uMatch ? ` (match:"${uMatch}")` : ""} WITHOUT replaceWith, passing values with item:"${uReplace}" and your best estimate of its calories and macros for the same amount. Entry now: ${JSON.stringify(uEntry.values)}`,
+            needsValues: true,
+          };
+        }
+        return { error: out.reason || `Couldn't update the ${uTracker.name} entry` };
+      }
       // "I drank it yesterday, not today": the same entry, on the day it happened.
       const uAt = typeof (input as any).at === "string" && (input as any).at ? String((input as any).at) : undefined;
       // "Actually I only ate half": one in-place rescale of every derived
@@ -13829,7 +13912,11 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // re-fired the habit sync while the delete removed no check-in.
       const hasValues = input.values && Object.keys(input.values).length > 0;
       if (!hasValues && !uAt) return { error: "Nothing to change: pass values, scaleBy, at or removeComponent." };
-      const newEntry = await storage.updateTrackerEntry(uTracker.id, uEntry.id, { ...(hasValues ? { values: { ...input.values } } : {}), ...(uAt ? { timestamp: uAt } : {}) });
+      // Figures the model supplies for a renamed food replace the old food's
+      // lookup: its components no longer describe the entry.
+      const renames = hasValues && typeof input.values.item === "string" && input.values.item.trim() && input.values.item.trim().toLowerCase() !== String((uEntry.values as any)?.item || "").trim().toLowerCase();
+      const dropLookup = renames && (uEntry as any).computed?.nutrition ? { computed: { nutrition: null, enrichment: null } } : {};
+      const newEntry = await storage.updateTrackerEntry(uTracker.id, uEntry.id, { ...(hasValues ? { values: { ...input.values } } : {}), ...(uAt ? { timestamp: uAt } : {}), ...dropLookup } as any);
       if (!newEntry) return { error: `Couldn't update the ${uTracker.name} entry` };
       return { updated: true, trackerName: uTracker.name, oldValues: uEntry.values, newValues: hasValues ? input.values : uEntry.values, newEntry, ...(uAt ? { movedTo: uAt, movedFrom: (uEntry as any).timestamp } : {}) };
     }
