@@ -34,6 +34,11 @@ describe("Needs Attention", () => {
       expect(i.dismissIds).toEqual([i.key]);
     }
     expect(items.find((i) => i.key.includes("laptop"))!.title).toBe("Old laptop: Replace");
+    // Advice for now, not a deadline: no date chip, and a sentence a person reads.
+    const sell = items.find((i) => i.key.includes("civic"))!;
+    expect(sell.daysUntil).toBe(0);
+    expect(sell.reason).toMatch(/^It is in its best selling window \(until Jan 2029\)/);
+    expect(sell.reason).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 
   it("a dismissed recommendation stays gone; a different one later is a new row", () => {

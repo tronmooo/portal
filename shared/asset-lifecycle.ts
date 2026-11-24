@@ -323,6 +323,13 @@ export interface AssetLifecycle {
 }
 
 const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
+/** "Jan 2029" — a calendar month for sentences (never a raw ISO date). */
+const monthYear = (d: string) => new Date(`${d.slice(0, 10)}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+/** The headline without its "Action —" prefix, capitalised, for a row that already shows the action. */
+export function headlineReason(headline: string): string {
+  const rest = headline.replace(/^[^—]+—\s*/, "");
+  return rest.charAt(0).toUpperCase() + rest.slice(1);
+}
 export function money(n: number): string {
   const r = Math.round(Math.abs(n));
   return `${n < 0 ? "-" : ""}$${r.toLocaleString("en-US")}`;
@@ -450,7 +457,7 @@ export function computeAssetLifecycle(input: LifecycleInput): AssetLifecycle {
     reasons.push(`A new one costs about ${money(replacement.value!)} and lasts about ${life} years.`);
   } else if (window?.status === "open" && value - floor >= Math.max(50, 0.1 * (P ?? value))) {
     action = "consider_selling";
-    headline = `Consider Selling — it is in its best selling window (until ${window.end}); it should still fetch about ${money(value)}.`;
+    headline = `Consider Selling — it is in its best selling window (until ${monthYear(window.end)}); it should still fetch about ${money(value)}.`;
     reasons.push(`Projected to lose about ${money(Math.max(0, dep12))} over the next year${salvageValue != null ? ` and fall toward ${salvageWords}` : ""}.`);
     if (remaining != null) reasons.push(`About ${yrs(remaining)} of useful life left.`);
   } else if (value <= floor && floor <= 0 && P) {
@@ -465,7 +472,7 @@ export function computeAssetLifecycle(input: LifecycleInput): AssetLifecycle {
       action = "monitor";
       headline = warrantySoon ? `Monitor — the warranty ends in ${warrantyDays} days; repairs after that are yours.`
         : lifeSoon ? `Monitor — about ${yrs(Math.max(0, remaining!))} of useful life left.`
-        : `Monitor — its best selling window opens on ${window!.start}.`;
+        : `Monitor — its best selling window opens in ${monthYear(window!.start)}.`;
     } else {
       action = "keep";
       headline = remaining != null
@@ -474,7 +481,7 @@ export function computeAssetLifecycle(input: LifecycleInput): AssetLifecycle {
     }
     if (remaining != null) reasons.push(`About ${yrs(age!)} old with a typical life of ${life} years.`);
     if (dep12 > 0) reasons.push(`Projected value in a year: ${money(in12)}.`);
-    if (window && window.status !== "passed") reasons.push(`Best time to sell: ${window.start} to ${window.end}.`);
+    if (window && window.status !== "passed") reasons.push(`Best time to sell: ${monthYear(window.start)} to ${monthYear(window.end)}.`);
     if (rvr) reasons.push(`Keeping it costs about ${money(rvr.annualKeepCost)} a year; a new one about ${money(rvr.annualReplaceCost)} a year.`);
   }
   // Typical figures for an unrecognised item are not enough to tell anyone to sell or replace.
@@ -546,14 +553,15 @@ export function lifecycleAttentionItems(
     if (!rec || !SIGNIFICANT_ACTIONS.has(rec.action)) continue;
     const id = lifecycleAlertId(r.profileId, rec.action);
     if (dismissed.has(id)) continue;
-    const end = rec.action === "consider_selling" ? r.lifecycle.sellingWindow?.end : null;
-    const daysUntil = end ? Math.max(0, Math.round((Date.parse(`${end}T12:00:00Z`) - now.getTime()) / DAY)) : 0;
+    // Advice for now, not a deadline: no date chip (a window ending in four
+    // years read as a red "Jan 30" beside expirations).
+    const daysUntil = 0;
     out.push({
       key: id,
       sourceKey: `lifecycle:${r.profileId}`,
       kind: "alert",
       title: `${r.name}: ${rec.label}`,
-      reason: rec.headline.replace(/^[^—]+—\s*/, ""),
+      reason: headlineReason(rec.headline),
       tier: rec.action === "consider_selling" ? "upcoming" : "soon",
       daysUntil,
       score: rec.action === "replace" ? 70 : rec.action === "dispose" ? 60 : 50,

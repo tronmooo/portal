@@ -10,7 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { ChevronDown, RefreshCw } from "lucide-react";
 import { formatMoneyCompact, parseLocalDate } from "@/lib/format";
-import { summarizeLifecycles, type AssetLifecycle, type LifecycleAction, type LifecycleRow } from "@shared/asset-lifecycle";
+import { headlineReason, summarizeLifecycles, type AssetLifecycle, type LifecycleAction, type LifecycleRow } from "@shared/asset-lifecycle";
 import { Link } from "wouter";
 
 export const LIFECYCLE_QUERY_KEY = ["/api/assets/lifecycle"] as const;
@@ -100,7 +100,7 @@ export function LifecycleSection({ profileId }: { profileId: string }) {
     <div className="mt-2 rounded-xl border border-border/40 px-3 py-2" data-testid="asset-lifecycle">
       <div className="flex items-start gap-2">
         <LifecyclePill action={r.action} label={r.label} className="mt-px shrink-0" />
-        <p className="text-[12px] leading-snug min-w-0" data-testid="lifecycle-headline">{r.headline.replace(/^[^—]+—\s*/, "")}</p>
+        <p className="text-[12px] leading-snug min-w-0" data-testid="lifecycle-headline">{headlineReason(r.headline)}</p>
       </div>
       {figs.length > 0 && (
         <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5" data-testid="lifecycle-figures">
