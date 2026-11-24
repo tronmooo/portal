@@ -101,6 +101,13 @@ describe("ExecutiveBriefing", () => {
     ...over,
   });
 
+  /** The Bills & Payments rows the Money card lists (shared/bills-timeline). */
+  const timelineOf = (bills: Array<{ id: string; name: string; amount: number; daysUntil: number }>) => ({
+    upcoming: bills.filter((b) => b.daysUntil >= 0).map((b) => ({ key: `${b.id}:next`, billId: b.id, name: b.name, amount: b.amount,
+      date: "2099-01-01", daysUntil: b.daysUntil, frequency: "monthly", category: "general", kind: "bill", autopay: false, linkedLiabilityId: b.id, state: "upcoming" })),
+    past: [],
+  });
+
   async function mount(enhanced: any, stats: any = {}) {
     const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
     wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
@@ -171,11 +178,12 @@ describe("ExecutiveBriefing", () => {
   });
 
   it("never shows a months-old occurrence, even from a payload that still carries one", async () => {
+    const bills = [
+      { id: "old", name: "Spotify Premium", amount: 11, daysUntil: -115, status: "overdue" },
+      { id: "next", name: "Netflix", amount: 9.99, daysUntil: 9, status: "upcoming" },
+    ];
     await mount(enhancedWith({
-      financeSnapshot: { upcomingBills: [
-        { id: "old", name: "Spotify Premium", amount: 11, daysUntil: -115, status: "overdue" },
-        { id: "next", name: "Netflix", amount: 9.99, daysUntil: 9, status: "upcoming" },
-      ] },
+      financeSnapshot: { upcomingBills: bills, billsTimeline: timelineOf(bills) },
     }));
     const money = screen.getByTestId("exec-card-money");
     expect(screen.getByTestId("exec-money-bill-next").textContent).toContain("Netflix");
@@ -594,14 +602,15 @@ describe("ExecutiveBriefing", () => {
   });
 
   it("hides QA bills and collapses the duplicate-bill pair (2026-07-29 report)", async () => {
+    const bills = [
+      { id: "b1", name: "Verizon Phone Bill payment", amount: 86.5, daysUntil: 3, status: "upcoming" },
+      { id: "b2", name: "Phone Bill payment", amount: 86.5, daysUntil: 3, status: "upcoming" },
+      { id: "b3", name: "QA Test Subscription", amount: 15.99, daysUntil: 5, status: "upcoming" },
+      { id: "b4", name: "rent the 1st", amount: 2500, daysUntil: 1, status: "upcoming" },
+      { id: "b5", name: "rent", amount: 300, daysUntil: 6, status: "upcoming" },
+    ];
     await mount(enhancedWith({
-      financeSnapshot: { upcomingBills: [
-        { id: "b1", name: "Verizon Phone Bill payment", amount: 86.5, daysUntil: 3, status: "upcoming" },
-        { id: "b2", name: "Phone Bill payment", amount: 86.5, daysUntil: 3, status: "upcoming" },
-        { id: "b3", name: "QA Test Subscription", amount: 15.99, daysUntil: 5, status: "upcoming" },
-        { id: "b4", name: "rent the 1st", amount: 2500, daysUntil: 1, status: "upcoming" },
-        { id: "b5", name: "rent", amount: 300, daysUntil: 6, status: "upcoming" },
-      ] },
+      financeSnapshot: { upcomingBills: bills, billsTimeline: timelineOf(bills) },
       expiringDocuments: [],
     }));
     const all = screen.getByTestId("executive-briefing").textContent || "";

@@ -168,6 +168,7 @@ import { useAssetValuation } from "@/hooks/useAssetValuation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CommitDateInput } from "@/components/CommitDateInput";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { resolveProfileTab, slugForProfileTab } from "@/lib/profile-tab-slugs";
@@ -8208,7 +8209,7 @@ function TasksTab({
 // EDIT PROFILE DIALOG
 // ============================================================
 
-function EditProfileDialog({
+export function EditProfileDialog({
   open,
   profile,
   onClose,
@@ -8263,7 +8264,6 @@ function EditProfileDialog({
   currentRef.current = { name, notes, fields };
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [blocked, setBlocked] = useState<Record<string, string>>({});
-  const flushing = useRef(false);
   const flushAgain = useRef(false);
   const aliveRef = useRef(true);
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
@@ -8271,57 +8271,66 @@ function EditProfileDialog({
   // as the form re-seed above).
   useEffect(() => { savedRef.current = formOf(profile); setSaveState("idle"); setBlocked({}); }, [profile.id, open]);
 
-  const flush = useCallback(async (): Promise<void> => {
-    if (flushing.current) { flushAgain.current = true; return; }
-    flushing.current = true;
-    try {
-      for (;;) {
-        flushAgain.current = false;
-        const sent = currentRef.current;
-        const pending = pendingProfilePatch(savedRef.current, sent);
-        const held = { ...pending.blocked };
-        let patch = pending.patch;
-        // Renaming is held to the same rule as the AI path: a name another
-        // profile already answers to is refused, not silently duplicated
-        // (shared/profile-rename.ts).
-        if (patch?.name !== undefined) {
-          const known: Array<{ id: string; name: string }> =
-            (queryClient.getQueryData(["/api/profiles"]) as any[] | undefined)?.filter(
-              (p: any) => p && typeof p.id === "string" && typeof p.name === "string",
-            ) ?? [];
-          const rename = checkProfileRename(known, profile.id, patch.name, savedRef.current.name);
-          if (rename.status === "rejected") {
-            held.name = rename.error;
-            const { name: _dropped, ...rest } = patch;
-            patch = Object.keys(rest).length > 0 ? rest : null;
-          } else {
-            patch = { ...patch, name: rename.name };
-          }
+  // ONE save chain. A save asked for while another is on its way joins it:
+  // the running loop goes round again with the newest values, and every
+  // caller (Done included) waits for the same promise. Resolves true when
+  // everything sendable is saved, false when a save failed.
+  const inflight = useRef<Promise<boolean> | null>(null);
+  const runFlush = useCallback(async (): Promise<boolean> => {
+    for (;;) {
+      flushAgain.current = false;
+      const sent = currentRef.current;
+      const pending = pendingProfilePatch(savedRef.current, sent);
+      const held = { ...pending.blocked };
+      let patch = pending.patch;
+      // Renaming is held to the same rule as the AI path: a name another
+      // profile already answers to is refused, not silently duplicated
+      // (shared/profile-rename.ts).
+      if (patch?.name !== undefined) {
+        const known: Array<{ id: string; name: string }> =
+          (queryClient.getQueryData(["/api/profiles"]) as any[] | undefined)?.filter(
+            (p: any) => p && typeof p.id === "string" && typeof p.name === "string",
+          ) ?? [];
+        const rename = checkProfileRename(known, profile.id, patch.name, savedRef.current.name);
+        if (rename.status === "rejected") {
+          held.name = rename.error;
+          const { name: _dropped, ...rest } = patch;
+          patch = Object.keys(rest).length > 0 ? rest : null;
+        } else {
+          patch = { ...patch, name: rename.name };
         }
-        if (aliveRef.current) setBlocked((prev) => (JSON.stringify(prev) === JSON.stringify(held) ? prev : held));
-        if (!patch) break;
-        if (aliveRef.current) setSaveState("saving");
-        try {
-          await apiRequest("PATCH", `/api/profiles/${profile.id}`, patch);
-        } catch (err: any) {
-          if (aliveRef.current) setSaveState("error");
-          toast({ title: `Couldn't save "${sent.name || profile.name}"`, description: formatApiError(err), variant: "destructive" });
-          return;
-        }
-        savedRef.current = applySavedPatch(savedRef.current, sent, patch);
-        if (aliveRef.current) setSaveState("saved");
-        // A NAME is drawn by every screen that mentions this record — owner
-        // badges, list rows, search, the profile switcher — none of which sit
-        // under the profiles domain. A rename is rare; refresh everything
-        // rather than leave half the app calling them by the old name.
-        invalidateDomains(patch.name !== undefined ? "everything" : "profiles");
-        onSaved();
-        if (!flushAgain.current) break;
       }
-    } finally {
-      flushing.current = false;
+      if (aliveRef.current) setBlocked((prev) => (JSON.stringify(prev) === JSON.stringify(held) ? prev : held));
+      if (!patch) return true;
+      if (aliveRef.current) setSaveState("saving");
+      try {
+        await apiRequest("PATCH", `/api/profiles/${profile.id}`, patch);
+      } catch (err: any) {
+        // Newer input arrived while this one was on its way: try again with
+        // it (its timer already fired into this chain, nothing else would
+        // send it). The same values that just failed are not resent.
+        if (flushAgain.current) continue;
+        if (aliveRef.current) setSaveState("error");
+        toast({ title: `Couldn't save "${sent.name || profile.name}"`, description: formatApiError(err), variant: "destructive" });
+        return false;
+      }
+      savedRef.current = applySavedPatch(savedRef.current, sent, patch);
+      if (aliveRef.current) setSaveState("saved");
+      // A NAME is drawn by every screen that mentions this record — owner
+      // badges, list rows, search, the profile switcher — none of which sit
+      // under the profiles domain. A rename is rare; refresh everything
+      // rather than leave half the app calling them by the old name.
+      invalidateDomains(patch.name !== undefined ? "everything" : "profiles");
+      onSaved();
+      if (!flushAgain.current) return true;
     }
   }, [profile.id, profile.name, onSaved, toast]);
+  const flush = useCallback((): Promise<boolean> => {
+    if (inflight.current) { flushAgain.current = true; return inflight.current; }
+    const run = runFlush().finally(() => { inflight.current = null; });
+    inflight.current = run;
+    return run;
+  }, [runFlush]);
 
   // Save shortly after the last keystroke.
   useEffect(() => {
@@ -8333,7 +8342,40 @@ function EditProfileDialog({
   const flushRef = useRef(flush);
   flushRef.current = flush;
   useEffect(() => () => { void flushRef.current(); }, []);
-  const closeAfterSaving = () => { void flush(); onClose(); };
+  // Leaving the page (a reload, closing the tab) while a save is on its way
+  // or a change is still waiting would drop it: the browser asks first.
+  const unsavedWork = saveState === "saving" || pendingProfilePatch(savedRef.current, { name, notes, fields }).patch !== null;
+  useEffect(() => {
+    if (!open || !unsavedWork) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [open, unsavedWork]);
+  // Done WAITS for the save (L7): closing first and saving behind the dialog
+  // lost the edit to a reload made at once (QA 2026-11-24: a plan changed,
+  // Done, reload — the old plan). A failed save keeps the dialog open with
+  // the reason; a second press closes without it.
+  const [closing, setClosing] = useState(false);
+  const [closeFailed, setCloseFailed] = useState(false);
+  const closeAfterSaving = async () => {
+    if (closing) return;
+    if (closeFailed) { onClose(); return; }
+    setClosing(true);
+    const ok = await flush();
+    if (!aliveRef.current) return;
+    setClosing(false);
+    if (ok) onClose();
+    else setCloseFailed(true);
+  };
+  // A date is saved whole or not at all (Rule 6): CommitDateInput hands over
+  // a complete day or "" — never the 0002-12-12 / 0020-12-12 / 0202-12-12 a
+  // native date input reports while its year is typed (QA 2026-11-24: Next
+  // Billing was written three times on the way to 2026, one of them stored).
+  const commitDate = (key: string, day: string) => {
+    currentRef.current = { ...currentRef.current, fields: { ...currentRef.current.fields, [key]: day } };
+    setFields(prev => ({ ...prev, [key]: day }));
+    void flush();
+  };
 
   // Type-specific suggested fields that should always be available for editing
   const SUGGESTED_FIELDS: Record<string, { key: string; label: string; placeholder: string }[]> = {
@@ -8422,7 +8464,7 @@ function EditProfileDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) closeAfterSaving(); }}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) void closeAfterSaving(); }}>
       <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-edit-profile">
         <DialogHeader>
           <DialogTitle>Edit {profile.type === "self" ? "My Profile" : profile.name}</DialogTitle>
@@ -8466,11 +8508,17 @@ function EditProfileDialog({
                       ))}
                     </SelectContent>
                   </Select>
+                ) : isDate ? (
+                  <CommitDateInput
+                    className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 md:text-sm"
+                    value={toDateInputValue(fields[key])}
+                    onCommit={day => commitDate(key, day)}
+                    data-testid={`input-field-${key}`}
+                  />
                 ) : (
                   <Input
                     className="mt-1"
-                    type={isDate ? "date" : undefined}
-                    value={isDate ? toDateInputValue(fields[key]) : (fields[key] ?? "")}
+                    value={fields[key] ?? ""}
                     placeholder={sg?.placeholder || ""}
                     onChange={e => setFields(prev => ({ ...prev, [key]: e.target.value }))}
                     onBlur={() => { void flush(); }}
@@ -8501,7 +8549,9 @@ function EditProfileDialog({
               : saveState === "saved" ? "All changes saved"
               : "Changes save automatically"}
           </p>
-          <Button onClick={closeAfterSaving} data-testid="button-done-edit-profile">Done</Button>
+          <Button onClick={() => { void closeAfterSaving(); }} disabled={closing} data-testid="button-done-edit-profile">
+            {closing ? "Saving…" : closeFailed ? "Close without saving" : "Done"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

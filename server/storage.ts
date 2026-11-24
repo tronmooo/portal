@@ -15,10 +15,11 @@ import { analyzeFitnessEntry, calorieContextForOwner, caloriesForStoredEntry, ty
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { formatMoneyMajor } from "@shared/money";
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
-import { assertEventSpan } from "@shared/event-span";
+import { assertEventSpan, carryEventSpan } from "@shared/event-span";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { canonicalIncomeFrequency } from "@shared/obligation-windows";
 import { buildBillsTimeline, rollBillsForward } from "@shared/bills-timeline";
+import { debtPaymentRows, isCalendarDebtProfile, mergeBillsTimelines } from "../shared/debt-payments-timeline";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
@@ -1688,7 +1689,7 @@ export class MemStorage implements IStorage {
   async updateEvent(id: string, data: Partial<CalendarEvent>): Promise<CalendarEvent | undefined> {
     const event = this.events.get(id);
     if (!event) return undefined;
-    const updated = { ...event, ...data };
+    const updated = { ...event, ...carryEventSpan(event as any, data as any) };
     assertEventSpan(updated as any);
     this.events.set(id, updated);
     this.logActivity("event", `Updated event: ${updated.title}`);
@@ -2794,7 +2795,16 @@ export class MemStorage implements IStorage {
         spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : 0,
         spendByCategory,
         upcomingBills,
-        billsTimeline: buildBillsTimeline(obligations as any[], today),
+        // Loans and cards too (shared/debt-payments-timeline), as SupabaseStorage.
+        // This storage keeps no liability payments: every debt's next
+        // instalment is still to pay.
+        billsTimeline: mergeBillsTimelines(
+          buildBillsTimeline(obligations as any[], today),
+          debtPaymentRows(
+            allProfilesArr.filter(p => isCalendarDebtProfile(p as any) && matchesFilter(profileAndOwnerIds(p as any))) as any[],
+            allProfilesArr as any[], new Map(), today,
+          ),
+        ),
         monthlyObligationTotal: Math.round(monthlyObligationTotal),
         // Mirrors SupabaseStorage: cash OUT is spend + the bill money still
         // owed this month, never the monthly-equivalent of every bill (which

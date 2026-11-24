@@ -16,7 +16,7 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 621. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 627. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -51,14 +51,14 @@ reached only by clicking through is not detected).
 
 | Page | Routes | Desktop browser | Touch browser | jsdom tests |
 |---|---|---:|---:|---:|
-| ArtifactsPage | `/artifacts` `/dashboard/documents` `/dashboard/artifacts` | 2 | 2 | 2 |
-| CalendarPage | `/calendar` | 5 | 1 | 1 |
+| ArtifactsPage | `/artifacts` `/dashboard/documents` `/dashboard/artifacts` | 2 | 2 | 3 |
+| CalendarPage | `/calendar` | 6 | 2 | 1 |
 | ChatPage | `/chat` | 4 | 2 | **0** |
 | DashboardPage | `/dashboard` `/dashboard/executive` `/dashboard/daily` | 3 | 1 | **0** |
 | DetailsPage | `/details` | 1 | 1 | **0** |
 | DocumentDetailPage | `/documents/:id` | 1 | 1 | 1 |
 | DocumentReviewPage | `/documents/:id/review` | **0** | **0** | 1 |
-| EditorPage | `/editor/new/:type` `/editor/:id` | 3 | 3 | 1 |
+| EditorPage | `/editor/new/:type` `/editor/:id` | 4 | 4 | 2 |
 | FillWorkspacePage | `/workspace/fill` | 2 | 2 | **0** |
 | FinancePage | `/dashboard/finance` `/finance` | 1 | 1 | **0** |
 | GoalsPage | `/goals` `/dashboard/goals` | 1 | 1 | **0** |
@@ -66,11 +66,11 @@ reached only by clicking through is not detected).
 | InsightsPage | `/insights` | 1 | 1 | **0** |
 | JournalPage | `/dashboard/journal` `/journal` | 1 | 1 | 1 |
 | JournalWorkspacePage | `/workspace/journal` | 1 | 2 | 2 |
-| NotesWorkspacePage | `/workspace/notes` | 1 | 2 | 2 |
+| NotesWorkspacePage | `/workspace/notes` | 1 | 2 | 3 |
 | ObligationsPage | `/dashboard/obligations` `/obligations` `/bills` | 1 | 1 | **0** |
 | PrivacyPage | `/privacy` | 1 | 1 | **0** |
 | ProfileInfoPage | `/profiles` `/profiles/:id/info` | 2 | 1 | 3 |
-| ProfileRouteDispatch | `/profiles/:id/:tab` `/profiles/:id` `/profile/:id` | 6 | 3 | **0** |
+| ProfileRouteDispatch | `/profiles/:id/:tab` `/profiles/:id` `/profile/:id` | 7 | 3 | **0** |
 | ProfilesListPage | `/profiles/list` | 1 | 1 | **0** |
 | ResetPasswordPage | `/reset-password` | **0** | **0** | **0** |
 | RootRedirect | `/` | 2 | 1 | **0** |
@@ -124,10 +124,10 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/profile-types` | yes | **0** | **0** |
 | `GET /api/profile-types/:typeKey` | **no** | **0** | **0** |
 | `GET /api/profiles` | yes | 40 | 17 |
-| `POST /api/profiles` | yes | 3 | 27 |
-| `DELETE /api/profiles/:id` | yes | 3 | 28 |
-| `GET /api/profiles/:id` | yes | 4 | 7 |
-| `PATCH /api/profiles/:id` | yes | 12 | 4 |
+| `POST /api/profiles` | yes | 3 | 28 |
+| `DELETE /api/profiles/:id` | yes | 3 | 30 |
+| `GET /api/profiles/:id` | yes | 4 | 9 |
+| `PATCH /api/profiles/:id` | yes | 12 | 5 |
 | `GET /api/profiles/:id/ai-summary` | yes | 1 | **0** |
 | `GET /api/profiles/:id/detail` | yes | **0** | 2 |
 | `GET /api/profiles/:id/documents` | yes | **0** | 1 |
@@ -272,7 +272,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/obligation-occurrences/:occId/reschedule` | yes | 1 | **0** |
 | `POST /api/obligation-occurrences/:occId/status` | yes | **0** | **0** |
 | `GET /api/obligations` | yes | 6 | 3 |
-| `POST /api/obligations` | yes | 2 | 7 |
+| `POST /api/obligations` | yes | 2 | 8 |
 | `DELETE /api/obligations/:id` | yes | 3 | 4 |
 | `GET /api/obligations/:id` | **no** | **0** | 1 |
 | `PATCH /api/obligations/:id` | yes | 3 | 1 |
@@ -534,8 +534,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `GET /api/artifacts` | yes | 3 | 6 |
-| `POST /api/artifacts` | yes | 1 | 5 |
+| `GET /api/artifacts` | yes | 4 | 6 |
+| `POST /api/artifacts` | yes | 2 | 5 |
 | `DELETE /api/artifacts/:id` | yes | 1 | 6 |
 | `GET /api/artifacts/:id` | yes | 1 | 1 |
 | `PATCH /api/artifacts/:id` | yes | **0** | 1 |
@@ -600,7 +600,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/journal` | yes | 7 | 5 |
 | `DELETE /api/journal/:id` | yes | 1 | 7 |
 | `PATCH /api/journal/:id` | yes | 4 | 2 |
-| `GET /api/notes` | yes | 3 | 2 |
+| `GET /api/notes` | yes | 4 | 2 |
 | `POST /api/notes` | yes | 5 | 2 |
 | `DELETE /api/notes/:id` | yes | 1 | 4 |
 | `PATCH /api/notes/:id` | yes | 2 | 1 |

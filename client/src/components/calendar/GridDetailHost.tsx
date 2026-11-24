@@ -31,7 +31,14 @@ export function GridDetailHost({ item, onClose, fallback }: {
   const mine = sourceId
     ? cal.occurrences.filter((o) => ownId(o) || mergedInto(o.seriesId))
     : [];
-  const hit = mine.find((o) => o.effectiveDate === day) ?? mine.find((o) => o.date === day) ?? null;
+  // A one-off record has one occurrence wherever it now sits: after an edit
+  // moves it, the timeline and the occurrence stream refetch separately, and
+  // for a moment they name different days. Matching on the day alone then
+  // fell through to the grid's old dialog, drawn from the tap's snapshot
+  // ("November 24" for an event just saved on the 26th).
+  const oneOff = mine.length > 0 && mine.every((o) => o.seriesId === mine[0].seriesId && (o.series.recurrence || "none") === "none")
+    ? mine[0] : null;
+  const hit = mine.find((o) => o.effectiveDate === day) ?? mine.find((o) => o.date === day) ?? oneOff;
 
   if (!hit) {
     // Still loading: wait rather than flash the old dialog and swap it out.

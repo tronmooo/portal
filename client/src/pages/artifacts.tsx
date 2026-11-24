@@ -28,7 +28,7 @@ import { useProfileFilterCtx } from "@/hooks/useProfileFilterCtx";
 import {
   Archive, FileText, BookOpen, Brain, Camera, File, Heart,
   Shield, CreditCard, Scale, Folder, Search, X, Copy, Check as CheckIcon,
-  Pin, PinOff, Tag, Trash2, Sparkles,
+  Pin, PinOff, Tag, Trash2, Sparkles, Pencil,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -1338,6 +1338,23 @@ export default function ArtifactsPage() {
                       <Badge variant="secondary" className="text-xs">{liveSelected.owners.join(", ")}</Badge>
                     )}
                     <span className="text-xs text-muted-foreground">{formatDate(liveSelected.date)}</span>
+                    {/* A note opens read-only here; Edit opens it in the Notes
+                        workspace (QA 2026-11-24: the only road to a saved
+                        note's editor was Chat → Notes). */}
+                    {liveSelected.isArtifact && liveSelected.source.type === "note" && (
+                      <Button
+                        size="sm"
+                        className="ml-auto h-8 gap-1.5"
+                        onClick={() => {
+                          const id = liveSelected.id;
+                          setSelectedArtifact(null);
+                          hashNavigate(`/workspace/notes?note=${encodeURIComponent(id)}&from=artifacts`);
+                        }}
+                        data-testid="button-edit-note"
+                      >
+                        <Pencil className="h-3.5 w-3.5" /> Edit
+                      </Button>
+                    )}
                   </div>
                   {/* Renderer executes arbitrary artifact content (mermaid,
                       charts, markdown, sanitized HTML) — the most crash-prone

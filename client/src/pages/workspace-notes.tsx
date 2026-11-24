@@ -251,6 +251,25 @@ export default function NotesWorkspacePage() {
     setListOpen(false);
   };
 
+  // Opened for ONE note (Artifacts → a note → Edit): #/workspace/notes?note=<id>
+  // opens that note for editing, and the X goes back to Artifacts. QA
+  // 2026-11-24: a saved note opened from Artifacts was read-only, and the only
+  // road to its editor was Chat → Notes. Opening still writes nothing (W3).
+  const deepLink = useMemo(() => {
+    const q = new URLSearchParams(typeof window !== "undefined" ? (window.location.hash.split("?")[1] || "") : "");
+    return { noteId: q.get("note"), from: q.get("from") };
+  }, []);
+  const openedDeepLink = useRef(false);
+  useEffect(() => {
+    if (!deepLink.noteId || openedDeepLink.current || !editor) return;
+    const n = notes.find((x) => x.id === deepLink.noteId);
+    if (!n) return;
+    openedDeepLink.current = true;
+    void openNote(n);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLink.noteId, notes, editor]);
+  const leave = () => { if (deepLink.from === "artifacts") hashNavigate("/artifacts"); else leaveWorkspace(); };
+
   const switchMode = () => {
     if (mode === "rich") { preferPlain.current = true; setMode("plain"); return; }
     if (noteNeedsPlainEditor(content)) {
@@ -466,7 +485,7 @@ export default function NotesWorkspacePage() {
       kind="notes"
       status={STATUS[state]}
       unsaved={state === "dirty" || state === "error" || state === "saving"}
-      onClose={async () => { await saveNow(); if (pending()) return false; leaveWorkspace(); }}
+      onClose={async () => { await saveNow(); if (pending()) return false; leave(); }}
       save={{
         state: state === "new" ? "empty" : state,
         disabled: !content.trim(),
