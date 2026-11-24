@@ -14,9 +14,9 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 | Chat tools that write | 111 | 22 | 71 |
 | Chat tools that read | 42 | 20 | 34 |
 
-Screens: 29 pages (48 routes). 15 are opened by no live browser check, 18 by none in a touch (phone) context.
+Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 611. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 613. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -51,35 +51,35 @@ reached only by clicking through is not detected).
 
 | Page | Routes | Desktop browser | Touch browser | jsdom tests |
 |---|---|---:|---:|---:|
-| ArtifactsPage | `/artifacts` `/dashboard/documents` `/dashboard/artifacts` | **0** | 1 | 2 |
-| CalendarPage | `/calendar` | 4 | **0** | 1 |
-| ChatPage | `/chat` | 3 | 1 | **0** |
-| DashboardPage | `/dashboard` `/dashboard/executive` `/dashboard/daily` | 2 | **0** | **0** |
-| DetailsPage | `/details` | **0** | **0** | **0** |
-| DocumentDetailPage | `/documents/:id` | **0** | 1 | 1 |
+| ArtifactsPage | `/artifacts` `/dashboard/documents` `/dashboard/artifacts` | 2 | 2 | 2 |
+| CalendarPage | `/calendar` | 5 | 1 | 1 |
+| ChatPage | `/chat` | 4 | 2 | **0** |
+| DashboardPage | `/dashboard` `/dashboard/executive` `/dashboard/daily` | 3 | 1 | **0** |
+| DetailsPage | `/details` | 1 | 1 | **0** |
+| DocumentDetailPage | `/documents/:id` | 1 | 1 | 1 |
 | DocumentReviewPage | `/documents/:id/review` | **0** | **0** | 1 |
-| EditorPage | `/editor/new/:type` `/editor/:id` | 1 | 2 | 1 |
-| FillWorkspacePage | `/workspace/fill` | **0** | 1 | **0** |
-| FinancePage | `/dashboard/finance` `/finance` | **0** | **0** | **0** |
-| GoalsPage | `/goals` `/dashboard/goals` | **0** | **0** | **0** |
-| HabitsPage | `/dashboard/habits` `/habits` | **0** | **0** | 1 |
-| InsightsPage | `/insights` | **0** | **0** | **0** |
-| JournalPage | `/dashboard/journal` `/journal` | **0** | **0** | 1 |
-| JournalWorkspacePage | `/workspace/journal` | **0** | 1 | 2 |
-| NotesWorkspacePage | `/workspace/notes` | **0** | 1 | 2 |
-| ObligationsPage | `/dashboard/obligations` `/obligations` `/bills` | **0** | **0** | **0** |
-| PrivacyPage | `/privacy` | **0** | **0** | **0** |
-| ProfileInfoPage | `/profiles` `/profiles/:id/info` | 1 | **0** | 3 |
-| ProfileRouteDispatch | `/profiles/:id/:tab` `/profiles/:id` `/profile/:id` | 5 | 3 | **0** |
-| ProfilesListPage | `/profiles/list` | **0** | **0** | **0** |
+| EditorPage | `/editor/new/:type` `/editor/:id` | 3 | 3 | 1 |
+| FillWorkspacePage | `/workspace/fill` | 2 | 2 | **0** |
+| FinancePage | `/dashboard/finance` `/finance` | 1 | 1 | **0** |
+| GoalsPage | `/goals` `/dashboard/goals` | 1 | 1 | **0** |
+| HabitsPage | `/dashboard/habits` `/habits` | 1 | 1 | 1 |
+| InsightsPage | `/insights` | 1 | 1 | **0** |
+| JournalPage | `/dashboard/journal` `/journal` | 1 | 1 | 1 |
+| JournalWorkspacePage | `/workspace/journal` | 1 | 2 | 2 |
+| NotesWorkspacePage | `/workspace/notes` | 1 | 2 | 2 |
+| ObligationsPage | `/dashboard/obligations` `/obligations` `/bills` | 1 | 1 | **0** |
+| PrivacyPage | `/privacy` | 1 | 1 | **0** |
+| ProfileInfoPage | `/profiles` `/profiles/:id/info` | 2 | 1 | 3 |
+| ProfileRouteDispatch | `/profiles/:id/:tab` `/profiles/:id` `/profile/:id` | 6 | 3 | **0** |
+| ProfilesListPage | `/profiles/list` | 1 | 1 | **0** |
 | ResetPasswordPage | `/reset-password` | **0** | **0** | **0** |
-| RootRedirect | `/` | 1 | 1 | **0** |
-| SettingsPage | `/settings` | **0** | **0** | **0** |
+| RootRedirect | `/` | 2 | 1 | **0** |
+| SettingsPage | `/settings` | 1 | 1 | **0** |
 | ShareViewPage | `/share/:token` | **0** | **0** | **0** |
-| TasksPage | `/dashboard/tasks` `/tasks` | **0** | **0** | 2 |
-| TermsPage | `/terms` | **0** | **0** | **0** |
-| TrackersPage | `/trackers` `/linked` `/liabilities` | 4 | 1 | 2 |
-| WellnessPage | `/wellness` `/dashboard/health` `/health` | **0** | 1 | 1 |
+| TasksPage | `/dashboard/tasks` `/tasks` | 1 | 1 | 2 |
+| TermsPage | `/terms` | 1 | 1 | **0** |
+| TrackersPage | `/trackers` `/linked` `/liabilities` | 5 | 2 | 2 |
+| WellnessPage | `/wellness` `/dashboard/health` `/health` | 1 | 2 | 1 |
 
 ## Every workflow door, by domain
 
@@ -120,7 +120,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `DELETE /api/entity-links/:id` | **no** | **0** | 1 |
 | `GET /api/entity-links/:type/:id` | **no** | **0** | 1 |
 | `GET /api/entity-links/:type/:id/related` | **no** | **0** | **0** |
-| `GET /api/profile-bootstrap/:id` | yes | 4 | **0** |
+| `GET /api/profile-bootstrap/:id` | yes | 5 | **0** |
 | `GET /api/profile-types` | yes | **0** | **0** |
 | `GET /api/profile-types/:typeKey` | **no** | **0** | **0** |
 | `GET /api/profiles` | yes | 40 | 15 |
@@ -701,5 +701,5 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/diagnostics/ownership-consistency` | **no** | **0** | 1 |
 | `GET /api/diagnostics/schema` | **no** | 1 | 1 |
 | `POST /api/finance/webhook` | **no** | 1 | **0** |
-| `GET /api/version` | **no** | 1 | 21 |
+| `GET /api/version` | **no** | 1 | 22 |
 | `GET /api/warmup` | yes | 2 | **0** |

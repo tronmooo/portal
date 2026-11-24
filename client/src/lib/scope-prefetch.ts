@@ -30,9 +30,15 @@ export function warmProfileDetail(id: string): void {
   const last = detailWarmed.get(id) || 0;
   if (Date.now() - last < 25_000) return; // inside the server's 30s cache window
   detailWarmed.set(id, Date.now());
-  apiRequest("GET", `/api/profile-bootstrap/${id}`).catch(() => {
-    detailWarmed.delete(id); // let a later hover retry after a failure
-  });
+  apiRequest("GET", `/api/profile-bootstrap/${id}`)
+    // Read the body to its end. A response nobody reads never finishes: the
+    // request stayed open in the browser for as long as the page lived (found
+    // 2026-11-24 — the Assets tab held one open past 16 s, against a server
+    // that had answered in 150 ms), holding its connection and its payload.
+    .then((res) => res.arrayBuffer())
+    .catch(() => {
+      detailWarmed.delete(id); // let a later hover retry after a failure
+    });
 }
 
 export function prefetchScopeBootstrap(

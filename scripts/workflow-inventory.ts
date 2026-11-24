@@ -268,6 +268,8 @@ export interface TestFile {
   browser: boolean;
   /** … in a touch (phone) context. */
   touch: boolean;
+  /** … in a desktop-width context (a file can drive both). */
+  desktop: boolean;
 }
 
 function configIncludes(configFile: string): Set<string> {
@@ -301,7 +303,9 @@ export function loadTestFiles(): TestFile[] {
     else layer = "live"; // a script run by hand: live checks, the acceptance rig, audits
     const browser = /from ["']playwright["']|require\(["']playwright["']\)|chromium\.launch/.test(src);
     const touch = browser && /hasTouch:\s*true|devices\[/.test(src);
-    return { file: posix, layer, src, browser, touch };
+    const widths = [...src.matchAll(/width:\s*(\d{3,4})/g)].map((m) => Number(m[1]));
+    const desktop = browser && (!touch || widths.some((w) => w >= 1000));
+    return { file: posix, layer, src, browser, touch, desktop };
   });
 }
 
@@ -398,11 +402,18 @@ export function buildInventory(toolNames: string[]): Inventory {
   const HASH_REF = /#\/(?:\$\{[^}]*\}|[\w\-./:])*/g;
   for (const t of tests) {
     if (t.browser) {
-      for (const m of t.src.match(HASH_REF) ?? []) {
-        const hit = matchPattern(m.slice(1).replace(/[./]+$/, "") || "/", screenList);
+      // A screen is named by the hash it is opened at ("#/tasks"), or as an
+      // entry of a route table the check walks ({ path: "/tasks", … }).
+      const refs = [
+        ...(t.src.match(HASH_REF) ?? []).map((m) => m.slice(1)),
+        ...[...t.src.matchAll(/\bpath:\s*(?:\([^)]*\)\s*=>\s*)?["'`](\/[^"'`]*)["'`]/g)].map((m) => m[1]),
+      ];
+      for (const ref of refs) {
+        const hit = matchPattern(ref.replace(/[./]+$/, "") || "/", screenList);
         if (!hit) continue;
         const row = screens.find((s) => s.path === hit.path)!;
-        push(t.touch ? row.touch : row.desktop, t.file);
+        if (t.touch) push(row.touch, t.file);
+        if (t.desktop) push(row.desktop, t.file);
       }
     } else if (t.layer === "local" && /\.dom\.test\.tsx$|\.test\.tsx$/.test(t.file)) {
       for (const row of screens) {
