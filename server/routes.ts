@@ -6030,6 +6030,8 @@ ${JSON.stringify(ctx, null, 2)}`;
     const uid = (req as AuthenticatedRequest).userId;
     if (!uid) return res.status(401).json({ error: "Unauthorized" });
     const updated = await storage.updateProfile(req.params.id, { avatar: null as any });
+    // No such profile (or not this user's): nothing was removed, so say so.
+    if (!updated) return res.status(404).json({ error: "Profile not found" });
     bustCache(`profiles:${uid}`); bustCache(`profile-detail:${uid}:`);
     res.json({ ok: true, profile: updated });
   }));

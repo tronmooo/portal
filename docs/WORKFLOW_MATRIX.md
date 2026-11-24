@@ -9,26 +9,26 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 | | Total | No test at all | Not exercised on the deployed app |
 |---|---:|---:|---:|
-| API write routes | 184 | 45 | 85 |
-| API read routes | 111 | 37 | 59 |
+| API write routes | 184 | 33 | 73 |
+| API read routes | 111 | 34 | 55 |
 | Chat tools that write | 111 | 22 | 71 |
 | Chat tools that read | 42 | 20 | 34 |
 
 Screens: 29 pages (48 routes). 15 are opened by no live browser check, 18 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 608. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 610. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
 | Domain | Write routes | …untested | …not on deployed | Read routes | Chat tools | …write tools not on deployed |
 |---|---:|---:|---:|---:|---:|---:|
-| Account & access | 14 | 10 | 11 | 7 | 0 | 0 |
-| Profiles | 13 | 5 | 7 | 16 | 10 | 6 |
+| Account & access | 14 | 7 | 8 | 7 | 0 | 0 |
+| Profiles | 13 | 1 | 3 | 16 | 10 | 6 |
 | Assets & ownership | 5 | 1 | 1 | 10 | 5 | 4 |
 | Accounts & net worth | 4 | 0 | 1 | 2 | 5 | 2 |
-| Liabilities | 21 | 4 | 8 | 6 | 16 | 9 |
+| Liabilities | 21 | 0 | 4 | 6 | 16 | 9 |
 | Auto Pay | 2 | 0 | 0 | 0 | 0 | 0 |
-| Bills & obligations | 8 | 2 | 4 | 3 | 4 | 2 |
+| Bills & obligations | 8 | 1 | 3 | 3 | 4 | 2 |
 | Finance | 28 | 8 | 10 | 21 | 23 | 10 |
 | Tasks | 6 | 0 | 2 | 2 | 7 | 2 |
 | Calendar | 8 | 2 | 5 | 7 | 7 | 5 |
@@ -93,41 +93,41 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/audit-log` | **no** | **0** | 1 |
 | `POST /api/audit-log` | yes | **0** | **0** |
 | `POST /api/auth/callback` | yes | **0** | **0** |
-| `POST /api/auth/change-password` | yes | **0** | **0** |
+| `POST /api/auth/change-password` | yes | **0** | 1 |
 | `GET /api/auth/config` | yes | **0** | **0** |
-| `POST /api/auth/forgot-password` | yes | **0** | **0** |
-| `GET /api/auth/me` | yes | **0** | **0** |
+| `POST /api/auth/forgot-password` | yes | **0** | 1 |
+| `GET /api/auth/me` | yes | **0** | 1 |
 | `POST /api/auth/refresh` | yes | **0** | **0** |
-| `POST /api/auth/reset-password` | yes | **0** | **0** |
-| `POST /api/auth/signin` | yes | 1 | 4 |
+| `POST /api/auth/reset-password` | yes | **0** | 1 |
+| `POST /api/auth/signin` | yes | 1 | 5 |
 | `POST /api/auth/signout` | yes | **0** | **0** |
 | `POST /api/auth/signup` | yes | **0** | **0** |
 | `DELETE /api/data/all` | yes | 2 | 1 |
-| `GET /api/export` | yes | 2 | **0** |
+| `GET /api/export` | yes | 2 | 1 |
 | `POST /api/import` | yes | 2 | **0** |
 | `POST /api/import/bank-csv` | yes | **0** | **0** |
-| `GET /api/onboarding-status` | yes | **0** | **0** |
+| `GET /api/onboarding-status` | yes | **0** | 1 |
 | `POST /api/onboarding/complete` | yes | **0** | **0** |
-| `GET /api/preferences/:key` | yes | 9 | 2 |
-| `PUT /api/preferences/:key` | yes | 2 | 1 |
+| `GET /api/preferences/:key` | yes | 9 | 3 |
+| `PUT /api/preferences/:key` | yes | 2 | 2 |
 | `GET /api/public/artifacts/:token` | yes | 1 | 1 |
 
 ### Profiles
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `POST /api/entity-links` | **no** | **0** | **0** |
-| `DELETE /api/entity-links/:id` | **no** | **0** | **0** |
-| `GET /api/entity-links/:type/:id` | **no** | **0** | **0** |
+| `POST /api/entity-links` | **no** | **0** | 1 |
+| `DELETE /api/entity-links/:id` | **no** | **0** | 1 |
+| `GET /api/entity-links/:type/:id` | **no** | **0** | 1 |
 | `GET /api/entity-links/:type/:id/related` | **no** | **0** | **0** |
 | `GET /api/profile-bootstrap/:id` | yes | 4 | **0** |
 | `GET /api/profile-types` | yes | **0** | **0** |
 | `GET /api/profile-types/:typeKey` | **no** | **0** | **0** |
-| `GET /api/profiles` | yes | 40 | 14 |
-| `POST /api/profiles` | yes | 3 | 24 |
-| `DELETE /api/profiles/:id` | yes | 3 | 25 |
-| `GET /api/profiles/:id` | yes | 4 | 4 |
-| `PATCH /api/profiles/:id` | yes | 12 | 3 |
+| `GET /api/profiles` | yes | 40 | 15 |
+| `POST /api/profiles` | yes | 3 | 26 |
+| `DELETE /api/profiles/:id` | yes | 3 | 27 |
+| `GET /api/profiles/:id` | yes | 4 | 6 |
+| `PATCH /api/profiles/:id` | yes | 12 | 4 |
 | `GET /api/profiles/:id/ai-summary` | yes | 1 | **0** |
 | `GET /api/profiles/:id/detail` | yes | **0** | 2 |
 | `GET /api/profiles/:id/documents` | yes | **0** | 1 |
@@ -138,8 +138,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/profiles/:id/lookup-value` | yes | 3 | **0** |
 | `GET /api/profiles/:id/overview` | yes | **0** | **0** |
 | `PUT /api/profiles/:id/owners` | yes | 1 | 2 |
-| `DELETE /api/profiles/:id/photo` | **no** | **0** | **0** |
-| `POST /api/profiles/:id/photo` | yes | **0** | **0** |
+| `DELETE /api/profiles/:id/photo` | **no** | **0** | 1 |
+| `POST /api/profiles/:id/photo` | yes | **0** | 1 |
 | `GET /api/profiles/:id/tree` | yes | **0** | 1 |
 | `POST /api/profiles/:id/unlink` | yes | 2 | 1 |
 | `GET /api/profiles/lite` | yes | 3 | 7 |
@@ -213,17 +213,17 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/liabilities/:id/assets` | yes | **0** | **0** |
 | `POST /api/liabilities/:id/autopay` | yes | 2 | 2 |
 | `PATCH /api/liabilities/:id/occurrences/:date` | **no** | 1 | **0** |
-| `POST /api/liabilities/:id/occurrences/:date/charges` | **no** | **0** | **0** |
-| `DELETE /api/liabilities/:id/occurrences/:date/charges/:chargeId` | **no** | **0** | **0** |
-| `POST /api/liabilities/:id/occurrences/:date/pay` | **no** | **0** | **0** |
-| `POST /api/liabilities/:id/occurrences/:date/skip` | **no** | **0** | **0** |
+| `POST /api/liabilities/:id/occurrences/:date/charges` | **no** | **0** | 1 |
+| `DELETE /api/liabilities/:id/occurrences/:date/charges/:chargeId` | **no** | **0** | 1 |
+| `POST /api/liabilities/:id/occurrences/:date/pay` | **no** | **0** | 1 |
+| `POST /api/liabilities/:id/occurrences/:date/skip` | **no** | **0** | 1 |
 | `POST /api/liabilities/:id/occurrences/:date/status` | **no** | 1 | 1 |
 | `GET /api/liabilities/:id/parties` | yes | **0** | 1 |
-| `POST /api/liabilities/:id/pause` | yes | **0** | 1 |
-| `GET /api/liabilities/:id/payments` | yes | 5 | 3 |
+| `POST /api/liabilities/:id/pause` | yes | **0** | 2 |
+| `GET /api/liabilities/:id/payments` | yes | 5 | 4 |
 | `POST /api/liabilities/:id/payments` | yes | 3 | 4 |
-| `POST /api/liabilities/:id/resume` | yes | **0** | 1 |
-| `GET /api/liabilities/:id/schedule` | yes | **0** | 4 |
+| `POST /api/liabilities/:id/resume` | yes | **0** | 2 |
+| `GET /api/liabilities/:id/schedule` | yes | **0** | 5 |
 | `POST /api/liability-asset-links` | yes | **0** | 2 |
 | `DELETE /api/liability-asset-links/:id` | yes | **0** | 1 |
 | `PATCH /api/liability-asset-links/:id` | yes | 2 | **0** |
@@ -262,7 +262,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
 | `POST /api/autopay/reconcile` | **no** | **0** | 1 |
-| `POST /api/autopay/run` | **no** | 1 | 2 |
+| `POST /api/autopay/run` | **no** | 1 | 3 |
 
 ### Bills & obligations
 
@@ -276,7 +276,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `DELETE /api/obligations/:id` | yes | 2 | 4 |
 | `GET /api/obligations/:id` | **no** | **0** | 1 |
 | `PATCH /api/obligations/:id` | yes | 3 | 1 |
-| `DELETE /api/obligations/:id/last-payment` | **no** | **0** | **0** |
+| `DELETE /api/obligations/:id/last-payment` | **no** | **0** | 1 |
 | `POST /api/obligations/:id/materialize` | **no** | 1 | **0** |
 | `POST /api/obligations/:id/pay` | yes | 3 | 2 |
 
@@ -299,7 +299,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/budgets/copy` | yes | 1 | 1 |
 | `GET /api/cashflow` | yes | 3 | 1 |
 | `POST /api/cashflow` | yes | 1 | 1 |
-| `GET /api/expenses` | yes | 12 | 18 |
+| `GET /api/expenses` | yes | 12 | 19 |
 | `POST /api/expenses` | yes | 6 | 16 |
 | `DELETE /api/expenses/:id` | yes | 1 | 21 |
 | `GET /api/expenses/:id` | **no** | **0** | 3 |
@@ -372,8 +372,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
 | `GET /api/tasks` | yes | 25 | 13 |
-| `POST /api/tasks` | yes | 7 | 11 |
-| `DELETE /api/tasks/:id` | yes | 4 | 12 |
+| `POST /api/tasks` | yes | 7 | 13 |
+| `DELETE /api/tasks/:id` | yes | 4 | 14 |
 | `GET /api/tasks/:id` | yes | 5 | **0** |
 | `PATCH /api/tasks/:id` | yes | 6 | 2 |
 | `POST /api/tasks/:id/occurrence` | yes | 3 | 1 |
