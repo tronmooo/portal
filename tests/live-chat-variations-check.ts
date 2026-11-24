@@ -47,14 +47,33 @@ const LISTS = {
 type ListName = keyof typeof LISTS;
 type Rows = Record<ListName, any[]> & { entries: any[] };
 
+// The app reads a list the way this does: it tells the server the newest data
+// version it has seen (learned from the write's own answer), so another server
+// instance cannot hand it the list from before the write. A read without it
+// can be a few seconds stale — which is not what a person's screen shows, and
+// read here as "Added task: Call Dad" with no task (2026-11-24).
+let seenDataVersion = "";
+async function read(path: string) {
+  const { response } = await fetchWithRateLimitRetry(`${API_BASE}${path}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${await getSmokeToken()}`,
+      "X-Timezone": TZ,
+      ...(seenDataVersion ? { "X-Data-Version": seenDataVersion } : {}),
+    },
+  });
+  const data = await response.json().catch(() => null);
+  return { ok: response.ok, status: response.status, data };
+}
+
 async function snapshot(): Promise<Rows> {
   const out: any = {};
   await Promise.all((Object.keys(LISTS) as ListName[]).map(async (k) => {
-    const r = await api("GET", LISTS[k]);
+    const r = await read(LISTS[k]);
     if (!r.ok) throw new Error(`GET ${LISTS[k]}: ${r.status}`);
     out[k] = list(r.data);
   }));
-  const t = await api("GET", "/trackers");
+  const t = await read("/trackers");
   if (!t.ok) throw new Error(`GET /trackers: ${t.status}`);
   out.entries = list(t.data).flatMap((tr: any) => (tr.entries || []).map((e: any) => ({ ...e, tracker: tr.name, trackerId: tr.id })));
   out.trackers = list(t.data);
@@ -81,6 +100,8 @@ async function say(message: string, history: Array<{ role: string; content: stri
     body: JSON.stringify({ message, history }),
   });
   const data: any = await response.json().catch(() => null);
+  const version = response.headers.get("x-data-version") || (typeof data?.dataVersion === "string" ? data.dataVersion : "");
+  if (version) seenDataVersion = version;
   return { status: response.status, ms, reply: String(data?.reply || ""), data };
 }
 
