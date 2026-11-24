@@ -821,12 +821,16 @@ export async function lookupComponents(
     const raw = rawStateOf(`${ph.text} ${ph.quantityText}`);
     const m = (raw && lookupNutritionDb(`${ph.text} raw`)) || lookupNutritionDb(ph.text) || lookupNutritionDb(ph.quantityText);
     if (!m) return;
+    // Weighed raw or dry, and the only row is the COOKED food ("40 g of dry
+    // oats" against cooked oatmeal: 28 kcal for 152): that row is not this
+    // food. The databases have the dry one.
+    if (raw && /\bcooked\b/i.test(`${m.item.name} ${m.item.serving.label}`)) return;
     const spec = detectSpecificity(ph.text);
     const branded = spec.level === "brand" || spec.level === "product";
     // An averaged row ("cereal", "protein shake": low confidence) is likewise
     // only what is left when no database knows the food. A barcode in the
     // user's words outranks every name match.
-    const hasBarcode = !!barcodeIn(`${ph.text} ${ph.quantityText}`);
+    const hasBarcode = !!barcodeIn(`${ph.text} ${ph.quantityText}`) || (phrases.length === 1 && !!barcodeIn(message));
     if ((m.item.kind === "generic" && branded) || m.item.confidence === "low" || hasBarcode) fallback[i] = componentFromDb(m.item, ph, now);
     else components[i] = componentFromDb(m.item, ph, now);
   });
@@ -857,12 +861,16 @@ export async function lookupComponents(
     const left = deadline - Date.now();
     if (idx.length > 0 && left > 1500) {
       try {
+        // A barcode the user typed names the product even when the agent left
+        // the digits out of the entry's name (one food, one barcode).
+        const typedCode = phrases.length === 1 ? barcodeIn(message) : null;
         const asks: SourceAsk[] = idx.map((i) => {
           const spec = detectSpecificity(phrases[i].text);
           // "Branded" is a KNOWN brand in the words. A Title-Case item the agent
           // wrote ("Baked Farmed Atlantic Salmon") only looks like a product name.
           const known = spec.signals.includes("brand") || spec.signals.includes("restaurant") || spec.signals.includes("barcode");
-          return { phrase: phrases[i].text, quantityText: phrases[i].quantityText, branded: known, maybeBranded: !known && (spec.level === "brand" || spec.level === "product") };
+          const quantityText = typedCode && !barcodeIn(`${phrases[i].text} ${phrases[i].quantityText}`) ? `${phrases[i].quantityText} barcode ${typedCode}` : phrases[i].quantityText;
+          return { phrase: phrases[i].text, quantityText, branded: known || !!typedCode, maybeBranded: !known && !typedCode && (spec.level === "brand" || spec.level === "product") };
         });
         const found = await deps.sourceLookup(asks, { deadlineMs: Math.max(1500, left - 2500), now });
         idx.forEach((i, k) => {

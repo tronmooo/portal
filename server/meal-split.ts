@@ -51,6 +51,14 @@ export async function splitCombinedFoodLog(
   if (!itemKey) return null;
   const foods = splitSeparateFoods(String(values[itemKey]));
   if (foods.length < 2) return null;
+  // The user's own words decide how many foods there are. A single food the
+  // agent named database-style ("Salmon, Atlantic, farmed, raw (120 g)",
+  // "Barilla Spaghetti No. 5, weighed dry") has commas and is still one food:
+  // split, it became three entries with the same figures (746 kcal for 120 g).
+  const said = String(userMessage || "").trim().replace(/[.!?]+$/, "")
+    // A barcode or UPC the user appends identifies the food; it is not another one.
+    .replace(/[,;]?\s*\(?\b(?:barcode|upc|ean)\b[\s:#]*[\d -]{8,}\)?/gi, " ");
+  if (said && splitSeparateFoods(said).length < 2) return null;
   // Numbers the user read off a label belong to what they named as a whole;
   // they cannot be divided between foods by guesswork.
   if (Object.keys(detectUserStatedNutrition(userMessage || "")).length > 0) return null;

@@ -378,3 +378,31 @@ describe("8. A label applies when the sentence talks about the package first", (
     expect(labelFor("Banana", "I had a banana and a protein bar that has 200 calories, 20g protein and 8g fat")).toBeNull();
   });
 });
+
+describe("9. Found by the full real-model run (2026-11-25)", () => {
+  it("the item is never cut into more foods than the user named", async () => {
+    const { splitCombinedFoodLog } = await import("../server/meal-split");
+    const one = (item: string, msg: string) => splitCombinedFoodLog({ trackerName: "Nutrition", values: { item, calories: 250 } }, msg);
+    expect(await one("Salmon, Atlantic, farmed, sashimi (120 g)", "I ate 120 g of raw farmed Atlantic salmon as sashimi.")).toBeNull();
+    expect(await one("Barilla Spaghetti No. 5, Italian, enriched (100 g)", "I ate 100 g of Barilla Spaghetti No. 5, weighed dry, barcode 8076800195057.")).toBeNull();
+    // Two foods said, one combined item: still split.
+    expect((await one("Banana + Doughnut", "Ate a banana and a doughnut"))!.map((p) => p.values.item)).toEqual(["Banana", "Doughnut"]);
+  });
+
+  it("dry oats never take the cooked-oatmeal row", async () => {
+    const r = await lookupComponents("Rolled Oats, dry (40 g)", "I ate 40 grams of dry rolled oats.", { syncOnly: true, aliases: {} } as any, NOW);
+    expect(r.components).toHaveLength(0);
+    expect(r.unresolved).toHaveLength(1);
+    // Said without a state, oatmeal is still the cooked reference.
+    const cooked = await lookupComponents("Oatmeal (1 cup)", "I ate a cup of oatmeal", { syncOnly: true, aliases: {} } as any, NOW);
+    expect(cooked.components[0].name).toMatch(/oatmeal/i);
+  });
+
+  it("a barcode typed in the message reaches the lookup even when the entry's name has no digits", async () => {
+    const asked: any[] = [];
+    await lookupComponents("Weetabix (37.5 g)", "I ate 37.5 g of Weetabix, barcode 5010029000023.", { aliases: {}, now: () => NOW, sourceLookup: async (asks) => { asked.push(...asks); return asks.map(() => null); } }, NOW);
+    expect(asked).toHaveLength(1);
+    expect(asked[0].quantityText).toContain("5010029000023");
+    expect(asked[0].branded).toBe(true);
+  });
+});

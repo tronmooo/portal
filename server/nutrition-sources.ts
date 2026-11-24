@@ -704,7 +704,13 @@ export async function resolveFromSources(asks: SourceAsk[], deps: SourceDeps = {
     // Name fit first; on a tie the manufacturer-submitted USDA record is listed
     // before a crowd-sourced one, and a plain reference record before a product.
     const rank = (c: SourceCandidate) => (c.provider === "fdc" ? (c.dataType === "Branded" ? 1 : 0) : 2);
-    const candidates = lists.flat()
+    // No known brand in the words, and a reference record fits the name: the
+    // packaged products are not offered at all ("Baked Atlantic Cod" was
+    // matched to a retail fillet with a different fat content).
+    const all = lists.flat();
+    const isReference = (c: SourceCandidate) => c.provider === "fdc" && c.dataType !== "Branded";
+    const pool = ask.maybeBranded && all.some((c) => isReference(c) && scoreCandidate(ask.phrase, c) >= 0.55) ? all.filter(isReference) : all;
+    const candidates = pool
       .map((c) => ({ c, s: scoreCandidate(ask.phrase, c) }))
       .sort((a, b) => b.s - a.s || rank(a.c) - rank(b.c))
       .slice(0, 12)
