@@ -3,12 +3,13 @@
 // engine's executeTool against an in-memory store; the model is never called.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const db = { expenses: [] as any[] };
+const db = { expenses: [] as any[], documents: [] as any[], modelCalls: 0 };
 
 vi.mock("../server/storage", () => {
   const impl: Record<string, any> = {
     _timezone: "America/New_York",
-    getProfiles: async () => [{ id: "p-self", name: "Robert", type: "self", fields: {} }],
+    getProfiles: async () => [{ id: "p-self", name: "Robert", type: "self", fields: {} }, { id: "p-alice", name: "Alice", type: "person", fields: {} }],
+    getDocuments: async () => db.documents,
     getSelfProfile: async () => ({ id: "p-self", name: "Robert", type: "self", fields: {} }),
     getPreference: async () => null,
     getExpenses: async () => db.expenses,
@@ -29,7 +30,17 @@ vi.mock("../server/storage", () => {
   return { storage };
 });
 
+vi.mock("@anthropic-ai/sdk", () => ({
+  default: class {
+    messages = {
+      create: async () => { db.modelCalls++; throw new Error("model unavailable in this test"); },
+      stream: () => { db.modelCalls++; throw new Error("model unavailable in this test"); },
+    };
+  },
+}));
+
 let executeTool: (name: string, input: any, userId?: string) => Promise<any>;
+let processMessage: (msg: string, history?: any[], userId?: string) => Promise<any>;
 let TOOL_ACTION_MAP: Record<string, string>;
 
 beforeEach(async () => {
@@ -37,7 +48,14 @@ beforeEach(async () => {
     { id: "e-coffee", description: "Corner Coffee", amount: 14.5, category: "food", date: "2026-11-24", tags: [], linkedProfiles: ["p-self"] },
     { id: "e-shoes", description: "Trail Shoes", amount: 90, category: "shopping", date: "2026-11-20", tags: [], linkedProfiles: ["p-self"] },
   ];
-  ({ executeTool, TOOL_ACTION_MAP } = await import("../server/ai-engine") as any);
+  db.modelCalls = 0;
+  db.documents = [
+    // Types like these hold the letters "me": docuMEnt, stateMEnt, MEdical.
+    { id: "d-warranty", name: "Truck Warranty 2026", type: "document", mimeType: "application/pdf", extractedData: {}, linkedProfiles: ["p-self", "p-alice"], tags: [] },
+    { id: "d-statement", name: "Bank Statement October", type: "statement", mimeType: "application/pdf", extractedData: {}, linkedProfiles: ["p-self"], tags: [] },
+    { id: "d-license", name: "Drivers License", type: "id", mimeType: "image/jpeg", extractedData: {}, linkedProfiles: ["p-self"], tags: [] },
+  ];
+  ({ executeTool, processMessage, TOOL_ACTION_MAP } = await import("../server/ai-engine") as any);
 });
 
 describe("a refund says what it did", () => {
@@ -65,5 +83,35 @@ describe("a refund says what it did", () => {
     const data = { expenseDescription: "Corner Coffee", _tool: "refund_expense" };
     expect(genericActionLabel(type, data)).toBe("Refund recorded");
     expect(actionCardSubject(data)).toBe("Corner Coffee");
+  });
+});
+
+describe("\"show me …\" opens a document only when it names one", () => {
+  const opened = (res: any): string[] =>
+    (res?.actions || []).filter((a: any) => a?.type === "retrieve").map((a: any) => String(a?.data?.documentId));
+
+  it("a chart request is not answered with a document (it was: \"Here's 'Zqhfxb Warranty 2026'\")", async () => {
+    const res = await processMessage("Show me a bar chart of my expenses by category", [], "user-1");
+    expect(opened(res)).toEqual([]);
+    expect(String(res?.reply || "")).not.toMatch(/Here's "/);
+  });
+
+  it("the little words name no document: me, my, of, by, all", async () => {
+    for (const msg of ["Show me all of my stuff", "Show me my tasks", "Show me what I have by month", "Get me everything"]) {
+      const res = await processMessage(msg, [], "user-1");
+      expect(opened(res), msg).toEqual([]);
+    }
+  });
+
+  it("a document that IS named still opens at once, without the model", async () => {
+    const warranty = await processMessage("Show me my warranty", [], "user-1");
+    expect(opened(warranty)).toEqual(["d-warranty"]);
+    const license = await processMessage("open my drivers license", [], "user-1");
+    expect(opened(license)).toEqual(["d-license"]);
+    const statement = await processMessage("Show me the bank statement", [], "user-1");
+    expect(opened(statement)).toEqual(["d-statement"]);
+    const alices = await processMessage("show Alice's warranty", [], "user-1");
+    expect(opened(alices)).toEqual(["d-warranty"]);
+    expect(db.modelCalls).toBe(0);
   });
 });

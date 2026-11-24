@@ -54,6 +54,14 @@ type Step = {
   display?: Display;
   /** Sibling tools that legitimately do the same job for this phrasing. */
   also?: string[];
+  /**
+   * The app may answer this from the record itself, without the tool (J4: a
+   * question about the journal or a note), or cannot run it on this account
+   * (no Google connection). The step passes when the reply says this.
+   */
+  direct?: RegExp;
+  /** What the assistant's "are you sure?" names when it does not repeat the run's tag. */
+  ours?: RegExp;
 };
 
 const s = (tool: string, message: string, extra: Partial<Step> = {}): Step => ({ tool, message, ...extra });
@@ -192,17 +200,18 @@ const STEPS: Step[] = [
   s("query_calendar", `What's on my calendar this week?`),
   s("complete_event", `Mark the ${T} Dentist event as completed`),
   s("delete_event", `Delete the ${T} Dentist event`, { confirm: YES }),
-  s("sync_calendar", `Sync my calendar`),
+  // The smoke account has no Google connection: the honest answer is that it is not connected.
+  s("sync_calendar", `Sync my calendar`, { direct: /(?:isn't|is not|not) connected/i }),
 
   // ── Journal, notes, artifacts, memory ──
   s("journal_entry", `Journal entry: ${T} felt great today, productive morning`),
   s("append_journal_entry", `Add to today's journal: ${T} also went for a long walk`),
   // J4: a question about the journal is answered from the stored entries.
-  s("read_journal", `Summarize what I wrote in my journal this week`),
+  s("read_journal", `Summarize what I wrote in my journal this week`, { direct: /productive morning|long walk/i }),
   s("update_journal", `Change today's journal entry mood to okay`),
   s("delete_journal", `Delete my journal entry for today`, { confirm: YES }),
   s("create_note", `Make a note called ${T} Note: living room paint color is OC-17`),
-  s("search_notes", `Find my note about the living room paint color`),
+  s("search_notes", `Find my note about the living room paint color`, { direct: /OC-17/ }),
   s("update_note", `Update the ${T} Note note to say the paint color is OC-45`),
   s("delete_note", `Delete my note titled ${T} Note`, { confirm: YES }),
   s("create_artifact", `Create a checklist called ${T} Packing with items: passport, charger, socks`),
@@ -214,7 +223,7 @@ const STEPS: Step[] = [
   // Saved memories ride in the model's context, so it may simply answer.
   s("recall_memory", `Use your saved memories to look up what you know about my ${T} locker`),
   s("update_memory", `Update that memory: my ${T} locker code is now 9876`),
-  s("delete_memory", `Forget my ${T} locker code`, { confirm: YES }),
+  s("delete_memory", `Forget my ${T} locker code`, { confirm: YES, ours: /locker code/i }),
 
   // ── Documents ──
   s("create_document", `Create a document record called ${T} Warranty for my fridge warranty`),
@@ -420,7 +429,7 @@ const month = new Date().toISOString().slice(0, 7);
       // Answer "are you sure?" only when the question is about a record this
       // run made. A blind yes once agreed to delete a look-alike fixture row
       // the assistant offered in place of one that no longer existed.
-      const asksAboutOurs = reply1.includes(T) || !step.message.includes(T);
+      const asksAboutOurs = reply1.includes(T) || !step.message.includes(T) || (step.ours ? step.ours.test(reply1) : false);
       if (!ran && step.confirm && asksAboutOurs && /\?|confirm|are you sure|go ahead|proceed/i.test(reply1)) {
         const second = await chatTurn(step.confirm, [{ role: "user", content: step.message }, { role: "assistant", content: reply1 }]);
         confirmed = true;
@@ -487,7 +496,8 @@ const month = new Date().toISOString().slice(0, 7);
       final: trimFinal(final),
     };
     fs.appendFileSync(logFile, JSON.stringify(rec) + "\n");
-    const ok = turn.status === 200 && !turn.error && rec.hasReply && (step.tool ? !!rec.via && shown : true);
+    const answeredDirectly = !!step.direct && step.direct.test(reply);
+    const ok = turn.status === 200 && !turn.error && rec.hasReply && (step.tool ? (!!rec.via && shown) || answeredDirectly : true);
     console.log(`${ok ? "PASS" : "FAIL"} ${rec.tool.padEnd(30)} ${String(turn.totalMs).padStart(6)}ms first=${String(turn.firstProgressMs ?? "-").padStart(5)}ms tools=[${turn.toolsStarted.join(",")}]${rec.via && rec.via !== "tool" ? ` via ${rec.via}` : ""} ${ok ? "" : `invoked=${invoked} toolOk=${toolOk} shown(${display})=${shown} ${turn.error || toolErr.join("; ") || reply.slice(0, 140).replace(/\n/g, " ")}`}`);
   }
 

@@ -1600,8 +1600,15 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
     
     for (const term of searchTerms) {
       // Strip possessive, trailing type words, and noise words
-      const cleaned = term.replace(/(?:'s|s')\s+/g, " ").replace(/\s+(?:document|file|record|report|pdf|photo|image)$/i, "").replace(/\b(?:up|the|a|an)\b/g, "").replace(/\s+/g, " ").trim();
-      const cleanedWords = cleaned.split(/\s+/).filter(w => w.length > 1);
+      const cleaned = term.replace(/(?:'s|s')\s+/g, " ").replace(/\s+(?:document|file|record|report|pdf|photo|image)$/i, "").replace(/\b(?:up|the|a|an)\b/g, "").replace(/\s+/g, " ").trim()
+        // "show ME my licence": the pronoun is not part of what is asked for.
+        .replace(/^(?:me|us)\s+/i, "").replace(/^(?:my|our)\s+/i, "").trim();
+      // Only words that can name a document count as evidence. The little
+      // words were matched as SUBSTRINGS: "me" is in "docuMEnt", "stateMEnt"
+      // and "MEdical", so "show me a bar chart of my expenses by category"
+      // scored against any such document and was answered with it, in 250 ms,
+      // without the model (chat tool sweep, 2026-11-24).
+      const cleanedWords = cleaned.split(/\s+/).filter(w => w.length >= 3 && !OPEN_DOC_STOP_WORDS.has(w));
       
       // Resolve profile name from query
       const profileMatch = allProfiles.find(p => cleaned.includes(p.name.toLowerCase()));
@@ -1622,8 +1629,9 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
           if (dType.includes(w)) score += 20;
           if (dTags.some((t: string) => t.includes(w))) score += 15;
         }
-        // Profile match bonus
-        if (profileMatch && d.linkedProfiles.includes(profileMatch.id)) score += 25;
+        // Profile match bonus — only on top of evidence about the document
+        // itself: whose it is cannot, alone, say which document was meant.
+        if (score > 0 && profileMatch && d.linkedProfiles.includes(profileMatch.id)) score += 25;
         // Keyword synonyms
         const synonyms: Record<string, string[]> = {
           wellness: ["medical", "health", "visit", "checkup", "check"],
@@ -1639,6 +1647,10 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
         }
         return score;
       }
+
+      // A request for something the app DRAWS is not a request for a file,
+      // whatever words it shares with one.
+      if (NOT_A_DOCUMENT_REQUEST.test(cleaned)) continue;
 
       // Score all docs and pick the best
       const scored = allDocuments.map(d => ({ doc: d, score: scoreDoc(d) })).filter(s => s.score > 0).sort((a, b) => b.score - a.score);
@@ -3798,6 +3810,18 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
 
 /** "$14.50" for a refund's confirmation line. */
 const formatRefundMoney = (n: number): string => `$${(Math.round(n * 100) / 100).toFixed(2)}`;
+
+/** Words in "open / show / find …" that name no document. */
+const OPEN_DOC_STOP_WORDS = new Set([
+  "me", "my", "our", "your", "his", "her", "its", "their", "all", "any", "some", "this", "that", "these", "those",
+  "and", "for", "from", "with", "about", "into", "onto", "over", "per", "via", "are", "was", "has", "have", "how",
+  "what", "which", "who", "when", "where", "why", "please", "now", "today", "latest", "recent", "new", "old",
+]);
+
+/** "show me a chart of …": something the app DRAWS, never a stored file. Kept
+ *  to the words for a drawing — "expense report", "income statement" and
+ *  "bill of sale" are documents people do keep. */
+const NOT_A_DOCUMENT_REQUEST = /\b(?:(?:bar|pie|line|area)\s+(?:chart|graph)|charts?|graphs?|plots?|breakdown|trends?|how (?:much|many))\b/i;
 
 export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- Data Query Tools ---
