@@ -49,3 +49,27 @@ export function assertEventSpan(e: EventSpanLike): void {
     throw err;
   }
 }
+
+const dayNumber = (iso: string) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) / 86_400_000;
+const isoOfDayNumber = (n: number) => new Date(n * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * Moving an event moves all of it. An edit that changes `date` and says
+ * nothing about `endDate` carries the stored end date by the same number of
+ * days, so the span keeps its length (a one-day event stays one day).
+ *
+ * Without this, every event stored with an end date — a one-day event saved
+ * with end = start, as chat and the import write it — could not be moved at
+ * all: the calendar's Edit sent the new date alone, the merged record ended
+ * before it started, and the whole edit was refused (owner report 2026-11-24:
+ * "the event stayed on November 24 after I changed it to November 26").
+ * Both storages apply it before `assertEventSpan`, so every door agrees.
+ */
+export function carryEventSpan<P extends EventSpanLike>(existing: EventSpanLike, patch: P): P {
+  if (!patch || patch.date === undefined || patch.endDate !== undefined) return patch;
+  const from = DAY.test(String(existing?.date || "")) ? String(existing.date) : null;
+  const to = DAY.test(String(patch.date || "")) ? String(patch.date) : null;
+  const end = DAY.test(String(existing?.endDate || "")) ? String(existing.endDate) : null;
+  if (!from || !to || !end || from === to || end < from) return patch;
+  return { ...patch, endDate: isoOfDayNumber(dayNumber(end) + dayNumber(to) - dayNumber(from)) };
+}

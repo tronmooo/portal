@@ -147,9 +147,14 @@ green. After a push to `main`:
    the task list as Unscheduled) — QA 2026-11-24, second pass: drawn as an
    all-day item on the day it was added, beside a row saying "No due date".
    The open detail renders the LIVE timeline row (`liveTimelineItem`), not the
-   snapshot from the tap.
+   snapshot from the tap — found again by `type` + `sourceId` when an edit
+   moved it (the id carries the date). Moving an event's start moves its end
+   date with it (`carryEventSpan`, `shared/event-span.ts`, both storages).
+   (2026-11-24: an event with an end date could not be moved, and a moved
+   event's open detail still read "November 24".)
    *Guards:* `tests/sync-rules-valuation*.test.*`, `tests/sync-rules-followups.test.ts`,
    `tests/patch-keeps-unsent-fields.test.ts`, `tests/commit-date-input.dom.test.tsx`,
+   `tests/qa-2026-11-24-date-edits-persist.dom.test.tsx`,
    `tests/qa-2026-11-24-dashboard-calendar.test.ts`.
    *Live check:* `npx tsx tests/live-task-date-and-calendar-check.ts`.
 7. **A failed request is not an empty account.** No `queryFn` may turn a

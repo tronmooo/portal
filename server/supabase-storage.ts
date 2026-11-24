@@ -35,7 +35,7 @@ async function withTrackerCreateLock<T>(key: string, fn: () => Promise<T>): Prom
     if (trackerCreateLocks.get(key) === chain) trackerCreateLocks.delete(key);
   }
 }
-import { assertEventSpan } from "@shared/event-span";
+import { assertEventSpan, carryEventSpan } from "@shared/event-span";
 import { searchCorpus, searchRowHref } from "@shared/search-match";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { formatDollars } from "@shared/money";
@@ -4585,6 +4585,8 @@ export class SupabaseStorage implements IStorage {
     // [P0.2] Optimistic concurrency: compare against the trigger-maintained
     // updated_at column (fetched only when the caller sent expectedUpdatedAt).
     const eventVersion = await this.assertNoWriteConflictFor("events", id, data as Record<string, any>);
+    // Moving the start moves the end with it (shared/event-span).
+    data = carryEventSpan(existing as any, data as any) as Partial<CalendarEvent>;
     const merged = { ...existing, ...data };
     assertEventSpan(merged as any); // the edited record as a whole must still run forwards
     const { error } = await this.guardedWrite(this.supabase.from("events").update(onlyPatched({
