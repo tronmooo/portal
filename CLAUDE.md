@@ -1015,15 +1015,50 @@ Read these before touching `shared/nutrition-enrichment.ts`,
 NUTRITION block of the chat prompt (`server/ai-engine.ts`).
 *Guards:* `tests/nutrition-accuracy.test.ts` (the owner's sheet, through the
 real in-turn pass, each starting from a deliberately wrong estimate),
-`tests/nutrition-corrections.test.ts`, `tests/nutrition-enrichment*.test.ts`.
+`tests/nutrition-corrections.test.ts`, `tests/nutrition-enrichment*.test.ts`,
+`tests/nutrition-sources.test.ts` (recorded database responses),
+`tests/nutrition-scan.test.ts`, `tests/nutrition-scan-dialog.dom.test.tsx`.
 *Live check (deployed app, smoke account, real chat):* `npx tsx tests/live-nutrition-accuracy-check.ts`.
 
-**N1. Source order.** A label the user read out (or uploaded) → the named
-brand's own label (`NUTRITION_DB`, then the product database) → a standard
-reference for the food as described → a labelled estimate. A full label from
-the user (`isFullLabel`: calories and two more values) is the entry's WHOLE
-source: no lookup runs beside it. A label belongs to the food it follows
-(`labelFor`), not to every food in the message.
+**N1. Source order.** A label the user read out or photographed → the named
+brand's own label (`NUTRITION_DB`) → a barcode match → the food databases
+(USDA FoodData Central, Open Food Facts: `server/nutrition-sources.ts`) → a
+standard reference row → a labelled estimate, last. A full label from the
+user (`isFullLabel`: calories and two more values) or a scanned one is the
+entry's WHOLE source: no lookup runs beside it. A label belongs to the food
+it follows (`labelFor`), not to every food in the message. An averaged
+internal row ("cereal") is only what is left when no database knows the food.
+**N1a. A model may choose a record; it never supplies a figure.** For a food
+the internal table does not have, the databases are searched and a model
+picks WHICH record the user's words mean (`modelChoose`: same food, same
+form, same variety, same brand — or none) and may read a loose amount ("a
+bowl") as grams, which is then marked assumed. Every number is the record's
+and every multiplication is the server's (`componentFromSource`,
+`resolveAmount`). A branded record's PRINTED per-serving values are used
+whenever the amount is a number of label servings; per-100 g figures are
+back-calculated and carry the label's rounding twice. A restaurant order
+only accepts records carrying the restaurant's name (`restaurantIn`); a
+build-your-own order is its ingredients (`restaurantBuildPhrases`: "no X"
+leaves X out, "double" is two). With no record, the estimate says what ONE
+serving holds and the server scales it by a stated weight
+(`amountFromStatedWeight`); only then does an estimate replace the figures
+already on the entry. The lookup runs INSIDE the chat turn (bounded,
+`IN_TURN_LOOKUP_MS`) so the reply quotes the stored figures; the after-reply
+pass is only what ran out of time. Needs `FDC_API_KEY` in the deployment
+(`GET /api/nutrition/sources` says whether it is set); without it USDA's
+shared demo key allows 10 requests an hour and generic foods fall to estimates.
+**N1b. A scanned label is read, shown, then logged.** `Scan label` in the
+chat box (`NutritionScanDialog`) or a picture sent in chat with words that ask
+for it to be logged (`asksToLogPicturedFood`) is read by a vision model into
+`ScannedLabel` (`shared/nutrition-scan.ts`; `sanitizeScannedLabel`: only
+canonical nutrients and plain numbers — "<1 g" is dropped, never 0), together
+with serving size, servings per container and % Daily Values as printed. How
+much was eaten is read against the label's own serving (`consumedFromScan`:
+servings, grams, the label's household unit, a share of the package); with no
+amount it is one serving, marked assumed. Reading writes nothing; only
+`POST /api/nutrition/log-scan` writes, through the same door as a chat log
+(`__scan`). A barcode (typed, or its digits read from a picture and checked
+with `isValidGtin`) is looked up in Open Food Facts, then USDA Branded.
 **N2. The server does the arithmetic.** How much was eaten is read from the
 user's words (`normalizeQuantity`: "one and a half", "three quarters of one",
 "250-gram", a weight anywhere in the phrase, "two 12 oz", "made two … only
@@ -1059,11 +1094,27 @@ and the amount in the user's own terms (`componentAmount`: "225 g", not
 `scaleBy`; "that was yesterday" is `update_tracker_entry(at)`; the entry is
 picked by the user's word for it (`match`, `findNutritionEntry`); "remove the
 cheese" subtracts that component's own figures (`removeNutritionComponent`)
-and, when the entry is one estimate, says so instead of guessing; "the same
-breakfast as yesterday" is `log_tracker_entry(repeatFrom, repeatMeal)`,
-expanded into one log per food with the stored numbers (`repeatedMealInputs`;
-Rule 11a). Never delete and re-log to correct, and never re-estimate a meal
-that is on record.
+and, when the entry is one estimate, says so instead of guessing; "it was
+cod, not salmon" / "it was weighed dry" is `replaceWith`
+(`replaceNutritionFood`: the item is renamed and looked up afresh at the
+amount on record; figures only the old food had are removed; with no source
+for the new food the entry is put back untouched and the model supplies
+figures); "the same breakfast as yesterday" is
+`log_tracker_entry(repeatFrom, repeatMeal)`, expanded into one log per food
+with the stored numbers (`repeatedMealInputs`; Rule 11a). Never delete and
+re-log to correct, and never re-estimate a meal that is on record.
+**N8. One food is one entry even when its name has a comma.** "White rice,
+dry (100 g)" is one food: a fragment that only says how the food was prepared
+or weighed (`isStateOnlyFragment`) never becomes an entry of its own
+(2026-11-25, real model on the preview: 100 g of dry rice logged as 730 kcal).
+*Live checks against the real model (smoke account; a preview with
+`SMOKE_API_BASE=https://<preview>/api SMOKE_UI_BASE=https://<preview>`, and
+`NODE_USE_ENV_PROXY=1` in a cloud session):*
+`npx tsx tests/live-nutrition-engine-check.ts` (139 cases; expected values and
+their sources in `tests/fixtures/nutrition-e2e-cases.json` — USDA records,
+Open Food Facts barcodes, label arithmetic, label pictures, corrections) and
+`npx tsx tests/live-nutrition-ui-check.ts` (the chat screen on a phone, the
+Scan label dialog, the tracker and Wellness screens).
 *Not built (2026-11-24):* barcode / UPC entry; reading an uploaded label
 photo into this path; allulose as its own nutrient; a generic row for every
 food (unmatched generic foods still go to the model's estimate, labelled as
