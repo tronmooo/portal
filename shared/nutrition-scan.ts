@@ -96,7 +96,9 @@ export function sanitizeScannedLabel(raw: any, origin: ScannedLabel["origin"] = 
   if (ml) serving.ml = ml;
   const hh = num(s.householdAmount);
   const hu = text(s.householdUnit, 30)?.toLowerCase();
-  if (hh && hu) { serving.householdAmount = hh; serving.householdUnit = hu; }
+  // A fraction printed on the label ("2/3 cup") is read from the print below, exactly: a reader's 0.667 is not 2/3.
+  if (hh && hu && !/\d\s*\/\s*\d/.test(serving.text)) { serving.householdAmount = hh; serving.householdUnit = hu; }
+  else if (hu) serving.householdUnit = hu;
   // The printed text is the fallback for anything the reader left out: "2/3 cup (55g)".
   if (!serving.grams && !serving.ml) {
     const g = serving.text.match(/(\d+(?:[.,]\d+)?)\s*g\b/i);
@@ -110,7 +112,7 @@ export function sanitizeScannedLabel(raw: any, origin: ScannedLabel["origin"] = 
       const a = h[1].includes("/")
         ? h[1].trim().split(/\s+/).reduce((sum, part) => sum + (part.includes("/") ? Number(part.split("/")[0]) / Number(part.split("/")[1]) : Number(part)), 0)
         : Number(h[1]);
-      if (isFinite(a) && a > 0) { serving.householdAmount = Math.round(a * 1000) / 1000; serving.householdUnit = h[2].trim(); }
+      if (isFinite(a) && a > 0) { serving.householdAmount = Math.round(a * 1e6) / 1e6; serving.householdUnit = serving.householdUnit || h[2].trim(); }
     }
   }
   const spc = num(raw.servingsPerContainer);
@@ -152,7 +154,7 @@ const unitWord = (u: string) => {
   if (/^(fl oz|floz|fluid ounces?)$/.test(w)) return "fl oz";
   return w.replace(/(es|s)$/, "");
 };
-const r4 = (n: number) => Math.round(n * 10000) / 10000;
+const r4 = (n: number) => Math.round(n * 1e6) / 1e6;
 
 /**
  * How many label servings the user's words are. Read against the label's own

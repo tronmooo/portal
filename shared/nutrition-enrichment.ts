@@ -322,7 +322,8 @@ export function detectPackageFraction(text: string): { fraction: number; word: s
  */
 const SMALL_NUMBER: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
 const SPOKEN_FRACTION: Record<string, number> = { half: 0.5, quarter: 0.25, third: 1 / 3, "three quarters": 0.75, "two thirds": 2 / 3 };
-const trimNumber = (n: number): string => String(Math.round(n * 10000) / 10000);
+/** Six decimals: a third of a cup against a 2/3-cup serving must come out as exactly half. */
+const trimNumber = (n: number): string => String(Math.round(n * 1e6) / 1e6);
 export function spokenAmountsToDigits(text: string): string {
   let t = String(text || "");
   // "one and a half", "2 and a quarter", "one and three quarters"

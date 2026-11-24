@@ -891,6 +891,8 @@ export function weighedWithInedible(text: string): boolean {
   return /\b(?:includ\w*|with|counting|plus)\s+(?:the\s+|its\s+)?(peel|skin|rind|pit|stone|shell|core|bone|bones)\b|\b(unpeeled|whole weight|gross weight|skin[- ]on|peel[- ]on|bone[- ]in)\b/i.test(String(text || ""));
 }
 
+const SIZE_WORDS = ["small", "medium", "large", "big", "huge", "jumbo", "mini", "tiny", "xl"];
+
 export function resolveServings(item: NutritionDbItem, qty: QuantityNormalization, phrase?: string): ServingResolution {
   const r = resolveServingsRaw(item, qty, phrase);
   // Unit rounding (12 fl oz vs a 355 ml can, 8 fl oz vs a 240 ml cup) must not
@@ -905,7 +907,11 @@ function resolveServingsRaw(item: NutritionDbItem, qty: QuantityNormalization, p
   const s = item.serving;
   // "large banana" scales a generic reference; "Big Mac" / "Grande latte" are
   // product names whose size IS the row.
-  const size = item.kind === "generic" ? sizeFactor(phrase || qty.original) : 1;
+  // …and so is a size the reference row is already stated for: "2 large eggs"
+  // of the "large egg (50 g)" row are two of them, not two and a half.
+  const sizeWord = SIZE_WORDS.find((w) => new RegExp(`\\b${w}\\b`, "i").test(phrase || qty.original));
+  const rowIsThatSize = !!sizeWord && new RegExp(`\\b${sizeWord}\\b`, "i").test(`${item.name} ${item.serving.label}`);
+  const size = item.kind === "generic" && !rowIsThatSize ? sizeFactor(phrase || qty.original) : 1;
   const unit = (qty.unit || "").toLowerCase();
   const isOunceWord = /^(oz|ounce|ounces)$/.test(unit);
   // An explicit number + unit ("12 oz", "2 tablespoons", "182 g") matched to

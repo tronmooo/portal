@@ -69,7 +69,10 @@ export interface SourceAsk {
   phrase: string;
   /** The user's words for how much. */
   quantityText: string;
+  /** The phrase names a known brand: a packaged product. */
   branded: boolean;
+  /** No known brand, but it reads like a product name: reference records and products are both considered. */
+  maybeBranded?: boolean;
 }
 
 /** What a chooser decided for one ask. */
@@ -172,7 +175,10 @@ function fdcVector(rows: any[]): NutrientVector {
   return out;
 }
 
-const fdcHeaders = (): Record<string, string> => ({ "X-Api-Key": process.env.FDC_API_KEY || "DEMO_KEY" });
+/** The names a USDA FoodData Central key may be stored under (the first one set wins). */
+export const FDC_KEY_NAMES = ["FDC_API_KEY", "USDA_FDC_API_KEY", "USDA_API_KEY", "FOODDATA_CENTRAL_API_KEY", "FDC_KEY", "DATA_GOV_API_KEY"] as const;
+export const fdcKey = (): string | undefined => FDC_KEY_NAMES.map((n) => process.env[n]?.trim()).find((v) => !!v);
+const fdcHeaders = (): Record<string, string> => ({ "X-Api-Key": fdcKey() || "DEMO_KEY" });
 const FDC = "https://api.nal.usda.gov/fdc/v1";
 
 const titleCase = (s: string) => s.toLowerCase().replace(/(^|[\s(/-])([a-z])/g, (_m, a: string, b: string) => a + b.toUpperCase());
@@ -205,6 +211,7 @@ function fdcCandidate(f: any): SourceCandidate | null {
 }
 
 export async function fdcSearch(query: string, kind: "generic" | "branded", deps: SourceDeps = {}): Promise<SourceCandidate[]> {
+  // (A phrase that may be either is searched both ways by the caller.)
   const q = String(query || "").trim();
   if (!q) return [];
   const types = kind === "branded" ? "Branded" : "Foundation,SR%20Legacy,Survey%20%28FNDDS%29";
@@ -557,6 +564,8 @@ For each numbered ask you get the person's words and a list of candidate records
 Rules:
 - pick the candidate that IS the food the person described: same food, same form (raw vs cooked, dry vs prepared, drained, with or without skin), same variety (zero sugar vs regular, whole vs reduced fat, flavor) and, for a product, the same brand and product line. Prefer a plain single-ingredient reference record for a plain food. When the person did not say raw or cooked, choose the form the food is normally eaten in.
 - null when no candidate is that food (a different brand, a different dish, a different form). A wrong record is worse than none.
+- A plain food the person did not attribute to a brand (salmon, quinoa, an egg) is a reference record (Foundation, SR Legacy, Survey), never a packaged product that happens to share its name.
+- When the same product is offered by USDA (Branded) and by Open Food Facts, pick the USDA record: it is the manufacturer's own label. Pick an Open Food Facts record only when it is clearly the product and its calories are plausible for that kind of food.
 - assumedAmount: ONLY when the person gave no weight or volume and the amount is a loose one ("a bowl", "a plate", "one", "a handful", "a large one"): your best reading of that amount in grams (ml for a drink). Otherwise null. Never fill it when a weight or volume was stated.
 - edibleFraction: ONLY when the person says the stated weight includes peel, skin, bone, shell or pit: the typical edible share (0-1). Otherwise null.`;
 
@@ -685,12 +694,20 @@ export async function resolveFromSources(asks: SourceAsk[], deps: SourceDeps = {
           .map((list) => list.filter((c) => `${c.brand || ""} ${c.name}`.toLowerCase().replace(/[^a-z ]/g, "").includes(restaurant)))
       : ask.branded
       ? await Promise.all([fdcSearch(query, "branded", deps), offSearch(query, deps)])
+      : ask.maybeBranded
+      // A capitalised name with no known brand ("Baked Farmed Atlantic Salmon",
+      // "Kodiak Power Cakes") may be a plain food or a product: both are offered,
+      // reference records first, and the chooser is told to prefer the plain one.
+      ? await Promise.all([fdcSearch(query, "generic", deps), fdcSearch(query, "branded", deps)])
       : [await fdcSearch(query, "generic", deps)];
     // Best few by name fit, so the chooser reads a short list.
+    // Name fit first; on a tie the manufacturer-submitted USDA record is listed
+    // before a crowd-sourced one, and a plain reference record before a product.
+    const rank = (c: SourceCandidate) => (c.provider === "fdc" ? (c.dataType === "Branded" ? 1 : 0) : 2);
     const candidates = lists.flat()
       .map((c) => ({ c, s: scoreCandidate(ask.phrase, c) }))
-      .sort((a, b) => b.s - a.s)
-      .slice(0, 10)
+      .sort((a, b) => b.s - a.s || rank(a.c) - rank(b.c))
+      .slice(0, 12)
       .map((x) => x.c);
     return { i, ask, candidates };
   }));

@@ -142,7 +142,9 @@ async function runCase(c: Case): Promise<void> {
     const tol = c.tol || { pct: 8, abs: 1 };
     for (const [k, want] of Object.entries(c.expect)) {
       got[k] = sumOf(food, k);
-      if (!within(got[k], want, tol)) why.push(`${k} ${got[k]} vs ${want} (${want ? `${round(((got[k] - want) / want) * 100)}%` : "abs"})`);
+      // Milligram quantities are stored as whole numbers (172.5 mg is stored as 173).
+      const t = /^(sodium|caffeine|potassium|cholesterol|calcium)$/.test(k) ? { pct: tol.pct, abs: Math.max(tol.abs, 0.6) } : tol;
+      if (!within(got[k], want, t)) why.push(`${k} ${got[k]} vs ${want} (${want ? `${round(((got[k] - want) / want) * 100)}%` : "abs"})`);
     }
     for (const [k, want] of Object.entries(c.expectTotals || {})) {
       got[k] = totalOf(food, k);

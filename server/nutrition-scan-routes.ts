@@ -47,9 +47,14 @@ export function registerNutritionScanRoutes(app: Express, rateLimit: Limiter): v
   });
 
   // Which food sources this deployment can reach: says whether a key is set, never the key.
-  app.get("/api/nutrition/sources", (_req, res) => {
+  app.get("/api/nutrition/sources", async (_req, res) => {
+    const { fdcKey, FDC_KEY_NAMES } = await import("./nutrition-sources");
     res.json({
-      usdaFoodDataCentral: process.env.FDC_API_KEY ? "configured" : "shared demo key (10 requests an hour)",
+      usdaFoodDataCentral: fdcKey() ? "configured" : "shared demo key (10 requests an hour)",
+      // Variable NAMES only (never a value), so a missing or misnamed key can be seen from outside.
+      usdaKeyNamesAccepted: FDC_KEY_NAMES,
+      usdaLikeVariablesPresent: Object.keys(process.env).filter((k) => /fdc|usda|fooddata|data_?gov/i.test(k)),
+      vercelEnv: process.env.VERCEL_ENV || null,
       openFoodFacts: process.env.NUTRITION_LOOKUP_DISABLE === "1" ? "disabled" : "enabled",
       model: process.env.ANTHROPIC_API_KEY ? "configured" : "not configured",
     });

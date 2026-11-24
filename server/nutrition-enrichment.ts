@@ -137,7 +137,11 @@ export function labelFor(item: string, message: string): StatedLabel | null {
   const text = String(message || "");
   const firstValue = text.search(/\d+(?:\.\d+)?\s*(?:kcal|calories?|cals?)\b|\d+(?:\.\d+)?\s*(?:g|mg|grams?)\s+(?:of\s+)?(?:total\s+)?(?:protein|carb|fat|sugar|fiber|sodium)/i);
   const head = firstValue > 0 ? text.slice(0, firstValue) : text;
-  const foods = splitComponentPhrases(head).filter((p) => !/^(there (are|is)|each|every|the label|label|it says|it has|per)\b/i.test(p) && tokens(p).length > 0);
+  // A phrase about the PACKAGE or the label ("The bag has 2.5 servings", "one
+  // serving is", "The tub says 150 g has") names no food. "a protein bar that
+  // has" does: its subject is the food.
+  const LABEL_TALK = /^(?:there (?:are|is)|it (?:says|has|contains)|per\b|(?:the|this|that|its|one|each|every|a|an)?\s*(?:label|tub|bag|box|package|packet|pack|container|can|bottle|jar|carton|wrapper|pouch|servings?|nutrition|back|side|whole thing)\b)/i;
+  const foods = splitComponentPhrases(head).filter((p) => !LABEL_TALK.test(p.trim()) && tokens(p).length > 0);
   if (foods.length <= 1) return label;
   const mine = new Set(tokens(item));
   return tokens(foods[foods.length - 1]).some((t) => mine.has(t)) ? label : null;
@@ -855,7 +859,10 @@ export async function lookupComponents(
       try {
         const asks: SourceAsk[] = idx.map((i) => {
           const spec = detectSpecificity(phrases[i].text);
-          return { phrase: phrases[i].text, quantityText: phrases[i].quantityText, branded: spec.level === "brand" || spec.level === "product" };
+          // "Branded" is a KNOWN brand in the words. A Title-Case item the agent
+          // wrote ("Baked Farmed Atlantic Salmon") only looks like a product name.
+          const known = spec.signals.includes("brand") || spec.signals.includes("restaurant") || spec.signals.includes("barcode");
+          return { phrase: phrases[i].text, quantityText: phrases[i].quantityText, branded: known, maybeBranded: !known && (spec.level === "brand" || spec.level === "product") };
         });
         const found = await deps.sourceLookup(asks, { deadlineMs: Math.max(1500, left - 2500), now });
         idx.forEach((i, k) => {
@@ -1033,13 +1040,23 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
     logger.warn("nutrition-enrichment", `lookup failed for entry ${entry.id}: ${e?.message || e}`);
     return done({ status: "failed", reason: "lookup failed", trackerId: tracker.id, trackerName: tracker.name });
   }
-  if (lookup.components.length === 0) {
-    return done({ status: "skipped", reason: `no source matched "${text.slice(0, 80)}"`, needsMore: !!opts.sync, trackerId: tracker.id, trackerName: tracker.name });
-  }
-  if (lookup.unresolved.length > 0) {
-    // A partial meal total would under-count. Keep the base estimate.
-    return done({ status: "skipped", reason: `could not identify: ${lookup.unresolved.join(", ")}`, needsMore: !!opts.sync, trackerId: tracker.id, trackerName: tracker.name });
-  }
+  // Every entry says where its figures came from. When no source could price
+  // the food, that is the answer: the figures are the assistant's estimate.
+  // (The in-turn table pass leaves no mark: the full pass still has its turn.)
+  const unsourced = async (reason: string): Promise<EnrichOutcome> => {
+    if (!opts.sync && !existing) {
+      const stub: NutritionEnrichment = {
+        version: 1, status: "skipped", mode, specificity, sourceText: text, components: [], totals: {}, userProvided: [], userValues: {},
+        confidence: "low", servingFactor: 1, linkedEntries: [], summary: "No source matched: the figures are the assistant's estimate.",
+        reason, enrichedAt: now, verification: "estimated",
+      };
+      try { await storage.updateTrackerEntry(tracker.id, entry.id, { computed: { nutrition: stub } } as any); } catch { /* the entry stands either way */ }
+    }
+    return done({ status: "skipped", reason, needsMore: !!opts.sync, trackerId: tracker.id, trackerName: tracker.name });
+  };
+  if (lookup.components.length === 0) return unsourced(`no source matched "${text.slice(0, 80)}"`);
+  // A partial meal total would under-count. Keep the base estimate.
+  if (lookup.unresolved.length > 0) return unsourced(`could not identify: ${lookup.unresolved.join(", ")}`);
 
   const summed = sumComponentTotals(lookup.components, now);
   const { totals, userProvided } = applyUserProvided(summed, userValues, now);
@@ -1248,7 +1265,11 @@ export async function rescaleNutritionEntry(
     const patch: Record<string, number> = {};
     for (const key of ENTRY_VALUE_NUTRIENTS) {
       const t = scaled.totals[key];
-      if (t && (key !== "caffeine" || t.value > 0)) patch[key] = t.value;
+      if (!t || (key === "caffeine" && t.value <= 0)) continue;
+      // An estimate that never replaced the entry's own figure (buildEntryValuePatch)
+      // must not replace it now: the figure ON the entry is the one that is scaled.
+      const own = Number(entry.values?.[key]);
+      patch[key] = t.sourceType === "model_estimate" && !existing.estimateScaledByServer && isFinite(own) ? roundNutrient(own * factor, key) : t.value;
     }
     for (const ref of scaled.linkedEntries) {
       try {

@@ -367,3 +367,14 @@ describe("7. Regressions the live run exposed", () => {
     expect(stored.computed.nutrition.verification).toBe("reference");
   });
 });
+
+describe("8. A label applies when the sentence talks about the package first", () => {
+  it("'The bag has 2.5 servings and one serving is …' is still this food's label", () => {
+    const popcorn = "I ate the whole bag of popcorn. The bag has 2.5 servings and one serving is 140 calories, 8g fat, 16g carbs and 2g protein.";
+    expect(labelFor("Popcorn (whole bag, 2.5 servings)", popcorn)?.consumed).toMatchObject({ calories: 350, fat: 20, carbs: 40, protein: 5 });
+    const yogurt = "I ate 90 g of yogurt. The tub says 150 g has 120 calories, 15g protein, 8g carbs and 3g fat.";
+    expect(labelFor("Yogurt (90g)", yogurt)?.consumed).toMatchObject({ calories: 72, protein: 9 });
+    // Two foods, a label for the second: still not the first one's.
+    expect(labelFor("Banana", "I had a banana and a protein bar that has 200 calories, 20g protein and 8g fat")).toBeNull();
+  });
+});

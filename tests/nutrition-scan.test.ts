@@ -51,8 +51,8 @@ describe("how much was eaten, against the label's own serving", () => {
   const cases: Array<[string, number, boolean]> = [
     ["I ate 2 servings of this.", 2, false],
     ["I ate 82.5 grams of this", 1.5, false],
-    ["I ate a third of a cup of this granola", 0.4998, false],
-    ["half a cup", 0.7496, false],
+    ["I ate a third of a cup of this granola", 0.5, false],
+    ["half a cup", 0.75, false],
     ["I ate the whole bag", 8, false],
     ["half the bag", 4, false],
     ["I had half a serving", 0.5, false],
