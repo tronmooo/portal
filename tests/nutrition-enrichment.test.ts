@@ -133,7 +133,7 @@ describe("user-stated nutrition is the user's data", () => {
     const patch = buildEntryValuePatch({ item: "protein bar", calories: 210, protein: 20 }, { totals, userProvided, userValues: { calories: 210, protein: 20 } });
     expect(patch.calories).toBe(210);
     expect(patch.protein).toBe(20);
-    expect(patch.carbs).toBe(21); // the lookup fills what the user did not state
+    expect(patch.carbs).toBe(22); // the lookup fills what the user did not state
   });
 });
 

@@ -989,6 +989,73 @@ for the whole tab, journal / expenses / goals for the cards that read them.
 Customize); per-widget colors; widgets over documents or the calendar; a
 custom score replacing the header's Wellness chip.
 
+## Nutrition rules (a food's numbers are its source's, scaled by what was eaten)
+
+Owner, 2026-11-24, with a test sheet: "Chobani Zero Sugar Vanilla Greek
+Yogurt, 90 kcal, protein 12 g, carbs 7 g … it's good but it's not great."
+(225 g of a 150 g cup: the calories had been scaled and the protein had not.)
+The chat model NAMES the food and how much; the figures are the server's.
+Read these before touching `shared/nutrition-enrichment.ts`,
+`shared/nutrition-label.ts`, `shared/nutrition-db.ts`,
+`server/nutrition-enrichment.ts`, `server/nutrition-edits.ts` or the
+NUTRITION block of the chat prompt (`server/ai-engine.ts`).
+*Guards:* `tests/nutrition-accuracy.test.ts` (the owner's sheet, through the
+real in-turn pass, each starting from a deliberately wrong estimate),
+`tests/nutrition-corrections.test.ts`, `tests/nutrition-enrichment*.test.ts`.
+*Live check (deployed app, smoke account, real chat):* `npx tsx tests/live-nutrition-accuracy-check.ts`.
+
+**N1. Source order.** A label the user read out (or uploaded) → the named
+brand's own label (`NUTRITION_DB`, then the product database) → a standard
+reference for the food as described → a labelled estimate. A full label from
+the user (`isFullLabel`: calories and two more values) is the entry's WHOLE
+source: no lookup runs beside it. A label belongs to the food it follows
+(`labelFor`), not to every food in the message.
+**N2. The server does the arithmetic.** How much was eaten is read from the
+user's words (`normalizeQuantity`: "one and a half", "three quarters of one",
+"250-gram", a weight anywhere in the phrase, "two 12 oz", "made two … only
+ate …") and multiplies the source's per-serving figures. A stated label is
+scaled by its own basis (`parseStatedLabel`: per 40 g, per serving with
+"3.5 servings per bag", a share of the whole item, portions of a recipe).
+Numbers stated as a total ("2 eggs, about 140 calories") are left as stated.
+A number in front of a product noun is the product's name, not a label
+("42g protein shake"). Never ask the model to multiply.
+**N3. Unknown is not zero.** A nutrient the source does not state has no
+value: it is not written as 0, not filled from a generic row, and when the
+source is the user's label the model's guess for it is removed from the
+entry. "<1 g" is not a number. Net carbs are derived (`netCarbsOf`) and only
+when fiber or sugar alcohol is known.
+**N4. Printed calories stand.** Never recompute calories as protein×4 +
+carbs×4 + fat×9: fiber, sugar alcohols, allulose and label rounding make the
+two differ legitimately. Scaled figures keep the arithmetic (`roundNutrient`:
+one decimal of a calorie, two of a gram; 1.75 g is not 1.8).
+**N5. State and edible weight decide the numbers.** Raw / dry / "weighed
+before cooking" is the raw reference (`rawStateOf`; the cooked rows exclude
+those words); a weight "including the peel" is scaled by the row's
+`edibleFraction` and labelled an estimate; "three eggs but only two of the
+yolks" is 3 whites and 2 yolks (`eggPartsOf`); oil a food was cooked with is
+its own component. Add a food by adding a `NUTRITION_DB` row with its match
+words and exclusions: only label or standard-reference values, and a row
+that repeats a word ("half and half") matches as a phrase (`altMatches`).
+**N6. Every figure says where it came from.** Components carry their source,
+amount and confidence; the reply and the card say Verified (a label, for an
+amount the user stated), Reference values, or Estimated (`verificationOf`),
+and the amount in the user's own terms (`componentAmount`: "225 g", not
+"1.5 × 5.3 oz cup").
+**N7. A correction changes the entry that exists** (Rule 6): a portion is
+`scaleBy`; "that was yesterday" is `update_tracker_entry(at)`; the entry is
+picked by the user's word for it (`match`, `findNutritionEntry`); "remove the
+cheese" subtracts that component's own figures (`removeNutritionComponent`)
+and, when the entry is one estimate, says so instead of guessing; "the same
+breakfast as yesterday" is `log_tracker_entry(repeatFrom, repeatMeal)`,
+expanded into one log per food with the stored numbers (`repeatedMealInputs`;
+Rule 11a). Never delete and re-log to correct, and never re-estimate a meal
+that is on record.
+*Not built (2026-11-24):* barcode / UPC entry; reading an uploaded label
+photo into this path; allulose as its own nutrient; a generic row for every
+food (unmatched generic foods still go to the model's estimate, labelled as
+one); the corrections in N7 are covered at the tool level — which tool the
+real model picks for each sentence is checked only by the live script.
+
 ## Touch rules (the app is used on a phone; a mouse click proves nothing about a finger)
 
 **T1. A drag on a control never navigates.** The shell turns a quick sideways

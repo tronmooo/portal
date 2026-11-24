@@ -177,7 +177,7 @@ describe("user-provided values are preserved", () => {
     const after = (await storage.getTrackerEntry(entry.id))!;
     expect(after.values.calories).toBe(210);
     expect(after.values.protein).toBe(20);
-    expect(after.values.carbs).toBe(21); // filled from the product
+    expect(after.values.carbs).toBe(22); // filled from the product
     const n = (after.computed as any).nutrition;
     expect(n.userProvided).toEqual(["calories", "protein"]);
     expect(n.totals.calories).toMatchObject({ value: 210, sourceType: "user" });

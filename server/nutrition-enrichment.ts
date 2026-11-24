@@ -35,6 +35,8 @@ import {
   isNutritionTrackerLike,
   linkedMeasurementsFor,
   normalizeQuantity,
+  parseAmountToken,
+  rawStateOf,
   overallConfidence,
   parseEnrichmentMode,
   rescaleEnrichment,
@@ -56,6 +58,7 @@ import {
 } from "@shared/nutrition-enrichment";
 import { NUTRITION_DB, lookupNutritionDb, nutritionCandidates, phraseNamesDbItem, resolveServings, type NutritionDbItem } from "@shared/nutrition-db";
 import { ITEM_ENRICHMENT_PREF_KEY } from "@shared/item-identity";
+import { isFullLabel, parseStatedLabel, type StatedLabel } from "@shared/nutrition-label";
 import { getAnthropicClient } from "./anthropic-client";
 import { logger } from "./logger";
 
@@ -91,7 +94,9 @@ export function planEnrichmentCandidate(
   if (!text) return null;
   const specificity = detectSpecificity(`${item} ${message}`.trim());
   const decision = decideEnrichment("auto", specificity, text);
-  if (!decision.attempt) return null;
+  // A label the user read out is a complete source however vaguely the food
+  // is named ("soup", "a recipe"): the arithmetic still has to be done.
+  if (!decision.attempt && !labelFor(item, message)) return null;
   return { entryId: entry.id, trackerId: tracker.id, trackerName: tracker.name, item, specificity, message: message || undefined };
 }
 
@@ -115,6 +120,24 @@ export async function readEnrichmentMode(storage: IStorage): Promise<EnrichmentM
     : parseEnrichmentMode(await storage.getPreference(NUTRITION_ENRICHMENT_PREF_KEY).catch(() => null));
   if (key) modeMemo.set(key, { mode, at: Date.now() });
   return mode;
+}
+
+/**
+ * The label in the user's message, when it describes THIS entry's food. One
+ * message can log two foods and give a label for one of them ("a banana and a
+ * protein bar that has 200 calories…"): the label belongs to the food it
+ * follows, not to every entry the message produced.
+ */
+export function labelFor(item: string, message: string): StatedLabel | null {
+  const label = parseStatedLabel(message);
+  if (!label) return null;
+  const text = String(message || "");
+  const firstValue = text.search(/\d+(?:\.\d+)?\s*(?:kcal|calories?|cals?)\b|\d+(?:\.\d+)?\s*(?:g|mg|grams?)\s+(?:of\s+)?(?:total\s+)?(?:protein|carb|fat|sugar|fiber|sodium)/i);
+  const head = firstValue > 0 ? text.slice(0, firstValue) : text;
+  const foods = splitComponentPhrases(head).filter((p) => !/^(there (are|is)|each|every|the label|label|it says|it has|per)\b/i.test(p) && tokens(p).length > 0);
+  if (foods.length <= 1) return label;
+  const mine = new Set(tokens(item));
+  return tokens(foods[foods.length - 1]).some((t) => mine.has(t)) ? label : null;
 }
 
 /** The food the entry names, from whichever text field the agent used. */
@@ -243,14 +266,30 @@ export function nutrientsFromOffNutriments(n: Record<string, any> | null | undef
   set("carbs", pick("carbohydrates"));
   set("fat", pick("fat"));
   set("saturatedFat", pick("saturated-fat"));
+  set("transFat", pick("trans-fat"));
+  set("monoFat", pick("monounsaturated-fat"));
+  set("polyFat", pick("polyunsaturated-fat"));
   set("fiber", pick("fiber"));
   set("sugar", pick("sugars"));
   set("addedSugar", pick("added-sugars"));
+  set("sugarAlcohol", pick("polyols"));
   set("sodium", pick("sodium", 1000));
   set("cholesterol", pick("cholesterol", 1000));
   set("potassium", pick("potassium", 1000));
   set("calcium", pick("calcium", 1000));
   set("iron", pick("iron", 1000));
+  set("magnesium", pick("magnesium", 1000));
+  set("zinc", pick("zinc", 1000));
+  set("phosphorus", pick("phosphorus", 1000));
+  set("selenium", pick("selenium", 1e6));
+  set("vitaminA", pick("vitamin-a", 1e6));
+  set("vitaminB6", pick("vitamin-b6", 1000));
+  set("vitaminB12", pick("vitamin-b12", 1e6));
+  set("vitaminC", pick("vitamin-c", 1000));
+  set("vitaminD", pick("vitamin-d", 1e6));
+  set("vitaminE", pick("vitamin-e", 1000));
+  set("vitaminK", pick("vitamin-k", 1e6));
+  set("folate", pick("vitamin-b9", 1e6));
   set("caffeine", pick("caffeine", 1000));
   if (out.calories == null && out.protein == null && out.carbs == null && out.fat == null) return null;
   return out;
@@ -360,12 +399,16 @@ export async function openFoodFactsLookup(phrase: string, opts: { timeoutMs?: nu
 
 const MODEL_ESTIMATE_SYSTEM = `You are a nutrition reference. You receive food/drink phrases a person logged and return nutrition per component as JSON.
 Rules:
-- Return ONLY a JSON object: {"components":[{"name":string,"brand":string|null,"quantityText":string,"servings":number,"serving":{"amount":number,"unit":string,"grams":number|null,"ml":number|null,"label":string},"nutrients":{"calories":number,"protein":number,"carbs":number,"fat":number,"saturatedFat":number|null,"fiber":number|null,"sugar":number|null,"addedSugar":number|null,"sodium":number|null,"cholesterol":number|null,"potassium":number|null,"calcium":number|null,"iron":number|null,"caffeine":number|null,"fluidMl":number|null},"isBeverage":boolean,"confidence":"high"|"medium"|"low","basis":string}]}
+- Return ONLY a JSON object: {"components":[{"name":string,"brand":string|null,"quantityText":string,"servings":number,"serving":{"amount":number,"unit":string,"grams":number|null,"ml":number|null,"label":string},"nutrients":{"calories":number,"protein":number,"carbs":number,"fat":number,"saturatedFat":number|null,"fiber":number|null,"sugar":number|null,"addedSugar":number|null,"transFat":number|null,"sugarAlcohol":number|null,"sodium":number|null,"cholesterol":number|null,"potassium":number|null,"calcium":number|null,"iron":number|null,"magnesium":number|null,"zinc":number|null,"vitaminC":number|null,"vitaminD":number|null,"caffeine":number|null,"fluidMl":number|null},"isBeverage":boolean,"confidence":"high"|"medium"|"low","basis":string}]}
 - One component per phrase given, in the same order. Never add a phrase that was not given.
 - "nutrients" are PER SERVING as described by "serving"; "servings" is how many servings the person's quantity is (the phrase's wording decides; unstated = 1).
 - Use the standard nutrition reference for generic foods (medium confidence). Use a branded product's actual label ONLY when you are certain of it (high confidence); otherwise use the closest generic food and say so in "basis" (medium). Vague wording ("some fruit") is low confidence.
 - Grams: protein/carbs/fat/fiber/sugar. Milligrams: sodium/cholesterol/potassium/calcium/iron/caffeine. Calories in kcal. fluidMl only for drinks (the volume drunk per serving).
-- Do not invent precision. Round sensibly. Unknown → null.`;
+- Do not invent precision. Round sensibly. Unknown → null, NEVER 0: 0 means the food has none.
+- The state the food was weighed in decides the numbers: raw meat and dry rice, pasta or oats are denser than cooked. "weighed before cooking", "raw", "dry", "uncooked" → the RAW reference; otherwise the cooked form it is eaten in. Say which in "basis".
+- A weight that includes peel, skin, pit, shell or bone is not all food: use the edible part and say so in "basis".
+- "servings" is what was EATEN: "made two sandwiches but only ate three quarters of one" → 0.75; "one and a half bars" → 1.5; "half of it" → 0.5.
+- Calories are the reference's or the label's own figure. Never recompute them as protein×4 + carbs×4 + fat×9 — fiber, sugar alcohols and label rounding make that differ legitimately.`;
 
 export async function modelEstimateComponents(
   input: { item: string; message: string; phrases: string[] },
@@ -436,6 +479,11 @@ const hasQuantity = (q: ReturnType<typeof normalizeQuantity>) =>
 
 /** Does the user's segment name a reference food the item text does not name at all? */
 function namesAnotherFood(segment: string, itemText: string): boolean {
+  // The same product on both sides is the same food, whatever other rows a
+  // word of it brushes ("protein bars" in the user's plural).
+  const a = lookupNutritionDb(segment);
+  const b = lookupNutritionDb(itemText);
+  if (a && b && a.item.id === b.item.id) return false;
   return nutritionCandidates(segment, 10).some((m) => !phraseNamesDbItem(m.item, itemText));
 }
 
@@ -444,7 +492,33 @@ function namesAnotherFood(segment: string, itemText: string): boolean {
  * much. "Oatmeal + 2% milk" as the item, "1 packet of Quaker oatmeal with 1
  * cup of 2% milk" as the message → "1 packet …" and "1 cup of 2% milk".
  */
+/**
+ * "Three eggs but only two of the yolks": the eggs are not three whole eggs.
+ * The whites and the yolks are counted separately, each from its own
+ * reference row. Read from the user's words; null when they say no such thing.
+ */
+const EGG_COUNT = "\\d+(?:\\.\\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|twelve";
+const EGG_PARTS_RE = new RegExp(`(${EGG_COUNT})\\s+(?:whole\\s+|large\\s+|medium\\s+)?eggs?\\b[^.!?]{0,40}?\\bonly\\s+(${EGG_COUNT})\\s+(?:of\\s+(?:the|their|them)\\s*)?(yolks?|whites?)`, "i");
+export function eggPartsOf(text: string): { whites: number; yolks: number } | null {
+  const m = String(text || "").match(EGG_PARTS_RE);
+  if (!m) return null;
+  const eggs = parseAmountToken(m[1]);
+  const part = parseAmountToken(m[2]);
+  if (eggs == null || part == null || eggs <= 0 || part < 0 || part > eggs) return null;
+  return /^yolk/i.test(m[3]) ? { whites: eggs, yolks: part } : { whites: part, yolks: eggs };
+}
+
 export function componentPhrases(item: string, message: string): Phrase[] {
+  // An item that is only the whites, or only the yolks, is already one of the
+  // two parts (the agent split them); it is read as itself.
+  const onePart = !/\beggs?\b/i.test(String(item || "").replace(/\beggs?\s+(whites?|yolks?)\b/gi, ""));
+  const eggs = (/\begg/i.test(item) && !onePart) || !String(item || "").trim() ? eggPartsOf(message) || eggPartsOf(item) : null;
+  if (eggs && splitComponentPhrases(item).length <= 1) {
+    const out: Phrase[] = [];
+    if (eggs.whites > 0) out.push({ text: "egg whites", quantityText: `${eggs.whites} whites`, userQuantityStated: true });
+    if (eggs.yolks > 0) out.push({ text: "egg yolks", quantityText: `${eggs.yolks} yolks`, userQuantityStated: true });
+    if (out.length > 0) return out;
+  }
   const itemParts = splitComponentPhrases(item);
   const msgParts = splitComponentPhrases(message);
   const parts = itemParts.length > 0 ? itemParts : msgParts;
@@ -528,6 +602,31 @@ function componentFromExternal(m: ExternalProductMatch, phrase: Phrase, now: str
   };
 }
 
+/**
+ * The food as the user's label describes it. Per-serving values are the
+ * label's own; `servings` is how many of the label's basis were eaten, so a
+ * later "actually only half" rescales it like any other component.
+ */
+function componentFromLabel(item: string, label: StatedLabel, now: string): NutritionComponent {
+  const source = `label you gave · ${label.method}`;
+  const unit = label.basis.kind === "grams" ? "g" : label.basis.kind === "ml" ? "ml" : label.basis.kind === "recipe" ? "recipe" : label.basis.kind === "serving" ? "serving" : "item";
+  return {
+    name: item,
+    userQuantity: label.method,
+    normalizedQuantity: { original: label.method, amount: label.factor, unit, grams: label.basis.kind === "grams" ? label.basis.amount * label.factor : null, ml: label.basis.kind === "ml" ? label.basis.amount * label.factor : null, count: label.basis.kind === "grams" || label.basis.kind === "ml" ? null : label.factor, confidence: "exact" },
+    servings: round3(label.factor),
+    matchedServing: { amount: label.basis.kind === "grams" || label.basis.kind === "ml" ? label.basis.amount : 1, unit, grams: label.basis.kind === "grams" ? label.basis.amount : null, ml: label.basis.kind === "ml" ? label.basis.amount : null, label: label.basis.label },
+    sourceType: "user",
+    source,
+    sourceItem: item,
+    confidence: "exact",
+    perServing: label.values,
+    nutrients: componentNutrients(label.values, label.factor, { source, sourceType: "user", sourceItem: item, confidence: "exact", enrichedAt: now }),
+    isBeverage: false,
+    servingAssumed: false,
+  };
+}
+
 function componentFromModel(est: ModelComponentEstimate, phrase: Phrase, now: string): NutritionComponent {
   const qty = normalizeQuantity(est.quantityText || phrase.quantityText);
   // A model estimate is at most a generic equivalent — never "exact".
@@ -559,7 +658,8 @@ const minConf = (a: EnrichmentConfidence, b: EnrichmentConfidence): EnrichmentCo
   const rank = { exact: 4, high: 3, medium: 2, low: 1 } as const;
   return rank[a] <= rank[b] ? a : b;
 };
-const round3 = (n: number) => Math.round(n * 1000) / 1000;
+/** Stored servings keep the precision the arithmetic used, so a later rescale ("only half") starts from the same number. */
+const round3 = (n: number) => Math.round(n * 1e6) / 1e6;
 
 export interface LookupResult {
   components: NutritionComponent[];
@@ -603,7 +703,11 @@ export async function lookupComponents(
   const fallback: Array<NutritionComponent | null> = phrases.map(() => null);
   phrases.forEach((ph, i) => {
     if (components[i]) return;
-    const m = lookupNutritionDb(ph.text) || lookupNutritionDb(ph.quantityText);
+    // The state the food was WEIGHED in is in the user's words, not always in
+    // the item the agent wrote: "200 grams of chicken weighed before cooking"
+    // is raw chicken (240 kcal), not the cooked reference (330).
+    const raw = rawStateOf(`${ph.text} ${ph.quantityText}`);
+    const m = (raw && lookupNutritionDb(`${ph.text} raw`)) || lookupNutritionDb(ph.text) || lookupNutritionDb(ph.quantityText);
     if (!m) return;
     const spec = detectSpecificity(ph.text);
     const branded = spec.level === "brand" || spec.level === "product";
@@ -771,13 +875,19 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
   const text = item || message;
   const specificity = detectSpecificity(`${item} ${message}`.trim());
   const decision = decideEnrichment(mode === "off" ? "auto" : mode, specificity, text);
-  if (!decision.attempt) return done({ status: "skipped", reason: decision.reason, trackerId: tracker.id, trackerName: tracker.name });
+  if (!decision.attempt && !labelFor(item, message)) return done({ status: "skipped", reason: decision.reason, trackerId: tracker.id, trackerName: tracker.name });
 
-  const userValues = detectUserStatedNutrition(message);
+  // What the user read off a label, scaled by how much of it they ate
+  // (shared/nutrition-label). A full label is the entry's whole source: no
+  // lookup runs beside it and nothing it omits is filled in from elsewhere.
+  const label = labelFor(item, message);
+  const userValues = label ? label.consumed : {};
 
   let lookup: LookupResult;
   try {
-    lookup = await lookupComponents(item || message, message, deps, now);
+    lookup = isFullLabel(label)
+      ? { components: [componentFromLabel(item || "Food", label, now)], unresolved: [], usedNetwork: false }
+      : await lookupComponents(item || message, message, deps, now);
   } catch (e: any) {
     logger.warn("nutrition-enrichment", `lookup failed for entry ${entry.id}: ${e?.message || e}`);
     return done({ status: "failed", reason: "lookup failed", trackerId: tracker.id, trackerName: tracker.name });
@@ -815,6 +925,7 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
     linkedEntries: [],
     summary: summarizeEnrichment({ components: lookup.components, totals }),
     enrichedAt: now,
+    ...(isFullLabel(label) ? { fromLabel: true } : {}),
   };
 
   // The in-turn pass writes only what a label or a menu states (exact/high)
@@ -900,7 +1011,17 @@ async function applyEnrichment(
   const linked = await writeLinkedEntries(storage, t, entry, enrichment, now);
   const final: NutritionEnrichment = { ...enrichment, linkedEntries: linked, enrichedAt: now };
   const computed: Record<string, any> = { nutrition: final, enrichment: provenanceForUi(final) };
-  const updated = await storage.updateTrackerEntry(t.id, entry.id, { ...(Object.keys(patch).length > 0 ? { values: patch } : {}), computed } as any);
+  // Unknown stays unknown. When the source is the user's label, a nutrient the
+  // label does not state is not known — the figure the agent guessed for it
+  // when it saved the entry is removed, not left beside the label's numbers
+  // as if the label had said it.
+  const valuesToDelete = enrichment.fromLabel
+    ? Object.keys(entry.values || {}).filter((k) => {
+        const key = canonicalNutrientKey(k);
+        return !!key && key !== "fluidMl" && enrichment.totals[key] == null && patch[k] == null;
+      })
+    : [];
+  const updated = await storage.updateTrackerEntry(t.id, entry.id, { ...(Object.keys(patch).length > 0 ? { values: patch } : {}), ...(valuesToDelete.length > 0 ? { valuesToDelete } : {}), computed } as any);
   return { enrichment: final, entry: updated };
 }
 

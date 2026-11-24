@@ -10,6 +10,7 @@ import { splitSeparateFoods, foodLabel, shareMealValues } from "@shared/food-spl
 import { isNutritionTrackerName } from "@shared/nutrition-shaped";
 import { canonicalNutrientKey, sumComponentTotals, detectUserStatedNutrition } from "@shared/nutrition-enrichment";
 import { lookupComponents } from "./nutrition-enrichment";
+import { repeatedMealInputs } from "./nutrition-edits";
 
 const ITEM_KEYS = ["item", "food", "meal", "name", "description"] as const;
 
@@ -35,7 +36,14 @@ async function referenceValues(food: string, message: string): Promise<Record<st
 export async function splitCombinedFoodLog(
   input: Record<string, any> | null | undefined,
   userMessage: string,
+  /** For "the same breakfast as yesterday": the person's own food entries, loaded only when a call asks to repeat. */
+  repeat?: { entries: (forProfile?: string) => Promise<Array<{ values?: Record<string, any> | null; timestamp?: string | null }>>; timezone: string; today: string },
 ): Promise<Array<Record<string, any>> | null> {
+  if (input?.repeatFrom && repeat && isNutritionTrackerName(String(input.trackerName || ""))) {
+    const out = repeatedMealInputs(input, await repeat.entries(input.forProfile), { timezone: repeat.timezone, today: repeat.today });
+    // Nothing to copy: the call runs as it is and the executor says why.
+    return "inputs" in out ? out.inputs : [{ ...input, __repeatError: out.error }];
+  }
   const values = input?.values;
   if (!input || !values || typeof values !== "object") return null;
   if (!isNutritionTrackerName(String(input.trackerName || ""))) return null;

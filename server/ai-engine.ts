@@ -33,7 +33,8 @@ import { classifyNutritionAutoCreate, isNutritionTrackerName } from "@shared/nut
 import { rescaleNutritionEntry, enrichNutritionEntry } from "./nutrition-enrichment";
 import { splitCombinedFoodLog } from "./meal-split";
 import { planTrackerEntryCandidate, planProfileCandidate, planObligationCandidate, enrichItem } from "./item-enrichment";
-import { recapLine, describeSources, CONFIDENCE_LABEL } from "@shared/nutrition-enrichment";
+import { recapLine, describeSources, VERIFICATION_LABEL, verificationOf, isNutritionTrackerLike } from "@shared/nutrition-enrichment";
+import { findNutritionEntry, removeNutritionComponent } from "./nutrition-edits";
 import { formatAttribute } from "@shared/item-identity";
 
 /**
@@ -65,7 +66,8 @@ async function attachEnrichmentCandidate(entry: any, tracker: { id: string; name
         entry.computed = sync.entry.computed;
         entry._recapDetail = recapLine(sync.enrichment);
         const assumed = sync.enrichment.components.some((c) => c.servingAssumed);
-        entry.enrichmentNote = `${CONFIDENCE_LABEL[sync.enrichment.confidence]} · source: ${describeSources(sync.enrichment)}${assumed ? " · serving size assumed" : ""}`;
+        // "Verified · manufacturer label" / "Estimated · standard reference · serving size assumed"
+        entry.enrichmentNote = `${VERIFICATION_LABEL[verificationOf(sync.enrichment)]} · ${describeSources(sync.enrichment)}${assumed ? " · serving size assumed" : ""}`;
         needsMore = false;
       } else {
         needsMore = sync.needsMore !== false || sync.status === "failed";
@@ -87,6 +89,26 @@ async function attachEnrichmentCandidate(entry: any, tracker: { id: string; name
     if (isItem) entry._itemEnrichment = candidate;
     else entry._nutritionEnrichment = candidate;
   } catch { /* never block a log on enrichment */ }
+}
+
+/**
+ * What "the same breakfast as yesterday" is copied from: the named person's
+ * own food entries (server/nutrition-edits.ts `repeatedMealInputs`). Read only
+ * when a log call asks to repeat.
+ */
+function foodRepeatContext() {
+  const timezone = aiUserTimezone();
+  return {
+    timezone,
+    today: getUserToday(timezone),
+    entries: async (forProfile?: string) => {
+      const [trackers, profiles] = await Promise.all([storage.getTrackers(), storage.getProfiles()]);
+      const who = forProfile ? matchProfileByName(profiles, forProfile) : profiles.find((p) => p.type === "self");
+      const pool = who ? trackers.filter((t) => !(t.linkedProfiles || []).length || (t.linkedProfiles || []).includes(who.id)) : trackers;
+      const tracker = pool.find((t) => isNutritionTrackerLike(t));
+      return tracker ? entriesForPerson(tracker.entries || [], who?.id) : [];
+    },
+  };
 }
 
 /** Same for a just-created profile (vehicle, device, account, subscription). */
@@ -4132,6 +4154,8 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
         at: { type: "string", description: "Optional date/time the entry actually happened (ISO date, natural language like 'June 3 2025', or a bare clock time like '8:15 AM' which is treated as today at that time). ALWAYS set this when the user attaches a time to the action ('at 8:15 AM', 'this morning at 7', 'yesterday'). Omit for 'now'." },
+        repeatFrom: { type: "string", description: "NUTRITION ONLY — copy what was eaten on another day instead of estimating: 'I had the same breakfast as yesterday' → trackerName:'Nutrition', values:{}, repeatFrom:'yesterday', repeatMeal:'breakfast'. 'yesterday', 'today' or a YYYY-MM-DD date. The server logs each food from that day again with the same numbers, one entry per food. Do NOT also log the foods yourself." },
+        repeatMeal: { type: "string", description: "With repeatFrom: which meal to copy — breakfast | lunch | dinner | snack. Omit to copy everything eaten that day." },
         category: { type: "string", description: "Semantic category of the tracked thing, used only if a NEW tracker gets auto-created: health | fitness | nutrition | sleep | mental | lifestyle | finance | medication | habit | productivity. The server already recognizes thousands of medications, supplements, exercises, and sports on its own — set this from your own understanding for anything unusual (a niche drug, an obscure hobby) so the tracker is never filed under 'custom'." },
       },
       required: ["trackerName", "values"],
@@ -5342,6 +5366,9 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         forProfile: { type: "string", description: "Profile name to narrow tracker search." },
         values: { type: "object", description: "New values to set for the entry (replaces old values). May be {} when scaleBy is given." },
         entryIndex: { type: "number", description: "0 = most recent entry (default). 1 = second most recent, etc." },
+        match: { type: "string", description: "Which entry, in the user's words, instead of entryIndex: a food ('protein bar', 'coke') picks the most recent entry naming it; a meal ('lunch', 'breakfast') picks from the most recent day with that meal. Use it whenever the user names the entry ('that protein bar', 'my lunch')." },
+        at: { type: "string", description: "Move the entry to the day/time it really happened, keeping everything else: 'I drank that protein shake yesterday, not today' → at:'yesterday' as a YYYY-MM-DD date (or an ISO date-time). Never delete and re-log to change a date." },
+        removeComponent: { type: "string", description: "NUTRITION ONLY — an ingredient to take OUT of the entry: 'remove the cheese from my lunch' → match:'lunch', removeComponent:'cheese'. The server subtracts that ingredient's own figures and re-sums the rest. If it answers needsValues, the entry has no separate figures for it: call again with the recalculated values instead." },
         scaleBy: { type: "number", description: "NUTRITION ONLY — a portion correction as a multiplier: 'actually I only ate half of it' → 0.5; 'I had two of those' → 2; 'I ate about a third' → 0.33. The server rescales every nutrient (calories, macros, sugar, sodium, caffeine), the meal's components, and any linked hydration/caffeine rows together. Do NOT recompute the numbers yourself and do NOT log a second entry." },
       },
       required: ["trackerName", "values"],
@@ -6126,8 +6153,14 @@ BEHAVIOR:
   ALWAYS set the "item" field to a human-readable food name. Capitalize it. This is the most visible part of the entry.
   KEEP THE SPECIFICS IN "item": brand, product, flavor, restaurant, size and the user's quantity wording ("Quaker Instant Oatmeal Maple & Brown Sugar (1 packet) with 2% milk (1 cup)", "Coca-Cola (12 oz)", "Big Mac", "McDonald's Medium Fries"). The server's enrichment layer identifies specific products from that text AFTER the entry is saved and refines the numbers with label data — still pass your best estimate now; a generic estimate for a vague item ("cereal") is correct and stays.
   ONE FOOD = ONE ENTRY: every separate food or drink is its OWN log_tracker_entry with its OWN item and its OWN numbers. "Ate a banana and a doughnut" → TWO calls: { item: "Banana", calories: 105, ... } and { item: "Doughnut", calories: 250, ... }. "3 eggs, 2 wheat toast with butter, a banana and coffee with creamer" → FOUR calls (3 Eggs · 2 Wheat Toast with Butter · Banana · Coffee with Creamer). NEVER join foods into one item with "+", "and" or commas, and never send meal totals. What was added TO a food stays with it ("coffee with cream and sugar", "toast with butter", "oatmeal with milk"), and a single dish is one food however many ingredients name it ("mac and cheese", "bacon, egg and cheese sandwich", "chicken burrito bowl"). The server splits a combined item into separate entries anyway, with rougher numbers than yours.
-  PORTION CORRECTIONS: "actually I only ate half" / "I had two of those" → update_tracker_entry(trackerName:"Nutrition", values:{}, scaleBy:0.5 or 2). Never log a second entry and never halve the numbers yourself.
+  PORTION CORRECTIONS: "actually I only ate half" / "I had two of those" → update_tracker_entry(trackerName:"Nutrition", values:{}, scaleBy:0.5 or 2). When the user names the entry ("half of that protein bar"), add match:"protein bar". Never log a second entry and never halve the numbers yourself.
+  OTHER CORRECTIONS change the entry that exists, never a new one: "I drank that shake yesterday, not today" → update_tracker_entry(trackerName:"Nutrition", values:{}, match:"shake", at:"<yesterday as YYYY-MM-DD>"). "Remove the cheese from my lunch" → update_tracker_entry(trackerName:"Nutrition", values:{}, match:"lunch", removeComponent:"cheese"). "I had the same breakfast as yesterday" → log_tracker_entry(trackerName:"Nutrition", values:{}, repeatFrom:"yesterday", repeatMeal:"breakfast") — the server copies those entries; do not re-estimate them.
   USER-STATED LABEL VALUES WIN: "it says 210 calories and 20g protein" → pass exactly calories:210, protein:20; the server keeps them even if a product lookup disagrees.
+  A LABEL WITH A BASIS — THE SERVER DOES THE ARITHMETIC: when the user reads out a label and how much they ate ("75 grams of cereal, the label says 160 calories … per 40 grams"; "the entire bag, 3.5 servings per bag, each serving 150 calories…"; "half a bar containing 200 calories…"; "four portions of a recipe containing 800 calories, I ate one and a half"), log ONE entry for the food and the server scales the label by what was eaten, exactly. Use the server's figures (the tool result's "refined" line) in your reply; never restate your own multiplication.
+  SOURCE ORDER: a label the user gave or uploaded beats everything; a named brand means that product's own label (keep the brand, product and flavor in "item" so the server can match it); with no brand, a standard reference value for the food as described.
+  UNKNOWN IS NOT ZERO: pass a nutrient only when you know it. Pass 0 only when the food truly has none (0 g fat in a soda). If a label or the user did not state a nutrient, leave the key out; never fill it with 0.
+  NEVER RECOMPUTE CALORIES FROM MACROS: fiber, sugar alcohols, allulose and label rounding make protein×4 + carbs×4 + fat×9 differ from the printed calories legitimately. The printed or stated calories are the calories.
+  KEEP HOW IT WAS MEASURED IN "item": raw vs cooked and dry vs cooked change the numbers ("Chicken breast, raw (200 g)", "White rice, dry (100 g)"); a weight that includes peel, skin, pit or bone is not all food ("Banana (250 g with peel)" → estimate the edible part); "3 eggs but only 2 of the yolks" is 3 whites and 2 yolks, logged as ONE entry ("3 Eggs (only 2 yolks)"); oil, butter or dressing a food was cooked or served with is counted, with its amount ("Chicken (100 g) with Olive Oil (15 g)"); "two coffees, one black and one with 30 ml of whole milk" is two entries ("Black Coffee", "Coffee with Whole Milk (30 ml)"). When only part of something was eaten ("made two sandwiches, ate three quarters of one"), log what was EATEN (0.75 sandwich).
 - ITEM IDENTITY (every tracker and profile, not just food): keep the identifying words the user gave — brand, product line, model, year, trim, plan tier, strength, size — in the record's name/item/drug field exactly as said ("2021 Honda CR-V EX AWD", "MacBook Air M3 15-inch", "Netflix Premium", "Advil 200 mg", "Nature Made Fish Oil 1200 mg", "Purina Pro Plan Sensitive Skin & Stomach Salmon"). The server's Item Enrichment Layer identifies the exact product from that text AFTER the record is saved and fills the attributes identity changes (specs, MPG, strength, plan price…). Never invent such attributes yourself and NEVER guess a medication strength when several exist: "I took Advil" → drug:"Advil" with no dosage; "two Advil 200 mg tablets" → dosage:200, count:2 (the server computes the 400 mg total). A generic mention ("my car", "pain medicine") saves as the generic record it is.
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
 - MULTI-EXERCISE WORKOUTS: A workout that lists several exercises is NOT one entry. Emit ONE log_tracker_entry PER exercise so none is silently dropped. "45-min chest workout: bench press 135 for 3x10, incline dumbbells 40lb, pushups to failure" → THREE log_tracker_entry calls: (1) trackerName:"Bench Press" values:{exercise:"Bench Press", weight:135, sets:3, reps:10}; (2) trackerName:"Incline Dumbbell Press" values:{exercise:"Incline Dumbbell Press", weight:40, sets:3}; (3) trackerName:"Pushups" values:{exercise:"Pushups", reps:0, notes:"to failure"}. Bodyweight/"to failure" moves (pushups, planks, pullups) STILL get their own entry even without a weight number — never omit an exercise just because it has no load. Pick the specific exercise name for each trackerName.
@@ -7118,10 +7151,66 @@ interface ValidationResult {
   errors: string[];
 }
 
+/**
+ * The date/time an entry happened, as the model passed it in `at` (ISO,
+ * natural language, or a bare clock time), normalized in place. Shared by
+ * logging an entry and moving one ("that was yesterday, not today").
+ */
+function normalizeEntryAt(normalized: Record<string, any>, warnings: string[]): void {
+  // W4-4: honor an explicit entry date. Parse whatever the AI passed in `at`
+  // (ISO or natural language). On parse failure, warn and drop it so the
+  // executor falls back to NOW(). Do NOT infer from the raw message here.
+  if (normalized.at != null && String(normalized.at).trim()) {
+    let atStr = String(normalized.at).trim();
+    // Defensive read: `storage` is a lazy proxy that throws without DB
+    // env (pure unit tests) — fall back to the default timezone.
+    let atTz = DEFAULT_TIMEZONE;
+    try { atTz = (storage as any)._timezone || DEFAULT_TIMEZONE; } catch { /* no storage in unit tests */ }
+    // A bare clock time ("8:15 AM", "10pm") is Invalid Date to new Date()
+    // and was silently dropped to "now" — compose it with today's date in
+    // the USER'S timezone (the server clock is UTC on Vercel).
+    const bareTime = atStr.match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)$/i);
+    if (bareTime) {
+      let hours = parseInt(bareTime[1], 10) % 12;
+      if (/^p/i.test(bareTime[3])) hours += 12;
+      const minutes = bareTime[2] ? parseInt(bareTime[2], 10) : 0;
+      atStr = todayAtTimeISO(hours, minutes, atTz);
+    }
+    const when = new Date(atStr);
+    if (isNaN(when.getTime())) {
+      warnings.push(`Couldn't parse entry date "${normalized.at}" — using now instead`);
+      normalized.at = undefined;
+    } else {
+      // DATE-ANCHORING FIX (2026-07-27, "yesterday shows as July 25"): a
+      // date-only value ("2026-07-26") or a midnight-UTC instant
+      // ("2026-07-26T00:00:00.000Z" — the model's way of saying "that
+      // day") parses to 00:00 UTC, which is the EVENING OF THE PREVIOUS
+      // DAY in every US timezone — the entry then renders on the wrong
+      // date. Anchor calendar-date intent to NOON in the user's timezone:
+      // noon is DST-safe and displays on the intended day everywhere.
+      // Values that carry a real clock time keep their exact instant.
+      const dateOnly = atStr.match(/^(\d{4}-\d{2}-\d{2})$/);
+      const midnightUtc = !dateOnly && when.toISOString().endsWith("T00:00:00.000Z");
+      if (dateOnly || midnightUtc) {
+        const calendarDate = dateOnly ? dateOnly[1] : when.toISOString().slice(0, 10);
+        normalized.at = zonedTimeToUTC(calendarDate, 12, 0, atTz).toISOString();
+      } else {
+        normalized.at = when.toISOString();
+      }
+    }
+  } else {
+    normalized.at = undefined;
+  }
+}
+
 export function validateToolInput(toolName: string, input: Record<string, any>): ValidationResult {
   const warnings: string[] = [];
   const errors: string[] = [];
   const normalized = { ...input };
+
+  // "I drank it yesterday, not today": an entry edit's corrected day is parsed
+  // like a log's.
+  if (toolName === "update_tracker_entry") normalizeEntryAt(normalized, warnings);
 
   switch (toolName) {
     case "create_expense": {
@@ -7225,7 +7314,12 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
     }
     case "log_tracker_entry": {
       if (!normalized.trackerName?.trim()) errors.push("Tracker name is required");
-      if (!normalized.values || Object.keys(normalized.values).length === 0) errors.push("Entry values are required");
+      // "The same breakfast as yesterday" is expanded into one log per food
+      // before it gets here (server/meal-split.ts). A call that still carries
+      // repeatFrom found nothing to copy, or named a tracker that is not food.
+      if (normalized.__repeatError) errors.push(String(normalized.__repeatError));
+      else if (normalized.repeatFrom) errors.push("repeatFrom copies food entries only: use trackerName \"Nutrition\".");
+      else if (!normalized.values || Object.keys(normalized.values).length === 0) errors.push("Entry values are required");
       // Ensure numeric values are actually numbers
       if (normalized.values) {
         for (const [k, v] of Object.entries(normalized.values)) {
@@ -7235,50 +7329,7 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
           }
         }
       }
-      // W4-4: honor an explicit entry date. Parse whatever the AI passed in `at`
-      // (ISO or natural language). On parse failure, warn and drop it so the
-      // executor falls back to NOW(). Do NOT infer from the raw message here.
-      if (normalized.at != null && String(normalized.at).trim()) {
-        let atStr = String(normalized.at).trim();
-        // Defensive read: `storage` is a lazy proxy that throws without DB
-        // env (pure unit tests) — fall back to the default timezone.
-        let atTz = DEFAULT_TIMEZONE;
-        try { atTz = (storage as any)._timezone || DEFAULT_TIMEZONE; } catch { /* no storage in unit tests */ }
-        // A bare clock time ("8:15 AM", "10pm") is Invalid Date to new Date()
-        // and was silently dropped to "now" — compose it with today's date in
-        // the USER'S timezone (the server clock is UTC on Vercel).
-        const bareTime = atStr.match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)$/i);
-        if (bareTime) {
-          let hours = parseInt(bareTime[1], 10) % 12;
-          if (/^p/i.test(bareTime[3])) hours += 12;
-          const minutes = bareTime[2] ? parseInt(bareTime[2], 10) : 0;
-          atStr = todayAtTimeISO(hours, minutes, atTz);
-        }
-        const when = new Date(atStr);
-        if (isNaN(when.getTime())) {
-          warnings.push(`Couldn't parse entry date "${normalized.at}" — using now instead`);
-          normalized.at = undefined;
-        } else {
-          // DATE-ANCHORING FIX (2026-07-27, "yesterday shows as July 25"): a
-          // date-only value ("2026-07-26") or a midnight-UTC instant
-          // ("2026-07-26T00:00:00.000Z" — the model's way of saying "that
-          // day") parses to 00:00 UTC, which is the EVENING OF THE PREVIOUS
-          // DAY in every US timezone — the entry then renders on the wrong
-          // date. Anchor calendar-date intent to NOON in the user's timezone:
-          // noon is DST-safe and displays on the intended day everywhere.
-          // Values that carry a real clock time keep their exact instant.
-          const dateOnly = atStr.match(/^(\d{4}-\d{2}-\d{2})$/);
-          const midnightUtc = !dateOnly && when.toISOString().endsWith("T00:00:00.000Z");
-          if (dateOnly || midnightUtc) {
-            const calendarDate = dateOnly ? dateOnly[1] : when.toISOString().slice(0, 10);
-            normalized.at = zonedTimeToUTC(calendarDate, 12, 0, atTz).toISOString();
-          } else {
-            normalized.at = when.toISOString();
-          }
-        }
-      } else {
-        normalized.at = undefined;
-      }
+      normalizeEntryAt(normalized, warnings);
       break;
     }
     case "create_profile": {
@@ -13735,8 +13786,30 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const uEntries = entriesForPerson(uTracker.entries || [], uteProfileId);
       if (uEntries.length === 0) return { error: `Tracker "${uTracker.name}" has no entries to update.` };
       const uIdx = input.entryIndex ?? 0;
-      const uEntry = uEntries[uEntries.length - 1 - uIdx];
-      if (!uEntry) return { error: `No entry found at index ${uIdx}` };
+      // "that protein bar" / "my lunch": the entry the user named, not simply
+      // the newest one (server/nutrition-edits.ts).
+      const uMatch = String((input as any).match || "").trim();
+      const uRemove = String((input as any).removeComponent || "").trim();
+      const uEntry = uMatch
+        ? findNutritionEntry(uEntries as any[], uMatch, { timezone: aiUserTimezone(), containing: uRemove || undefined })
+        : uEntries[uEntries.length - 1 - uIdx];
+      if (!uEntry) return { error: uMatch ? `No ${uTracker.name} entry matches "${uMatch}". Ask the user which entry they mean.` : `No entry found at index ${uIdx}` };
+      // "Remove the cheese from my lunch": the ingredient's own figures come
+      // off and the rest is re-summed. An entry saved as one estimate has no
+      // such figures; the model is told to send the recalculated values.
+      if (uRemove) {
+        const out = await removeNutritionComponent(storage, { trackerId: uTracker.id, entry: uEntry, name: uRemove });
+        if (out.ok) return { updated: true, trackerName: uTracker.name, oldValues: uEntry.values, newValues: out.entry?.values, newEntry: out.entry, removedComponent: out.removed };
+        if (out.needsValues) {
+          return {
+            error: `${out.reason} Call update_tracker_entry again for the same entry${uMatch ? ` (match:"${uMatch}")` : ""} WITHOUT removeComponent, passing values with the item renamed and the calories and macros recalculated without ${uRemove}. Entry now: ${JSON.stringify(uEntry.values)}`,
+            needsValues: true,
+          };
+        }
+        return { error: out.reason || `Couldn't update the ${uTracker.name} entry` };
+      }
+      // "I drank it yesterday, not today": the same entry, on the day it happened.
+      const uAt = typeof (input as any).at === "string" && (input as any).at ? String((input as any).at) : undefined;
       // "Actually I only ate half": one in-place rescale of every derived
       // nutrition value (server/nutrition-enrichment), never a second entry.
       const scaleBy = Number((input as any).scaleBy);
@@ -13750,9 +13823,11 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // minted a new id, reset the timestamp to NOW (wrecking charts and
       // month-scoped goals), dropped enrichment/mood/tags/forProfile, and
       // re-fired the habit sync while the delete removed no check-in.
-      const newEntry = await storage.updateTrackerEntry(uTracker.id, uEntry.id, { values: { ...input.values } });
+      const hasValues = input.values && Object.keys(input.values).length > 0;
+      if (!hasValues && !uAt) return { error: "Nothing to change: pass values, scaleBy, at or removeComponent." };
+      const newEntry = await storage.updateTrackerEntry(uTracker.id, uEntry.id, { ...(hasValues ? { values: { ...input.values } } : {}), ...(uAt ? { timestamp: uAt } : {}) });
       if (!newEntry) return { error: `Couldn't update the ${uTracker.name} entry` };
-      return { updated: true, trackerName: uTracker.name, oldValues: uEntry.values, newValues: input.values, newEntry };
+      return { updated: true, trackerName: uTracker.name, oldValues: uEntry.values, newValues: hasValues ? input.values : uEntry.values, newEntry, ...(uAt ? { movedTo: uAt, movedFrom: (uEntry as any).timestamp } : {}) };
     }
 
     // ─── END NEW HANDLERS ─────────────────────────────────────────────────────
@@ -16431,7 +16506,7 @@ async function runBulkLogPath(
     const perFood: ExtractedOperation[] = [];
     for (const op of ops) {
       const parts = op.tool === "log_tracker_entry"
-        ? await splitCombinedFoodLog(op.input as Record<string, any>, userMessage).catch(() => null)
+        ? await splitCombinedFoodLog(op.input as Record<string, any>, userMessage, foodRepeatContext()).catch(() => null)
         : null;
       if (!parts) perFood.push(op);
       else for (const input of parts) perFood.push({ ...op, input, raw: String(input.values?.item || op.raw) });
@@ -18274,7 +18349,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       const splitFoodCalls = new Map<string, string[]>();
       for (const t of modelToolUses) {
         const parts = t.name === "log_tracker_entry"
-          ? await splitCombinedFoodLog(t.input as Record<string, any>, userMessage).catch(() => null)
+          ? await splitCombinedFoodLog(t.input as Record<string, any>, userMessage, foodRepeatContext()).catch(() => null)
           : null;
         if (!parts) { toolUses.push(t); continue; }
         const ids = parts.map((_, n) => `${t.id}::food${n + 1}`);
