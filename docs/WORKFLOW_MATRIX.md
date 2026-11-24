@@ -9,14 +9,14 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 | | Total | No test at all | Not exercised on the deployed app |
 |---|---:|---:|---:|
-| API write routes | 184 | 33 | 73 |
-| API read routes | 111 | 34 | 55 |
+| API write routes | 184 | 31 | 66 |
+| API read routes | 111 | 33 | 54 |
 | Chat tools that write | 111 | 22 | 71 |
 | Chat tools that read | 42 | 20 | 34 |
 
 Screens: 29 pages (48 routes). 15 are opened by no live browser check, 18 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 610. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 611. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -31,15 +31,15 @@ Test files read: 610. Test files no config runs: 2 (`tests/critical-flows.test.t
 | Bills & obligations | 8 | 1 | 3 | 3 | 4 | 2 |
 | Finance | 28 | 8 | 10 | 21 | 23 | 10 |
 | Tasks | 6 | 0 | 2 | 2 | 7 | 2 |
-| Calendar | 8 | 2 | 5 | 7 | 7 | 5 |
+| Calendar | 8 | 2 | 3 | 7 | 7 | 5 |
 | Habits | 6 | 0 | 1 | 2 | 6 | 4 |
 | Goals | 4 | 0 | 0 | 2 | 4 | 2 |
-| Trackers & health | 12 | 3 | 5 | 2 | 11 | 5 |
+| Trackers & health | 12 | 3 | 4 | 2 | 11 | 5 |
 | Wellness dashboard | 1 | 0 | 1 | 1 | 0 | 0 |
 | Executive dashboard & alerts | 3 | 0 | 1 | 10 | 9 | 1 |
-| Documents & artifacts | 20 | 7 | 10 | 7 | 12 | 5 |
+| Documents & artifacts | 20 | 5 | 7 | 7 | 12 | 5 |
 | Workspaces | 5 | 1 | 4 | 0 | 0 | 0 |
-| Journal & notes | 9 | 0 | 4 | 4 | 9 | 6 |
+| Journal & notes | 9 | 0 | 3 | 4 | 9 | 6 |
 | Record details | 6 | 0 | 6 | 4 | 3 | 1 |
 | AI chat | 9 | 2 | 4 | 5 | 22 | 7 |
 | System (not a user workflow) | 8 | 5 | 8 | 9 | 0 | 0 |
@@ -262,7 +262,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
 | `POST /api/autopay/reconcile` | **no** | **0** | 1 |
-| `POST /api/autopay/run` | **no** | 1 | 3 |
+| `POST /api/autopay/run` | **no** | 1 | 4 |
 
 ### Bills & obligations
 
@@ -398,15 +398,15 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/calendar/status` | yes | **0** | **0** |
 | `POST /api/calendar/sync` | yes | **0** | **0** |
 | `GET /api/calendar/sync-status` | yes | **0** | **0** |
-| `GET /api/calendar/timeline` | yes | 8 | 4 |
+| `GET /api/calendar/timeline` | yes | 8 | 5 |
 | `GET /api/date-rules` | yes | 2 | **0** |
 | `GET /api/date-rules/:system/:id` | **no** | **0** | **0** |
-| `GET /api/events` | yes | 6 | 4 |
-| `POST /api/events` | yes | 3 | 7 |
-| `DELETE /api/events/:id` | yes | 2 | 4 |
+| `GET /api/events` | yes | 6 | 5 |
+| `POST /api/events` | yes | 3 | 8 |
+| `DELETE /api/events/:id` | yes | 2 | 5 |
 | `GET /api/events/:id` | yes | 1 | 1 |
-| `PATCH /api/events/:id` | yes | 2 | **0** |
-| `POST /api/events/:id/occurrence` | yes | 2 | **0** |
+| `PATCH /api/events/:id` | yes | 2 | 1 |
+| `POST /api/events/:id/occurrence` | yes | 2 | 1 |
 | `POST /api/events/:id/series-flag` | yes | 1 | **0** |
 | `POST /api/events/:id/series-settings` | yes | 2 | 1 |
 
@@ -468,14 +468,14 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `PATCH /api/tracker-entries/:entryId` | yes | 1 | 1 |
 | `POST /api/tracker-entries/:entryId/enrich` | **no** | **0** | **0** |
 | `POST /api/tracker-entries/:entryId/rescale` | yes | **0** | **0** |
-| `GET /api/trackers` | yes | 11 | 18 |
-| `POST /api/trackers` | yes | 2 | 9 |
-| `DELETE /api/trackers/:id` | yes | 1 | 7 |
-| `GET /api/trackers/:id` | yes | 1 | 2 |
+| `GET /api/trackers` | yes | 11 | 19 |
+| `POST /api/trackers` | yes | 2 | 10 |
+| `DELETE /api/trackers/:id` | yes | 1 | 8 |
+| `GET /api/trackers/:id` | yes | 1 | 3 |
 | `PATCH /api/trackers/:id` | yes | 1 | 2 |
-| `POST /api/trackers/:id/entries` | yes | 2 | 3 |
-| `DELETE /api/trackers/:id/entries/:entryId` | yes | **0** | 1 |
-| `PATCH /api/trackers/:id/entries/:entryId` | yes | 2 | **0** |
+| `POST /api/trackers/:id/entries` | yes | 2 | 4 |
+| `DELETE /api/trackers/:id/entries/:entryId` | yes | **0** | 2 |
+| `PATCH /api/trackers/:id/entries/:entryId` | yes | 2 | 1 |
 | `POST /api/trackers/migrate-to-self` | **no** | 2 | **0** |
 | `POST /api/trackers/smart-entry` | **no** | **0** | **0** |
 
@@ -511,7 +511,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/dashboard/ai-suggestions` | yes | 2 | **0** |
 | `GET /api/exec-widgets/suggest` | yes | 2 | 1 |
 | `GET /api/insights` | yes | 3 | **0** |
-| `GET /api/notifications` | yes | 9 | 6 |
+| `GET /api/notifications` | yes | 9 | 7 |
 | `POST /api/notifications/dismiss` | yes | 5 | 2 |
 | `GET /api/notifications/dismissed` | yes | 2 | 1 |
 | `POST /api/notifications/restore` | **no** | 1 | 2 |
@@ -545,16 +545,16 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/artifacts/:id/toggle/:itemId` | yes | **0** | 1 |
 | `GET /api/chat-artifacts` | yes | **0** | **0** |
 | `DELETE /api/chat-artifacts/:id` | **no** | **0** | **0** |
-| `GET /api/documents` | yes | 9 | 3 |
-| `POST /api/documents` | **no** | 2 | 3 |
-| `DELETE /api/documents/:id` | yes | 4 | 6 |
-| `GET /api/documents/:id` | yes | 2 | 1 |
-| `PATCH /api/documents/:id` | yes | 1 | **0** |
-| `GET /api/documents/:id/delete-impact` | yes | **0** | **0** |
+| `GET /api/documents` | yes | 9 | 4 |
+| `POST /api/documents` | **no** | 2 | 4 |
+| `DELETE /api/documents/:id` | yes | 4 | 7 |
+| `GET /api/documents/:id` | yes | 2 | 2 |
+| `PATCH /api/documents/:id` | yes | 1 | 1 |
+| `GET /api/documents/:id/delete-impact` | yes | **0** | 1 |
 | `GET /api/documents/:id/file` | yes | 4 | **0** |
-| `POST /api/documents/:id/purge` | **no** | **0** | **0** |
+| `POST /api/documents/:id/purge` | **no** | **0** | 1 |
 | `POST /api/documents/:id/reextract` | **no** | **0** | **0** |
-| `POST /api/documents/:id/restore` | **no** | **0** | **0** |
+| `POST /api/documents/:id/restore` | **no** | **0** | 1 |
 | `POST /api/documents/:id/send-email` | **no** | **0** | **0** |
 | `POST /api/documents/reextract-all` | **no** | **0** | **0** |
 | `POST /api/documents/repair-orphaned-events` | **no** | **0** | **0** |
@@ -596,14 +596,14 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `DELETE /api/captures/:id` | **no** | 1 | **0** |
 | `GET /api/captures/:id` | **no** | 1 | **0** |
 | `PATCH /api/captures/:id` | **no** | 2 | **0** |
-| `GET /api/journal` | yes | 7 | 4 |
-| `POST /api/journal` | yes | 7 | 4 |
-| `DELETE /api/journal/:id` | yes | 1 | 5 |
-| `PATCH /api/journal/:id` | yes | 4 | 1 |
-| `GET /api/notes` | yes | 3 | 1 |
-| `POST /api/notes` | yes | 5 | 1 |
-| `DELETE /api/notes/:id` | yes | 1 | 3 |
-| `PATCH /api/notes/:id` | yes | 2 | **0** |
+| `GET /api/journal` | yes | 7 | 5 |
+| `POST /api/journal` | yes | 7 | 5 |
+| `DELETE /api/journal/:id` | yes | 1 | 6 |
+| `PATCH /api/journal/:id` | yes | 4 | 2 |
+| `GET /api/notes` | yes | 3 | 2 |
+| `POST /api/notes` | yes | 5 | 2 |
+| `DELETE /api/notes/:id` | yes | 1 | 4 |
+| `PATCH /api/notes/:id` | yes | 2 | 1 |
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
