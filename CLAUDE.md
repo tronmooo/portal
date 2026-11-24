@@ -160,12 +160,19 @@ green. After a push to `main`:
    (`isRecordScopedPersistKey`: `["/api/profiles", id, …]`) is restored with
    its real age and marked invalidated, and its page refetches on mount. Any
    new persisted key that the bootstrap does not re-seed needs the same.
+   The snapshot also keeps a write's INVALIDATION (`inv`): a write only marks
+   the bootstrap stale off the dashboard, so a bootstrap saved invalidated is
+   refetched at launch and the lists seeded from it are first paint only; the
+   list the write patched is saved beside it and restored in its place
+   (`overlayKeysForStaleBootstrap`). (2026-11-24: a logged run and a one-cent
+   expense vanished on the first reload and came back minutes later.)
    (2026-11-24: an expense and a nested asset added from chat showed in
    Finance and Assets, while the asset's own Financials and Contained tabs
    said "No expenses logged" / "No child assets yet" — and still did after a
    manual refresh, because the refresh restored the old page as fresh.)
    *Guards:* `tests/sync-rules-failed-request.dom.test.tsx`,
-   `tests/persisted-record-cache.test.ts`, `tests/qa-2026-11-24-findings.test.ts`,
+   `tests/persisted-record-cache.test.ts`, `tests/persisted-write-reload.test.ts`,
+   `tests/qa-2026-11-24-findings.test.ts`,
    `tests/qa-2026-11-24-findings.dom.test.tsx`.
    *Live check (real browser, smoke account):* `npx tsx tests/live-qa-2026-11-24-check.ts`.
 8. **Destructive buttons take two taps** (`useConfirmArm`). A "snooze" hides

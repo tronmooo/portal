@@ -279,6 +279,7 @@ export default defineConfig({
       'tests/recurring-profile-dep.test.ts',
       'tests/curated-persistence.test.ts',
       'tests/persisted-record-cache.test.ts',
+      'tests/persisted-write-reload.test.ts',
       'tests/qa-2026-11-24-findings.test.ts',
       'tests/qa-2026-11-24-findings.dom.test.tsx',
       'tests/model-router.test.ts',

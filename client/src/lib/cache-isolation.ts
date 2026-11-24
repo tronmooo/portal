@@ -15,6 +15,8 @@ export interface PersistedEntry {
   k: unknown; // queryKey
   d: unknown; // data
   t: number;  // dataUpdatedAt (ms epoch)
+  /** The entry was marked invalidated (stale by a write) when it was saved. */
+  inv?: boolean;
 }
 
 export interface PersistedBlob {

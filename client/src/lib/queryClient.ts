@@ -567,6 +567,46 @@ export function isRecordScopedPersistKey(queryKey: any): boolean {
   return Array.isArray(queryKey) && queryKey[0] === "/api/profiles" && queryKey.length > 1;
 }
 
+/**
+ * The scope a bootstrap key was captured under:
+ * ["/api/dashboard-bootstrap", mode, ...ids, month].
+ */
+function bootstrapScopeOf(key: unknown[]): { mode: string; ids: string[]; month: string } {
+  const mode = String(key[1] ?? "everyone");
+  const month = key.length > 2 ? String(key[key.length - 1]) : "";
+  const ids = key.slice(2, Math.max(2, key.length - 1)).map(String);
+  return { mode, ids, month };
+}
+
+/*
+ * A WRITE THE SNAPSHOT MISSED (2026-11-24 QA: a run logged on Trackers and a
+ * one-cent expense added in Finance showed at once, were GONE after the first
+ * reload — even searched by exact description — and came back minutes later).
+ *
+ * The lists a tab shows (["/api/trackers", scope…], ["/api/expenses", scope…])
+ * are not persisted themselves: on reload they are re-seeded from the persisted
+ * BOOTSTRAP payload, as fresh. A write patches the live list and only MARKS the
+ * bootstrap invalidated — it is refetched only where the dashboard observes it,
+ * so on Trackers or Finance it keeps its pre-write rows. The snapshot saved
+ * those pre-write rows without the invalidation, and on reload:
+ *   - the list was seeded from them as FRESH, so its page did not refetch;
+ *   - the bootstrap kept its real age, but within staleTime (3 min) of its
+ *     last fetch the launch prefetch took it as fresh and did not refetch;
+ * so the new row was missing until staleTime ran out ("back later").
+ *
+ * So the snapshot records the invalidation (`inv`), and a restored entry that
+ * was invalidated — or the lists seeded from an invalidated bootstrap — is a
+ * first paint only: it keeps its real age, is marked invalidated, and refetches
+ * on mount (Rule 7). And because the list the user just wrote to is NEWER than
+ * that bootstrap, it is saved beside it (`overlayKeysForStaleBootstrap`) and
+ * restored in its place, so even the first paint shows the new row.
+ * Guard: tests/persisted-write-reload.test.ts.
+ */
+function overlayKeysForStaleBootstrap(bootstrapKey: unknown[], bootstrapData: unknown): unknown[][] {
+  const { mode, ids, month } = bootstrapScopeOf(bootstrapKey);
+  return bootstrapSeedEntries(bootstrapData, mode, ids, month).map((e) => e.key);
+}
+
 // Per-entry / total localStorage budgets. A single oversize payload is dropped
 // on its OWN (see snapshotCache) so it can never disable persistence of the
 // other essential keys — the failure mode the old total-only cap created.
@@ -597,7 +637,8 @@ export function snapshotCache(): void {
       return;
     }
     const all = queryClient.getQueryCache().getAll();
-    const candidates: Array<{ k: any; d: any; t: number; bytes: number }> = [];
+    const candidates: Array<{ k: any; d: any; t: number; bytes: number; inv: boolean }> = [];
+    const staleBootstraps: Array<{ k: unknown[]; d: unknown; t: number }> = [];
     const debug = perfLogEnabled();
     for (const q of all) {
       if (!q.state.data) continue;
@@ -634,17 +675,40 @@ export function snapshotCache(): void {
           continue;
         }
       }
-      candidates.push({ k: q.queryKey, d: data, t: q.state.dataUpdatedAt, bytes });
+      const inv = q.state.isInvalidated === true;
+      candidates.push({ k: q.queryKey, d: data, t: q.state.dataUpdatedAt, bytes, inv });
+      if (inv && Array.isArray(q.queryKey) && q.queryKey[0] === "/api/dashboard-bootstrap") {
+        staleBootstraps.push({ k: q.queryKey as unknown[], d: q.state.data, t: q.state.dataUpdatedAt });
+      }
+    }
+    // The lists a write patched after the bootstrap went stale: saved beside
+    // it so the reload paints them, not the bootstrap's pre-write rows.
+    if (staleBootstraps.length > 0) {
+      const taken = new Set(candidates.map((c) => JSON.stringify(c.k)));
+      for (const b of staleBootstraps) {
+        for (const key of overlayKeysForStaleBootstrap(b.k, b.d)) {
+          const tag = JSON.stringify(key);
+          if (taken.has(tag)) continue;
+          const q = queryClient.getQueryCache().find({ queryKey: key as any, exact: true });
+          if (!q || q.state.status !== "success" || q.state.data === undefined) continue;
+          if (q.state.dataUpdatedAt <= b.t) continue; // nothing newer than the bootstrap's copy
+          let bytes = 0;
+          try { bytes = JSON.stringify(q.state.data).length; } catch { continue; }
+          if (bytes > MAX_ENTRY_BYTES) continue;
+          taken.add(tag);
+          candidates.push({ k: key, d: q.state.data, t: q.state.dataUpdatedAt, bytes, inv: true });
+        }
+      }
     }
     // Freshest first, then fill up to the total budget so the newest scope's
     // fast-restore data is preferred if we ever have to trim.
     candidates.sort((a, b) => b.t - a.t);
-    const out: Array<{ k: any; d: any; t: number }> = [];
+    const out: Array<{ k: any; d: any; t: number; inv?: true }> = [];
     let total = 0;
     for (const c of candidates) {
       if (total + c.bytes > MAX_TOTAL_BYTES) continue;
       total += c.bytes;
-      out.push({ k: c.k, d: c.d, t: c.t });
+      out.push(c.inv ? { k: c.k, d: c.d, t: c.t, inv: true } : { k: c.k, d: c.d, t: c.t });
     }
     // Nothing curated is loaded yet (very early boot) — leave any existing blob
     // in place rather than wiping a good restore snapshot.
@@ -742,19 +806,24 @@ export function hydrateQueryCache(): void {
     // lands, seedDashboardCaches overwrites all dependent keys with fresh
     // rows — so staleness is bounded by one round trip, not by the blob age.
     const seededAt = Date.now();
-    let bootstrapEntry: { k: any; d: any; t: number } | null = null;
+    let bootstrapEntry: { k: any; d: any; t: number; inv?: boolean } | null = null;
+    const markInvalidated = (key: unknown) =>
+      void queryClient.getQueryCache().find({ queryKey: key as any, exact: true })?.invalidate();
     for (const entry of entries) {
       // Only seed if no fresh data exists
       const existing = queryClient.getQueryData(entry.k as any);
       if (existing !== undefined) continue;
       const isBootstrap = Array.isArray(entry.k) && entry.k[0] === "/api/dashboard-bootstrap";
       const recordScoped = isRecordScopedPersistKey(entry.k);
-      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: isBootstrap || recordScoped ? entry.t : seededAt });
-      // One record's page: painted from the snapshot, then refetched on mount
-      // (see isRecordScopedPersistKey). Never trusted as current.
-      if (recordScoped) void queryClient.getQueryCache().find({ queryKey: entry.k as any, exact: true })?.invalidate();
+      // A first paint only, refetched on mount: one record's page (see
+      // isRecordScopedPersistKey), anything a write had marked stale when it
+      // was saved, and a list saved beside a stale bootstrap (see
+      // overlayKeysForStaleBootstrap). Never trusted as current.
+      const firstPaintOnly = recordScoped || entry.inv === true || !isEssentialToPersist(entry.k);
+      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: isBootstrap || firstPaintOnly ? entry.t : seededAt });
+      if (firstPaintOnly) markInvalidated(entry.k);
       if (isBootstrap) {
-        bootstrapEntry = entry as { k: any; d: any; t: number };
+        bootstrapEntry = entry as { k: any; d: any; t: number; inv?: boolean };
       }
     }
 
@@ -767,10 +836,12 @@ export function hydrateQueryCache(): void {
     // localStorage — no extra persistence cost. The bootstrap key encodes the
     // scope it was captured under: ["/api/dashboard-bootstrap", mode, ...ids, month].
     if (bootstrapEntry) {
-      const k = bootstrapEntry.k as unknown[];
-      const mode = String(k[1] ?? "everyone");
-      const month = k.length > 2 ? String(k[k.length - 1]) : "";
-      const ids = k.slice(2, Math.max(2, k.length - 1)).map(String);
+      const { mode, ids, month } = bootstrapScopeOf(bootstrapEntry.k as unknown[]);
+      // A bootstrap a write had made stale carries pre-write rows: the lists
+      // seeded from it paint, then refetch on mount (see the note above
+      // overlayKeysForStaleBootstrap). A list saved beside it was restored
+      // above and is not overwritten here.
+      const staleBootstrap = bootstrapEntry.inv === true;
       // Seeded FRESH (see the block above): the stale bootstrap query is the
       // single designated refresher; its landing re-seeds every one of these
       // keys via seedDashboardCaches. Seeding them stale here re-created the
@@ -778,7 +849,8 @@ export function hydrateQueryCache(): void {
       // slots (never clobber a fresher restore).
       for (const { key, data } of bootstrapSeedEntries(bootstrapEntry.d, mode, ids, month)) {
         if (queryClient.getQueryData(key as any) !== undefined) continue;
-        queryClient.setQueryData(key as any, data, { updatedAt: seededAt });
+        queryClient.setQueryData(key as any, data, { updatedAt: staleBootstrap ? bootstrapEntry.t : seededAt });
+        if (staleBootstrap) markInvalidated(key);
       }
     }
   } catch {
