@@ -4,6 +4,7 @@
 // persistence, hash-drift expiry, and honest hard-delete reporting.
 import { describe, it, expect } from "vitest";
 import { deriveBulkSet, planBulkAction, executeBulkPlan } from "../server/bulk-actions";
+import { actionCardSubject, genericActionLabel } from "../shared/chat-action-card";
 
 const PROFILES = [
   { id: "self-1", type: "self", name: "Me" },
@@ -120,6 +121,19 @@ describe("executeBulkPlan", () => {
     expect(storage._ledger).toHaveLength(1);
     expect(storage._ledger[0].reversible).toBe(true);
     expect(storage._ledger[0].reversePlan).toMatchObject({ op: "restore_set", ids: { task: ["t1", "t2"] } });
+  });
+
+  it("tells the chat's card what was applied (the confirming turn's input is only { confirm: true })", async () => {
+    // Chat tool sweep, 2026-11-24: a confirmed merge / bulk delete showed a
+    // card reading "Bulk change applied" that named nothing.
+    const storage = stubStorage({ getTasks: async () => TASKS });
+    const { plan_id } = await planBulkAction(storage, { operation: "delete", name_contains: "ZZZBULK" });
+    const res = await executeBulkPlan(storage, plan_id);
+    // What the chat engine builds the card's data from: the tool input, then the result's display hints.
+    const cardData = { confirm: true, ...res._displayData, _tool: "execute_bulk_action" };
+    expect(genericActionLabel("delete_entity", cardData)).toBe("Bulk change applied");
+    expect(actionCardSubject(cardData)).toBe("Deleted 2 records");
+    expect(actionCardSubject({ confirm: true, _tool: "execute_bulk_action" })).toBe("");
   });
 
   it("expires the plan on hash drift instead of deleting", async () => {

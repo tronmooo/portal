@@ -419,6 +419,10 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
     merged: { relinked, children_moved: childrenMoved, fields_filled: filledFields, shares_moved: sharesMoved, references_moved: refsMoved },
     ...(totalFailed > 0 ? { failed } : {}),
     source_archived: !delErr,
+    // What the chat's card names: the confirming turn's own input is only
+    // { confirm: true }, so without this the card read "Bulk change applied"
+    // and said nothing about which profiles (chat tool sweep, 2026-11-24).
+    _displayData: { description: `Merged ${source_name} into ${target_name}` },
     message: `Merged "${source_name}" into "${target_name}": ${totalRelinked} record${totalRelinked === 1 ? "" : "s"} re-pointed${childrenMoved ? `, ${childrenMoved} child profile${childrenMoved === 1 ? "" : "s"} moved` : ""}${sharesMoved ? `, ${sharesMoved} ownership share${sharesMoved === 1 ? "" : "s"} moved` : ""}${refsMoved ? `, ${refsMoved} linked record${refsMoved === 1 ? "" : "s"} re-pointed` : ""}${filledFields.length ? `, ${filledFields.length} empty field${filledFields.length === 1 ? "" : "s"} filled from "${source_name}"` : ""}. "${source_name}" was archived (soft-deleted)${big ? "" : " — this can be undone"}.${totalFailed ? ` ${totalFailed} record(s) failed to re-point.` : ""}`,
   };
 }

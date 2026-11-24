@@ -266,6 +266,26 @@ export function hasStoredFilter(): boolean {
 }
 
 /**
+ * True while there is no scope to show for this user yet: nothing saved for
+ * them on this device and no choice made this session. The default — their
+ * own profile — can only be named once the profile list is known, so until
+ * then the stored state reads "everyone" without anyone having chosen it.
+ *
+ * Reads the user's own slot by id, not through the "active user" pointer:
+ * the auth layer sets that pointer in an effect, after the first screen has
+ * already rendered.
+ */
+export function needsDefaultScope(userId: string): boolean {
+  if (!userId) return false;
+  if (_userChose && _loadedForUid === userId) return false;
+  try {
+    return localStorage.getItem(`${LOCAL_KEY_BASE}:${userId}`) == null;
+  } catch {
+    return false; // no storage: nothing to wait for, behave as before
+  }
+}
+
+/**
  * Seed the default scope on first load. The DEFAULT is the primary user — the
  * single `self` profile — so the app opens as that person's personal dashboard
  * rather than the aggregate "Everyone" view. Only runs when the user has made

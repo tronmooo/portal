@@ -331,6 +331,15 @@ const ENTITY_NOUN: Partial<Record<IntentEntity, string>> = {
 };
 
 /**
+ * What these tools did, in their own words. A refund counts as an "update"
+ * of an expense, and a full one removes it: "Updated expense." was the
+ * sentence a refunded user read (chat tool sweep, 2026-11-24).
+ */
+const TOOL_SUMMARY_PHRASE: Record<string, string> = {
+  refund_expense: "Recorded the refund",
+};
+
+/**
  * A summary built ONLY from what executed — used to replace prose whose verb
  * or entity contradicted the tool results. Deliberately plain: its job is to
  * be true, and the action cards below it carry the detail.
@@ -344,6 +353,9 @@ export function groundedSummary(operations: ExecutedOperation[]): string {
     const verb = o.status === "deduped" ? "Updated the existing" : OP_VERB[toolOperation(o.tool)];
     const noun = ENTITY_NOUN[TOOL_INTENT_ENTITY[o.tool]] ?? "record";
     const label = o.raw && o.raw !== o.tool ? ` "${o.raw}"` : "";
+    // A tool whose outcome is not "created / updated / deleted a <noun>".
+    const phrase = o.status === "ok" ? TOOL_SUMMARY_PHRASE[o.tool] : undefined;
+    if (phrase) return `${phrase}${label}`;
     return `${verb} ${noun}${label}`;
   });
   const more = ok.length > parts.length ? ` (+${ok.length - parts.length} more)` : "";

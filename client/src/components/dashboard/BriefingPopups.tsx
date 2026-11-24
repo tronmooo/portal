@@ -39,6 +39,7 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { useShowTestData } from "@/lib/showTestData";
 import { isTestDataRow } from "@shared/test-data";
 import { dateRuleVerbs } from "@shared/date-rules";
+import { allBillsRows } from "@shared/bills-all-tab";
 import { routeForEntity } from "@shared/entity-routes";
 
 // ── Shared date/format helpers ───────────────────────────────────────────────
@@ -354,18 +355,45 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
     onSuccess: () => { toast({ title: "Payment skipped", description: "This occurrence was skipped; the next one stays scheduled." }); invalidateFinance(); },
     onError: (e: any) => toast({ title: "Couldn't skip", description: e?.message, variant: "destructive" }),
   });
+  // The row answers the tap. An edit or a delete used to show only after the
+  // finance snapshot had been fetched again (~1.3 s on production, measured
+  // 2026-11-24, while every other page changed at once). The change is drawn
+  // into the lists this view reads straight away, the refetch that follows
+  // confirms it, and a failed write puts the lists back as they were.
+  const patchBillLists = (id: string, change: ((bill: any) => any) | null) => {
+    const apply = (rows: any) => (Array.isArray(rows)
+      ? (change ? rows.map((b: any) => (b?.id === id ? change(b) : b)) : rows.filter((b: any) => b?.id !== id))
+      : rows);
+    const before = [
+      ...queryClient.getQueriesData<any>({ queryKey: ["/api/dashboard-enhanced"] }),
+      ...queryClient.getQueriesData<any>({ queryKey: ["/api/obligations"], exact: true }),
+    ];
+    queryClient.setQueriesData<any>({ queryKey: ["/api/dashboard-enhanced"] }, (d: any) => (d?.financeSnapshot?.upcomingBills
+      ? { ...d, financeSnapshot: { ...d.financeSnapshot, upcomingBills: apply(d.financeSnapshot.upcomingBills) } }
+      : d));
+    queryClient.setQueriesData<any>({ queryKey: ["/api/obligations"], exact: true }, (d: any) => apply(d));
+    return () => { for (const [key, data] of before) queryClient.setQueryData(key, data); };
+  };
   const editBill = useMutation({
     mutationFn: async (vars: { id: string; amount?: number; nextDueDate?: string }) => {
       const { id, ...body } = vars;
       await apiRequest("PATCH", `/api/obligations/${id}`, body);
     },
+    onMutate: (vars) => {
+      // Only the amount is drawn ahead: a changed date moves the row between
+      // lists by rules the server owns.
+      if (vars.amount === undefined) return { undo: undefined as undefined | (() => void) };
+      setEditId(null);
+      return { undo: patchBillLists(vars.id, (b) => ({ ...b, amount: vars.amount })) };
+    },
     onSuccess: () => { toast({ title: "Bill updated" }); setEditId(null); invalidateFinance(); },
-    onError: (e: any) => toast({ title: "Update failed", description: e?.message, variant: "destructive" }),
+    onError: (e: any, _vars, ctx) => { ctx?.undo?.(); toast({ title: "Update failed", description: e?.message, variant: "destructive" }); },
   });
   const deleteBill = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/obligations/${id}`); },
+    onMutate: (id) => { setConfirmDeleteId(null); return { undo: patchBillLists(id, null) }; },
     onSuccess: () => { toast({ title: "Bill deleted" }); setConfirmDeleteId(null); invalidateFinance(); },
-    onError: (e: any) => toast({ title: "Delete failed", description: e?.message, variant: "destructive" }),
+    onError: (e: any, _id, ctx) => { ctx?.undo?.(); toast({ title: "Delete failed", description: e?.message, variant: "destructive" }); },
   });
 
   const rows = useMemo(() => (sourceBills || []).slice().sort((a, b) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9)), [sourceBills]);
@@ -405,7 +433,15 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
     { id: "overdue", label: "Overdue", count: overdueRows.length },
     { id: "paid", label: "Paid", count: paidRows.length },
   ];
-  const visible = filter === "soon" ? soonRows : filter === "overdue" ? overdueRows : filter === "paid" ? paidRows : rows;
+  // All Bills keeps a bill paid this month on the list, on its next date
+  // (shared/bills-all-tab.ts): a monthly bill just paid is next due past the
+  // snapshot's 30 days, and the tab used to read as if there were no bills.
+  // It carries the bill's own amount, not the amount of the last payment.
+  const allRows = useMemo(
+    () => allBillsRows(rows, paidRows.map((p) => ({ ...p, amount: Number(obById.get(p.id)?.amount ?? p.amount) || 0 })), new Date().toLocaleDateString("en-CA")),
+    [rows, paidRows, obById],
+  );
+  const visible = filter === "soon" ? soonRows : filter === "overdue" ? overdueRows : filter === "paid" ? paidRows : allRows;
 
   // The expandable detail card under a row — recurrence, links, history, and
   // the real in-place actions. Identical write paths to the previous popup.
@@ -551,7 +587,7 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
               icon={filter === "paid" ? CheckCircle2 : filter === "overdue" ? AlertTriangle : CalendarDays}
               tone={filter === "paid" ? "neutral" : "good"}
               label={filter === "paid" ? "Nothing paid yet this month" : filter === "overdue" ? "Nothing overdue" : "Nothing due in the next 7 days"}
-              hint={rows.length > 0 ? `${rows.length} bill${rows.length === 1 ? "" : "s"} in All Bills.` : undefined}
+              hint={allRows.length > 0 ? `${allRows.length} bill${allRows.length === 1 ? "" : "s"} in All Bills.` : undefined}
               ctaLabel={rows.length > 0 ? "Show all bills" : undefined}
               onCta={() => setFilter("all")}
             />
@@ -564,7 +600,9 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
               const due = String(b.dueDate || obById.get(b.id)?.nextDueDate || "").slice(0, 10);
               const st = billStatus(b.status, b.daysUntil, b.paidDate);
               const when = b.status === "paid" ? "" : due ? fmtDate(due) : "";
-              const caption = [st.sub, when].filter(Boolean).join(" · ");
+              // Under All Bills a bill paid this month says so beside its next date.
+              const paidNote = b.status !== "paid" && b.paidDate ? `paid ${fmtDate(b.paidDate)}` : "";
+              const caption = [st.sub, when, paidNote].filter(Boolean).join(" · ");
               return (
                 <div key={`${filter}:${b.id}`} data-testid={`bill-card-${b.id}`} data-record-id={b.id}>
                   <button

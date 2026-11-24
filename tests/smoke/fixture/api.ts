@@ -32,6 +32,8 @@ export type ApiResponse<T = any> = {
   ok: boolean;
   data: T;
   headers: Headers;
+  /** Duration of the final attempt (time waiting out a 429 is not counted). */
+  ms: number;
 };
 
 // The server enforces a rolling 60-writes/min budget per user. Every gate
@@ -73,7 +75,7 @@ export async function api<T = any>(
   opts: { token?: string } = {},
 ): Promise<ApiResponse<T>> {
   const token = opts.token ?? (await getSmokeToken());
-  const { response: r } = await fetchWithRateLimitRetry(`${API_BASE}${path}`, {
+  const { response: r, ms } = await fetchWithRateLimitRetry(`${API_BASE}${path}`, {
     method,
     headers: {
       "Content-Type": "application/json",
@@ -84,7 +86,7 @@ export async function api<T = any>(
   const text = await r.text();
   let parsed: any = text;
   try { parsed = JSON.parse(text); } catch { /* leave as string */ }
-  return { status: r.status, ok: r.ok, data: parsed, headers: r.headers };
+  return { status: r.status, ok: r.ok, data: parsed, headers: r.headers, ms };
 }
 
 /** Convenience: assert a request succeeded. */

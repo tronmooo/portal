@@ -41,6 +41,23 @@ green. After a push to `main`:
   (`acquireGateLock`, `tests/smoke/fixture/gate-lock.ts`) while it writes.
   Any new script that writes as the smoke account must take it too.
   *Guard:* `tests/live-gate-rate-limit.test.ts`.
+- **A merged migration is not an applied migration.** Twice a file in
+  `migrations/` was never run on production and the code's "safe" fallback
+  hid it (2026-11-09: two months of chat actions unrecorded; 2026-11-24:
+  `trackers.linked_habit_id` and `auth_rate_limits` missing — a deleted habit
+  left its tracker behind and the shared sign-in limit was not in force).
+  Everything a migration adds is listed in `shared/schema-expectations.ts`;
+  `GET /api/diagnostics/schema` names what the database lacks. After applying
+  a migration, and after a deploy: `npx tsx tests/live-schema-drift-check.ts`.
+  A fallback for a missing optional column must keep the feature working
+  (`isMissingColumnError`), not switch it off.
+  *Guard:* `tests/schema-expectations.test.ts`.
+- **Every door into the app is in the workflow matrix**
+  (`docs/WORKFLOW_MATRIX.md`, from `npx tsx scripts/gen-workflow-matrix.ts`):
+  each API route, chat tool and screen with the tests that reference it. A
+  new route or tool must be placed in a domain. Live workflow checks
+  (`tests/live-*-workflows-check.ts`) share `tests/helpers/live-workflow.ts`.
+  *Guard:* `tests/workflow-matrix.test.ts`.
 - Node version: `.nvmrc` → `package.json` `engines.node` (what Vercel builds
   with) → every workflow (`node-version-file`). Change all of them together;
   `tests/ops-guards.test.ts` enforces it.
@@ -1159,6 +1176,21 @@ runs in a touch context (`hasTouch`, `isMobile`, `tap()`, real touch drags)
 at phone width, not only with a desktop mouse.
 *Guard:* `tests/swipe-guard.dom.test.tsx`.
 *Live check (phone, real touch events, smoke account):* `npx tsx tests/live-touch-gestures-check.ts`.
+
+**T3. The first screen loads once.** With no scope saved for the user (a
+first sign-in, and every sign-in after a sign-out) the scope is settled
+BEFORE any screen asks for data: one slim profile list, then the default
+(`resolveDefaultScope`, `client/src/lib/scope-ready.ts`; `useScopeReady` gates
+`HubArea` and the bootstrap prefetch in `App.tsx`). Never mount a scoped
+screen on the unchosen "everyone" and let it re-key when the profile list
+lands (2026-11-24, measured: the dashboard loaded for Everyone, painted
+household totals, then loaded again for the person — 32 requests, 3.9 s to
+the dashboard; 23 and 1.4 s after). A saved scope never waits; a failed or
+slow list opens the screen as before. A background request reads its
+response to the end (`warmProfileDetail`): one nobody reads never finishes.
+*Guards:* `tests/scope-ready.dom.test.ts`, `tests/warm-profile-detail.test.ts`.
+*Live check (every page, desktop and phone, and the sign-in load):*
+`npx tsx tests/live-all-pages-check.ts`.
 
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.

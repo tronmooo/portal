@@ -31,6 +31,7 @@ import os from "os";
 import path from "path";
 import { api, getSmokeToken } from "../tests/smoke/fixture/api";
 import { API_BASE } from "../tests/smoke/fixture/account";
+import { acquireGateLock, preferenceLockIo } from "../tests/smoke/fixture/gate-lock";
 import { TOOL_DEFINITIONS, TOOL_ACTION_MAP, READ_ONLY_TOOLS } from "../server/ai-engine";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -53,6 +54,14 @@ type Step = {
   display?: Display;
   /** Sibling tools that legitimately do the same job for this phrasing. */
   also?: string[];
+  /**
+   * The app may answer this from the record itself, without the tool (J4: a
+   * question about the journal or a note), or cannot run it on this account
+   * (no Google connection). The step passes when the reply says this.
+   */
+  direct?: RegExp;
+  /** What the assistant's "are you sure?" names when it does not repeat the run's tag. */
+  ours?: RegExp;
 };
 
 const s = (tool: string, message: string, extra: Partial<Step> = {}): Step => ({ tool, message, ...extra });
@@ -67,8 +76,13 @@ const STEPS: Step[] = [
   s("refresh_ai_summary", `Refresh the AI summary for ${T} Alice`),
   s("", `Create a person profile named ${T} Alicia`),
   s("merge_profiles", `Merge the profile ${T} Alicia into ${T} Alice`,
-    { confirm: `Yes, I confirm — go ahead with the pending profile merge of ${T} Alicia into ${T} Alice.` }),
+    // The confirming turn runs the plan, so its card is the plan's.
+    { confirm: `Yes, I confirm — go ahead with the pending profile merge of ${T} Alicia into ${T} Alice.`, also: ["execute_bulk_action"] }),
   s("", `Add a vehicle asset called ${T} Truck, a 2015 Ford F-150 worth $18,000`),
+  // Characteristics (D1–D5): a typed value on a record, read back and reported on.
+  s("set_record_detail", `Record that the condition of ${T} Truck is Good`),
+  s("get_record_details", `What characteristics do I have recorded on ${T} Truck?`),
+  s("find_records_by_detail", `Which of my things have a condition of Good or better?`),
   s("", `Add a vehicle asset called ${T} Van worth $5,000`),
   s("revalue_asset", `Re-estimate the current market value of my ${T} Truck`),
   s("link_asset_owner", `${T} Truck belongs to ${T} Alice — make her the owner`),
@@ -95,7 +109,9 @@ const STEPS: Step[] = [
   s("create_task", `Add a task called ${T} Task due tomorrow`),
   s("update_task", `Change the ${T} Task task's priority to high`),
   s("query_tasks", `List my tasks due this week`),
-  s("get_summary", `How many tasks do I have?`),
+  // Counts the prompt's own snapshot does not carry, so the tool has to run
+  // ("How many tasks do I have?" is answered, correctly, without it).
+  s("get_summary", `Give me summary statistics across all of my data: how many expenses, habits, trackers, events and documents do I have?`),
   s("explain_dashboard_item", `Why is ${T} Task showing on my dashboard?`),
   s("get_entity_history", `What's the change history of the task ${T} Task?`),
   s("complete_task", `Mark ${T} Task as done`),
@@ -141,7 +157,11 @@ const STEPS: Step[] = [
   s("refund_expense", `I got a full refund for the ${T} Coffee expense`),
   s("", `Log a $900 expense called ${T} Laptop`),
   s("convert_expense_to_asset", `Convert the ${T} Laptop expense into an asset`),
-  s("delete_expense", `Delete the ${T} Coffee expense`, { confirm: YES }),
+  // Its own expense: the full refund above took the Coffee expense out of the
+  // ledger, and asked for a record that is gone the assistant offered a
+  // look-alike ("Smoke Coffee") instead (2026-11-24).
+  s("", `Log a $6 expense called ${T} Snack`),
+  s("delete_expense", `Delete the ${T} Snack expense`, { confirm: YES }),
   s("log_income", `Add income of $137 from ${T} Freelance`),
   s("update_income", `Change the ${T} Freelance income to $150`),
   s("get_cashflow", `What's my cash flow this month?`),
@@ -181,15 +201,18 @@ const STEPS: Step[] = [
   s("query_calendar", `What's on my calendar this week?`),
   s("complete_event", `Mark the ${T} Dentist event as completed`),
   s("delete_event", `Delete the ${T} Dentist event`, { confirm: YES }),
-  s("sync_calendar", `Sync my calendar`),
+  // The smoke account has no Google connection: the honest answer is that it is not connected.
+  s("sync_calendar", `Sync my calendar`, { direct: /(?:isn't|is not|not) connected/i }),
 
   // ── Journal, notes, artifacts, memory ──
   s("journal_entry", `Journal entry: ${T} felt great today, productive morning`),
   s("append_journal_entry", `Add to today's journal: ${T} also went for a long walk`),
+  // J4: a question about the journal is answered from the stored entries.
+  s("read_journal", `Summarize what I wrote in my journal this week`, { direct: /productive morning|long walk/i }),
   s("update_journal", `Change today's journal entry mood to okay`),
   s("delete_journal", `Delete my journal entry for today`, { confirm: YES }),
   s("create_note", `Make a note called ${T} Note: living room paint color is OC-17`),
-  s("search_notes", `Find my note about the living room paint color`),
+  s("search_notes", `Find my note about the living room paint color`, { direct: /OC-17/ }),
   s("update_note", `Update the ${T} Note note to say the paint color is OC-45`),
   s("delete_note", `Delete my note titled ${T} Note`, { confirm: YES }),
   s("create_artifact", `Create a checklist called ${T} Packing with items: passport, charger, socks`),
@@ -201,7 +224,7 @@ const STEPS: Step[] = [
   // Saved memories ride in the model's context, so it may simply answer.
   s("recall_memory", `Use your saved memories to look up what you know about my ${T} locker`),
   s("update_memory", `Update that memory: my ${T} locker code is now 9876`),
-  s("delete_memory", `Forget my ${T} locker code`, { confirm: YES }),
+  s("delete_memory", `Forget my ${T} locker code`, { confirm: YES, ours: /locker code/i }),
 
   // ── Documents ──
   s("create_document", `Create a document record called ${T} Warranty for my fridge warranty`),
@@ -371,13 +394,29 @@ const month = new Date().toISOString().slice(0, 7);
   const custom: Step[] | null = arg("steps")
     ? JSON.parse(fs.readFileSync(arg("steps")!, "utf8").replace(/\{T\}/g, T))
     : null;
-  const steps = custom || (only ? STEPS.filter((x) => only.includes(x.tool)) : STEPS);
+  // --only keeps the named tools' steps, and a fixture step ("" tool) that sits
+  // directly before one of them: it makes the record that step acts on.
+  const steps = custom || (only
+    ? STEPS.filter((x, i) => only.includes(x.tool) || (x.tool === "" && only.includes(STEPS.slice(i + 1).find((y) => y.tool !== "")?.tool ?? "")))
+    : STEPS);
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const logFile = path.join(OUT_DIR, "results.jsonl");
   fs.writeFileSync(logFile, "");
 
   const version = (await api("GET", "/version")).data?.sha;
   console.log(`\n── Chat tool sweep (${T}) — ${steps.length} step(s), ${toolNames.length} tools, ${API_BASE} @ ${String(version).slice(0, 8)} ──\n`);
+
+  // The sweep writes as the smoke account for most of an hour. The contract
+  // suite WIPES that account when it starts, so the sweep holds the account's
+  // gate lock like every other gate: a push made mid-sweep would otherwise
+  // delete the records the remaining steps are about.
+  const releaseGate = await acquireGateLock(preferenceLockIo((m, p, b) => api(m, p, b)), { gate: "chat-tool-sweep" });
+
+  // "Copy last month's budgets" needs a last month to copy: the smoke account
+  // has none, and the tool then (rightly) refuses. Seeded here, removed below.
+  const [yy, mm] = month.split("-").map(Number);
+  const prevMonth = mm === 1 ? `${yy - 1}-12` : `${yy}-${String(mm - 1).padStart(2, "0")}`;
+  const seededBudget = await api("POST", "/budgets", { month: prevMonth, category: `${T.toLowerCase()} seed`, amount: 50 });
 
   // Everything present before the run is off limits to cleanup.
   const before: Record<string, Set<string>> = {};
@@ -395,7 +434,7 @@ const month = new Date().toISOString().slice(0, 7);
       // Answer "are you sure?" only when the question is about a record this
       // run made. A blind yes once agreed to delete a look-alike fixture row
       // the assistant offered in place of one that no longer existed.
-      const asksAboutOurs = reply1.includes(T) || !step.message.includes(T);
+      const asksAboutOurs = reply1.includes(T) || !step.message.includes(T) || (step.ours ? step.ours.test(reply1) : false);
       if (!ran && step.confirm && asksAboutOurs && /\?|confirm|are you sure|go ahead|proceed/i.test(reply1)) {
         const second = await chatTurn(step.confirm, [{ role: "user", content: step.message }, { role: "assistant", content: reply1 }]);
         confirmed = true;
@@ -462,7 +501,8 @@ const month = new Date().toISOString().slice(0, 7);
       final: trimFinal(final),
     };
     fs.appendFileSync(logFile, JSON.stringify(rec) + "\n");
-    const ok = turn.status === 200 && !turn.error && rec.hasReply && (step.tool ? !!rec.via && shown : true);
+    const answeredDirectly = !!step.direct && step.direct.test(reply);
+    const ok = turn.status === 200 && !turn.error && rec.hasReply && (step.tool ? (!!rec.via && shown) || answeredDirectly : true);
     console.log(`${ok ? "PASS" : "FAIL"} ${rec.tool.padEnd(30)} ${String(turn.totalMs).padStart(6)}ms first=${String(turn.firstProgressMs ?? "-").padStart(5)}ms tools=[${turn.toolsStarted.join(",")}]${rec.via && rec.via !== "tool" ? ` via ${rec.via}` : ""} ${ok ? "" : `invoked=${invoked} toolOk=${toolOk} shown(${display})=${shown} ${turn.error || toolErr.join("; ") || reply.slice(0, 140).replace(/\n/g, " ")}`}`);
   }
 
@@ -484,5 +524,7 @@ const month = new Date().toISOString().slice(0, 7);
       if (r.ok) removed++;
     }
   } catch { /* budgets are best effort */ }
+  if (seededBudget.data?.id) await api("DELETE", `/budgets/${seededBudget.data.id}?month=${prevMonth}`).catch(() => undefined);
   console.log(`\ncleanup: removed ${removed} row(s) created by the sweep. Results: ${logFile}\n`);
+  await releaseGate();
 })();

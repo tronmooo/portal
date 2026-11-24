@@ -11,6 +11,12 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
+      'tests/workflow-matrix.test.ts',
+      'tests/bills-all-tab.dom.test.tsx',
+      'tests/chat-tool-sweep-2026-11-24.test.ts',
+      'tests/scope-ready.dom.test.ts',
+      'tests/warm-profile-detail.test.ts',
+      'tests/schema-expectations.test.ts',
       'tests/qa-2026-11-24-dashboard-calendar.test.ts',
       'tests/commit-date-input.dom.test.tsx',
       'tests/qa-2026-11-24-date-edits-persist.dom.test.tsx',
