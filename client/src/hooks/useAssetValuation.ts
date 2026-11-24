@@ -267,6 +267,9 @@ export function refreshOnOpen(snapshot: ValuationSnapshot | null | undefined, no
   const r: any = snapshot.record;
   const checked = Date.parse(String(r?.checkedAt || r?.valuedAt || ""));
   const due = !Number.isFinite(checked) || now - checked >= SWEEP_RECHECK_MS;
+  // The value is current but the AI has not worked out the salvage value yet:
+  // an unforced refresh, which the server answers with one quick model call.
+  if (!due && snapshot.salvageDue) return { refresh: true, force: false };
   return { refresh: due, force: due };
 }
 
@@ -322,7 +325,7 @@ export function useAssetValuation(profileId: string | undefined, opts: { enabled
     const last = lastAttemptAt.get(profileId) || 0;
     if (Date.now() - last < ATTEMPT_THROTTLE_MS) return;
     track(refreshAssetValuation(profileId, { force: due.force }));
-  }, [enabled, profileId, data?.supported, data?.freshness?.fresh, data?.freshness?.reason, data?.mode, track]);
+  }, [enabled, profileId, data?.supported, data?.freshness?.fresh, data?.freshness?.reason, data?.mode, data?.salvageDue, track]);
 
   const refresh = useCallback(async () => {
     if (!profileId) return;

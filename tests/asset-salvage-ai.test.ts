@@ -4,7 +4,7 @@
 // the field back to the AI. See shared/asset-salvage.ts.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { MemStorage } from "../server/storage";
-import { refreshValuation } from "../server/valuation/service";
+import { getValuationSnapshot, refreshValuation } from "../server/valuation/service";
 import { setEvidenceProvidersForTest } from "../server/valuation/providers/registry";
 import { buildValuationContext } from "@shared/valuation";
 import {
@@ -47,11 +47,13 @@ describe("the rules", () => {
     expect(salvageNeedsEstimate(est, "k", new Date(NOW.getTime() + SALVAGE_MAX_AGE_MS))).toBe(true);
   });
 
-  it("an answer above what it cost or is worth, negative or null is refused", () => {
+  it("an answer above what it cost or is worth, negative or garbage is refused; null means none", () => {
     expect(normalizeSalvageEstimate({ salvageValue: 1800.4, basis: " scrap " }, { purchasePrice: 28000 })).toEqual({ value: 1800, basis: "scrap" });
     expect(normalizeSalvageEstimate({ salvageValue: 40000 }, { purchasePrice: 28000, currentValue: 20000 })).toBeNull();
     expect(normalizeSalvageEstimate({ salvageValue: -5 }, { purchasePrice: 28000 })).toBeNull();
-    expect(normalizeSalvageEstimate({ salvageValue: null }, { purchasePrice: 28000 })).toBeNull();
+    expect(normalizeSalvageEstimate({ salvageValue: null, basis: "Land holds its value." }, { purchasePrice: 28000 })).toEqual({ value: null, basis: "Land holds its value." });
+    expect(normalizeSalvageEstimate({ salvageValue: "lots" }, { purchasePrice: 28000 })).toBeNull();
+    expect(normalizeSalvageEstimate({ basis: "no figure" }, { purchasePrice: 28000 })).toBeNull();
     expect(normalizeSalvageEstimate("nope", {})).toBeNull();
   });
 
@@ -114,6 +116,37 @@ describe("the value-tracking run stores the AI's salvage value", () => {
     const f = (await storage.getProfile(p.id))!.fields as any;
     expect(f.salvageValue).toBe(2500);
     expect(f.salvageValueSource).toBe("user");
+  });
+
+  it("an asset valued earlier gets its salvage value on the next open, without re-running the research", async () => {
+    const p = await seed(storage);
+    let research = 0;
+    setEvidenceProvidersForTest([{ id: "live-search", supports: (_c: any, plan: any) => plan.providers.includes("live-search"), fetch: async (run: any) => { research++; return [live(20000, run.now)]; } } as any]);
+    await refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW, allowModel: false });
+    expect(research).toBe(1);
+    process.env.ANTHROPIC_API_KEY = "test";
+    try {
+      // The snapshot (what the page opens with) says the salvage value is due…
+      expect((await getValuationSnapshot(storage, p.id, { now: NOW }))!.salvageDue).toBe(true);
+      // …and the unforced refresh the page then sends fills it with one quick call.
+      const out = await refreshValuation(storage, p.id, { reason: "scheduled", now: NOW, estimateSalvage: async () => ({ value: 1200, basis: "Scrap value." }) });
+      expect(out.wrote).toBe(true);
+      expect(research).toBe(1);
+      expect((await storage.getProfile(p.id))!.fields.salvageValue).toBe(1200);
+      expect((await getValuationSnapshot(storage, p.id, { now: NOW }))!.salvageDue).toBe(false);
+    } finally { delete process.env.ANTHROPIC_API_KEY; }
+  });
+
+  it("an AI answer of none is remembered, so it is not asked on every open", async () => {
+    const p = await seed(storage);
+    let calls = 0;
+    const estimateSalvage = async () => { calls++; return { value: null, basis: "Holds its value." }; };
+    await refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW, allowModel: true, estimateSalvage });
+    await refreshValuation(storage, p.id, { reason: "scheduled", now: NOW, allowModel: true, estimateSalvage });
+    expect(calls).toBe(1);
+    const f = (await storage.getProfile(p.id))!.fields as any;
+    expect(f.salvageValueSource).toBe("estimate");
+    expect(f.salvageValue ?? null).toBeNull();
   });
 
   it("with no model, nothing is guessed", async () => {

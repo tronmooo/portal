@@ -34,7 +34,7 @@ import { localTodayISO } from "@/lib/dates";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { useAssetValuation, useAssetValuationHistory } from "@/hooks/useAssetValuation";
-import { SALVAGE_KEY, SALVAGE_BASIS_KEY, SALVAGE_BOOKKEEPING_KEYS, salvageSource } from "@shared/asset-salvage";
+import { SALVAGE_KEY, SALVAGE_BASIS_KEY, SALVAGE_BOOKKEEPING_KEYS, salvageJudgedNone, salvageSource } from "@shared/asset-salvage";
 import { projectDepreciation, recentChange, seriesInRange, valueSeries, VALUE_RANGES, type ValuePoint, type ValueRangeKey } from "@shared/asset-depreciation";
 import { formatTimeAgo } from "@/lib/format";
 import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
@@ -301,7 +301,8 @@ export function ValueCard({ profile, spent = 0 }: {
   const priceKey = PURCHASE_PRICE_KEYS.find((k) => parseMoney(fields[k]) > 0) || "purchasePrice";
   const salvage = parseMoney(fields[SALVAGE_KEY]);
   const salvageBy = salvage > 0 ? salvageSource(fields) : null;
-  const salvageBasis = salvageBy === "estimate" && typeof fields[SALVAGE_BASIS_KEY] === "string" ? String(fields[SALVAGE_BASIS_KEY]) : "";
+  const salvageNone = salvageJudgedNone(fields);
+  const salvageBasis = (salvageBy === "estimate" || salvageNone) && typeof fields[SALVAGE_BASIS_KEY] === "string" ? String(fields[SALVAGE_BASIS_KEY]) : "";
   const history = useAssetValuationHistory(profile.id, v.supported);
   const purchaseDateKey = Object.keys(fields).find((k) => PURCHASE_DATE_RE.test(k) && fields[k]);
   const purchaseDate = purchaseDateKey ? String(fields[purchaseDateKey]) : null;
@@ -406,6 +407,11 @@ export function ValueCard({ profile, spent = 0 }: {
             {formatMoneyCompact(salvage)}
             {salvageBy === "estimate" && <span className="rounded bg-primary/15 px-1 py-px text-[11px] font-semibold text-primary" data-testid="asset-salvage-ai">AI</span>}
           </span>
+        ) : salvageNone ? (
+          <span className="inline-flex items-center gap-1.5 font-normal text-muted-foreground">
+            None
+            <span className="rounded bg-primary/15 px-1 py-px text-[11px] font-semibold text-primary" data-testid="asset-salvage-ai">AI</span>
+          </span>
         ) : null}
         raw={salvage > 0 ? String(salvage) : ""}
         save={(val) => write(SALVAGE_KEY, val)} remove={() => write(SALVAGE_KEY, null)}
@@ -413,9 +419,9 @@ export function ValueCard({ profile, spent = 0 }: {
           ? "What it would fetch at the end of its useful life. Portol's AI estimates it when it values the asset."
           : "What it would fetch at the end of its useful life"}
         testId="asset-value-salvage" inputTestId={`overview-field-input-${SALVAGE_KEY}`} removeTestId="overview-field-remove-salvageValue" />
-      {salvageBy === "estimate" && (
+      {(salvageBy === "estimate" || salvageNone) && (
         <p className="pt-1 text-[11px] text-muted-foreground" data-testid="asset-salvage-basis">
-          AI estimate{salvageBasis ? `: ${salvageBasis}` : "."} Tap to use your own figure.
+          {salvageNone ? "The AI found no salvage value — it tends to hold its value" : "AI estimate"}{salvageBasis ? `: ${salvageBasis}` : "."} Tap to use your own figure.
         </p>
       )}
       {salvageBy === "user" && v.auto && v.supported && (
@@ -423,9 +429,9 @@ export function ValueCard({ profile, spent = 0 }: {
           Your figure. Remove it to let the AI estimate it on the next refresh.
         </p>
       )}
-      {salvage <= 0 && v.auto && v.supported && (
+      {salvage <= 0 && !salvageNone && v.auto && v.supported && (
         <p className="pt-1 text-[11px] text-muted-foreground" data-testid="asset-salvage-pending">
-          The AI estimates the salvage value on the next valuation{v.refreshing ? " — running now." : "."}
+          {v.refreshing ? "The AI is estimating the salvage value…" : "The AI estimates the salvage value when this asset is valued."}
         </p>
       )}
 

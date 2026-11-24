@@ -793,7 +793,11 @@ summary then evaluation"):
    should be determined by AI"): each value-tracking run asks for it beside
    the market research (`estimateSalvageValue`, `server/valuation/salvage.ts`)
    and stores it with its provenance and one-line reason
-   (`shared/asset-salvage.ts`; labelled "AI" on the card). It is re-asked only
+   (`shared/asset-salvage.ts`; labelled "AI" on the card). An asset whose
+   value is already current gets it on open: the snapshot's `salvageDue`
+   makes the page send an unforced refresh, which the server answers with the
+   one quick model call and no market research. An AI answer of "none" (it
+   holds its value) is stamped and shown as None. It is re-asked only
    when missing, when what it was estimated from changes, or after
    `SALVAGE_MAX_AGE_MS`. A figure the user types (page or chat:
    `stampSalvageProvenance`) is theirs and never replaced; removing it hands

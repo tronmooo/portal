@@ -71,6 +71,29 @@ export function isValuableProfile(p: { type?: string | null; fields?: any } | nu
   return !!p && isAssetTabProfile(p) && String(p.type) !== "account";
 }
 
+/** The facts a salvage estimate for this asset depends on (shared/asset-salvage.ts). */
+export function salvageKeyFor(ctx: ValuationContext): string {
+  return salvageInputsKey({
+    name: ctx.name, kind: ctx.classification.semanticCategory,
+    purchasePrice: ctx.purchase.price, purchaseDate: ctx.purchase.date, condition: ctx.condition,
+  });
+}
+
+function modelConfigured(): boolean { return !!process.env.ANTHROPIC_API_KEY; }
+
+/**
+ * Store an AI salvage answer — unless the user typed a figure (or tracking
+ * was switched off) while the AI was answering. True when it wrote.
+ */
+async function storeSalvage(storage: IStorage, profileId: string, est: SalvageEstimate | null, key: string, now: Date): Promise<boolean> {
+  if (!est) return false;
+  const latest = await storage.getProfile(profileId).catch(() => null);
+  const fields = (latest?.fields as any) || {};
+  if (!latest || !isAutoValuationEnabled(fields) || !salvageNeedsEstimate(fields, key, now)) return false;
+  await storage.updateProfile(profileId, { fields: salvageEstimatePatch(est, key, now) } as any);
+  return true;
+}
+
 /** Shown wherever a manual asset explains why nothing is refreshing. */
 export const MANUAL_DETAIL = "Automatic value tracking is off for this asset";
 
@@ -103,6 +126,9 @@ export async function getValuationSnapshot(
     supported: true,
     mode,
     inputFingerprint: ctx.inputFingerprint,
+    // The AI has a salvage value to work out: opening the asset asks for it
+    // even when the value estimate is fresh (a quick call, no research).
+    salvageDue: mode === "auto" && modelConfigured() && salvageNeedsEstimate(detail.fields, salvageKeyFor(ctx), now),
     // Manual: the stored record is the LAST estimate, kept as history. It is
     // never stale, so no client, sweep or scheduler ever asks for a refresh.
     freshness: mode === "manual"
@@ -340,6 +366,18 @@ export async function refreshValuation(
   const quickCtx = buildValuationContext(bundleFromDetail(detail), now);
   const freshness = assessFreshness(previous, quickCtx.inputFingerprint, now, VALUATION_MODEL_VERSION);
   if (!opts.force && freshness.fresh) {
+    // The value is current, but the salvage value may still be the AI's to
+    // work out (an asset valued before salvage was estimated, or one whose
+    // purchase facts changed). One quick model call, no market research.
+    const salvageKey = salvageKeyFor(quickCtx);
+    if ((opts.allowModel ?? modelConfigured()) && salvageNeedsEstimate(detail.fields, salvageKey, now)) {
+      const est = await (opts.estimateSalvage ?? estimateSalvageValue)(quickCtx, {
+        currentValue: previous?.value ?? quickCtx.estimatorValue ?? quickCtx.userValue?.value ?? null,
+      }).catch(() => null);
+      if (await storeSalvage(storage, profileId, est, salvageKey, now)) {
+        return { ...none, wrote: true, snapshot: await getValuationSnapshot(storage, profileId, { record: previous, now }) };
+      }
+    }
     // The full check (which sees linked records) says nothing changed. If the
     // stored profile-only fingerprint disagrees — a record written before
     // spec fills were stamped, or by an older build — heal it in place so the
@@ -378,7 +416,7 @@ export async function refreshValuation(
     ctx = buildValuationContext(bundle, now);
     plan = planValuation(ctx, now);
 
-    const allowModel = opts.allowModel ?? !!process.env.ANTHROPIC_API_KEY;
+    const allowModel = opts.allowModel ?? modelConfigured();
     // The model is consulted only when deterministic planning came up short.
     if (plan.needsAi) {
       const understanding: AssetUnderstanding | null = await trace.measure("understanding.model", () => resolveUnderstanding(storage, ctx, { allowModel, now }));
@@ -391,10 +429,7 @@ export async function refreshValuation(
     // The salvage value is the AI's (shared/asset-salvage.ts): asked beside
     // the market research so it adds no wait, and only when the stored figure
     // is not the user's and is missing or out of date.
-    const salvageKey = salvageInputsKey({
-      name: ctx.name, kind: ctx.classification.semanticCategory,
-      purchasePrice: ctx.purchase.price, purchaseDate: ctx.purchase.date, condition: ctx.condition,
-    });
+    const salvageKey = salvageKeyFor(ctx);
     const salvagePending: Promise<SalvageEstimate | null> | null = allowModel && salvageNeedsEstimate(detail.fields, salvageKey, now)
       ? trace.measure("salvage", () => (opts.estimateSalvage ?? estimateSalvageValue)(ctx, {
         currentValue: previous?.value ?? ctx.estimatorValue ?? ctx.userValue?.value ?? null,
@@ -493,14 +528,9 @@ export async function refreshValuation(
     }
     // Store the AI's salvage value — unless the user typed one while it ran.
     const salvage = salvagePending ? await salvagePending : null;
-    if (salvage) {
-      const now2 = await storage.getProfile(profileId).catch(() => null);
-      const fields = (now2?.fields as any) || {};
-      if (now2 && isAutoValuationEnabled(fields) && salvageNeedsEstimate(fields, salvageKey, now)) {
-        await trace.measure("persist.salvage", () => storage.updateProfile(profileId, { fields: salvageEstimatePatch(salvage, salvageKey, now) } as any));
-        wrote = true;
-        trace.set("salvage", salvage.value);
-      }
+    if (await trace.measure("persist.salvage", () => storeSalvage(storage, profileId, salvage, salvageKey, now))) {
+      wrote = true;
+      trace.set("salvage", salvage?.value ?? "none");
     }
     trace.set("status", record.status); trace.set("changed", changed); trace.set("value", record.value);
     trace.end();

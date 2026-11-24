@@ -230,6 +230,16 @@ describe("asset profile layout", () => {
     expect(screen.queryByTestId("asset-salvage-user")).toBeNull();
   });
 
+  it("an AI answer of none reads as None, labelled, with its reason", async () => {
+    const hook = () => [`/profiles/${ID}`, vi.fn()] as [string, (to: string) => void];
+    const none = { ...PROFILE, fields: { ...FIELDS, salvageValue: null, salvageValueSource: "estimate", salvageValueBasis: "Gold holds its value." } };
+    render(<QueryClientProvider client={queryClient}><Router hook={hook as any}><ValueCard profile={none} /></Router></QueryClientProvider>);
+    const line = await screen.findByTestId("asset-value-salvage");
+    expect(line.textContent).toContain("None");
+    expect(screen.getByTestId("asset-salvage-basis").textContent).toContain("Gold holds its value.");
+    expect(screen.queryByTestId("asset-salvage-pending")).toBeNull();
+  });
+
   it("a salvage figure with no AI stamp is the user's: no AI label", async () => {
     const hook = () => [`/profiles/${ID}`, vi.fn()] as [string, (to: string) => void];
     const mine = { ...PROFILE, fields: { ...FIELDS, salvageValue: 75 } };

@@ -62,24 +62,35 @@ export function salvageInputsKey(input: { name?: string | null; kind?: string | 
   ].join("|");
 }
 
-/** Should the next valuation run ask the AI for a salvage value? */
+/**
+ * Should the AI be asked for a salvage value? Never over the user's figure.
+ * An AI answer of "none" (something that holds its value) is stamped too, so
+ * it is not asked again until its inputs change or it ages out.
+ */
 export function salvageNeedsEstimate(fields: Record<string, any> | null | undefined, inputsKey: string, now: Date): boolean {
   const f = fields || {};
-  const source = salvageSource(f);
-  if (source === "user") return false;
-  if (source === null) return true;
+  if (salvageSource(f) === "user") return false;
+  if (f[SALVAGE_SOURCE_KEY] !== "estimate") return true;
   if (String(f[SALVAGE_FOR_KEY] || "") !== inputsKey) return true;
   const at = Date.parse(String(f[SALVAGE_AS_OF_KEY] || ""));
   return !Number.isFinite(at) || now.getTime() - at >= SALVAGE_MAX_AGE_MS;
 }
 
-export interface SalvageEstimate { value: number; basis: string }
+/** `value: null` — the AI judged it has no meaningful salvage value (a house, art, gold). */
+export interface SalvageEstimate { value: number | null; basis: string }
+
+/** The AI looked and judged there is no salvage value to show. */
+export function salvageJudgedNone(fields: Record<string, any> | null | undefined): boolean {
+  const f = fields || {};
+  return f[SALVAGE_SOURCE_KEY] === "estimate" && salvageSource(f) === null;
+}
 
 /**
  * The model's answer, checked. A salvage value is never negative and never
  * above what the thing cost or is worth now (whichever is larger) — a figure
- * outside that is not a salvage value, so it is refused, not clamped.
- * `null` from the model (an appreciating asset: a house, art, gold) is null.
+ * outside that is not a salvage value, so it is refused (null), not clamped.
+ * `salvageValue: null` from the model (an asset that holds or gains value)
+ * is the answer "none": `{ value: null }`.
  */
 export function normalizeSalvageEstimate(
   raw: unknown,
@@ -87,12 +98,14 @@ export function normalizeSalvageEstimate(
 ): SalvageEstimate | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
-  if (r.salvageValue === null || r.salvageValue === undefined) return null;
-  const value = num(r.salvageValue);
-  if (!(value >= 0)) return null;
+  const basis = typeof r.basis === "string" ? r.basis.trim().replace(/\s+/g, " ").slice(0, 240) : "";
+  if (!("salvageValue" in r)) return null;
+  if (r.salvageValue === null) return { value: null, basis };
+  const value = typeof r.salvageValue === "number" ? r.salvageValue
+    : typeof r.salvageValue === "string" ? Number(r.salvageValue.replace(/[$,\s]/g, "")) : NaN;
+  if (!Number.isFinite(value) || value < 0) return null;
   const ceiling = Math.max(num(bounds.purchasePrice), num(bounds.currentValue));
   if (ceiling > 0 && value > ceiling) return null;
-  const basis = typeof r.basis === "string" ? r.basis.trim().replace(/\s+/g, " ").slice(0, 240) : "";
   return { value: Math.round(value), basis };
 }
 
