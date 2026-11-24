@@ -97,10 +97,14 @@ async function run(browser: any, surface: Surface, undo: Array<() => Promise<unk
     check(!(await page.locator(t(`bill-row-${id}`)).first().isVisible().catch(() => false)), L("it is no longer under Due Soon"));
     console.log(L(`NOTE  the Paid figure reads ${(await page.locator(t("bills-stat-paid")).first().innerText()).replace(/\s+/g, " ")}`));
 
-    // Delete, in two steps. From Paid: a monthly bill just paid is next due
-    // about a month out, which can be past the 30 days "All Bills" lists.
-    await press(t("bills-filter-paid"));
+    // A bill just paid stays under All Bills, on its next date (it used to
+    // vanish there: next month's date is past the 30 days the list looked at).
+    await press(t("bills-filter-all"));
     await row().waitFor({ timeout: 10000 });
+    const allText = (await row().innerText()).replace(/\s+/g, " ");
+    check(/Upcoming/.test(allText) && /paid /i.test(allText), L(`paid, it is still under All Bills on its next date: ${allText.slice(0, 90)}`));
+
+    // Delete, in two steps.
     await openRow();
     await press(t(`popup-delete-${id}`));
     await page.locator(t(`bill-delete-confirm-${id}`)).first().waitFor({ timeout: 10000 });

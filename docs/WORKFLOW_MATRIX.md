@@ -16,7 +16,7 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 620. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 621. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -271,9 +271,9 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/obligation-occurrences` | yes | 1 | **0** |
 | `POST /api/obligation-occurrences/:occId/reschedule` | yes | 1 | **0** |
 | `POST /api/obligation-occurrences/:occId/status` | yes | **0** | **0** |
-| `GET /api/obligations` | yes | 5 | 3 |
+| `GET /api/obligations` | yes | 6 | 3 |
 | `POST /api/obligations` | yes | 2 | 7 |
-| `DELETE /api/obligations/:id` | yes | 2 | 4 |
+| `DELETE /api/obligations/:id` | yes | 3 | 4 |
 | `GET /api/obligations/:id` | **no** | **0** | 1 |
 | `PATCH /api/obligations/:id` | yes | 3 | 1 |
 | `DELETE /api/obligations/:id/last-payment` | **no** | **0** | 1 |
@@ -352,7 +352,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `get_cashflow` | read | **0** | 1 |
 | `create_expense` | write | 18 | 6 |
 | `delete_expense` | write | 3 | 2 |
-| `update_expense` | write | 3 | 1 |
+| `update_expense` | write | 4 | 1 |
 | `query_expenses` | read | **0** | 1 |
 | `spending_analytics` | write | **0** | 1 |
 | `log_income` | write | 5 | 2 |
@@ -507,7 +507,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/activity` | **no** | 1 | **0** |
 | `GET /api/ai-digest` | yes | 1 | **0** |
 | `GET /api/dashboard-bootstrap` | yes | 9 | 2 |
-| `GET /api/dashboard-enhanced` | yes | 13 | 13 |
+| `GET /api/dashboard-enhanced` | yes | 14 | 13 |
 | `GET /api/dashboard/ai-suggestions` | yes | 2 | **0** |
 | `GET /api/exec-widgets/suggest` | yes | 2 | 1 |
 | `GET /api/insights` | yes | 3 | **0** |
