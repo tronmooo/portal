@@ -142,3 +142,36 @@ describe("the summary that replaces a contradicted reply", () => {
     expect(groundedSummary([{ tool: "update_expense", status: "ok", raw: "Corner Coffee" }])).toBe('Updated expense "Corner Coffee".');
   });
 });
+
+// Chat variations, 2026-11-24: "add a task to buy birthday candles" followed by
+// "mark that done" / "mark it as done" / "I finished it" was refused three
+// times out of three as a replay of the earlier message.
+describe("pointing back at what was just named is not a replay", () => {
+  const PRIOR = ["add a task to buy birthday candles"];
+  const call = { title: "Buy birthday candles" };
+
+  it("finishing, paying, skipping or moving \"it\" / \"that\" runs", async () => {
+    const { isStaleReplayCall } = await import("../shared/ai-tool-routing");
+    for (const msg of [
+      "mark that done", "mark it as done", "I finished it", "check that off", "cross it off", "that's done",
+      "it is finished", "done with that", "I did it", "complete it", "tick that off",
+    ]) {
+      expect(isStaleReplayCall("complete_task", call, msg, PRIOR), msg).toBe(false);
+    }
+    for (const msg of ["pay it", "I paid that", "skip it this month", "those are paid"]) {
+      expect(isStaleReplayCall("pay_obligation", { name: "Water Bill" }, msg, ["add a $40 water bill due on the 5th"]), msg).toBe(false);
+    }
+    for (const msg of ["delete it", "remove that one", "cancel that"]) {
+      expect(isStaleReplayCall("delete_task", call, msg, PRIOR), msg).toBe(false);
+    }
+  });
+
+  it("a NEW request that never mentions the old task still cannot re-run it", async () => {
+    const { isStaleReplayCall } = await import("../shared/ai-tool-routing");
+    // The model re-creating, or completing, the earlier task while answering something else.
+    for (const msg of ["Create an asset for my Dodge Ram 2025, it's white four-wheel-drive", "what's the weather like", "log 8 hours of sleep", "add a note about the garage code"]) {
+      expect(isStaleReplayCall("create_task", call, msg, PRIOR), msg).toBe(true);
+      expect(isStaleReplayCall("complete_task", call, msg, PRIOR), msg).toBe(true);
+    }
+  });
+});

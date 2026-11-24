@@ -134,7 +134,10 @@ const oneEvent = (words: string[], date?: string, time?: string, recurrence?: st
 const logged = (want: Array<[string, string, number]>, exact = true) => (c: Ctx): string => {
   const e = c.made.entries;
   for (const [tracker, field, value] of want) {
-    const hit = e.find((x) => has(x.tracker, tracker) && Object.entries(x.values || {}).some(([k, v]) => has(k, field) && money(v, value)));
+    // The tracker is matched by any of the names it may go by ("water|hydration"),
+    // the reading by its value: a tracker names its own field ("value", "ounces").
+    const named = new RegExp(tracker, "i");
+    const hit = e.find((x) => named.test(String(x.tracker)) && Object.entries(x.values || {}).some(([k, v]) => (!field || has(k, field)) && money(v, value)));
     if (!hit) return `no ${tracker} entry with ${field} = ${value} (new entries: ${e.map((x) => `${x.tracker} ${JSON.stringify(x.values)}`).join(" | ").slice(0, 260) || "none"})`;
   }
   if (exact && e.length !== want.length) return `expected ${want.length} new entr${want.length === 1 ? "y" : "ies"}, got ${e.length}: ${e.map((x) => `${x.tracker} ${JSON.stringify(x.values)}`).join(" | ").slice(0, 260)}`;
@@ -178,9 +181,9 @@ const CASES: Case[] = [
   { group: "expenses", say: "I got Sarah a birthday gift for $35", expect: (c) => expenses([[35, "gift"]], TODAY)(c) || (c.made.profiles.length ? `it created a profile for Sarah (${names(c.made.profiles, "name")})` : "") },
 
   // ── Health and trackers ───────────────────────────────────────────────────
-  { group: "health", say: "weight 182.4", expect: logged([["weight", "weight", 182.4]]) },
+  { group: "health", say: "weight 182.4", expect: logged([["weight", "", 182.4]]) },
   { group: "health", say: "my blood pressure was 118/76 this morning", expect: logged([["blood pressure", "systolic", 118]], false) },
-  { group: "health", say: "drank 16 oz of water", expect: logged([["water", "", 16]], false) },
+  { group: "health", say: "drank 16 oz of water", expect: logged([["water|hydration", "", 16]], false) },
   { group: "health", say: "slept 7.5 hours last night", expect: logged([["sleep", "", 7.5]], false) },
   { group: "health", say: "I had a banana and a doughnut", expect: (c) => {
     const food = c.made.entries.filter((e) => /nutrition|food|meal|calor/i.test(e.tracker));
@@ -188,14 +191,15 @@ const CASES: Case[] = [
     const items = food.map((e) => String(e.values?.item || e.values?.food || e.notes || "").toLowerCase());
     return items.some((i) => i.includes("banana")) && items.some((i) => /dou?gh?nut/.test(i)) ? "" : `the two entries are ${items.join(" | ")}`;
   } },
-  { group: "health", say: "ran 3 miles in 28 minutes", expect: logged([["run", "", 3]], false) },
+  { group: "health", say: "ran 3 miles in 28 minutes", expect: logged([["run|cardio|exercise|workout", "", 3]], false) },
 
   // ── Events ────────────────────────────────────────────────────────────────
   { group: "events", say: "dentist appointment next Tuesday at 2pm", expect: oneEvent(["dentist"], TUESDAY, "14:00") },
   { group: "events", say: "Lunch with Sam on December 3 at noon", expect: oneEvent(["sam"], `${TODAY.slice(0, 4)}-12-03`, "12:00") },
   { group: "events", say: "Jordan's birthday is March 9", expect: oneEvent(["jordan", "birthday"], undefined, undefined, "yearly") },
   { group: "events", say: "team offsite Friday 9am to 5pm at the Marriott", expect: oneEvent(["offsite"], FRIDAY, "09:00") },
-  { group: "events", say: "schedule a haircut for the day after tomorrow at 10:30", expect: oneEvent(["haircut"], dayIn(2), "10:30") },
+  // Something you DO at a time is a timed task; something that HAPPENS is an event. Either is on the calendar at 10:30.
+  { group: "events", say: "schedule a haircut for the day after tomorrow at 10:30", expect: (c) => (c.made.events.length ? oneEvent(["haircut"], dayIn(2), "10:30")(c) : oneTask(["haircut"], dayIn(2), "10:30")(c)) },
 
   // ── Several things in one breath ──────────────────────────────────────────
   { group: "combined", say: "I spent $8 on a smoothie and need to call mom tomorrow", expect: (c) => {
@@ -208,7 +212,7 @@ const CASES: Case[] = [
     if (t.length !== 3) return `expected three tasks, got ${t.length} (${names(t)})`;
     return ["milk", "rent", "vet"].every((w) => t.some((x) => has(x.title, w))) ? "" : `the tasks are ${names(t)}`;
   } },
-  { group: "combined", say: "weight 181 and I spent 9.99 on vitamins", expect: (c) => logged([["weight", "weight", 181]], false)(c) || expenses([[9.99, "vitamin"]], TODAY)(c) },
+  { group: "combined", say: "weight 181 and I spent 9.99 on vitamins", expect: (c) => logged([["weight", "", 181]], false)(c) || expenses([[9.99, "vitamin"]], TODAY)(c) },
 
   // ── Notes and journal ─────────────────────────────────────────────────────
   { group: "writing", say: "note: the garage door code is 4471", expect: (c) => (c.made.notes.length === 1 && has(c.made.notes[0].content ?? c.made.notes[0].title, "4471") ? "" : `expected one note holding 4471, got ${c.made.notes.length} note(s); memories: ${c.made.memories.length}`) },
@@ -236,7 +240,70 @@ const CASES: Case[] = [
   } },
   { group: "safety", say: "never mind, don't add anything", expect: nothingMade },
 
+  // ── Bills and debts ───────────────────────────────────────────────────────
+  { group: "money", say: "I have a $25 a month Spotify subscription due on the 5th", expect: (c) => {
+    const p = c.made.profiles.filter((x) => has(x.name, "spotify"));
+    if (p.length !== 1) return `expected ONE Spotify bill, got ${p.length} (${names(c.made.profiles, "name")})`;
+    return money(p[0].fields?.amount ?? p[0].fields?.monthlyPayment, 25) ? "" : `its amount is ${JSON.stringify(p[0].fields?.amount ?? p[0].fields?.monthlyPayment)}, expected 25`;
+  } },
+  { group: "money", say: "I owe $5,000 on my Visa at 22% APR, minimum payment $150 on the 12th", expect: (c) => {
+    const p = c.made.profiles.filter((x) => ["liability", "loan"].includes(x.type));
+    if (p.length !== 1) return `expected ONE debt record (a card is its own bill), got ${p.length} (${names(c.made.profiles, "name")})`;
+    const f = p[0].fields || {};
+    if (!money(f.balance, 5000)) return `its balance is ${f.balance}, expected 5000`;
+    if (!money(f.interestRate, 22)) return `its rate is ${f.interestRate}, expected 22 (a percent)`;
+    return money(f.monthlyPayment, 150) ? "" : `its payment is ${f.monthlyPayment}, expected 150`;
+  } },
+  { group: "money", say: "got paid $2,400 today", expect: (c) => (c.made.incomes.length === 1 && money(c.made.incomes[0].amount, 2400) ? (c.made.expenses.length ? "it also logged an expense" : "") : `expected one income of 2400, got ${c.made.incomes.map((i) => i.amount).join(", ") || "none"}; expenses: ${c.made.expenses.map((e) => e.amount).join(", ") || "none"}`) },
+  { group: "money", say: "I want to save $3,000 for a vacation by June", expect: (c) => (c.made.goals.length === 1 && money(c.made.goals[0].target, 3000) ? "" : `expected one goal with target 3000, got ${c.made.goals.map((g) => `${g.title} ${g.target}`).join(" | ") || "none"}`) },
+
+  // ── Habits ────────────────────────────────────────────────────────────────
+  { group: "habits", say: "start a daily habit to meditate", expect: (c) => (c.made.habits.length === 1 && has(c.made.habits[0].name, "meditat") ? "" : `expected one meditation habit, got ${names(c.made.habits, "name")}`) },
+  { group: "habits", say: "I meditated today", expect: (c) => {
+    const h = c.now.habits.filter((x) => has(x.name, "meditat"));
+    if (h.length !== 1) return `expected ONE meditation habit, got ${h.length}`;
+    const done = (h[0].checkins || []).filter((k: any) => day(k.date) === TODAY).length;
+    return done === 1 ? "" : `today has ${done} check-in(s), expected 1`;
+  } },
+  { group: "habits", say: "I meditated again... no wait, I only did it once", expect: (c) => {
+    const h = c.now.habits.filter((x) => has(x.name, "meditat"));
+    const done = ((h[0]?.checkins) || []).filter((k: any) => day(k.date) === TODAY).length;
+    return done === 1 ? "" : `today has ${done} check-in(s), expected it to stay at 1`;
+  } },
+
+  // ── Editing by name ───────────────────────────────────────────────────────
+  { group: "edits", say: "add a task to call the electrician", then: "rename the electrician task to Call the electrician about the breaker", expect: (c) => {
+    const t = c.now.tasks.filter((x) => has(x.title, "electrician"));
+    if (t.length !== 1) return `expected ONE electrician task, got ${t.length} (${names(t)})`;
+    return has(t[0].title, "breaker") ? "" : `the task is still "${t[0].title}"`;
+  } },
+  { group: "edits", say: "spent $60 on a jacket", then: "change the jacket expense category to clothing", expect: (c) => {
+    const e = c.now.expenses.filter((x) => has(x.description, "jacket"));
+    if (e.length !== 1) return `expected ONE jacket expense, got ${e.length}`;
+    if (!money(e[0].amount, 60)) return `its amount changed to ${e[0].amount}`;
+    return has(e[0].category, "cloth") ? "" : `its category is "${e[0].category}"`;
+  } },
+  { group: "edits", say: "dinner with Priya on Saturday at 7pm", then: "move it to 8pm", expect: (c) => {
+    const e = c.now.events.filter((x) => has(x.title, "priya"));
+    if (e.length !== 1) return `expected ONE dinner event, got ${e.length}; tasks: ${names(c.now.tasks.filter((x) => has(x.title, "priya")))}`;
+    return String(e[0].time || "").slice(0, 5) === "20:00" ? "" : `it is at ${e[0].time}, expected 20:00`;
+  } },
+
   // ── Referring back to what was just said ──────────────────────────────────
+  { group: "followups", say: "add a task to pick up the cake", then: "mark it as done", expect: (c) => {
+    const t = c.now.tasks.filter((x) => has(x.title, "cake"));
+    return t.length === 1 && t[0].status === "done" ? "" : `expected the one cake task done, got ${t.map((x) => x.status).join(", ") || "none"}`;
+  } },
+  { group: "followups", say: "add a task to order printer ink", then: "I finished it", expect: (c) => {
+    const t = c.now.tasks.filter((x) => has(x.title, "ink"));
+    return t.length === 1 && t[0].status === "done" ? "" : `expected the one ink task done, got ${t.map((x) => x.status).join(", ") || "none"}`;
+  } },
+  { group: "followups", say: "spent $18 on a movie ticket", then: "delete that", expect: (c) => {
+    const e = c.now.expenses.filter((x) => has(x.description, "movie"));
+    // It may ask first; what it may not do is leave the expense AND say it was removed.
+    if (e.length === 0) return "";
+    return /delet|remov/i.test(c.reply) && !/\?/.test(c.reply) ? `the expense is still there but the reply says: ${c.reply.slice(0, 120)}` : "";
+  } },
   { group: "followups", say: "spent $30 on a phone case", then: "actually it was $32", expect: (c) => {
     const e = c.now.expenses.filter((x) => has(x.description, "phone case"));
     if (e.length !== 1) return `expected ONE phone case expense after the correction, got ${e.length} (${e.map((x) => x.amount).join(", ")})`;

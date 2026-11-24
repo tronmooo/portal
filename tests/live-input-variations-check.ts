@@ -28,8 +28,8 @@ runWorkflowCheck("live-input-variations-check", async ({ tag, check, call, clean
   const year = Number(today.slice(0, 4));
   /** The row with this id in a list, read fresh. */
   const inList = async (path: string, id: string) => list((await call("GET", path)).data).find((r) => r.id === id);
-  /** Every script the stored text could run is gone or inert; the words stay. */
-  const safeText = (stored: string, typed: string) => !/<script/i.test(stored) && stored.replace(/\s+/g, " ").includes(typed.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim().slice(0, 12));
+  /** Typed markup is kept as words (the page shows it as text) and no script survives. */
+  const safeText = (stored: string, _typed: string) => !/<script/i.test(stored) && !/alert\(1\)/.test(stored) && stored.includes("bold") && stored.includes("{{template}}") && stored.includes("${money}");
 
   // ── Text: what is typed is what is kept ─────────────────────────────────
   section("text in a task title, an expense description and a note");
@@ -98,6 +98,10 @@ runWorkflowCheck("live-input-variations-check", async ({ tag, check, call, clean
     if (r.data?.id) cleanup(() => api("DELETE", `/expenses/${r.data.id}`));
     if (want === "refused") return check(refused(r), `an expense of ${JSON.stringify(typed)} (${why}) is refused with a reason (${detail(r)})`);
     const stored = r.data?.id ? Number((await inList("/expenses", r.data.id))?.amount) : NaN;
+    // The amount box sends a number. Text that reads as an amount ("12.50",
+    // "1,234.56", "$25") may be understood or refused with a reason — what it
+    // may never be is stored as some other figure.
+    if (typeof typed === "string") return check(r.ok ? Math.abs(stored - want) < 0.0005 : refused(r), `an expense of ${JSON.stringify(typed)} (${why}) is stored as ${want} or refused with a reason, never as another figure (${r.ok ? stored : detail(r)})`);
     check(r.ok && Math.abs(stored - want) < 0.0005, `an expense of ${JSON.stringify(typed)} (${why}) is stored as ${want} (${r.ok ? stored : detail(r)})`);
   };
   await amountCase(0.01, 0.01, "one cent");
