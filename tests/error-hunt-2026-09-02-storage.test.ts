@@ -378,13 +378,17 @@ describe("#9 computeGoalProgress uses the user's current month", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // #10 undated tasks land on their creation day in the user's zone
 // ─────────────────────────────────────────────────────────────────────────────
-describe("#10 getCalendarTimeline places undated tasks on the LOCAL creation day", () => {
-  it("source: createdAt goes through localDayOf, not slice(0,10)", () => {
+// Superseded (QA 2026-11-24, second pass): an undated task is no longer placed
+// on its creation day at all — it is not on the calendar. The UTC-slice bug
+// this guarded cannot come back, because no creation day is read.
+describe("#10 getCalendarTimeline and undated tasks", () => {
+  it("source: a task with no due date is skipped, and createdAt is never sliced into a day", () => {
     const i = SRC.indexOf("async getCalendarTimeline(");
     const j = SRC.indexOf("for (const task of tasks)", i);
     const body = SRC.slice(j, j + 1800);
-    expect(body).toContain("localDayOf(rawDate, this._timezone)");
+    expect(body).toContain("if (!task.dueDate) continue;");
     expect(body).not.toMatch(/rawDate\.slice\(0, 10\) >= startDate/);
+    expect(body).not.toContain("task.createdAt");
   });
 });
 

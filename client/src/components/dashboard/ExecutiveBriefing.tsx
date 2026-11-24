@@ -21,7 +21,7 @@
 // in, Pay arms then commits (money moves on the SECOND tap), medications get
 // "Taken", managed recurring dates get "Done". Popups are the same components
 // the dashboard KPI tiles use.
-import { sumMonthIncomeNow, selectUpcomingBills, UPCOMING_BILLS_EMPTY_COPY } from "@shared/obligation-windows";
+import { sumMonthIncomeNow, UPCOMING_BILLS_EMPTY_COPY } from "@shared/obligation-windows";
 import { setEventOccurrence } from "@/lib/event-occurrence";
 import { isDoneToday } from "@shared/task-counts";
 import { relativeTimeShort, elapsedDays } from "@shared/relative-time";
@@ -1250,14 +1250,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // 2026-10-21: bills left Needs Attention, so the Money card lists the WHOLE
   // window — overdue first, in red, with the two-tap Pay — not just the
   // not-yet-due part.
-  const billsDueSoon = selectUpcomingBills(allBills as any[])
-    // What is coming. The server sends each bill at its next date (an elapsed
-    // date is assumed paid); a payload from before that rule is held to it too.
-    .filter((b: any) => (b.daysUntil ?? 0) >= 0)
-    .sort((a: any, b: any) => (a.daysUntil ?? 0) - (b.daysUntil ?? 0));
   // Upcoming and past payments, from the server (shared/bills-timeline) — the
   // panel a bill row opens, the same one the Finance tab shows.
   const billsTimeline = readBillsTimeline(enhanced?.financeSnapshot);
+  // The card lists THAT panel's Upcoming rows, so the two can never disagree:
+  // the card said "Nothing due in the next 30 days" while the Calendar had the
+  // auto loan's payment 26 days out (QA 2026-11-24). Loans and cards are in
+  // the timeline (shared/debt-payments-timeline); an elapsed bill date is
+  // assumed paid there, so nothing listed is overdue.
+  // Test rows hidden and a name-nested duplicate pair collapsed, as before.
+  const billsDueSoon = dedupeBills(hideTest(billsTimeline.upcoming
+    .map((r) => ({ id: r.billId, key: r.key, name: r.name, amount: r.amount, daysUntil: r.daysUntil, dueDate: r.date }))));
 
   // Documents
   // Grouped to ONE CARD PER RECORD PER DAY so this card, its count and the
@@ -2159,7 +2162,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     const hsl = tonePalette(toneForDays(b.daysUntil));
                     return (
                       <div
-                        key={b.id}
+                        key={b.key}
                         role="button"
                         tabIndex={0}
                         onClick={() => setPopup("bills")}

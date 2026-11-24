@@ -136,12 +136,17 @@ green. After a push to `main`:
    on `type="date"`. A form that saves on submit refuses a half-typed date
    (`dateInputState(...) === "partial"`, `client/src/lib/date-input.ts`) rather
    than filing the record with no date. (2026-11-24: the task editor sent
-   "0002-11-25", got a 400 and reset; the task stayed Unscheduled.)
+   "0002-11-25", got a 400 and reset; the task stayed Unscheduled. Same day,
+   the profile Edit dialog autosaved Next Billing as 0002-, 0020- and
+   0202-12-12 on the way to 2026 — its date fields are `CommitDateInput` now,
+   `tests/edit-profile-dialog-save.dom.test.tsx`.)
    **The Calendar and the task agree.** A task's occurrence is done by
    `isTaskOccurrenceDone` (`shared/task-occurrences.ts`): an undated task is
-   done when its row is. An undated task sits on the day it was added and is
-   labelled "No due date" (`meta.undated`), never shown as due that day. The
-   open detail renders the LIVE timeline row (`liveTimelineItem`), not the
+   done when its row is. A task with NO due date is not on the Calendar or
+   the Executive Timeline at all (`getCalendarTimeline` skips it; it lives in
+   the task list as Unscheduled) — QA 2026-11-24, second pass: drawn as an
+   all-day item on the day it was added, beside a row saying "No due date".
+   The open detail renders the LIVE timeline row (`liveTimelineItem`), not the
    snapshot from the tap — found again by `type` + `sourceId` when an edit
    moved it (the id carries the date). Moving an event's start moves its end
    date with it (`carryEventSpan`, `shared/event-span.ts`, both storages).
@@ -469,7 +474,10 @@ loan-terms and bill-details forms through `client/src/hooks/useAutosave.ts`
 since the last save; nothing on open — Rule 3). A new edit form uses one of
 these. Because there is no Cancel, the form offers "Undo changes" (back to
 the values it opened with — `useAutosave().opened`), and Done awaits the
-pending save before closing. A saved edit is written into the profile-detail
+pending save before closing. The Edit dialog has ONE save chain: Done joins
+a save already on its way, a failed save keeps the dialog open ("Close
+without saving" on the second press), and leaving the page with a save
+pending warns (QA 2026-11-24: a plan changed, Done, reload — the old plan). A saved edit is written into the profile-detail
 cache at once so the header does not show the old value until a refetch.
 After deleting a liability the app returns to the Liabilities list
 (`/linked?tab=liabilities`), not the Info tab.
@@ -634,7 +642,9 @@ sitting (opening an old entry and leaving writes nothing); a new document
 saves itself once it has content. EVERY document autosave leaves the URL alone
 (`quietSaveRef`: the route change remounts the editor and drops the caret —
 2026-11-23, the second autosave reloaded the page mid-typing); only the Save
-button moves it. A new sheet still waits for its first Save.
+button moves it. A new sheet still waits for its first Save. A save that comes back after the
+editor has closed never navigates (`stillOnNewEditor`): Save, then Calendar,
+reopened the document over the Calendar (QA 2026-11-24, second pass).
 Loading a document is not an edit: the editor takes the saved content ONCE per
 document and without an update event (`setContent(…, { emitUpdate: false })`;
 TipTap 3 emits by default), and a refetch of the saved copy never re-hydrates
@@ -670,6 +680,9 @@ hold (no underline). A category is the note's one `category:<name>` tag; an
 attachment is a file saved to Documents and linked from the text
 (`#/documents/<id>`). The category filter is a view: it names what it hides
 and is never stored (Rule 4).
+A saved note opened from Artifacts has Edit, which opens THAT note in the
+Notes workspace (`#/workspace/notes?note=<id>&from=artifacts`; the X goes back
+to Artifacts). *Guard:* `tests/qa-2026-11-24b-findings.dom.test.tsx`.
 **W9. A journal photo is a document the entry points at.** `photo:<documentId>`
 tags (`shared/journal-photos.ts`), written by the composer that owns the
 entry; the entry's own tags never include them on screen (`journalLabels`).
@@ -766,6 +779,13 @@ or counts five months of a subscription in one month's Expenses. It is a READ
 rule: the stored date still moves only on pay / skip / missed. The dashboard
 Money card has no Pay button; a row opens Bills & Payments (`BillsDuePopup`),
 the Finance tab's panel.
+Bills & Payments also lists each loan's or card's next payment and its
+recorded payments (`debtPaymentRows`, `shared/debt-payments-timeline.ts`),
+read through the Calendar's own `deriveScheduleFields` → `generateSchedule`,
+so the panel and the grid name the same day; a loan instalment is never
+"assumed" paid. The Executive Money card lists that timeline's Upcoming rows
+(QA 2026-11-24: "Nothing due in the next 30 days" beside the auto loan's
+payment on the Calendar). *Guard:* `tests/bills-timeline-debts.test.ts`.
 The walk steps over an occurrence already paid, skipped or marked missed
 (`settledDates` on the obligation, from the bill's own stamps), because the
 stored date does not move when a LATER date is the one settled. A plain "Pay"
