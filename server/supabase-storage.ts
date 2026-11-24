@@ -130,7 +130,7 @@ import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurrence, effectiveDueDate, resolveOccurrenceKey, isEndedBillFields, currentBillDueDate, readDueDate } from "../shared/liability-recurrence";
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
-import { taskOccurrenceDates, taskOccurrenceLabel, taskRepeats } from "../shared/task-occurrences";
+import { taskOccurrenceDates, isTaskOccurrenceDone, taskOccurrenceLabel, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { formatLoggedValues } from "../shared/tracker-units";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
@@ -4910,9 +4910,12 @@ export class SupabaseStorage implements IStorage {
           color: taskColor, category: "task", description: task.description,
           // Only the stored occurrence can be complete; projected future ones
           // are always still to do.
-          completed: task.status === "done" && d === String(task.dueDate || "").slice(0, 10),
+          completed: isTaskOccurrenceDone(task, d),
           linkedProfiles: task.linkedProfiles, sourceId: task.id,
-          meta: { priority: task.priority, status: task.status, tags: task.tags, recurring: isSeries },
+          // `undated`: the task has NO due date and sits on the day it was
+          // added. The Calendar says so ("No due date") instead of letting that
+          // day read as the due date the Dashboard says is blank.
+          meta: { priority: task.priority, status: task.status, tags: task.tags, recurring: isSeries, ...(task.dueDate ? {} : { undated: true }) },
         });
       }
     }

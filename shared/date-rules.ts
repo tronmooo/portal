@@ -247,6 +247,15 @@ export function isReportingPeriodBoundary(key: unknown, path?: unknown, contextK
 }
 
 /**
+ * A warranty field that names where the warranty BEGAN (its start, the
+ * purchase, its registration or activation) rather than where it ends.
+ * Normalized keys: `warrantyStartDate`, `warranty_effective_date`,
+ * `warrantyPurchaseDate`, `warrantyBeginsOn`, `warrantyFrom`.
+ */
+const WARRANTY_ORIGIN_RE =
+  /^warrant(y|ies)(coverage|period|term|plan)?(start|starts|started|begin|begins|began|beginning|commence|commences|commencement|effective|from|purchase|purchased|bought|issue|issued|registration|registered|activation|activated|install|installed|installation|inservice|claim|claimed)(date|day|on)?$/;
+
+/**
  * Ordered — FIRST match wins, so specific patterns precede generic ones.
  *
  * Deliberately semantic rather than per-document-type: a "renewal date" means
@@ -288,6 +297,13 @@ const FIELD_MATCHERS: FieldMatcher[] = [
   // ── Expirations: one-time important dates, NOT yearly ──
   // A driver's licence expires once. It becomes a new date when renewed; it
   // does not repeat every year, and pretending it does corrupts recurrence.
+  // A warranty field is an expiration only when it says when the warranty
+  // ENDS. `warrantyStartDate` begins with the same noun and is the day the
+  // cover began: classified on the noun alone, a tyre warranty that started in
+  // 2024 read "Expired" in Docs Exp, with `warrantyStartDate` named as its
+  // source (owner report 2026-11-24). `WARRANTY_ORIGIN_RE` is what the field
+  // says besides the noun; like a policy's start it is a fact, not a date to act on.
+  { ruleType: "informational", match: WARRANTY_ORIGIN_RE },
   { ruleType: "expiration", match: /^warrant(y|ies)/, subtype: "warranty" },
   { ruleType: "expiration", match: /lease(end|expir|termination|enddate)|endoflease/, subtype: "lease" },
   {

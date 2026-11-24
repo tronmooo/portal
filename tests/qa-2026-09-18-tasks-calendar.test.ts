@@ -194,7 +194,9 @@ describe("F-30: inline row edits", () => {
     const src = require("fs").readFileSync(require("path").resolve(__dirname, "../client/src/pages/tasks.tsx"), "utf8");
     expect(src).toContain("input-task-due-inline-${task.id}");
     expect(src).toContain("btn-task-priority-${task.id}");
-    expect(src).toContain("patchMutation.mutate({ dueDate: next || null })");
+    // A whole day only, through CommitDateInput; "" clears (2026-11-24: the
+    // plain onChange sent the first typed year digit, and null failed the schema).
+    expect(src).toContain("patchMutation.mutate({ dueDate: day })");
   });
 });
 
