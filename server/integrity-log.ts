@@ -22,6 +22,7 @@ export type IntegrityKind =
   | "mismatched_totals"
   | "stale_dependency"
   | "ai_read_triggered_write"
+  | "ai_recorded_a_non_report"
   | "scope_mismatch"
   | "conflicting_canonical_facts"
   | "validation_failed"

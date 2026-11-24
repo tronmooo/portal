@@ -151,7 +151,9 @@ export type RoutingMismatch =
   | "stale_turn_replay"
   | "duplicate_create_in_turn"
   /** Rule 1: a write tool was called on a turn classified READ. */
-  | "read_only_turn";
+  | "read_only_turn"
+  /** The sentence said it did NOT happen, or that it happened to someone else. */
+  | "not_reported";
 
 export interface RoutingViolation {
   mismatchType: RoutingMismatch;
@@ -538,6 +540,27 @@ export function duplicateCreateViolation(toolName: string, label: string, prior:
       `(This is scoped to one owner: the same name for a DIFFERENT person is a different record and is allowed, ` +
       `so set forProfile and call again rather than telling the user to resend.)`,
     // Silent: the first create's card already tells the user it exists.
+    userMessage: "",
+  };
+}
+
+/**
+ * The sentence did not report this (shared/not-reported.ts): the user said it
+ * did NOT happen, or it happened to someone else. Nothing is written; the
+ * model is told why and answers the user in its own words.
+ */
+export function notReportedViolation(toolName: string, reason: "denied" | "someone_else"): RoutingViolation {
+  const entity = TOOL_INTENT_ENTITY[toolName] ?? "unknown";
+  return {
+    mismatchType: "not_reported",
+    tool: toolName,
+    expectedEntity: entity,
+    actualEntity: entity,
+    expectedOperation: "read",
+    actualOperation: toolOperation(toolName),
+    modelDirective: reason === "denied"
+      ? "Not recorded: the user's message says this did NOT happen (\"I didn't …\"). Do not log it and do not create a tracker, habit or expense for it. Acknowledge briefly in one sentence; do not ask a follow-up question."
+      : "Not recorded: this message is about SOMEONE ELSE, not the user, and that person has no profile here. Do not file it under the user. Say in one sentence that it was not recorded because it is theirs, and that you can track it for them if the user asks you to create a profile for that person.",
     userMessage: "",
   };
 }

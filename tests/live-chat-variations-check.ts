@@ -358,7 +358,8 @@ const CASES: Case[] = [
   { group: "dates", say: "team standup every Monday at 9am", expect: (c) => {
     const e = c.made.events;
     if (e.length !== 1) return `expected ONE repeating event, got ${e.length} (${names(e)}); tasks: ${names(c.made.tasks)}`;
-    if (e[0].recurrence !== "weekly") return `it repeats "${e[0].recurrence}", expected weekly`;
+    // "weekly:1" is weekly on Monday.
+    if (!String(e[0].recurrence).startsWith("weekly")) return `it repeats "${e[0].recurrence}", expected weekly`;
     return String(e[0].time || "").slice(0, 5) === "09:00" ? "" : `it is at ${e[0].time}, expected 09:00`;
   } },
 
@@ -431,10 +432,10 @@ const CASES: Case[] = [
     return /\?/.test(c.reply) ? "" : `the task is still there and the reply did not ask: ${c.reply.slice(0, 120)}`;
   } },
   { group: "corrections", say: "log 2 cups of coffee", then: "sorry, it was 3 cups", expect: (c) => {
-    const e = c.now.entries.filter((x) => /coffee|caffeine/i.test(x.tracker) || Object.keys(x.values || {}).some((k) => /cup/i.test(k)));
-    const todays = e.filter((x) => day(x.timestamp) >= YESTERDAY);
-    if (todays.length !== 1) return `expected ONE coffee entry after the correction, got ${todays.length}: ${todays.map((x) => JSON.stringify(x.values)).join(" | ")}`;
-    return Object.values(todays[0].values || {}).some((v) => money(v, 3)) ? "" : `the entry reads ${JSON.stringify(todays[0].values)}, expected 3`;
+    // Whatever the tracker is called: ONE new entry since before the pair, reading 3.
+    const e = c.made.entries;
+    if (e.length !== 1) return `expected ONE entry after the correction, got ${e.length}: ${e.map((x) => `${x.tracker} ${JSON.stringify(x.values)}`).join(" | ") || "none"}`;
+    return Object.values(e[0].values || {}).some((v) => money(v, 3)) ? "" : `the entry reads ${JSON.stringify(e[0].values)}, expected 3`;
   } },
 ];
 

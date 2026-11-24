@@ -178,6 +178,7 @@ import {
   checkToolAgainstIntent,
   isStaleReplayCall,
   staleReplayViolation,
+  notReportedViolation,
   findDuplicateCreateInTurn,
   duplicateCreateViolation,
   recordTurnCreate,
@@ -186,6 +187,7 @@ import {
   type RoutingViolation,
   type TurnCreate,
 } from "@shared/ai-tool-routing";
+import { recordsAnOccurrence, whyNotReported } from "@shared/not-reported";
 import { toUserFacingError, stripInternalText } from "@shared/ai-message-kinds";
 import { checkClaims, shouldRetryUnbackedWriteClaim, UNBACKED_WRITE_RETRY_INSTRUCTION, honestFailureReply, groundedSummary, describeMismatch, stripStaleCapabilityClaims, type ExecutedOperation } from "@shared/ai-claim-check";
 import { recordChatFailure } from "./ai-failure-log";
@@ -1565,6 +1567,14 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
   const actionVerbs = lower.match(/\b(?:ran|run|walked|walk|played|play|spent|bought|ate|drank|slept|logged|tracked|created|added|reminded|weight|bp|mood|feeling|swam|cycled|biked|lifted|meditated|practiced|cooked|read|studied|worked)\b/gi) || [];
   const uniqueVerbs = new Set(actionVerbs.map(v => v.toLowerCase()));
   if (uniqueVerbs.size >= 2) {
+    return { matched: false, reply: "", actions: [], results: [] };
+  }
+
+  // A sentence that reports nothing of the user's is not for a quick path
+  // (shared/not-reported.ts): "my sister spent $200 on shoes" matched the
+  // "spent $X on Y" shortcut and became the user's own expense (2026-11-24).
+  // The model reads it instead, and the tool loop refuses to record it.
+  if (whyNotReported(message)) {
     return { matched: false, reply: "", actions: [], results: [] };
   }
 
@@ -18474,6 +18484,26 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             if (label && isStaleReplayCall(toolUse.name, input, userMessage, priorUserMessages)) {
               return staleReplayViolation(toolUse.name, label);
             }
+            // ── A REPORT THAT WAS NOT ONE ────────────────────────────────
+            // "I didn't go to the gym today" logged a gym session and created
+            // a Gym tracker; "my sister spent $200 on shoes" became the
+            // user's own expense (chat variations, 2026-11-24). A tool that
+            // records that something HAPPENED does not run when the sentence
+            // says it did not, or that it happened to someone else who has no
+            // profile here (shared/not-reported.ts). Like the two above, a
+            // fact about the message, read conservatively.
+            if (recordsAnOccurrence(toolUse.name)) {
+              const why = whyNotReported(userMessage, input);
+              if (why) {
+                logIntegrity({
+                  kind: "ai_recorded_a_non_report",
+                  message: `model called ${toolUse.name} for a sentence that reports nothing of the user's (${why}) — refused before execution`,
+                  userId, turnId, requestId: options?.requestId,
+                  detail: { tool: toolUse.name, label, why },
+                });
+                return notReportedViolation(toolUse.name, why);
+              }
+            }
             // One request creates ONE record: a second create of the same
             // name this turn is fan-out, not work.
             const dupCreate = findDuplicateCreateInTurn(toolUse.name, input, turnCreates);
@@ -19919,6 +19949,20 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
   const actions: ParsedAction[] = [];
   const results: any[] = [];
   let reply = "";
+
+  // With the model down this function guesses from keywords. A sentence that
+  // reports nothing of the user's (shared/not-reported.ts) is not guessed at:
+  // "my sister spent $200 on shoes" matched "spent" and was saved as the
+  // user's expense.
+  const notReported = whyNotReported(message);
+  if (notReported) {
+    return {
+      reply: notReported === "denied"
+        ? "Got it — nothing was recorded."
+        : "That sounds like someone else's, so I didn't record it as yours. Ask me to create a profile for them if you'd like to track it.",
+      actions, results,
+    };
+  }
 
   // Document retrieval — works even when AI is completely down
   if (lower.match(/^(?:open|show|view|pull up|find|get)\s+(?:my\s+)?(.+)/)) {
