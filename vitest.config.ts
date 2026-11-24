@@ -11,6 +11,8 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
+      'tests/liability-interest-expense-once.test.ts',
+      'tests/finance-expense-date.dom.test.tsx',
       'tests/workflow-matrix.test.ts',
       'tests/bills-all-tab.dom.test.tsx',
       'tests/chat-tool-sweep-2026-11-24.test.ts',

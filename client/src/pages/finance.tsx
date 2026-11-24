@@ -22,6 +22,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount, sumMonthIncomeToDateNow, canonicalIncomeFrequency, latePaychecks, reconcileExpectedPaychecks, paycheckStatus } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo, useRef } from "react";
+import { dateInputState, isCommittableDay, UNFINISHED_DATE_MESSAGE } from "@/lib/date-input";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -304,26 +305,60 @@ export default function FinancePage() {
      dialog without remount the second open briefly showed the prior
      expense's values. Keying the effect on editingExpense?.id keeps the
      form authoritatively in sync with the currently-selected row. */
+  // Pre-select the existing linked PERSON, and separately the account the
+  // expense was paid from. `linkedProfiles` mixes the two (Add writes
+  // [person, account]), and Edit used to write back [person] alone — so
+  // re-assigning an expense silently cut it loose from its account.
+  const linkageOf = (e: any, accounts: Set<string>) => ({
+    profileId: ((e?.linkedProfiles || []) as string[]).find((id) => !accounts.has(id)) ?? "",
+    accountId: ((e?.linkedProfiles || []) as string[]).find((id) => accounts.has(id)) ?? "",
+  });
+  /** The linkage the form was last seeded with, so a later account-list change
+   *  can correct an untouched picker without touching anything the user typed. */
+  const seededLinkageRef = useRef<{ profileId: string; accountId: string } | null>(null);
   useEffect(() => {
     if (editingExpense) {
+      const linkage = linkageOf(editingExpense, accountIdSet);
+      seededLinkageRef.current = linkage;
       setEditForm({
         description: editingExpense.description ?? "",
         amount: String((editingExpense as any).amount ?? ""),
         category: (editingExpense as any).category ?? "",
         vendor: (editingExpense as any).vendor ?? "",
         date: (editingExpense as any).date?.slice(0, 10) ?? "",
-        // Pre-select the existing linked PERSON, and separately the account
-        // the expense was paid from. `linkedProfiles` mixes the two (Add writes
-        // [person, account]), and Edit used to write back [person] alone — so
-        // re-assigning an expense silently cut it loose from its account.
-        profileId: ((editingExpense as any).linkedProfiles || []).find((id: string) => !accountIdSet.has(id)) ?? "",
-        accountId: ((editingExpense as any).linkedProfiles || []).find((id: string) => accountIdSet.has(id)) ?? "",
+        ...linkage,
       });
     } else {
+      seededLinkageRef.current = null;
       setEditForm({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "", accountId: "" });
     }
-  }, [editingExpense?.id, accountIdSet]);
+    // Seeded once per expense. QA 2026-11-24 (bug 9): this effect also ran on
+    // every change of `accountIdSet` — i.e. whenever /api/profiles refetched
+    // with different data (a refetch on window focus after the native date
+    // picker closed, a balance moved elsewhere) — and re-seeded EVERY field
+    // from the stored row. A date typed into the open dialog went back to the
+    // stored day before Save, the PATCH carried no date, and the toast said
+    // "updated". The account list now only corrects the two pickers below.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingExpense?.id]);
+  useEffect(() => {
+    if (!editingExpense || !seededLinkageRef.current) return;
+    const seeded = seededLinkageRef.current;
+    const next = linkageOf(editingExpense, accountIdSet);
+    if (next.profileId === seeded.profileId && next.accountId === seeded.accountId) return;
+    seededLinkageRef.current = next;
+    // Only pickers the user has not changed follow the late-loaded accounts.
+    setEditForm((f) => (f.profileId === seeded.profileId && f.accountId === seeded.accountId ? { ...f, ...next } : f));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountIdSet]);
   const [editSaving, setEditSaving] = useState(false);
+  // Rule 6: a half-typed native date reports "" — the same as an empty field.
+  // The forms read the element itself so "" from a half-typed day is refused
+  // instead of being filed as today (Add) or dropped as "unchanged" (Edit).
+  const addDateRef = useRef<HTMLInputElement | null>(null);
+  const editDateRef = useRef<HTMLInputElement | null>(null);
+  const [addDateError, setAddDateError] = useState<string | null>(null);
+  const [editDateError, setEditDateError] = useState<string | null>(null);
   // What the Edit dialog refuses to save, said out loud. A negative or empty
   // amount used to grey the Save button out with no explanation at all.
   const editAmountNum = parseFloat(editForm.amount);
@@ -1137,7 +1172,7 @@ export default function FinancePage() {
                 dialog stays here (it is a portal, and `addOpen` is also driven
                 by the ?new=expense deep link), but its trigger now sits in the
                 Recent Expenses header, where expenses are actually browsed. */}
-            <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setCategoryPicked(false); setAddAttempt(false); } }}>
+            <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setCategoryPicked(false); setAddAttempt(false); setAddDateError(null); } }}>
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Add Expense</DialogTitle>
@@ -1179,7 +1214,12 @@ export default function FinancePage() {
                   {/* Round-6 fix (BUG-016): Add Expense was missing a Date field, while Edit Expense had one.
                       Default to today (user TZ); user can override for backdated entries. */}
                   <div><Label className="text-xs">Date</Label>
-                    <Input type="date" value={newExpense.date} onChange={e => setNewExpense(p => ({ ...p, date: e.target.value }))} data-testid="input-expense-date" /></div>
+                    <Input type="date" ref={addDateRef} value={newExpense.date}
+                      onChange={e => { setAddDateError(null); setNewExpense(p => ({ ...p, date: e.target.value })); }}
+                      aria-invalid={addDateError ? true : undefined}
+                      data-testid="input-expense-date" />
+                    {addDateError && <p className="text-xs text-destructive mt-1" role="alert" data-testid="expense-date-error">{addDateError}</p>}
+                  </div>
                   <div><Label className="text-xs">Profile</Label>
                     <Select value={expenseProfileId} onValueChange={setExpenseProfileId}>
                       <SelectTrigger data-testid="select-expense-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
@@ -1247,6 +1287,13 @@ export default function FinancePage() {
                       // the optimistic path and losing the entry to a toast (D287).
                       if (!isWholeCents(amt)) {
                         toast({ title: SUB_CENT_AMOUNT_MESSAGE, variant: "destructive" });
+                        return;
+                      }
+                      // A half-typed date is not "no date" (Rule 6): it used to
+                      // be sent as "" and filed TODAY (QA 2026-11-24, bug 9).
+                      const addDateState = dateInputState(addDateRef.current);
+                      if (addDateState === "partial" || (newExpense.date && !isCommittableDay(newExpense.date))) {
+                        setAddDateError(UNFINISHED_DATE_MESSAGE);
                         return;
                       }
                       // Snapshot the payload BEFORE resetting the form (see the
@@ -1778,7 +1825,12 @@ export default function FinancePage() {
             </div>
             <div><Label>Vendor</Label><Input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} placeholder="Optional" /></div>
             {/* U11: prevent picking a future date for an already-incurred expense */}
-            <div><Label>Date</Label><Input type="date" max={localTodayISO()} value={editForm.date} onChange={e => setEditForm(f => ({...f, date: e.target.value}))} /></div>
+            <div><Label>Date</Label><Input type="date" ref={editDateRef} max={localTodayISO()} value={editForm.date}
+              onChange={e => { setEditDateError(null); setEditForm(f => ({...f, date: e.target.value})); }}
+              aria-invalid={editDateError ? true : undefined}
+              data-testid="input-edit-expense-date" />
+              {editDateError && <p className="text-xs text-destructive mt-1" role="alert" data-testid="edit-expense-date-error">{editDateError}</p>}
+            </div>
             {/* Round-6 fix (BUG-017): Edit Expense was missing the Profile field that Add Expense already had.
                 Match parity so re-assigning is possible without delete+recreate. */}
             <div><Label>Profile</Label>
@@ -1811,8 +1863,15 @@ export default function FinancePage() {
             )}
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditingExpense(null)} disabled={editSaving}>Cancel</Button>
-              <Button className="flex-1" disabled={!!editError || editSaving} onClick={async () => {
+              <Button className="flex-1" disabled={!!editError || editSaving} data-testid="btn-save-edit-expense" onClick={async () => {
                 if (!editingExpense) return;
+                // A half-typed date reports "" and used to read as "date
+                // unchanged": nothing was sent and the toast still said
+                // "updated" (QA 2026-11-24, bug 9). Refuse it and keep the form.
+                if (dateInputState(editDateRef.current) === "partial" || (editForm.date && !isCommittableDay(editForm.date))) {
+                  setEditDateError(UNFINISHED_DATE_MESSAGE);
+                  return;
+                }
                 const targetId = editingExpense.id;
                 const newDesc = editForm.description;
                 const newAmount = parseFloat(editForm.amount);
@@ -1843,8 +1902,8 @@ export default function FinancePage() {
                   if (Array.isArray(old?.items)) return { ...old, items: old.items.map(patch) };
                   return old;
                 });
-                // Close the dialog immediately
-                toast({ title: `"${newDesc}" updated` });
+                // Close the dialog immediately; say "updated" only once the
+                // server has the change, never before the write lands.
                 setEditingExpense(null);
                 setEditSaving(true);
                 try {
@@ -1870,7 +1929,24 @@ export default function FinancePage() {
                     // Round-6 fix (BUG-017): persist the chosen profile linkage.
                     ...(newProfiles ? { linkedProfiles: newProfiles } : {}),
                   });
-                  if (Object.keys(patch).length > 0) await apiRequest("PATCH", `/api/expenses/${targetId}`, patch);
+                  if (Object.keys(patch).length > 0) {
+                    const res = await apiRequest("PATCH", `/api/expenses/${targetId}`, patch);
+                    // The list shows the row the SERVER saved, not the form's
+                    // hope of it: a field it did not take reads as stored.
+                    const saved = await res.json().catch(() => null);
+                    if (saved && saved.id === targetId) {
+                      queryClient.setQueriesData({ queryKey: ["/api/expenses"] }, (old: any) => {
+                        const put = (e: any) => (e?.id === targetId ? { ...e, ...saved } : e);
+                        if (!old) return old;
+                        if (Array.isArray(old)) return old.map(put);
+                        if (Array.isArray(old?.items)) return { ...old, items: old.items.map(put) };
+                        return old;
+                      });
+                    }
+                    toast({ title: `"${newDesc}" updated` });
+                  } else {
+                    toast({ title: "Nothing changed", description: `"${newDesc}" already had these details.` });
+                  }
                   // Money that moved has to move back. Re-pointing an expense at
                   // another account, or changing its amount, used to leave the
                   // account balances exactly where the original save put them.
