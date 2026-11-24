@@ -58,7 +58,7 @@ const PACKAGE_WORDS = "bag|box|package|pack|container|can|bottle|tub|jar|carton|
 const PORTION_WORDS = "portions?|servings?|pieces?|slices?|helpings?|bowls?|plates?";
 
 const amount = (tok: string): number | null => {
-  const t = tok.toLowerCase().trim();
+  const t = tok.toLowerCase().replace(/\s+/g, "").trim();
   if (t === "half") return 0.5;
   if (t === "quarter") return 0.25;
   return parseAmountToken(t);
@@ -95,13 +95,17 @@ function measuresIn(lc: string): Measure[] {
     const n = Number(m[1]);
     if (!isFinite(n) || n <= 0) continue;
     const before = lc.slice(Math.max(0, idx - 24), idx);
-    const perBasis = /\b(per|in|for every|for each|every|each)\s+(?:a\s+|an\s+|one\s+)?$/.test(before);
+    // "per 40 g", "in 100 ml" — or the measure is the subject of the label's sentence: "150 g has 120 calories".
+    const perBasis = /\b(per|in|for every|for each|every|each)\s+(?:a\s+|an\s+|one\s+)?$/.test(before)
+      || /^\s*(?:serving\s+)?(?:has|have|contains?|provides?|is|=|:)\s+(?:about\s+)?\d/.test(after);
     out.push({ grams: toGrams(n, m[2]), ml: toMl(n, m[2]), text: m[0].replace(/\s+/g, " "), index: idx, perBasis });
   }
   return out;
 }
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
+/** The factor multiplies a label: it keeps the precision of the division (2/6 is not 0.3333). */
+const exact = (n: number) => Number(n.toPrecision(12));
 
 /** Scale a stated label by the factor, at storage precision. */
 function scale(values: NutrientVector, factor: number): NutrientVector {
@@ -124,10 +128,12 @@ export function parseStatedLabel(message: string): StatedLabel | null {
   if (Object.keys(values).length === 0) return null;
   const lc = spokenAmountsToDigits(text.toLowerCase().replace(/\s+/g, " "));
   const done = (basis: StatedLabel["basis"], factor: number, method: string, scaled: boolean): StatedLabel => {
-    const f = isFinite(factor) && factor > 0 ? round4(factor) : 1;
+    const f = isFinite(factor) && factor > 0 ? exact(factor) : 1;
     return { values, basis, factor: f, method, consumed: scale(values, f), scaled: scaled && f > 0 };
   };
 
+  // "a quarter of the bag" is read from the words as written (the digit form above is for amounts).
+  const spokenShare = text.toLowerCase().replace(/\s+/g, " ");
   const measures = measuresIn(lc);
 
   // 1. The label is for a weight or a volume: "per 40 grams", "per 100 ml".
@@ -156,6 +162,27 @@ export function parseStatedLabel(message: string): StatedLabel | null {
     }
   }
 
+  // 2b. The label's serving is a COUNT or a household measure, and so is what
+  //     was eaten: "one serving is 4 dumplings … I ate 5", "a serving is 2/3
+  //     cup … I ate 1 cup". The factor is eaten ÷ per-serving, in that unit.
+  const FRAC = "\\d+\\s*/\\s*\\d+|\\d+(?:\\.\\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|twelve|half";
+  const servingIs = lc.match(new RegExp(`\\b(?:one|a|1|each|per)\\s+serving\\s+(?:size\\s+)?(?:is|=|equals|of)\\s+(${FRAC})\\s+(?:of\\s+a\\s+)?([a-z]+)`))
+    || lc.match(new RegExp(`\\bserving size\\s+(?:is|of|:)?\\s*(${FRAC})\\s+([a-z]+)`))
+    || lc.match(new RegExp(`(${FRAC})\\s+([a-z]+)\\s+(?:is|are|=|makes?|equals?)\\s+(?:one|a|1)\\s+serving`));
+  if (servingIs) {
+    const per = amount(servingIs[1]);
+    const unit = servingIs[2].replace(/(es|s)$/, "");
+    const isMeasure = /^(g|gram|ml|oz|ounce|kg|lb|pound|liter|litre)$/.test(unit);
+    if (per && per > 0 && !isMeasure) {
+      const rest = lc.replace(servingIs[0], " ");
+      const ate = rest.match(new RegExp(`(${FRAC})\\s+(?:of\\s+a\\s+)?${unit}(?:e?s)?\\b`));
+      const eaten = ate ? amount(ate[1]) : null;
+      if (eaten && eaten > 0) {
+        return done({ kind: "serving", amount: per, label: `per ${servingIs[1].trim()} ${servingIs[2]}` }, eaten / per, `${round4(eaten)} ${unit} ÷ ${round4(per)} ${unit} per serving`, true);
+      }
+    }
+  }
+
   // 3. The label is per serving.
   const perServing = /\b(each|per|a|one|every|single)\s+serving\b|\bserving\s+(?:has|contains|is|provides)\b|\bper\s+portion\b/.test(lc);
   if (perServing) {
@@ -165,7 +192,7 @@ export function parseStatedLabel(message: string): StatedLabel | null {
       || lc.match(new RegExp(`(?:${PACKAGE_WORDS})\\s+(?:has|contains|holds|is)\\s+(\\d+(?:\\.\\d+)?)\\s+servings?`));
     if (perPackage) {
       const n = Number(perPackage[1]);
-      const share = detectPackageFraction(lc);
+      const share = detectPackageFraction(spokenShare);
       if (n > 0 && share) {
         const part = share.fraction === 1 ? `the whole ${share.word}` : `${round4(share.fraction)} of the ${share.word}`;
         return done(basis, n * share.fraction, `${part} × ${n} servings`, true);
@@ -176,6 +203,11 @@ export function parseStatedLabel(message: string): StatedLabel | null {
       .map((m) => ({ n: amount(m[1]), tok: m[1] }))
       .find((x) => x.n != null && !(x.tok === "a" || x.tok === "an" || x.tok === "one") );
     if (ate?.n) return done(basis, ate.n, `${ate.n} servings`, true);
+    const part = spokenShare.match(/\b(half|a half|a quarter|quarter|a third|two thirds|three quarters)\s+(?:of\s+)?(?:a|one)\s+serving\b/);
+    if (part) {
+      const f = ({ half: 0.5, "a half": 0.5, "a quarter": 0.25, quarter: 0.25, "a third": 1 / 3, "two thirds": 2 / 3, "three quarters": 0.75 } as Record<string, number>)[part[1]];
+      return done(basis, f, `${round4(f)} of a serving`, true);
+    }
     return done(basis, 1, "1 serving", true);
   }
 

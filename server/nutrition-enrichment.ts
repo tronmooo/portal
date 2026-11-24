@@ -411,6 +411,7 @@ Rules:
 - Return ONLY a JSON object: {"components":[{"name":string,"brand":string|null,"quantityText":string,"servings":number,"serving":{"amount":number,"unit":string,"grams":number|null,"ml":number|null,"label":string},"nutrients":{"calories":number,"protein":number,"carbs":number,"fat":number,"saturatedFat":number|null,"fiber":number|null,"sugar":number|null,"addedSugar":number|null,"transFat":number|null,"sugarAlcohol":number|null,"sodium":number|null,"cholesterol":number|null,"potassium":number|null,"calcium":number|null,"iron":number|null,"magnesium":number|null,"zinc":number|null,"vitaminC":number|null,"vitaminD":number|null,"caffeine":number|null,"fluidMl":number|null},"isBeverage":boolean,"confidence":"high"|"medium"|"low","basis":string}]}
 - One component per phrase given, in the same order. Never add a phrase that was not given.
 - "nutrients" are PER SERVING as described by "serving"; "servings" is how many servings the person's quantity is (the phrase's wording decides; unstated = 1).
+- ALWAYS give "serving.grams" (or "serving.ml" for a drink): the weight of the ONE serving your nutrients describe. For a food given by weight, make the serving 100 g and give per-100 g values; the server multiplies by the stated weight itself.
 - Use the standard nutrition reference for generic foods (medium confidence). Use a branded product's actual label ONLY when you are certain of it (high confidence); otherwise use the closest generic food and say so in "basis" (medium). Vague wording ("some fruit") is low confidence.
 - Grams: protein/carbs/fat/fiber/sugar. Milligrams: sodium/cholesterol/potassium/calcium/iron/caffeine. Calories in kcal. fluidMl only for drinks (the volume drunk per serving).
 - Do not invent precision. Round sensibly. Unknown → null, NEVER 0: 0 means the food has none.
@@ -517,7 +518,64 @@ export function eggPartsOf(text: string): { whites: number; yolks: number } | nu
   return /^yolk/i.test(m[3]) ? { whites: eggs, yolks: part } : { whites: part, yolks: eggs };
 }
 
+/**
+ * A build-your-own restaurant order, as its ingredients: "a Chipotle bowl with
+ * chicken, double white rice and guacamole, no cheese" is chicken + 2 × rice +
+ * guacamole, each from the restaurant's own published figures. Applies only
+ * to a restaurant whose ingredients are in the reference table, and only when
+ * EVERY ingredient the user kept resolves there — otherwise null, and the
+ * order is looked up as one item. "no X" / "without X" leaves X out; "double"
+ * is two servings, "extra" one and a half, "light" half. A burrito includes
+ * its tortilla.
+ */
+const BUILD_RESTAURANTS = Array.from(new Set(NUTRITION_DB.filter((r) => r.kind === "restaurant" && /^chipotle-/.test(r.id)).map((r) => String(r.brand || "").toLowerCase()))).filter(Boolean);
+const NEGATED_RE = /^(?:but\s+)?(?:no|without|hold(?:\s+the)?|minus|skip(?:ped)?(?:\s+the)?|none of the|not any)\s+/i;
+export function restaurantBuildPhrases(item: string, message: string): Phrase[] | null {
+  const text = [message, item].find((t) => BUILD_RESTAURANTS.some((b) => new RegExp(`\\b${b}\\b`, "i").test(String(t || ""))));
+  if (!text) return null;
+  const brand = BUILD_RESTAURANTS.find((b) => new RegExp(`\\b${b}\\b`, "i").test(text))!;
+  // What follows "with" / ":" / an opening parenthesis is the ingredient list.
+  const m = text.match(/\b(?:with|containing|including)\b\s*:?\s*(.+)$/i) || text.match(/[:(]\s*(.+?)\)?\s*$/);
+  if (!m) return null;
+  const pieces = m[1]
+    .replace(/[().]/g, " ")
+    .split(/\s*(?:,|;|\+|\band\b|\bplus\b|\bbut\b(?=\s+(?:no|without)))\s*/i)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (pieces.length < 2) return null;
+  const out: Phrase[] = [];
+  const seen = new Set<string>();
+  const add = (row: NutritionDbItem, servings: number) => {
+    if (seen.has(row.id)) return;
+    seen.add(row.id);
+    out.push({ text: row.name, quantityText: `${servings} servings`, userQuantityStated: true });
+  };
+  for (const raw of pieces) {
+    if (NEGATED_RE.test(raw)) continue;
+    const mult = /^(?:double|2x|two)\b/i.test(raw) ? 2 : /^triple\b/i.test(raw) ? 3 : /^extra\b/i.test(raw) ? 1.5 : /^(?:light|half|a little)\b/i.test(raw) ? 0.5 : 1;
+    const name = raw.replace(/^(?:double|triple|2x|two|extra|light|half|a little|some|a|the|fresh)\s+/i, "").trim();
+    const hit = lookupNutritionDb(`${brand} ${name}`);
+    if (!hit || hit.item.kind !== "restaurant" || String(hit.item.brand || "").toLowerCase() !== brand) return null;
+    add(hit.item, mult);
+  }
+  // The filling named before the list: "a Chipotle CHICKEN burrito with …".
+  const head = text.slice(0, m.index ?? 0);
+  for (const filling of ["chicken", "steak", "carnitas", "barbacoa", "sofritas"]) {
+    if (!new RegExp(`\\b${filling}\\b`, "i").test(head)) continue;
+    const row = NUTRITION_DB.find((r) => r.id === `${brand}-${filling}`);
+    if (row) add(row, /\bdouble\s+(?:chicken|steak|carnitas|barbacoa|sofritas|meat|protein)\b/i.test(head) ? 2 : 1);
+  }
+  if (out.length < 2) return null;
+  if (/\bburrito\b(?!\s+bowl)/i.test(text) && !/\bbowl\b/i.test(text)) {
+    const tortilla = NUTRITION_DB.find((r) => r.id === `${brand}-tortilla`);
+    if (tortilla) add(tortilla, 1);
+  }
+  return out;
+}
+
 export function componentPhrases(item: string, message: string): Phrase[] {
+  const build = restaurantBuildPhrases(item, message);
+  if (build) return build;
   // An item that is only the whites, or only the yolks, is already one of the
   // two parts (the agent split them); it is read as itself.
   const onePart = !/\beggs?\b/i.test(String(item || "").replace(/\beggs?\s+(whites?|yolks?)\b/gi, ""));
@@ -673,8 +731,16 @@ function componentFromModel(est: ModelComponentEstimate, phrase: Phrase, now: st
   // A model estimate is at most a generic equivalent — never "exact".
   const said = String(est.confidence || "medium").toLowerCase();
   const confidence: EnrichmentConfidence = said === "low" ? "low" : "medium";
-  const servings = est.servings && est.servings > 0 ? est.servings : 1;
   const s = est.serving || {};
+  // The estimator says what ONE serving is and what it holds; when the user
+  // stated a weight or a volume, how many servings that is gets worked out
+  // here, not by the model (150 g of a 185 g cup is 0.81 of it — the model
+  // returned the cup's figures unscaled).
+  const perG = Number(s.grams) > 0 ? Number(s.grams) : null;
+  const perMl = Number(s.ml) > 0 ? Number(s.ml) : null;
+  const stated = !qty.assumption && ((qty.grams != null && perG) || (qty.ml != null && perMl && /^(ml|l|fl oz|floz|oz|ounces?)$/.test(String(qty.unit || ""))));
+  const scaled = stated ? (qty.grams != null && perG ? qty.grams / perG : (qty.ml as number) / (perMl as number)) : null;
+  const servings = scaled && scaled > 0 ? scaled : est.servings && est.servings > 0 ? est.servings : 1;
   const basis = est.basis ? ` (${est.basis})` : "";
   return {
     name: est.name || phrase.text,
@@ -692,6 +758,7 @@ function componentFromModel(est: ModelComponentEstimate, phrase: Phrase, now: st
     isBeverage: !!est.isBeverage,
     // A bare count of a drink ("two coffees") says how many, not how big.
     servingAssumed: !hasQuantity(qty) || phrase.userQuantityStated === false || (!!est.isBeverage && qty.count != null && !qty.unit && qty.ml == null),
+    ...(scaled ? { amountFromStatedWeight: true } : {}),
   };
 }
 
@@ -1002,6 +1069,8 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
     ...(isFullLabel(label) || opts.scan ? { fromLabel: true } : {}),
   };
   enrichment.verification = verificationOf(enrichment);
+  const estimates = lookup.components.filter((c) => c.sourceType === "model_estimate");
+  if (estimates.length > 0 && estimates.every((c) => c.amountFromStatedWeight)) enrichment.estimateScaledByServer = true;
 
   // The in-turn pass writes only what a label or a menu states (exact/high)
   // and never leaves a proposal behind; anything less waits for the full pass.

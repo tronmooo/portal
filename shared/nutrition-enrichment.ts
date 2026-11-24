@@ -348,7 +348,8 @@ export function normalizeQuantity(text: string): QuantityNormalization {
   const spoken = original.toLowerCase().replace(/\s+/g, " ");
   const pkg = detectPackageFraction(spoken);
   if (pkg) { base.packageFraction = pkg.fraction; base.packageWord = pkg.word; }
-  let lc = spokenAmountsToDigits(spoken);
+  // "a third of a cup" → "0.3333 cup": the share is OF the measure that follows it.
+  let lc = spokenAmountsToDigits(spoken).replace(/(\d+(?:\.\d+)?)\s+of\s+(?:a|an|one)\s+(?=[a-z])/g, "$1 ");
   const ate = lc.match(MADE_THEN_ATE_RE);
   if (ate && new RegExp(AMOUNT_RE).test(ate[2])) lc = ate[2].trim();
 
@@ -655,6 +656,8 @@ export interface NutritionComponent {
   isBeverage?: boolean;
   /** The user gave no quantity: the serving size is assumed (and said so). */
   servingAssumed?: boolean;
+  /** An estimate whose per-serving figures were multiplied by a weight the user stated (server arithmetic). */
+  amountFromStatedWeight?: boolean;
   /** The record behind the figures, so it can be opened or re-read: a USDA FoodData Central id, an Open Food Facts barcode, an internal row. */
   sourceRef?: { provider: "fdc" | "off" | "internal" | "label" | "scan"; id: string; barcode?: string; dataType?: string };
   /** Percent Daily Values as printed on a scanned label (kept as printed, never computed). */
@@ -704,6 +707,8 @@ export interface NutritionEnrichment {
   enrichedAt: string;
   /** The whole entry comes from a label the user read out: nothing it omits is filled in. */
   fromLabel?: boolean;
+  /** Every estimated component was scaled by the server from a stated weight: its totals replace the base figures. */
+  estimateScaledByServer?: boolean;
   /** Verified / reference / estimated, as decided when the entry was written (`verificationOf`). */
   verification?: NutritionVerification;
 }
@@ -843,7 +848,10 @@ export function buildEntryValuePatch(
     if (key === "caffeine" && total.value <= 0) continue;
     const existing = existingValues[key];
     const existingNum = typeof existing === "number" ? existing : typeof existing === "string" ? parseFloat(existing) : NaN;
-    if (total.sourceType === "model_estimate" && isFinite(existingNum) && existingNum > 0) continue;
+    // …unless that estimate is a per-serving figure the SERVER scaled by a
+    // weight the user stated: the base number is the chat model's own
+    // multiplication, which is the part that goes wrong.
+    if (total.sourceType === "model_estimate" && isFinite(existingNum) && existingNum > 0 && !(enrichment as any).estimateScaledByServer) continue;
     patch[key] = total.value;
   }
   return patch;

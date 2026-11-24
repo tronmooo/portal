@@ -28,24 +28,22 @@ async function pictureData(file: File): Promise<{ data: string; mime: string }> 
     r.onerror = () => reject(new Error("The picture could not be read from this device."));
     r.readAsDataURL(file);
   });
+  // Shrink where the browser can decode the picture; otherwise send it as it is.
   try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const i = new Image();
-      i.onload = () => resolve(i);
-      i.onerror = () => reject(new Error("decode"));
-      i.src = raw;
-    });
-    const max = 1800;
-    const scale = Math.min(1, max / Math.max(img.width, img.height));
-    if (scale < 1 || !/^image\/(jpeg|png|webp)$/.test(file.type)) {
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const out = canvas.toDataURL("image/jpeg", 0.88);
-        if (out.length > 100) return { data: out.split(",")[1], mime: "image/jpeg" };
+    if (typeof createImageBitmap === "function") {
+      const img = await createImageBitmap(file);
+      const max = 1800;
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      if (scale < 1 || !/^image\/(jpeg|png|webp)$/.test(file.type)) {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const out = canvas.toDataURL("image/jpeg", 0.88);
+          if (out.length > 100) return { data: out.split(",")[1], mime: "image/jpeg" };
+        }
       }
     }
   } catch { /* send the original */ }
@@ -139,7 +137,7 @@ export function NutritionScanDialog({ open, onClose, onLogged }: { open: boolean
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) close(); }}>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" data-testid="nutrition-scan-dialog">
+      <DialogContent className="max-w-md max-h-[90dvh] overflow-y-auto" data-testid="nutrition-scan-dialog">
         <DialogHeader>
           <DialogTitle>Scan a nutrition label</DialogTitle>
           <DialogDescription>

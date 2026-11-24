@@ -268,3 +268,102 @@ describe("6. The nutrition fields Portol holds", () => {
     expect(roundNutrient(62.8, "sodium")).toBe(63);
   });
 });
+
+// ── Found with the real model on the preview (2026-11-25) ────────────────────
+import { splitSeparateFoods } from "../shared/food-split";
+import { restaurantBuildPhrases, lookupComponents } from "../server/nutrition-enrichment";
+import { sumComponentTotals } from "../shared/nutrition-enrichment";
+
+describe("7. Regressions the live run exposed", () => {
+  it("'White rice, dry (100 g)' is ONE food: a preparation word after a comma never becomes a second entry (logged 730 kcal)", () => {
+    expect(splitSeparateFoods("White rice, dry (100 g)")).toEqual(["White rice, dry (100 g)"]);
+    expect(splitSeparateFoods("Chicken breast, raw (200 g)")).toEqual(["Chicken breast, raw (200 g)"]);
+    expect(splitSeparateFoods("Black beans, canned, drained (1 cup)")).toEqual(["Black beans, canned, drained (1 cup)"]);
+    // Real second foods still separate.
+    expect(splitSeparateFoods("Chicken breast, raw (200 g), a banana")).toEqual(["Chicken breast, raw (200 g)", "a banana"]);
+  });
+
+  it("a label whose serving is a count or a household measure is scaled by what was eaten in that unit", () => {
+    const dumplings = parseStatedLabel("I ate 5 dumplings. The label says one serving is 4 dumplings with 220 calories, 9g fat, 26g carbs and 9g protein.")!;
+    expect(dumplings.consumed).toMatchObject({ calories: 275, fat: 11.25, carbs: 32.5, protein: 11.25 });
+    const cereal = parseStatedLabel("I ate 1 cup of cereal. The label says a serving is 2/3 cup with 200 calories, 3g fat, 41g carbs and 6g protein.")!;
+    expect(cereal.consumed).toMatchObject({ calories: 300, fat: 4.5, carbs: 61.5, protein: 9 });
+    const yogurt = parseStatedLabel("I ate 90 g of yogurt. The tub says 150 g has 120 calories, 15g protein, 8g carbs and 3g fat.")!;
+    expect(yogurt.consumed).toMatchObject({ calories: 72, protein: 9, carbs: 4.8, fat: 1.8 });
+  });
+
+  it("shares of a package, of a serving and of a recipe keep the precision of the division", () => {
+    expect(parseStatedLabel("I ate a quarter of a bag of trail mix. There are 8 servings per bag and each serving contains 170 calories, 11g fat, 14g carbs and 5g protein.")!.consumed).toMatchObject({ calories: 340, fat: 22, carbs: 28, protein: 10 });
+    expect(parseStatedLabel("I ate half a serving of ice cream. A serving has 270 calories, 17g fat, 26g carbs, 4g protein and 22g sugar.")!.consumed).toMatchObject({ calories: 135, fat: 8.5, sugar: 11 });
+    // 2 of 6 servings of 2400 kcal is 800, not 799.9.
+    expect(parseStatedLabel("I made six equal servings of chili containing 2400 calories, 150g protein, 210g carbs and 96g fat in total. I ate two servings.")!.consumed).toMatchObject({ calories: 800, protein: 50, carbs: 70, fat: 32 });
+  });
+
+  it("a build-your-own restaurant order is its ingredients: 'no X' leaves X out, 'double' is two, a burrito has its tortilla", async () => {
+    const total = async (item: string, msg: string) => {
+      const r = await lookupComponents(item, msg, { syncOnly: true, aliases: {} } as any, NOW);
+      const t: any = sumComponentTotals(r.components, NOW);
+      return { calories: t.calories?.value, protein: t.protein?.value, carbs: t.carbs?.value, fat: t.fat?.value, parts: r.components.length, unresolved: r.unresolved };
+    };
+    expect(await total("Chipotle Chicken Burrito Bowl", "I had a Chipotle burrito bowl with chicken, white rice, black beans and fresh tomato salsa, no cheese and no sour cream."))
+      .toMatchObject({ calories: 545, protein: 44, carbs: 66, fat: 12.5, parts: 4, unresolved: [] });
+    expect(await total("Chipotle Bowl", "I had a Chipotle bowl with chicken, double white rice, fajita veggies and guacamole."))
+      .toMatchObject({ calories: 850, protein: 43, carbs: 93, fat: 37, parts: 4 });
+    expect(await total("Chipotle Chicken Burrito", "I had a Chipotle chicken burrito with white rice, black beans, cheese and lettuce, but no salsa."))
+      .toMatchObject({ calories: 955, protein: 58, carbs: 114, fat: 29.5, parts: 6 });
+    // An ingredient the restaurant's table does not have: no partial build, the order is looked up as one item.
+    expect(restaurantBuildPhrases("Chipotle Bowl", "I had a Chipotle bowl with chicken and mystery sauce")).toBeNull();
+    // A restaurant with no ingredient table is never "built".
+    expect(restaurantBuildPhrases("Subway Turkey Sub", "a Subway turkey sub with lettuce, tomato and mayo")).toBeNull();
+  });
+
+  it("an estimate gives what ONE serving holds; the server scales it by the stated weight and the result replaces the base figure", async () => {
+    // The chat model saved the per-cup figure for 150 g (seen live: 222 kcal).
+    const entry = await storage.logEntry({ trackerId, values: { item: "Purple Yam, boiled (150 g)", calories: 222, protein: 8, carbs: 39, fat: 3.5 } });
+    const out = await enrichNutritionEntry(storage, {
+      entryId: entry!.id, trackerId, message: "I ate 150 grams of boiled purple yam.", mode: "auto",
+      deps: { now: () => NOW, aliases: {}, sourceLookup: async (asks) => asks.map(() => null),
+        // The estimator's serving is 100 g; it also returns a WRONG "servings" the server must not use.
+        modelEstimate: async () => [{ name: "Purple yam, boiled", servings: 1, serving: { amount: 100, unit: "g", grams: 100, label: "100 g" }, nutrients: { calories: 120, protein: 1.5, carbs: 28, fat: 0.1 }, confidence: "medium" }] },
+    });
+    expect(out.status).toBe("applied");
+    const stored = (await storage.getTrackerEntry(entry!.id))! as any;
+    expect(stored.values).toMatchObject({ calories: 180, protein: 2.25, carbs: 42, fat: 0.15 });
+    expect(stored.computed.nutrition.verification).toBe("estimated");
+    expect(stored.computed.nutrition.components[0].sourceType).toBe("model_estimate");
+  });
+
+  it("an estimate with no stated weight still never replaces the figures already on the entry", async () => {
+    const entry = await storage.logEntry({ trackerId, values: { item: "Purple Yam Stew", calories: 300, protein: 5, carbs: 50, fat: 9 } });
+    await enrichNutritionEntry(storage, {
+      entryId: entry!.id, trackerId, message: "I had a bowl of purple yam stew", mode: "auto",
+      deps: { now: () => NOW, aliases: {}, sourceLookup: async (asks) => asks.map(() => null),
+        modelEstimate: async () => [{ name: "Purple yam stew", servings: 1, serving: { amount: 1, unit: "bowl", grams: 350, label: "1 bowl" }, nutrients: { calories: 410, protein: 9, carbs: 61, fat: 14 }, confidence: "medium" }] },
+    });
+    expect(((await storage.getTrackerEntry(entry!.id))! as any).values).toMatchObject({ calories: 300, protein: 5, carbs: 50, fat: 9 });
+  });
+
+  it("the databases are asked before the model, for generic and branded foods alike, and a database answer is recorded with its record", async () => {
+    const asked: string[] = [];
+    const entry = await storage.logEntry({ trackerId, values: { item: "Teff, cooked (200 g)", ...WRONG } });
+    const out = await enrichNutritionEntry(storage, {
+      entryId: entry!.id, trackerId, message: "I ate 200 grams of cooked teff.", mode: "auto",
+      deps: { now: () => NOW, aliases: {},
+        sourceLookup: async (asks) => { asked.push(...asks.map((a) => `${a.phrase}|${a.branded}`)); return asks.map(() => ({
+          name: "Teff, cooked", userQuantity: "200 grams of cooked teff", normalizedQuantity: normalizeQuantity("200 grams"), servings: 2,
+          matchedServing: { amount: 100, unit: "g", grams: 100, ml: null, label: "100 g" }, sourceType: "reference" as const,
+          source: "USDA FoodData Central SR Legacy #168918 · 200 g", sourceItem: "Teff, cooked", confidence: "high" as const,
+          perServing: { calories: 101, protein: 3.87, carbs: 19.86, fat: 0.65 },
+          nutrients: Object.fromEntries(Object.entries({ calories: 202, protein: 7.74, carbs: 39.72, fat: 1.3 }).map(([k, v]) => [k, { value: v, unit: "g", source: "USDA", sourceType: "reference", confidence: "high", calculatedOrDirect: "calculated", enrichedAt: NOW }])) as any,
+          sourceRef: { provider: "fdc" as const, id: "168918", dataType: "SR Legacy" },
+        })); },
+        modelEstimate: async () => { throw new Error("the model must not be asked when a database answered"); } },
+    });
+    expect(out.status).toBe("applied");
+    expect(asked).toEqual(["Teff, cooked (200 g)|false"]);
+    const stored = (await storage.getTrackerEntry(entry!.id))! as any;
+    expect(stored.values).toMatchObject({ calories: 202, protein: 7.74, carbs: 39.72, fat: 1.3 });
+    expect(stored.computed.nutrition.components[0].sourceRef).toEqual({ provider: "fdc", id: "168918", dataType: "SR Legacy" });
+    expect(stored.computed.nutrition.verification).toBe("reference");
+  });
+});

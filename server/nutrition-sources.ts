@@ -317,7 +317,8 @@ export async function offSearch(query: string, deps: SourceDeps = {}): Promise<S
 
 /** A UPC / EAN as people give it: 8, 12, 13 or 14 digits, spaces and dashes allowed. */
 export function barcodeIn(text: string): string | null {
-  const m = String(text || "").match(/(?<![\d.])(\d[\d -]{6,18}\d)(?![\d.])/g) || [];
+  // Not part of a longer number or a decimal; a full stop ending the sentence is fine.
+  const m = String(text || "").match(/(?<![\d.])(\d[\d -]{6,18}\d)(?!\d|\.\d)/g) || [];
   for (const raw of m) {
     const digits = raw.replace(/[ -]/g, "");
     if ([8, 12, 13, 14].includes(digits.length) && isValidGtin(digits)) return digits;
@@ -674,7 +675,15 @@ export async function resolveFromSources(asks: SourceAsk[], deps: SourceDeps = {
   const searched = await Promise.all(open.map(async (i) => {
     const ask = asks[i];
     const query = searchQuery(ask.phrase);
-    const lists = ask.branded
+    // A restaurant's own items are published in USDA's reference set under
+    // the restaurant's name ("McDONALD'S, Egg McMUFFIN"). Only a record that
+    // carries that name is the restaurant's food; anything else (a frozen
+    // retail "burrito bowl") is refused before the chooser sees it.
+    const restaurant = restaurantIn(ask.phrase);
+    const lists = restaurant
+      ? (await Promise.all([fdcSearch(query, "generic", deps), fdcSearch(query, "branded", deps)]))
+          .map((list) => list.filter((c) => `${c.brand || ""} ${c.name}`.toLowerCase().replace(/[^a-z ]/g, "").includes(restaurant)))
+      : ask.branded
       ? await Promise.all([fdcSearch(query, "branded", deps), offSearch(query, deps)])
       : [await fdcSearch(query, "generic", deps)];
     // Best few by name fit, so the chooser reads a short list.
@@ -703,12 +712,21 @@ export async function resolveFromSources(asks: SourceAsk[], deps: SourceDeps = {
   return out;
 }
 
+/** Restaurants and chains: their food is not a packaged product, and a retail product that shares a word with the order is not it. */
+const RESTAURANT_RE = /\b(mcdonald'?s|chipotle|starbucks|subway|wendy'?s|burger king|taco bell|chick-?fil-?a|panera|dunkin'?|kfc|popeyes|domino'?s|pizza hut|five guys|in-?n-?out|shake shack|panda express|olive garden|sweetgreen|cava|qdoba|jimmy john'?s|jersey mike'?s|arby'?s|sonic|dairy queen|little caesars|papa john'?s|applebee'?s|chili'?s|ihop|denny'?s|cheesecake factory|tim hortons|dutch bros|jamba|wingstop|culver'?s|whataburger|jack in the box|carl'?s jr|hardee'?s|del taco|el pollo loco|red lobster|outback|texas roadhouse|buffalo wild wings|zaxby'?s|raising cane'?s|bojangles|white castle|krispy kreme|cinnabon|auntie anne'?s|baskin-?robbins|cold stone|nando'?s|pret|greggs|tim horton'?s|wagamama)\b/i;
+/** The restaurant a phrase names, lower-cased without punctuation, or null. */
+export function restaurantIn(phrase: string): string | null {
+  const m = String(phrase || "").match(RESTAURANT_RE);
+  return m ? m[1].toLowerCase().replace(/[^a-z ]/g, "") : null;
+}
+
 /** The words to search a database with: the food, without amounts, verbs and filler. */
 export function searchQuery(phrase: string): string {
   return String(phrase || "")
     .replace(/\([^)]*\)/g, (m) => (/\d/.test(m) ? " " : ` ${m.slice(1, -1)} `))
     .replace(/\b\d+(?:[.,]\d+)?\s*(?:-\s*)?(fl\.?\s*oz|oz|ounces?|ml|l|g|grams?|kg|lbs?|pounds?|cups?|tbsp|tsp|tablespoons?|teaspoons?|servings?|slices?|pieces?)\b/gi, " ")
-    .replace(/\b(i|ate|had|drank|about|around|approximately|roughly|some|a|an|the|of|my|half|whole|one|two|three|four|five|six|weighed|before cooking|including the peel)\b/gi, " ")
+    .replace(/\bhalf\s+(?=(?:a|an|of|the)\b)/gi, " ")
+    .replace(/\b(i|ate|had|drank|about|around|approximately|roughly|some|a|an|the|of|my|one|two|three|four|five|six|weighed|before cooking|including the peel)\b/gi, " ")
     .replace(/(?<![a-z])\d+(?:[.,]\d+)?(?![a-z%])/gi, " ")
     .replace(/[^\p{L}\p{N}%&' -]/gu, " ")
     .replace(/\s+/g, " ")

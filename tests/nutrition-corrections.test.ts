@@ -158,3 +158,43 @@ describe("'I had the same breakfast as yesterday' copies the entries, one per fo
     expect(resolveRepeatDate("whenever", today)).toBeNull();
   });
 });
+
+// "Actually it was cod, not salmon" / "it was weighed dry": the same entry, a
+// different food, looked up afresh at the amount on record.
+import { replaceNutritionFood } from "../server/nutrition-edits";
+import { normalizeQuantity } from "../shared/nutrition-enrichment";
+
+describe("'actually it was X, not Y' replaces the food on the same entry", () => {
+  const fromDb = (name: string, per100: Record<string, number>) => async (asks: any[]) => asks.map((a) => {
+    const q = normalizeQuantity(a.quantityText);
+    const grams = q.grams ?? 100;
+    return {
+      name, userQuantity: a.quantityText, normalizedQuantity: q, servings: grams / 100,
+      matchedServing: { amount: 100, unit: "g", grams: 100, ml: null, label: "100 g" }, sourceType: "reference" as const, source: "USDA FoodData Central (test)", sourceItem: name, confidence: "high" as const,
+      perServing: per100,
+      nutrients: Object.fromEntries(Object.entries(per100).map(([k, v]) => [k, { value: Math.round(v * grams) / 100, unit: "g", source: "USDA", sourceType: "reference", confidence: "high", calculatedOrDirect: "calculated", enrichedAt: NOW }])) as any,
+    };
+  });
+
+  it("the new food's figures for the amount already on record; nothing of the old food is left", async () => {
+    const salmon = await storage.logEntry({ trackerId, values: { item: "Baked Atlantic Salmon (170 g)", calories: 1 }, timestamp: NOW } as any);
+    await enrichNutritionEntry(storage, { entryId: salmon!.id, trackerId, message: "I ate 170 grams of baked farmed Atlantic salmon.", mode: "auto", deps: { ...offline, sourceLookup: fromDb("Fish, salmon, Atlantic, farmed, cooked, dry heat", { calories: 206, protein: 22.1, carbs: 0, fat: 12.35, caffeine: 5 }) } });
+    const before = (await storage.getTrackerEntry(salmon!.id))! as any;
+    expect(before.values).toMatchObject({ calories: 350.2, caffeine: 9 });
+    const out = await replaceNutritionFood(storage, { trackerId, entry: before, newItem: "baked Atlantic cod", deps: { ...offline, sourceLookup: fromDb("Fish, cod, Atlantic, cooked, dry heat", { calories: 105, protein: 22.83, carbs: 0, fat: 0.86 }) } });
+    expect(out.ok).toBe(true);
+    const after = (await storage.getTrackerEntry(salmon!.id))! as any;
+    // 170 g carried over from the entry: 105 × 1.7.
+    expect(after.values).toMatchObject({ item: "Baked Atlantic cod", calories: 178.5, protein: 38.81, fat: 1.46 });
+    expect("caffeine" in after.values).toBe(false);
+    expect(after.computed.nutrition.components.map((c: any) => c.name)).toEqual(["Fish, cod, Atlantic, cooked, dry heat"]);
+    expect((await entries()).length).toBe(1);
+  });
+
+  it("when no source knows the new food the entry is put back untouched and the caller is told to supply figures", async () => {
+    const salmon = await storage.logEntry({ trackerId, values: { item: "Baked Salmon (170 g)", calories: 350, protein: 37 }, timestamp: NOW } as any);
+    const out = await replaceNutritionFood(storage, { trackerId, entry: (await storage.getTrackerEntry(salmon!.id))!, newItem: "grilled snoek", deps: { ...offline, sourceLookup: async (asks: any[]) => asks.map(() => null) } });
+    expect(out).toMatchObject({ ok: false, needsValues: true });
+    expect(((await storage.getTrackerEntry(salmon!.id))! as any).values).toMatchObject({ item: "Baked Salmon (170 g)", calories: 350, protein: 37 });
+  });
+});

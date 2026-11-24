@@ -168,8 +168,11 @@ export function consumedFromScan(label: ScannedLabel, said: string | null | unde
 
   // "the whole bag", "half the container", "two bags", "the entire thing".
   const whole = /\b(whole|entire|all of (?:it|the)|the full|everything)\b/.test(words) && !/\bservings?\b/.test(words);
-  if (spc && (q.packageFraction != null || whole)) {
-    const f = q.packageFraction ?? 1;
+  // "half a cup" of a product measured in cups is a household amount, not half of the package.
+  const householdWord = label.serving.householdUnit ? unitWord(label.serving.householdUnit.split(" ")[0]) : "";
+  const shareOfPackage = q.packageFraction != null && unitWord(q.packageWord || "") !== householdWord ? q.packageFraction : null;
+  if (spc && (shareOfPackage != null || whole)) {
+    const f = shareOfPackage ?? 1;
     return { servings: r4(f * spc), method: `${f === 1 ? "the whole package" : `${r4(f)} of the package`} × ${spc} servings`, assumed: false };
   }
   const containers = words.match(/(\d+(?:\.\d+)?)\s+(?:whole\s+|full\s+)?(?:containers?|packages?|bags?|boxes|box|cans?|bottles?|tubs?|cartons?|pouches|pouch|packs?)\b/);
@@ -200,8 +203,8 @@ export function consumedFromScan(label: ScannedLabel, said: string | null | unde
   if (amount != null && !q.unit && q.count != null && (!ha || ha === 1)) {
     return { servings: r4(amount), method: `${r4(amount)} × ${label.serving.text}`, assumed: false };
   }
-  if (q.packageFraction != null && !spc) {
-    return { servings: r4(q.packageFraction), method: `${r4(q.packageFraction)} of one serving (the label does not say how many servings the package holds)`, assumed: true };
+  if (shareOfPackage != null && !spc) {
+    return { servings: r4(shareOfPackage), method: `${r4(shareOfPackage)} of one serving (the label does not say how many servings the package holds)`, assumed: true };
   }
   return one;
 }
