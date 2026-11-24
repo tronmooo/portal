@@ -11,8 +11,8 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 |---|---:|---:|---:|
 | API write routes | 184 | 31 | 66 |
 | API read routes | 111 | 33 | 54 |
-| Chat tools that write | 111 | 22 | 71 |
-| Chat tools that read | 42 | 20 | 34 |
+| Chat tools that write | 111 | 0 | 1 |
+| Chat tools that read | 42 | 0 | 3 |
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
@@ -23,25 +23,25 @@ Test files read: 614. Test files no config runs: 2 (`tests/critical-flows.test.t
 | Domain | Write routes | …untested | …not on deployed | Read routes | Chat tools | …write tools not on deployed |
 |---|---:|---:|---:|---:|---:|---:|
 | Account & access | 14 | 7 | 8 | 7 | 0 | 0 |
-| Profiles | 13 | 1 | 3 | 16 | 10 | 6 |
-| Assets & ownership | 5 | 1 | 1 | 10 | 5 | 4 |
-| Accounts & net worth | 4 | 0 | 1 | 2 | 5 | 2 |
-| Liabilities | 21 | 0 | 4 | 6 | 16 | 9 |
+| Profiles | 13 | 1 | 3 | 16 | 10 | 0 |
+| Assets & ownership | 5 | 1 | 1 | 10 | 5 | 0 |
+| Accounts & net worth | 4 | 0 | 1 | 2 | 5 | 0 |
+| Liabilities | 21 | 0 | 4 | 6 | 16 | 0 |
 | Auto Pay | 2 | 0 | 0 | 0 | 0 | 0 |
-| Bills & obligations | 8 | 1 | 3 | 3 | 4 | 2 |
-| Finance | 28 | 8 | 10 | 21 | 23 | 10 |
-| Tasks | 6 | 0 | 2 | 2 | 7 | 2 |
-| Calendar | 8 | 2 | 3 | 7 | 7 | 5 |
-| Habits | 6 | 0 | 1 | 2 | 6 | 4 |
-| Goals | 4 | 0 | 0 | 2 | 4 | 2 |
-| Trackers & health | 12 | 3 | 4 | 2 | 11 | 5 |
+| Bills & obligations | 8 | 1 | 3 | 3 | 4 | 0 |
+| Finance | 28 | 8 | 10 | 21 | 23 | 0 |
+| Tasks | 6 | 0 | 2 | 2 | 7 | 0 |
+| Calendar | 8 | 2 | 3 | 7 | 7 | 0 |
+| Habits | 6 | 0 | 1 | 2 | 6 | 0 |
+| Goals | 4 | 0 | 0 | 2 | 4 | 0 |
+| Trackers & health | 12 | 3 | 4 | 2 | 11 | 0 |
 | Wellness dashboard | 1 | 0 | 1 | 1 | 0 | 0 |
-| Executive dashboard & alerts | 3 | 0 | 1 | 10 | 9 | 1 |
-| Documents & artifacts | 20 | 5 | 7 | 7 | 12 | 5 |
+| Executive dashboard & alerts | 3 | 0 | 1 | 10 | 9 | 0 |
+| Documents & artifacts | 20 | 5 | 7 | 7 | 12 | 0 |
 | Workspaces | 5 | 1 | 4 | 0 | 0 | 0 |
-| Journal & notes | 9 | 0 | 3 | 4 | 9 | 6 |
+| Journal & notes | 9 | 0 | 3 | 4 | 9 | 0 |
 | Record details | 6 | 0 | 6 | 4 | 3 | 1 |
-| AI chat | 9 | 2 | 4 | 5 | 22 | 7 |
+| AI chat | 9 | 2 | 4 | 5 | 22 | 0 |
 | System (not a user workflow) | 8 | 5 | 8 | 9 | 0 | 0 |
 
 ## Screens
@@ -148,16 +148,16 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `get_profile_data` | read | **0** | **0** |
-| `create_profile` | write | 8 | 4 |
-| `update_profile` | write | 11 | **0** |
-| `delete_profile` | write | 1 | **0** |
-| `get_relationships` | read | **0** | **0** |
-| `merge_profiles` | write | 2 | **0** |
-| `validate_profile_isolation` | read | **0** | 1 |
-| `create_domain` | write | 1 | **0** |
-| `update_domain` | write | 2 | **0** |
-| `delete_domain` | write | 3 | **0** |
+| `get_profile_data` | read | **0** | 1 |
+| `create_profile` | write | 8 | 5 |
+| `update_profile` | write | 11 | 1 |
+| `delete_profile` | write | 1 | 1 |
+| `get_relationships` | read | **0** | 1 |
+| `merge_profiles` | write | 2 | 1 |
+| `validate_profile_isolation` | read | **0** | 2 |
+| `create_domain` | write | 1 | 1 |
+| `update_domain` | write | 2 | 1 |
+| `delete_domain` | write | 3 | 1 |
 
 ### Assets & ownership
 
@@ -181,30 +181,30 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `link_asset_owner` | write | 2 | **0** |
-| `split_ownership` | write | **0** | **0** |
-| `revalue_asset` | write | **0** | **0** |
-| `get_asset_rollup` | read | **0** | **0** |
-| `convert_expense_to_asset` | write | **0** | **0** |
+| `link_asset_owner` | write | 2 | 1 |
+| `split_ownership` | write | **0** | 1 |
+| `revalue_asset` | write | **0** | 1 |
+| `get_asset_rollup` | read | **0** | 1 |
+| `convert_expense_to_asset` | write | **0** | 1 |
 
 ### Accounts & net worth
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
 | `GET /api/accounts` | yes | 2 | 1 |
-| `POST /api/accounts` | yes | 2 | 3 |
-| `DELETE /api/accounts/:id` | yes | **0** | 1 |
+| `POST /api/accounts` | yes | 2 | 4 |
+| `DELETE /api/accounts/:id` | yes | **0** | 2 |
 | `PATCH /api/accounts/:id` | yes | 1 | 1 |
 | `POST /api/accounts/:id/adjust` | yes | 1 | **0** |
 | `GET /api/net-worth/history` | yes | 4 | **0** |
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `query_net_worth_history` | read | **0** | **0** |
-| `create_account` | write | **0** | **0** |
-| `update_account_balance` | write | **0** | **0** |
-| `get_accounts` | read | **0** | **0** |
-| `get_account_balances` | read | 1 | **0** |
+| `query_net_worth_history` | read | **0** | 1 |
+| `create_account` | write | **0** | 1 |
+| `update_account_balance` | write | **0** | 1 |
+| `get_accounts` | read | **0** | 1 |
+| `get_account_balances` | read | 1 | 1 |
 
 ### Liabilities
 
@@ -240,22 +240,22 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `get_loan_schedule` | read | **0** | **0** |
-| `create_liability` | write | 6 | 2 |
-| `update_liability` | write | 5 | **0** |
-| `add_liability_payment` | write | 5 | **0** |
-| `update_liability_payment` | write | **0** | 1 |
-| `delete_liability_payment` | write | 1 | 1 |
-| `undo_last_payment` | write | 1 | 1 |
-| `mark_loan_payment` | write | **0** | 1 |
-| `link_liability_asset` | write | 1 | **0** |
-| `link_liability_owner` | write | **0** | **0** |
-| `link_asset_to_liability` | write | **0** | **0** |
-| `unlink_asset_from_liability` | write | 1 | **0** |
-| `move_liability_to_asset` | write | **0** | **0** |
-| `get_liability_summary` | read | **0** | **0** |
-| `add_liability_charge` | write | **0** | **0** |
-| `set_liability_amount` | write | **0** | **0** |
+| `get_loan_schedule` | read | **0** | 1 |
+| `create_liability` | write | 6 | 3 |
+| `update_liability` | write | 5 | 1 |
+| `add_liability_payment` | write | 5 | 1 |
+| `update_liability_payment` | write | **0** | 2 |
+| `delete_liability_payment` | write | 1 | 2 |
+| `undo_last_payment` | write | 1 | 2 |
+| `mark_loan_payment` | write | **0** | 2 |
+| `link_liability_asset` | write | 1 | 1 |
+| `link_liability_owner` | write | **0** | 1 |
+| `link_asset_to_liability` | write | **0** | 1 |
+| `unlink_asset_from_liability` | write | 1 | 1 |
+| `move_liability_to_asset` | write | **0** | 1 |
+| `get_liability_summary` | read | **0** | 1 |
+| `add_liability_charge` | write | **0** | 1 |
+| `set_liability_amount` | write | **0** | 1 |
 
 ### Auto Pay
 
@@ -282,10 +282,10 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `create_obligation` | write | 2 | 2 |
-| `pay_obligation` | write | 3 | **0** |
-| `update_obligation` | write | 1 | 1 |
-| `delete_obligation` | write | **0** | **0** |
+| `create_obligation` | write | 2 | 3 |
+| `pay_obligation` | write | 3 | 1 |
+| `update_obligation` | write | 1 | 2 |
+| `delete_obligation` | write | **0** | 1 |
 
 ### Finance
 
@@ -343,29 +343,29 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `set_budget` | write | 2 | **0** |
-| `delete_budget` | write | 2 | **0** |
-| `get_budget_summary` | read | 1 | **0** |
-| `log_expected_paycheck` | write | **0** | **0** |
-| `confirm_paycheck_received` | write | 2 | **0** |
-| `delete_paycheck` | write | **0** | 1 |
-| `get_cashflow` | read | **0** | **0** |
-| `create_expense` | write | 18 | 5 |
-| `delete_expense` | write | 3 | 1 |
-| `update_expense` | write | 3 | **0** |
-| `query_expenses` | read | **0** | **0** |
-| `spending_analytics` | write | **0** | **0** |
-| `log_income` | write | 5 | 1 |
-| `update_income` | write | **0** | 1 |
-| `delete_income` | write | **0** | 1 |
-| `create_budget` | write | 1 | **0** |
-| `update_budget` | write | 3 | **0** |
-| `copy_budgets_previous_month` | write | 3 | 1 |
-| `refund_expense` | write | 1 | **0** |
-| `get_financial_summary` | read | 1 | **0** |
-| `search_financial_transactions` | read | 1 | **0** |
-| `get_spending_breakdown` | read | 1 | **0** |
-| `refresh_financial_data` | write | 3 | **0** |
+| `set_budget` | write | 2 | 1 |
+| `delete_budget` | write | 2 | 1 |
+| `get_budget_summary` | read | 1 | 1 |
+| `log_expected_paycheck` | write | **0** | 1 |
+| `confirm_paycheck_received` | write | 2 | 1 |
+| `delete_paycheck` | write | **0** | 2 |
+| `get_cashflow` | read | **0** | 1 |
+| `create_expense` | write | 18 | 6 |
+| `delete_expense` | write | 3 | 2 |
+| `update_expense` | write | 3 | 1 |
+| `query_expenses` | read | **0** | 1 |
+| `spending_analytics` | write | **0** | 1 |
+| `log_income` | write | 5 | 2 |
+| `update_income` | write | **0** | 2 |
+| `delete_income` | write | **0** | 2 |
+| `create_budget` | write | 1 | 1 |
+| `update_budget` | write | 3 | 1 |
+| `copy_budgets_previous_month` | write | 3 | 2 |
+| `refund_expense` | write | 1 | 1 |
+| `get_financial_summary` | read | 1 | 1 |
+| `search_financial_transactions` | read | 1 | 1 |
+| `get_spending_breakdown` | read | 1 | 1 |
+| `refresh_financial_data` | write | 3 | 1 |
 
 ### Tasks
 
@@ -382,13 +382,13 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `create_task` | write | 19 | 7 |
-| `restore_task` | write | 2 | 1 |
-| `complete_task` | write | 7 | **0** |
-| `delete_task` | write | 2 | 2 |
-| `update_task` | write | 1 | 3 |
-| `bulk_complete_tasks` | write | 2 | **0** |
-| `query_tasks` | read | **0** | **0** |
+| `create_task` | write | 19 | 8 |
+| `restore_task` | write | 2 | 2 |
+| `complete_task` | write | 7 | 1 |
+| `delete_task` | write | 2 | 3 |
+| `update_task` | write | 1 | 4 |
+| `bulk_complete_tasks` | write | 2 | 1 |
+| `query_tasks` | read | **0** | 1 |
 
 ### Calendar
 
@@ -412,13 +412,13 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `create_event` | write | 8 | 3 |
-| `update_event` | write | 1 | **0** |
-| `sync_date_rules_for_entity` | write | 1 | **0** |
-| `delete_event` | write | **0** | **0** |
-| `complete_event` | write | 2 | **0** |
-| `sync_calendar` | write | 2 | **0** |
-| `query_calendar` | read | **0** | **0** |
+| `create_event` | write | 8 | 4 |
+| `update_event` | write | 1 | 1 |
+| `sync_date_rules_for_entity` | write | 1 | 1 |
+| `delete_event` | write | **0** | 1 |
+| `complete_event` | write | 2 | 1 |
+| `sync_calendar` | write | 2 | 1 |
+| `query_calendar` | read | **0** | 1 |
 
 ### Habits
 
@@ -435,12 +435,12 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `restore_habit` | write | 2 | 1 |
-| `create_habit` | write | 7 | 3 |
-| `checkin_habit` | write | 9 | **0** |
-| `update_habit` | write | 3 | **0** |
-| `delete_habit` | write | 2 | **0** |
-| `uncomplete_habit` | write | 2 | **0** |
+| `restore_habit` | write | 2 | 2 |
+| `create_habit` | write | 7 | 4 |
+| `checkin_habit` | write | 9 | 1 |
+| `update_habit` | write | 3 | 1 |
+| `delete_habit` | write | 2 | 1 |
+| `uncomplete_habit` | write | 2 | 1 |
 
 ### Goals
 
@@ -455,10 +455,10 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `create_goal` | write | **0** | 2 |
-| `get_goal_progress` | read | **0** | **0** |
-| `update_goal` | write | **0** | **0** |
-| `delete_goal` | write | **0** | **0** |
+| `create_goal` | write | **0** | 3 |
+| `get_goal_progress` | read | **0** | 1 |
+| `update_goal` | write | **0** | 1 |
+| `delete_goal` | write | **0** | 1 |
 
 ### Trackers & health
 
@@ -481,17 +481,17 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `log_medication_dose` | write | 3 | 1 |
-| `skip_medication_dose` | write | 1 | 1 |
-| `get_missed_doses` | read | **0** | 1 |
-| `get_dose_history` | read | **0** | **0** |
-| `log_tracker_entry` | write | 20 | 3 |
-| `create_tracker` | write | 1 | 2 |
-| `delete_tracker` | write | 2 | **0** |
-| `update_tracker` | write | **0** | **0** |
-| `delete_tracker_entry` | write | 2 | **0** |
-| `update_tracker_entry` | write | 2 | **0** |
-| `schedule_medication_refills` | write | 2 | **0** |
+| `log_medication_dose` | write | 3 | 2 |
+| `skip_medication_dose` | write | 1 | 2 |
+| `get_missed_doses` | read | **0** | 2 |
+| `get_dose_history` | read | **0** | 1 |
+| `log_tracker_entry` | write | 20 | 4 |
+| `create_tracker` | write | 1 | 3 |
+| `delete_tracker` | write | 2 | 1 |
+| `update_tracker` | write | **0** | 1 |
+| `delete_tracker_entry` | write | 2 | 1 |
+| `update_tracker_entry` | write | 2 | 1 |
+| `schedule_medication_refills` | write | 2 | 1 |
 
 ### Wellness dashboard
 
@@ -520,23 +520,23 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `dismiss_notifications` | write | 1 | 1 |
-| `create_notification` | write | 1 | 1 |
-| `mark_notifications_read` | write | 1 | 1 |
-| `set_notification_preferences` | write | 2 | 1 |
-| `set_dashboard_scope` | write | **0** | **0** |
-| `configure_dashboard_sections` | write | 2 | 1 |
-| `refresh_dashboard` | write | 1 | 1 |
-| `validate_dashboard_counts` | read | **0** | **0** |
-| `explain_dashboard_item` | read | **0** | 1 |
+| `dismiss_notifications` | write | 1 | 2 |
+| `create_notification` | write | 1 | 2 |
+| `mark_notifications_read` | write | 1 | 2 |
+| `set_notification_preferences` | write | 2 | 2 |
+| `set_dashboard_scope` | write | **0** | 1 |
+| `configure_dashboard_sections` | write | 2 | 2 |
+| `refresh_dashboard` | write | 1 | 2 |
+| `validate_dashboard_counts` | read | **0** | 1 |
+| `explain_dashboard_item` | read | **0** | 2 |
 
 ### Documents & artifacts
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
 | `GET /api/artifacts` | yes | 3 | 6 |
-| `POST /api/artifacts` | yes | 1 | 4 |
-| `DELETE /api/artifacts/:id` | yes | 1 | 5 |
+| `POST /api/artifacts` | yes | 1 | 5 |
+| `DELETE /api/artifacts/:id` | yes | 1 | 6 |
 | `GET /api/artifacts/:id` | yes | 1 | 1 |
 | `PATCH /api/artifacts/:id` | yes | **0** | 1 |
 | `POST /api/artifacts/:id/duplicate` | yes | **0** | 1 |
@@ -546,13 +546,13 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/chat-artifacts` | yes | **0** | **0** |
 | `DELETE /api/chat-artifacts/:id` | **no** | **0** | **0** |
 | `GET /api/documents` | yes | 9 | 4 |
-| `POST /api/documents` | **no** | 2 | 4 |
+| `POST /api/documents` | **no** | 2 | 5 |
 | `DELETE /api/documents/:id` | yes | 4 | 7 |
 | `GET /api/documents/:id` | yes | 2 | 2 |
 | `PATCH /api/documents/:id` | yes | 1 | 1 |
 | `GET /api/documents/:id/delete-impact` | yes | **0** | 1 |
 | `GET /api/documents/:id/file` | yes | 4 | **0** |
-| `POST /api/documents/:id/purge` | **no** | **0** | 1 |
+| `POST /api/documents/:id/purge` | **no** | **0** | 2 |
 | `POST /api/documents/:id/reextract` | **no** | **0** | **0** |
 | `POST /api/documents/:id/restore` | **no** | **0** | 1 |
 | `POST /api/documents/:id/send-email` | **no** | **0** | **0** |
@@ -564,18 +564,18 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `create_artifact` | write | 1 | **0** |
-| `open_document` | read | **0** | **0** |
-| `create_document` | write | 1 | **0** |
-| `delete_artifact` | write | **0** | **0** |
-| `update_artifact` | write | **0** | 1 |
-| `duplicate_artifact` | write | 1 | 1 |
-| `toggle_artifact_item` | write | **0** | 1 |
-| `retrieve_document` | read | **0** | **0** |
-| `manage_document` | write | 3 | **0** |
-| `upload_document` | write | 1 | **0** |
-| `search_documents` | read | **0** | **0** |
-| `link_document` | write | **0** | 1 |
+| `create_artifact` | write | 1 | 1 |
+| `open_document` | read | **0** | 1 |
+| `create_document` | write | 1 | 1 |
+| `delete_artifact` | write | **0** | 1 |
+| `update_artifact` | write | **0** | 2 |
+| `duplicate_artifact` | write | 1 | 2 |
+| `toggle_artifact_item` | write | **0** | 2 |
+| `retrieve_document` | read | **0** | 1 |
+| `manage_document` | write | 3 | 1 |
+| `upload_document` | write | 1 | 1 |
+| `search_documents` | read | **0** | 1 |
+| `link_document` | write | **0** | 2 |
 
 ### Workspaces
 
@@ -607,15 +607,15 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `journal_entry` | write | 10 | 1 |
-| `create_note` | write | 3 | **0** |
-| `update_note` | write | 2 | **0** |
-| `delete_note` | write | 3 | **0** |
+| `journal_entry` | write | 10 | 2 |
+| `create_note` | write | 3 | 1 |
+| `update_note` | write | 2 | 1 |
+| `delete_note` | write | 3 | 1 |
 | `read_journal` | read | 1 | **0** |
-| `search_notes` | read | 2 | **0** |
-| `append_journal_entry` | write | 3 | **0** |
-| `delete_journal` | write | **0** | **0** |
-| `update_journal` | write | **0** | **0** |
+| `search_notes` | read | 2 | 1 |
+| `append_journal_entry` | write | 3 | 1 |
+| `delete_journal` | write | **0** | 1 |
+| `update_journal` | write | **0** | 1 |
 
 ### Record details
 
@@ -659,28 +659,28 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `search` | read | 10 | 7 |
-| `get_summary` | read | 2 | **0** |
-| `recall_memory` | read | 2 | **0** |
-| `save_memory` | write | 1 | **0** |
-| `navigate` | read | 4 | 6 |
-| `link_entities` | write | 3 | **0** |
-| `get_related` | read | **0** | **0** |
-| `delete_memory` | write | 1 | **0** |
-| `update_memory` | write | 1 | 1 |
-| `recall_actions` | read | **0** | **0** |
-| `undo_last_action` | write | 3 | 2 |
-| `get_entity_history` | read | **0** | 1 |
-| `preview_bulk_action` | read | 3 | **0** |
-| `execute_bulk_action` | write | 3 | **0** |
-| `find_orphans` | read | **0** | 1 |
-| `repair_relations` | write | 2 | **0** |
-| `repair_profile_types` | write | 1 | **0** |
-| `find_duplicates` | read | **0** | 1 |
-| `generate_chart` | read | 1 | **0** |
-| `generate_table` | read | 1 | **0** |
-| `generate_report` | read | **0** | **0** |
-| `refresh_ai_summary` | write | **0** | **0** |
+| `search` | read | 10 | 8 |
+| `get_summary` | read | 2 | 1 |
+| `recall_memory` | read | 2 | 1 |
+| `save_memory` | write | 1 | 1 |
+| `navigate` | read | 4 | 7 |
+| `link_entities` | write | 3 | 1 |
+| `get_related` | read | **0** | 1 |
+| `delete_memory` | write | 1 | 1 |
+| `update_memory` | write | 1 | 2 |
+| `recall_actions` | read | **0** | 1 |
+| `undo_last_action` | write | 3 | 3 |
+| `get_entity_history` | read | **0** | 2 |
+| `preview_bulk_action` | read | 3 | 1 |
+| `execute_bulk_action` | write | 3 | 1 |
+| `find_orphans` | read | **0** | 2 |
+| `repair_relations` | write | 2 | 1 |
+| `repair_profile_types` | write | 1 | 1 |
+| `find_duplicates` | read | **0** | 2 |
+| `generate_chart` | read | 1 | 1 |
+| `generate_table` | read | 1 | 1 |
+| `generate_report` | read | **0** | 1 |
+| `refresh_ai_summary` | write | **0** | 1 |
 
 ### System (not a user workflow)
 

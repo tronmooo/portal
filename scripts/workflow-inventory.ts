@@ -385,8 +385,13 @@ export function buildInventory(toolNames: string[]): Inventory {
   // A file that names most of the registry (a sweep, a generated list) says
   // nothing about any one tool, so it is not evidence for one.
   const toolRe = (name: string) => new RegExp(`["'\`#]${name}\\b(?!_)`);
+  // The exception drives EVERY tool for real: one command per tool through the
+  // deployed chat, failing before it starts when a tool has no command.
+  const PER_TOOL_SWEEPS = new Set(["scripts/verify-all-chat-tools.ts"]);
   const sweeps = new Set(
-    tests.filter((t) => toolNames.filter((n) => toolRe(n).test(t.src)).length > toolNames.length / 3).map((t) => t.file),
+    tests
+      .filter((t) => !PER_TOOL_SWEEPS.has(t.file) && toolNames.filter((n) => toolRe(n).test(t.src)).length > toolNames.length / 3)
+      .map((t) => t.file),
   );
   const tools: ToolRow[] = toolNames.map((name) => {
     const cov = emptyCoverage();

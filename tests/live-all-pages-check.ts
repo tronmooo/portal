@@ -12,14 +12,20 @@
 //   · on a phone nothing is wider than the screen
 //   · it is usable within the route budget (docs/PERFORMANCE_QA_CHECKLIST.md)
 //
-// Reads only: it creates nothing.
+// The pages themselves are only opened. A page that shows ONE record needs
+// one to exist, so what the smoke account lacks is created first (an account,
+// a document, a saved document) and removed afterwards, under the gate lock.
 //   npx tsx tests/live-all-pages-check.ts            (both)
 //   MODE=phone npx tsx tests/live-all-pages-check.ts
 import { createRequire } from "node:module";
 import { api } from "./smoke/fixture/api";
 import { UI_BASE } from "./smoke/fixture/account";
 import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
+import { acquireGateLock, preferenceLockIo } from "./smoke/fixture/gate-lock";
 import { list } from "./helpers/live-workflow";
+
+// A 1×1 PNG.
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 const req = createRequire(import.meta.url);
 const { chromium } = (() => {
@@ -75,7 +81,15 @@ async function run(browser: any, mode: "desktop" | "phone", routes: Array<{ path
     const line = `${r.method()} ${new URL(r.url()).pathname}`;
     if (r.method() !== "GET" && !NOT_A_WRITE.some((re) => re.test(line))) writes.push(line);
   });
-  const done = (r: any) => { if (pending.delete(r)) lastActivity = Date.now(); };
+  // How long each request of the page being opened took, to name what a slow page waited for.
+  const began = new Map<any, number>();
+  let took: Array<{ what: string; ms: number }> = [];
+  page.on("request", (r: any) => { if (isApi(r)) began.set(r, Date.now()); });
+  const done = (r: any) => {
+    if (pending.delete(r)) lastActivity = Date.now();
+    const b = began.get(r);
+    if (b) { took.push({ what: `${r.method()} ${new URL(r.url()).pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, ":id")}`, ms: Date.now() - b }); began.delete(r); }
+  };
   page.on("requestfinished", done);
   page.on("requestfailed", done);
   page.on("response", (r: any) => {
@@ -131,7 +145,7 @@ async function run(browser: any, mode: "desktop" | "phone", routes: Array<{ path
 
   const slow: string[] = [];
   for (const r of routes) {
-    errors = []; bad = []; writes = [];
+    errors = []; bad = []; writes = []; took = [];
     const t0 = Date.now();
     pending.clear();
     await page.goto(`${UI_BASE}/#${r.path}`);
@@ -173,7 +187,10 @@ async function run(browser: any, mode: "desktop" | "phone", routes: Array<{ path
     if (writes.length) problems.push(`wrote on open: ${[...new Set(writes)].join(", ")}`);
     if (phone && (state.scrollWidth > state.width + 1 || state.wide)) problems.push(`wider than the screen (${state.scrollWidth}px of ${state.width}px${state.wide ? `, ${state.wide}` : ""})`);
     check(problems.length === 0, `${where} opens clean in ${ms}ms${problems.length ? ` — ${problems.join("; ")}` : ""}`);
-    if (ms > SETTLE_BUDGET_MS) slow.push(`${r.name} ${ms}ms`);
+    if (ms > SETTLE_BUDGET_MS) {
+      const worst = [...took].sort((a, b) => b.ms - a.ms).slice(0, 2).map((x) => `${x.what} ${x.ms}ms`).join(", ");
+      slow.push(`${r.name} ${ms}ms (slowest: ${worst || "nothing finished"})`);
+    }
   }
   console.log(slow.length ? `SLOW  [${mode}] over ${SETTLE_BUDGET_MS}ms to settle: ${slow.join("; ")}` : `[${mode}] every page settled within ${SETTLE_BUDGET_MS}ms`);
   await ctx.close();
@@ -183,13 +200,28 @@ async function run(browser: any, mode: "desktop" | "phone", routes: Array<{ path
   const version = await (await fetch(`${UI_BASE}/api/version`)).json();
   console.log(`production is serving ${String(version.sha).slice(0, 7)}`);
 
+  const release = await acquireGateLock(preferenceLockIo((m, p, b) => api(m, p, b)), { gate: "live-all-pages-check" });
+  const undo: Array<() => Promise<unknown>> = [];
+  try {
   // One real record of each kind, for the pages that show one.
   const kind = (types: string[]) => (p: any) => types.includes(p.type);
-  const [person, asset, liability, account, document, artifact] = await Promise.all([
-    firstId("/profiles", kind(["self", "person"])), firstId("/profiles", kind(["asset", "vehicle", "property"])),
-    firstId("/profiles", kind(["liability", "loan"])), firstId("/profiles", kind(["account"])),
-    firstId("/documents"), firstId("/artifacts"),
-  ]);
+  const ensure = async (found: string | null, name: string, make: () => Promise<{ ok: boolean; status: number; data: any }>, remove: (id: string) => Promise<unknown>) => {
+    if (found) return found;
+    const made = await make();
+    const id = made.data?.id ?? null;
+    if (!made.ok || !id) { console.log(`SKIP  ${name}: could not create one (${made.status})`); return null; }
+    undo.push(() => remove(id));
+    return id as string;
+  };
+  const person = await firstId("/profiles", kind(["self", "person"]));
+  const asset = await firstId("/profiles", kind(["asset", "vehicle", "property"]));
+  const liability = await firstId("/profiles", kind(["liability", "loan"]));
+  const account = await ensure(await firstId("/profiles", kind(["account"])), "An account",
+    () => api("POST", "/accounts", { name: "Page Check Checking", accountKind: "checking", balance: 100 }), (id) => api("DELETE", `/accounts/${id}`));
+  const document = await ensure(await firstId("/documents"), "A document",
+    () => api("POST", "/documents", { name: "Page Check Receipt", type: "receipt", mimeType: "image/png", fileData: PNG }), (id) => api("POST", `/documents/${id}/purge`));
+  const artifact = await ensure(await firstId("/artifacts", (a) => a.type === "doc"), "A saved document",
+    () => api("POST", "/artifacts", { type: "doc", title: "Page Check Document", content: "<p>Opened by the page check.</p>" }), (id) => api("DELETE", `/artifacts/${id}`));
   const routes: Array<{ path: string; name: string }> = [
     { path: "/dashboard", name: "Dashboard" }, { path: "/dashboard/executive", name: "Dashboard · Executive" },
     { path: "/dashboard/daily", name: "Dashboard · Daily" }, { path: "/chat", name: "Chat" },
@@ -205,7 +237,7 @@ async function run(browser: any, mode: "desktop" | "phone", routes: Array<{ path
   ];
   const record = (id: string | null, path: (id: string) => string, name: string) => {
     if (id) routes.push({ path: path(id), name });
-    else console.log(`SKIP  ${name}: the smoke account has none right now`);
+    else { console.log(`FAIL  ${name}: no record to open it with`); failed = true; }
   };
   record(person, (id) => `/profiles/${id}/info`, "A person's Info");
   record(asset, (id) => `/profiles/${id}`, "An asset");
@@ -221,6 +253,10 @@ async function run(browser: any, mode: "desktop" | "phone", routes: Array<{ path
     if (MODE !== "desktop") await run(browser, "phone", routes);
   } finally {
     await browser.close();
+  }
+  } finally {
+    for (const u of undo.reverse()) await u().catch(() => undefined);
+    await release();
   }
   console.log(failed ? "\nFAILED" : "\nALL PASS");
   process.exit(failed ? 1 : 0);
