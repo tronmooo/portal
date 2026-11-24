@@ -205,16 +205,48 @@ describe("asset profile layout", () => {
     expect(screen.queryByTestId("asset-depreciation-bar")).toBeNull();
   });
 
-  it("salvage value is the user's own figure: stored as a number and marked on the bar", async () => {
+  it("salvage value: the AI estimates it; a typed figure overrides it, stored as a number", async () => {
     mount();
     const line = await screen.findByTestId("asset-value-salvage");
     expect(line.textContent).toContain("Not set");
+    expect(screen.getByTestId("asset-salvage-pending").textContent).toContain("The AI estimates the salvage value");
     expect(screen.queryByTestId("asset-salvage-mark")).toBeNull();
     fireEvent.click(line);
     fireEvent.change(screen.getByTestId("overview-field-input-salvageValue"), { target: { value: "$80" } });
     fireEvent.click(screen.getByTestId("overview-field-input-salvageValue-save"));
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(writes()[0].body).toEqual({ fields: { salvageValue: 80 } });
+  });
+
+  it("an AI salvage estimate is labelled as one, with its reason, and marked on the bar", async () => {
+    const hook = () => [`/profiles/${ID}`, vi.fn()] as [string, (to: string) => void];
+    const est = { ...PROFILE, fields: { ...FIELDS, salvageValue: 60, salvageValueSource: "estimate", salvageValueBasis: "Parts value of a 5-year-old laptop." } };
+    render(<QueryClientProvider client={queryClient}><Router hook={hook as any}><ValueCard profile={est} /></Router></QueryClientProvider>);
+    const line = await screen.findByTestId("asset-value-salvage");
+    expect(line.textContent).toContain("$60");
+    expect(screen.getByTestId("asset-salvage-ai").textContent).toBe("AI");
+    expect(screen.getByTestId("asset-salvage-basis").textContent).toContain("Parts value of a 5-year-old laptop.");
+    expect(screen.queryByTestId("asset-salvage-pending")).toBeNull();
+    expect(screen.queryByTestId("asset-salvage-user")).toBeNull();
+  });
+
+  it("an AI answer of none reads as None, labelled, with its reason", async () => {
+    const hook = () => [`/profiles/${ID}`, vi.fn()] as [string, (to: string) => void];
+    const none = { ...PROFILE, fields: { ...FIELDS, salvageValue: null, salvageValueSource: "estimate", salvageValueBasis: "Gold holds its value." } };
+    render(<QueryClientProvider client={queryClient}><Router hook={hook as any}><ValueCard profile={none} /></Router></QueryClientProvider>);
+    const line = await screen.findByTestId("asset-value-salvage");
+    expect(line.textContent).toContain("None");
+    expect(screen.getByTestId("asset-salvage-basis").textContent).toContain("Gold holds its value.");
+    expect(screen.queryByTestId("asset-salvage-pending")).toBeNull();
+  });
+
+  it("a salvage figure with no AI stamp is the user's: no AI label", async () => {
+    const hook = () => [`/profiles/${ID}`, vi.fn()] as [string, (to: string) => void];
+    const mine = { ...PROFILE, fields: { ...FIELDS, salvageValue: 75 } };
+    render(<QueryClientProvider client={queryClient}><Router hook={hook as any}><ValueCard profile={mine} /></Router></QueryClientProvider>);
+    await screen.findByTestId("asset-value-salvage");
+    expect(screen.queryByTestId("asset-salvage-ai")).toBeNull();
+    expect(screen.getByTestId("asset-salvage-user").textContent).toContain("Remove it to let the AI estimate it");
   });
 
   it("the Overview is three things in order: Asset details, the summary, Value", async () => {

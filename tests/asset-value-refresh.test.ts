@@ -34,6 +34,10 @@ describe("opening an asset asks for a current value", () => {
     const fresh = snap({ record: { status: "valued", value: 300, checkedAt: new Date(NOW - (SWEEP_RECHECK_MS - 1000)).toISOString() } });
     expect(refreshOnOpen(fresh, NOW)).toEqual({ refresh: false, force: false });
   });
+  it("a fresh one whose salvage value the AI still owes is asked for it, unforced (no research)", () => {
+    expect(refreshOnOpen(snap({ salvageDue: true }), NOW)).toEqual({ refresh: true, force: false });
+    expect(refreshOnOpen(snap({ salvageDue: true, mode: "manual" }), NOW).refresh).toBe(false);
+  });
   it("a stale one is refreshed without force (the server already agrees)", () => {
     expect(refreshOnOpen(snap({ freshness: { fresh: false, reason: "scheduled", detail: "" } }), NOW)).toEqual({ refresh: true, force: false });
   });

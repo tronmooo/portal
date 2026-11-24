@@ -111,7 +111,7 @@ async function main() {
       check((await page.locator(t("asset-value-graph")).count()) === 1, "the Value card has the value graph");
       check((await page.locator(t("asset-value-range-1y")).count()) === 1, "the graph has time ranges");
 
-      // ── Depreciation is stated; salvage value is the user's own figure ──
+      // ── Depreciation is stated; a typed salvage value overrides the AI's ──
       const dep = await page.locator(t("asset-depreciation")).innerText();
       check(/Depreciated since purchase|Gained since purchase/.test(dep), `the Value card states the change since purchase (${dep.split("\n")[0]})`);
       check(!/Confidence/.test(await page.locator(t("asset-value-card")).innerText()), "the Value card shows no confidence figure");

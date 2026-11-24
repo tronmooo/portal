@@ -308,6 +308,8 @@ export interface ValuationSnapshot {
   mode?: ValuationMode;
   /** A refresh is currently running (lock held). */
   refreshing?: boolean;
+  /** The AI should work out this asset's salvage value (shared/asset-salvage.ts). */
+  salvageDue?: boolean;
 }
 
 /** Bump when the engine's math changes in a way that should re-value stored records. */

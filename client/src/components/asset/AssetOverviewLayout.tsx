@@ -34,6 +34,7 @@ import { localTodayISO } from "@/lib/dates";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { useAssetValuation, useAssetValuationHistory } from "@/hooks/useAssetValuation";
+import { SALVAGE_KEY, SALVAGE_BASIS_KEY, SALVAGE_BOOKKEEPING_KEYS, salvageJudgedNone, salvageSource } from "@shared/asset-salvage";
 import { projectDepreciation, recentChange, seriesInRange, valueSeries, VALUE_RANGES, type ValuePoint, type ValueRangeKey } from "@shared/asset-depreciation";
 import { formatTimeAgo } from "@/lib/format";
 import { useDismissedAlerts } from "@/hooks/useDismissedAlerts";
@@ -273,8 +274,12 @@ function ValueGraph({ id, points }: { id: string; points: ValuePoint[] }) {
   );
 }
 
-/** What it would fetch at the end of its useful life — the user's own figure. */
-export const SALVAGE_KEY = "salvageValue";
+/**
+ * What it would fetch at the end of its useful life. Estimated by the AI on
+ * each value-tracking run (shared/asset-salvage.ts, server/valuation/salvage.ts);
+ * a figure the user types replaces it until they remove it.
+ */
+export { SALVAGE_KEY };
 
 /**
  * Value & Depreciation. Owner, 2026-11-23: "make sure it says how much it
@@ -295,6 +300,9 @@ export function ValueCard({ profile, spent = 0 }: {
   const fields = profile.fields || {};
   const priceKey = PURCHASE_PRICE_KEYS.find((k) => parseMoney(fields[k]) > 0) || "purchasePrice";
   const salvage = parseMoney(fields[SALVAGE_KEY]);
+  const salvageBy = salvage > 0 ? salvageSource(fields) : null;
+  const salvageNone = salvageJudgedNone(fields);
+  const salvageBasis = (salvageBy === "estimate" || salvageNone) && typeof fields[SALVAGE_BASIS_KEY] === "string" ? String(fields[SALVAGE_BASIS_KEY]) : "";
   const history = useAssetValuationHistory(profile.id, v.supported);
   const purchaseDateKey = Object.keys(fields).find((k) => PURCHASE_DATE_RE.test(k) && fields[k]);
   const purchaseDate = purchaseDateKey ? String(fields[purchaseDateKey]) : null;
@@ -393,10 +401,39 @@ export function ValueCard({ profile, spent = 0 }: {
       {v.paid > 0 && spent > 0 && (
         <Line label="Total invested" display={formatMoneyCompact(v.paid + spent)} testId="asset-value-row-total-invested" />
       )}
-      <Line label="Salvage value" kind="money" display={salvage > 0 ? formatMoneyCompact(salvage) : null} raw={salvage > 0 ? String(salvage) : ""}
+      <Line label="Salvage value" kind="money"
+        display={salvage > 0 ? (
+          <span className="inline-flex items-center gap-1.5">
+            {formatMoneyCompact(salvage)}
+            {salvageBy === "estimate" && <span className="rounded bg-primary/15 px-1 py-px text-[11px] font-semibold text-primary" data-testid="asset-salvage-ai">AI</span>}
+          </span>
+        ) : salvageNone ? (
+          <span className="inline-flex items-center gap-1.5 font-normal text-muted-foreground">
+            None
+            <span className="rounded bg-primary/15 px-1 py-px text-[11px] font-semibold text-primary" data-testid="asset-salvage-ai">AI</span>
+          </span>
+        ) : null}
+        raw={salvage > 0 ? String(salvage) : ""}
         save={(val) => write(SALVAGE_KEY, val)} remove={() => write(SALVAGE_KEY, null)}
-        hint="What it would fetch at the end of its useful life"
+        hint={v.auto && v.supported
+          ? "What it would fetch at the end of its useful life. Portol's AI estimates it when it values the asset."
+          : "What it would fetch at the end of its useful life"}
         testId="asset-value-salvage" inputTestId={`overview-field-input-${SALVAGE_KEY}`} removeTestId="overview-field-remove-salvageValue" />
+      {(salvageBy === "estimate" || salvageNone) && (
+        <p className="pt-1 text-[11px] text-muted-foreground" data-testid="asset-salvage-basis">
+          {salvageNone ? "The AI found no salvage value — it tends to hold its value" : "AI estimate"}{salvageBasis ? `: ${salvageBasis}` : "."} Tap to use your own figure.
+        </p>
+      )}
+      {salvageBy === "user" && v.auto && v.supported && (
+        <p className="pt-1 text-[11px] text-muted-foreground" data-testid="asset-salvage-user">
+          Your figure. Remove it to let the AI estimate it on the next refresh.
+        </p>
+      )}
+      {salvage <= 0 && !salvageNone && v.auto && v.supported && (
+        <p className="pt-1 text-[11px] text-muted-foreground" data-testid="asset-salvage-pending">
+          {v.refreshing ? "The AI is estimating the salvage value…" : "The AI estimates the salvage value when this asset is valued."}
+        </p>
+      )}
 
       {v.supported && (
         <>
@@ -544,7 +581,7 @@ export function AssetOverviewBody({
   const purchaseDate = fields[purchaseDateKey] ? String(fields[purchaseDateKey]) : "";
   const location = typeof fields.location === "string" ? fields.location.trim() : "";
   // Drawn by this layout itself, so the composition's copy is not repeated.
-  const staple = new Set([priceKey, purchaseDateKey, "purchasePrice", "purchaseDate", "userEnteredValue", "location", "ownershipPercentage", SALVAGE_KEY]);
+  const staple = new Set([priceKey, purchaseDateKey, "purchasePrice", "purchaseDate", "userEnteredValue", "location", "ownershipPercentage", SALVAGE_KEY, ...SALVAGE_BOOKKEEPING_KEYS]);
 
   const keyOf = (v: OverviewValue) => v.editable?.fieldKey || v.semanticKey;
   const fieldSections: OverviewSection[] = spec.sections.filter((s) => !SPECIAL.has(s.component));

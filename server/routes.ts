@@ -1,6 +1,7 @@
 import { z } from "zod";
 import express, { type Express, type Request } from "express";
 import { fieldPatchBetween } from "../shared/field-patch";
+import { stampSalvageProvenance } from "@shared/asset-salvage";
 import { resolveProfileTypeForCreate, findDuplicate, dedupRecordFromExpense, dedupRecordFromEvent, dedupRecordFromTask, isObligationFieldKey } from "../shared/domain";
 import { shouldAppendClarifyingQuestion, appendClarifyingQuestion } from "@shared/chat-clarify";
 import { canonicalExpenseCategory, canonicalObligationCategory, EXPENSE_CATEGORIES } from "@shared/category-canon";
@@ -5824,6 +5825,9 @@ ${JSON.stringify(ctx, null, 2)}`;
         if (f.userEnteredValue === undefined) { f.userEnteredValue = null; f.userEnteredValueAsOf = null; }
       }
     }
+    // A salvage value typed here is the user's; removing it hands it back to
+    // the AI estimate (shared/asset-salvage.ts).
+    stampSalvageProvenance(req.body);
     const previousName: string | undefined = renamedFromName;
     // The row as it stands before this edit, for the History tab's diff. The
     // request memo makes this free when a guard above already read it.
