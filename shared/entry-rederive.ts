@@ -51,6 +51,33 @@ function enrichAgain(
     : fitness;
 }
 
+/**
+ * A pace or speed stored under another name ("pace: 11.2", which the chat
+ * model sends beside the engine's own paceMinutesPerMile) is the same figure,
+ * and the provenance does not list it. Once distance and duration are both
+ * exact the pace IS their quotient, so a copy the user did not touch follows
+ * it rather than contradict it in the same row.
+ */
+function followPaceAndSpeed(values: Record<string, any>, e: Enrichment, changed: Set<string>): void {
+  const pace = e.calculated.paceMinutesPerMile?.value;
+  const speed = e.calculated.speedMph?.value;
+  for (const k of Object.keys(values)) {
+    if (k.startsWith("_") || changed.has(k) || k === "paceMinutesPerMile" || k === "speedMph") continue;
+    const name = k.toLowerCase().replace(/[^a-z]/g, "");
+    const target = /^(avg|average)?pace(minpermile|minutespermile)?$/.test(name) ? pace
+      : /^(avg|average)?speed(mph)?$|^mph$/.test(name) ? speed
+      : undefined;
+    if (target == null || !Number.isFinite(target)) continue;
+    const v = values[k];
+    if (typeof v === "number") values[k] = target;
+    else if (typeof v === "string" && /^\d+(\.\d+)?$/.test(v.trim())) values[k] = target;
+    else if (typeof v === "string" && /^\d{1,2}:\d{2}/.test(v.trim()) && target === pace) {
+      const secs = Math.round(target * 60);
+      values[k] = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+    }
+  }
+}
+
 export interface RederiveInput {
   trackerName?: string | null;
   /** The entry's values as stored, before the edit. */
@@ -109,5 +136,6 @@ export function rederiveEditedEntry(input: RederiveInput): RederiveResult | null
   for (const k of removed) { delete next.calculated[k]; delete next.estimated[k]; }
   const values = { ...explicit };
   applyEnrichmentToValues(values, next);
+  followPaceAndSpeed(values, next, changed);
   return { values, enrichment: next };
 }

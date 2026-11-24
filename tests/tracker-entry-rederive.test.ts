@@ -75,6 +75,18 @@ describe("an edited entry's derived figures follow the edit", () => {
     expect(saved.values.distance).toBe(1.5);
   });
 
+  it("a pace or speed stored under another name follows too (the chat's `pace: 11.2`)", () => {
+    const { values, enrichment } = loggedRun();
+    const stored = { ...values, pace: 11.2, avg_speed: 5.36, heart_rate: 150 };
+    const out = rederiveEditedEntry({ trackerName: "Running", storedValues: stored, enrichment, patchValues: formPatch(stored, { distance: 1.5 }) })!;
+    expect(out.values.pace).toBe(9.3);
+    expect(out.values.avg_speed).toBe(6.43);
+    expect(out.values.heart_rate).toBe(150);
+    // One the user typed in this edit is kept.
+    const typed = rederiveEditedEntry({ trackerName: "Running", storedValues: stored, enrichment, patchValues: formPatch(stored, { distance: 1.5, pace: 9 }) })!;
+    expect(typed.values.pace).toBe(9);
+  });
+
   it("a derived figure the user changes is theirs: it is kept and no longer marked derived", () => {
     const { values, enrichment } = loggedRun();
     const out = rederiveEditedEntry({ trackerName: "Running", storedValues: values, enrichment, patchValues: formPatch(values, { steps: 2500 }) })!;
