@@ -489,15 +489,17 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
                 <Button onClick={openFilledPdf} className="w-full" data-testid="button-open-filled-pdf">
                   <ExternalLink className="h-4 w-4 mr-2" /> {isImageInput ? "Open filled form" : "Open filled PDF"}
                 </Button>
-                {/* The filled copy is a saved document: say where it is and
-                    go there, so the last step is never a dead end. */}
+                {/* The filled copy is a saved document: open THAT document, so
+                    the last step is never a dead end. Not the Artifacts list:
+                    the profile filter there can hide the copy it was sent to
+                    find (Rule 4). */}
                 <Button
                   variant="outline"
                   className="w-full"
-                  onClick={() => { onOpenChange(false); hashNavigate("/artifacts"); }}
-                  data-testid="button-smart-fill-view-artifacts"
+                  onClick={() => { onOpenChange(false); hashNavigate(`/documents/${fillResult.documentId}`); }}
+                  data-testid="button-smart-fill-view-saved"
                 >
-                  <FolderOpen className="h-4 w-4 mr-2" /> Show it in Artifacts
+                  <FolderOpen className="h-4 w-4 mr-2" /> Show the saved copy
                 </Button>
               </div>
             </div>

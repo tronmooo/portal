@@ -16,7 +16,7 @@
 //   · A saved document, reopened, says "Saved" and writes nothing (W3).
 //   · Artifacts never shows "0 artifacts" while its lists are loading.
 //   · Fill In: the filled PDF holds the four approved values; the app behind
-//     the workspace is inert; "Show it in Artifacts" leaves the workspace.
+//     the workspace is inert; "Show the saved copy" opens the saved document.
 //
 // Writes only to the smoke account, holds the gate lock (acquireGateLock) and
 // deletes what it created.
@@ -118,6 +118,11 @@ async function run(browser: any, mode: "desktop" | "phone", made: { profiles: st
     : { viewport: { width: 1400, height: 950 }, deviceScaleFactor: SHOTS ? 2 : 1, timezoneId: "America/Los_Angeles" });
   const page = await ctx.newPage();
   await page.addInitScript("window.__name = (f) => f;");
+  // What moved the location, for the message of a failed navigation check.
+  await page.addInitScript(`window.__nav = [];
+    for (const m of ["back", "pushState", "replaceState"]) { const o = history[m].bind(history); history[m] = (...a) => { window.__nav.push(m + " @" + location.hash + " state=" + JSON.stringify(history.state)); return o(...a); }; }
+    addEventListener("popstate", (e) => window.__nav.push("popstate " + location.hash + " state=" + JSON.stringify(e.state)), true);
+    addEventListener("hashchange", () => window.__nav.push("hashchange " + location.hash), true);`);
   // The visible one: the editor draws a phone header and a desktop header.
   const press = (sel: string) => { const el = page.locator(sel).locator("visible=true").first(); return phone ? el.tap() : el.click(); };
   const seen: Array<{ method: string; path: string }> = [];
@@ -270,9 +275,14 @@ async function run(browser: any, mode: "desktop" | "phone", made: { profiles: st
     const typed: string[] = [];
     for (let i = 0; i < count; i++) {
       const input = inputs.nth(i);
-      const row = (await input.evaluate((el: HTMLElement) => (el.closest("li, tr, [data-field-row], div.rounded-md, div.border")?.textContent || el.getAttribute("placeholder") || "").toLowerCase())) as string;
-      const key = /mail/.test(row) ? "email" : /phone/.test(row) ? "phone" : /city/.test(row) ? "city" : /name/.test(row) ? "full_name" : order.find((k) => !typed.includes(k)) || "";
+      const row = ((await input.evaluate((el: HTMLElement) => el.closest(".grid")?.textContent || "")) as string).toLowerCase();
+      const key = /mail/.test(row) ? "email" : /phone/.test(row) ? "phone" : /city/.test(row) ? "city" : /name/.test(row) ? "full_name" : "";
       if (!key || typed.includes(key)) continue;
+      // A field left out of the fill has a disabled value box: include it first.
+      if (await input.isDisabled()) {
+        const id = String(await input.getAttribute("data-testid")).replace("smart-fill-value-", "");
+        await page.locator(t(`smart-fill-include-${id}`)).check();
+      }
       await input.fill(approved[key]);
       typed.push(key);
     }
@@ -298,13 +308,17 @@ async function run(browser: any, mode: "desktop" | "phone", made: { profiles: st
     }
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/qa-${mode}-fill-done.png` });
     const loadsBeforeLeave = loads;
-    await press(t("button-smart-fill-view-artifacts"));
-    await page.waitForFunction(() => location.hash.startsWith("#/artifacts"), null, { timeout: 15000 }).catch(() => undefined);
-    check(page.url().includes("#/artifacts") && (await page.locator(t("workspace-fill")).count()) === 0, label("\"Show it in Artifacts\" leaves the Fill In workspace for Artifacts"));
+    await page.evaluate(() => { (window as any).__nav.length = 0; });
+    await press(t("button-smart-fill-view-saved"));
+    // The route changes at once; the workspace leaves when the next page's
+    // code has loaded (it is a lazy chunk the first time).
+    await page.waitForFunction(() => location.hash.startsWith("#/documents/") && !document.querySelector('[data-testid="workspace-fill"]'), null, { timeout: 30000 }).catch(() => undefined);
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/qa-${mode}-fill-left.png` });
+    check(page.url().includes(`#/documents/${result?.documentId}`) && (await page.locator(t("workspace-fill")).count()) === 0, label(`"Show the saved copy" leaves the Fill In workspace for the saved document (now at ${page.url().split("#")[1] || "/"}${page.url().includes("#/documents/") ? "" : `; ${JSON.stringify(await page.evaluate(() => (window as any).__nav))}`})`));
     check(await page.evaluate(() => { const s = document.querySelector("[data-app-shell]"); return !!s && !s.hasAttribute("inert"); }), label("…and the app is reachable again"));
     check(loads === loadsBeforeLeave, label("…without reloading the page"));
     await page.waitForFunction((n: string) => (document.body.textContent || "").includes(n), `tutorial-form-${tag}`, { timeout: 20000 }).catch(() => undefined);
-    check((await page.evaluate(() => document.body.innerText)).includes(`tutorial-form-${tag}`), label("…where the filled copy is listed"));
+    check((await page.evaluate(() => document.body.innerText)).includes(`tutorial-form-${tag}`), label("…which shows the filled copy by name"));
   } finally {
     await ctx.close();
   }

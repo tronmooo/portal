@@ -526,7 +526,8 @@ The app behind an open workspace is covered, so it is also `inert`
 sidebar links are out of the tab order and the accessibility tree. (2026-11-24:
 "Dashboard" / "Artifacts" were found behind the Fill In workspace, clicked at
 their position, and nothing happened.) A workspace's last step is never a dead
-end: Smart Fill's "done" offers "Show it in Artifacts".
+end: Smart Fill's "done" offers "Show the saved copy", which opens that
+document (not the Artifacts list, where the profile filter can hide it).
 **W2. The X saves, then leaves; it never discards on its own.** Each
 workspace hands `WorkspaceCloseButton` a function that flushes what is pending
 and then goes to `/chat`. A failed save keeps the workspace open: the

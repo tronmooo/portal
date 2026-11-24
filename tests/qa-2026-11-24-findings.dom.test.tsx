@@ -155,7 +155,8 @@ describe("An open workspace covers the app — and the app behind it cannot be r
     const fs = await import("node:fs");
     expect(fs.readFileSync("client/src/App.tsx", "utf8")).toMatch(/data-app-shell/);
     const fill = fs.readFileSync("client/src/components/SmartFillDialog.tsx", "utf8");
-    expect(fill).toMatch(/data-testid="button-smart-fill-view-artifacts"/);
-    expect(fill).toMatch(/hashNavigate\("\/artifacts"\)/);
+    expect(fill).toMatch(/data-testid="button-smart-fill-view-saved"/);
+    // The saved document itself — a list can hide it behind the profile filter.
+    expect(fill).toMatch(/hashNavigate\(`\/documents\/\$\{fillResult\.documentId\}`\)/);
   });
 });
