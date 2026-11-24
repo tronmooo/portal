@@ -6,6 +6,8 @@
 // `dismissed_notifications` preference (a JSON array of id strings) and the
 // client filters by set membership. Caching and the profile filter stay in the
 // route — this module is pure "compute the list".
+import { computeLifecycles } from "./asset-lifecycle-service";
+import { lifecycleAlertId } from "@shared/asset-lifecycle";
 import { isQuietAutoPayBill, missedPayments } from "@shared/autopay";
 import type { IStorage } from "./storage";
 import { syncLog } from "@shared/sync-log";
@@ -172,6 +174,19 @@ export async function listDismissedAlerts(storage: IStorage, notifTz: string): P
       id, title: notice.title, message: notice.message,
       entityId: rule.sourceEntityId, entityType: isDoc ? "document" : "profile", dueDate: rule.date,
     });
+  }
+  // Asset lifecycle recommendations dismissed from Needs Attention
+  // (shared/asset-lifecycle.ts lifecycleAlertId) — restorable like any alert.
+  if ([...dismissed].some((id) => id.startsWith("lifecycle:"))) {
+    try {
+      for (const row of await computeLifecycles(storage)) {
+        const rec = row.lifecycle.recommendation;
+        if (!rec) continue;
+        const id = lifecycleAlertId(row.profileId, rec.action);
+        if (!dismissed.has(id)) continue;
+        out.set(id, { id, title: `${row.name}: ${rec.label}`, message: rec.headline, entityId: row.profileId, entityType: "profile" });
+      }
+    } catch { /* the rest of the list still loads */ }
   }
   for (const n of await buildNotifications(storage, notifTz, { includeDismissed: true })) {
     if (!dismissed.has(n.id) || out.has(n.id)) continue;

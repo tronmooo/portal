@@ -50,8 +50,9 @@ import { bundleFromDetail, resolveAssetBundle } from "./resolver";
 import { runProviders } from "./providers/registry";
 import { loadCachedUnderstanding, resolveUnderstanding } from "./understanding";
 import { MS_PER_HOUR } from "@shared/valuation/planner";
-import { estimateSalvageValue } from "./salvage";
-import { salvageEstimatePatch, salvageInputsKey, salvageNeedsEstimate, type SalvageEstimate } from "@shared/asset-salvage";
+import { estimateLifecycleAssumptions } from "./lifecycle-ai";
+import { salvageEstimatePatch, salvageSource } from "@shared/asset-salvage";
+import { LIFECYCLE_ASSUMPTIONS_KEY, lifecycleCategory, lifecycleNeedsEstimate, type LifecycleAssumptions } from "@shared/asset-lifecycle";
 
 // Itemized market research runs several web searches; the lock outlives the
 // whole provider budget so a second open joins the run instead of starting one.
@@ -71,26 +72,27 @@ export function isValuableProfile(p: { type?: string | null; fields?: any } | nu
   return !!p && isAssetTabProfile(p) && String(p.type) !== "account";
 }
 
-/** The facts a salvage estimate for this asset depends on (shared/asset-salvage.ts). */
-export function salvageKeyFor(ctx: ValuationContext): string {
-  return salvageInputsKey({
-    name: ctx.name, kind: ctx.classification.semanticCategory,
-    purchasePrice: ctx.purchase.price, purchaseDate: ctx.purchase.date, condition: ctx.condition,
-  });
-}
-
 function modelConfigured(): boolean { return !!process.env.ANTHROPIC_API_KEY; }
 
 /**
- * Store an AI salvage answer — unless the user typed a figure (or tracking
- * was switched off) while the AI was answering. True when it wrote.
+ * Store the AI's lifecycle assumptions (shared/asset-lifecycle.ts) — unless
+ * tracking was switched off, or another run already stored them for these
+ * inputs, while the AI was answering. The salvage value rides along into its
+ * own fields (shared/asset-salvage.ts), never over a figure the user typed.
+ * True when it wrote.
  */
-async function storeSalvage(storage: IStorage, profileId: string, est: SalvageEstimate | null, key: string, now: Date): Promise<boolean> {
-  if (!est) return false;
+async function storeLifecycle(storage: IStorage, profileId: string, a: LifecycleAssumptions | null, key: string, now: Date): Promise<boolean> {
+  if (!a) return false;
   const latest = await storage.getProfile(profileId).catch(() => null);
   const fields = (latest?.fields as any) || {};
-  if (!latest || !isAutoValuationEnabled(fields) || !salvageNeedsEstimate(fields, key, now)) return false;
-  await storage.updateProfile(profileId, { fields: salvageEstimatePatch(est, key, now) } as any);
+  if (!latest || !isAutoValuationEnabled(fields) || !lifecycleNeedsEstimate(fields, key, now)) return false;
+  const patch: Record<string, unknown> = {
+    [LIFECYCLE_ASSUMPTIONS_KEY]: { ...a, source: "ai", inputsKey: key, asOf: now.toISOString() },
+  };
+  if (salvageSource(fields) !== "user") {
+    Object.assign(patch, salvageEstimatePatch({ value: a.valueModel === "depreciating" ? a.salvageValue : null, basis: a.basis }, key, now));
+  }
+  await storage.updateProfile(profileId, { fields: patch } as any);
   return true;
 }
 
@@ -126,9 +128,10 @@ export async function getValuationSnapshot(
     supported: true,
     mode,
     inputFingerprint: ctx.inputFingerprint,
-    // The AI has a salvage value to work out: opening the asset asks for it
-    // even when the value estimate is fresh (a quick call, no research).
-    salvageDue: mode === "auto" && modelConfigured() && salvageNeedsEstimate(detail.fields, salvageKeyFor(ctx), now),
+    // The AI has lifecycle assumptions (salvage value, useful life …) to work
+    // out: opening the asset asks for them even when the value estimate is
+    // fresh (one quick call, no research).
+    salvageDue: mode === "auto" && modelConfigured() && lifecycleNeedsEstimate(detail.fields, ctx.inputFingerprint, now),
     // Manual: the stored record is the LAST estimate, kept as history. It is
     // never stale, so no client, sweep or scheduler ever asks for a refresh.
     freshness: mode === "manual"
@@ -145,10 +148,10 @@ export interface RefreshOptions {
   now?: Date;
   /** Wall-clock budget for the external providers, all together. */
   providerBudgetMs?: number;
-  /** Allow the semantic-understanding and salvage model calls (default true when a key is configured). */
+  /** Allow the semantic-understanding and lifecycle model calls (default true when a key is configured). */
   allowModel?: boolean;
-  /** The salvage-value estimator (tests inject one). */
-  estimateSalvage?: typeof estimateSalvageValue;
+  /** The lifecycle-assumptions estimator (tests inject one). */
+  estimateLifecycle?: typeof estimateLifecycleAssumptions;
 }
 
 export interface RefreshOutcome {
@@ -203,7 +206,7 @@ export function holdStoredEstimate(previous: ValuationRecord, next: ValuationRec
   };
 }
 
-function evidenceSources(record: ValuationRecord): string[] {
+export function evidenceSources(record: ValuationRecord): string[] {
   const urls: string[] = [];
   for (const e of record.evidence) {
     if (e.reference && /^https?:\/\//.test(e.reference)) urls.push(e.reference);
@@ -366,15 +369,16 @@ export async function refreshValuation(
   const quickCtx = buildValuationContext(bundleFromDetail(detail), now);
   const freshness = assessFreshness(previous, quickCtx.inputFingerprint, now, VALUATION_MODEL_VERSION);
   if (!opts.force && freshness.fresh) {
-    // The value is current, but the salvage value may still be the AI's to
-    // work out (an asset valued before salvage was estimated, or one whose
-    // purchase facts changed). One quick model call, no market research.
-    const salvageKey = salvageKeyFor(quickCtx);
-    if ((opts.allowModel ?? modelConfigured()) && salvageNeedsEstimate(detail.fields, salvageKey, now)) {
-      const est = await (opts.estimateSalvage ?? estimateSalvageValue)(quickCtx, {
+    // The value is current, but the lifecycle assumptions may still be the
+    // AI's to work out (an asset valued before they existed, or one whose
+    // facts changed). One quick model call, no market research.
+    const lifecycleKey = quickCtx.inputFingerprint;
+    if ((opts.allowModel ?? modelConfigured()) && lifecycleNeedsEstimate(detail.fields, lifecycleKey, now)) {
+      const a = await (opts.estimateLifecycle ?? estimateLifecycleAssumptions)(quickCtx, {
         currentValue: previous?.value ?? quickCtx.estimatorValue ?? quickCtx.userValue?.value ?? null,
+        category: lifecycleCategory(detail as any),
       }).catch(() => null);
-      if (await storeSalvage(storage, profileId, est, salvageKey, now)) {
+      if (await storeLifecycle(storage, profileId, a, lifecycleKey, now)) {
         return { ...none, wrote: true, snapshot: await getValuationSnapshot(storage, profileId, { record: previous, now }) };
       }
     }
@@ -426,13 +430,13 @@ export async function refreshValuation(
       }
     }
 
-    // The salvage value is the AI's (shared/asset-salvage.ts): asked beside
+    // The lifecycle assumptions are the AI's (shared/asset-lifecycle.ts): asked beside
     // the market research so it adds no wait, and only when the stored figure
     // is not the user's and is missing or out of date.
-    const salvageKey = salvageKeyFor(ctx);
-    const salvagePending: Promise<SalvageEstimate | null> | null = allowModel && salvageNeedsEstimate(detail.fields, salvageKey, now)
-      ? trace.measure("salvage", () => (opts.estimateSalvage ?? estimateSalvageValue)(ctx, {
+    const lifecyclePending: Promise<LifecycleAssumptions | null> | null = allowModel && lifecycleNeedsEstimate(detail.fields, ctx.inputFingerprint, now)
+      ? trace.measure("lifecycle", () => (opts.estimateLifecycle ?? estimateLifecycleAssumptions)(ctx, {
         currentValue: previous?.value ?? ctx.estimatorValue ?? ctx.userValue?.value ?? null,
+        category: lifecycleCategory(detail as any),
       })).catch(() => null)
       : null;
 
@@ -526,11 +530,12 @@ export async function refreshValuation(
     } else {
       await trace.measure("persist.touch", () => storage.touchAssetValuation(profileId, record));
     }
-    // Store the AI's salvage value — unless the user typed one while it ran.
-    const salvage = salvagePending ? await salvagePending : null;
-    if (await trace.measure("persist.salvage", () => storeSalvage(storage, profileId, salvage, salvageKey, now))) {
+    // Store the AI's lifecycle assumptions, keyed to the facts the record
+    // now stands on (after any spec fills), so the next open agrees.
+    const assumptions = lifecyclePending ? await lifecyclePending : null;
+    if (await trace.measure("persist.lifecycle", () => storeLifecycle(storage, profileId, assumptions, record.inputFingerprint || ctx.inputFingerprint, now))) {
       wrote = true;
-      trace.set("salvage", salvage?.value ?? "none");
+      trace.set("lifecycle", assumptions?.valueModel ?? "none");
     }
     trace.set("status", record.status); trace.set("changed", changed); trace.set("value", record.value);
     trace.end();

@@ -23,6 +23,7 @@ import { isAutoPayOn } from "@shared/autopay";
 import { ActiveFilterNotice, FilteredEmptyState } from "@/components/ActiveFilterNotice";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAssetsValuationSweep } from "@/hooks/useAssetValuation";
+import { LifecyclePill, useAssetLifecycles } from "@/components/asset/AssetLifecycle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain, invalidateDomains, patchQueries } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
@@ -5563,6 +5564,10 @@ export default function TrackersPage() {
   // stale valuations are refreshed concurrently in the background and each
   // one patches its own card + the net-worth aggregates as it lands.
   const valuationSweep = useAssetsValuationSweep(sectionFilter === "profiles" && !!profiles);
+  // Each asset's lifecycle recommendation (server/asset-lifecycle-service.ts) —
+  // the same answer its page and Needs Attention show.
+  const lifecycleQuery = useAssetLifecycles(sectionFilter === "profiles" || sectionFilter === "all");
+  const lifecycleById = useMemo(() => new Map((lifecycleQuery.data?.rows || []).map((r) => [r.profileId, r.lifecycle])), [lifecycleQuery.data]);
   // BUG-LT01/LT02/LT03/LT04/UI02: reset section whenever the route changes
   // so /trackers, /dashboard/health, and /linked never reuse a stale tab.
   useEffect(() => {
@@ -6929,7 +6934,13 @@ export default function TrackersPage() {
                         // pill treatment.
                         pills={
                           <>
-                            <StatusPill accent={accentHsl} className="capitalize">{child.type}</StatusPill>
+                            {(() => {
+                              // A recommendation other than Keep earns the card's first pill.
+                              const rec = lifecycleById.get(child.id)?.recommendation;
+                              return rec && rec.action !== "keep"
+                                ? <LifecyclePill action={rec.action} label={rec.label} />
+                                : <StatusPill accent={accentHsl} className="capitalize">{child.type}</StatusPill>;
+                            })()}
                             {nestedParentName
                               ? <StatusPill tone="neutral" className="max-w-[9rem] truncate">↳ {nestedParentName}</StatusPill>
                               : year && <StatusPill tone="neutral">{year}</StatusPill>}

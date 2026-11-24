@@ -3481,7 +3481,7 @@ function StaticInfoTab({
     "valuation_confidence", "valuation_method", "valuation_date", "valuation_range",
     "valuationLow", "valuationHigh", "valuationFactors", "valuationMissingInfo", "valuationSources",
     "currentValueSource", "current_value_source", "currentValueAsOf", "userEnteredValueAsOf",
-    "salvageValueSource", "salvageValueBasis", "salvageValueAsOf", "salvageValueFor",
+    "salvageValueSource", "salvageValueBasis", "salvageValueAsOf", "salvageValueFor", "lifecycleAssumptions",
     // The automatic-tracking switch on the value card — a control, not a fact.
     "valuationMode", "valuation_mode",
     "assetSubtype", "asset_subtype",

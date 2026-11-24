@@ -34,6 +34,7 @@ import { localTodayISO } from "@/lib/dates";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { useAssetValuation, useAssetValuationHistory } from "@/hooks/useAssetValuation";
+import { LifecycleSection, useAssetLifecycle } from "@/components/asset/AssetLifecycle";
 import { SALVAGE_KEY, SALVAGE_BASIS_KEY, SALVAGE_BOOKKEEPING_KEYS, salvageJudgedNone, salvageSource } from "@shared/asset-salvage";
 import { projectDepreciation, recentChange, seriesInRange, valueSeries, VALUE_RANGES, type ValuePoint, type ValueRangeKey } from "@shared/asset-depreciation";
 import { formatTimeAgo } from "@/lib/format";
@@ -215,22 +216,41 @@ const dayLabel = (iso: string) =>
  * first and last points named. A range with fewer than two points says so
  * instead of drawing a line through nothing.
  */
-function ValueGraph({ id, points }: { id: string; points: ValuePoint[] }) {
+export interface GraphAhead {
+  /** The lifecycle engine's projection, from today (shared/asset-lifecycle.ts). */
+  projection: ValuePoint[];
+  /** Salvage value line (≥ 0 only; a disposal cost is not a value). */
+  salvage: number | null;
+  /** The recommended selling window, shaded. */
+  window: { start: string; end: string } | null;
+}
+
+function ValueGraph({ id, points, ahead }: { id: string; points: ValuePoint[]; ahead?: GraphAhead | null }) {
   const [range, setRange] = useState<ValueRangeKey>("all");
   const now = useMemo(() => new Date(), [points]);
   const shown = useMemo(() => seriesInRange(points, range, now), [points, range, now]);
-  const drawable = shown.length >= 2;
-  const t0 = drawable ? Date.parse(shown[0].at) : 0;
-  const t1 = drawable ? Date.parse(shown[shown.length - 1].at) : 1;
-  const hi = Math.max(...shown.map((p) => p.value), 1), lo = Math.min(...shown.map((p) => p.value), hi);
-  const xy = shown.map((p) => {
-    const x = t1 === t0 ? 100 : 6 + ((Date.parse(p.at) - t0) / (t1 - t0)) * 188;
-    const y = hi === lo ? 30 : 8 + (1 - (p.value - lo) / (hi - lo)) * 44;
-    return [x, y] as const;
-  });
-  const line = xy.map(([x, y], i) => `${i ? "L" : "M"} ${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
-  const first = shown[0], last = shown[shown.length - 1];
-  const fell = drawable && last.value < first.value;
+  // "All" is history AND the projection: the past solid, the future dashed,
+  // the salvage value and the best time to sell drawn on the same axis.
+  const future = range === "all" && ahead && ahead.projection.length > 1 ? ahead.projection.slice(1) : [];
+  const all = [...shown, ...future];
+  const drawable = all.length >= 2;
+  const t0 = drawable ? Date.parse(all[0].at) : 0;
+  const t1 = drawable ? Date.parse(all[all.length - 1].at) : 1;
+  const salvageLine = future.length && ahead?.salvage != null && ahead.salvage >= 0 ? ahead.salvage : null;
+  const vals = [...all.map((p) => p.value), ...(salvageLine != null ? [salvageLine] : [])];
+  const hi = Math.max(...vals, 1), lo = Math.min(...vals, hi);
+  const X = (t: number) => (t1 === t0 ? 100 : 6 + ((t - t0) / (t1 - t0)) * 188);
+  const Y = (v: number) => (hi === lo ? 30 : 8 + (1 - (v - lo) / (hi - lo)) * 44);
+  const xy = shown.map((p) => [X(Date.parse(p.at)), Y(p.value)] as const);
+  const fxy = future.length ? [xy[xy.length - 1] ?? [X(Date.parse(future[0].at)), Y(future[0].value)] as const, ...future.map((p) => [X(Date.parse(p.at)), Y(p.value)] as const)] : [];
+  const path = (pts: ReadonlyArray<readonly [number, number]>) => pts.map(([x, y], i) => `${i ? "L" : "M"} ${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+  const line = path(xy);
+  const first = all[0], lastPast = shown[shown.length - 1] ?? all[0], end = all[all.length - 1];
+  const fell = drawable && lastPast.value < first.value;
+  const win = future.length && ahead?.window ? {
+    x0: Math.max(6, X(Date.parse(`${ahead.window.start}T12:00:00Z`))),
+    x1: Math.min(194, X(Date.parse(`${ahead.window.end}T12:00:00Z`))),
+  } : null;
 
   return (
     <div className="mt-1.5" data-testid="asset-value-graph">
@@ -249,21 +269,41 @@ function ValueGraph({ id, points }: { id: string; points: ValuePoint[] }) {
       {drawable ? (
         <>
           <svg viewBox="0 0 200 60" preserveAspectRatio="none" className="w-full h-[72px] mt-1" role="img"
-            aria-label={`From ${formatMoneyCompact(first.value)} on ${dayLabel(first.at)} to ${formatMoneyCompact(last.value)} on ${dayLabel(last.at)}`}>
+            aria-label={`From ${formatMoneyCompact(first.value)} on ${dayLabel(first.at)} to ${formatMoneyCompact(lastPast.value)} today${future.length ? `, projected ${formatMoneyCompact(end.value)} by ${dayLabel(end.at)}` : ""}`}>
             <defs>
               <linearGradient id={`val-fill-${id}`} x1="0" x2="0" y1="0" y2="1">
                 <stop offset="0" stopColor="#8b5cf6" stopOpacity="0.35" /><stop offset="1" stopColor="#8b5cf6" stopOpacity="0.02" />
               </linearGradient>
             </defs>
-            <path d={`${line} L ${xy[xy.length - 1][0].toFixed(1)} 58 L ${xy[0][0].toFixed(1)} 58 Z`} fill={`url(#val-fill-${id})`} />
-            <path d={line} fill="none" stroke="#a78bfa" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+            {win && win.x1 > win.x0 && (
+              <rect x={win.x0} y={4} width={win.x1 - win.x0} height={54} fill="#f59e0b" fillOpacity="0.14" data-testid="asset-graph-window" />
+            )}
+            {salvageLine != null && (
+              <line x1={6} x2={194} y1={Y(salvageLine)} y2={Y(salvageLine)} stroke="currentColor" strokeOpacity="0.45" strokeDasharray="2 2" strokeWidth="1" vectorEffect="non-scaling-stroke" data-testid="asset-graph-salvage" />
+            )}
+            {xy.length >= 2 && <path d={`${line} L ${xy[xy.length - 1][0].toFixed(1)} 58 L ${xy[0][0].toFixed(1)} 58 Z`} fill={`url(#val-fill-${id})`} />}
+            {xy.length >= 2 && <path d={line} fill="none" stroke="#a78bfa" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
+            {fxy.length >= 2 && (
+              <path d={path(fxy)} fill="none" stroke="#a78bfa" strokeOpacity="0.8" strokeWidth="1.5" strokeDasharray="3 3" strokeLinecap="round" vectorEffect="non-scaling-stroke" data-testid="asset-graph-projection" />
+            )}
           </svg>
           <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground tabular-nums">
             <span data-testid="asset-value-graph-start">{dayLabel(first.at)} · {formatMoneyCompact(first.value)}</span>
-            <span className={fell ? "text-red-400" : last.value > first.value ? "text-emerald-400" : ""} data-testid="asset-value-graph-end">
-              Today · {formatMoneyCompact(last.value)}
-            </span>
+            {future.length ? (
+              <span data-testid="asset-value-graph-end">{dayLabel(end.at)} · {formatMoneyCompact(end.value)} projected</span>
+            ) : (
+              <span className={fell ? "text-red-400" : lastPast.value > first.value ? "text-emerald-400" : ""} data-testid="asset-value-graph-end">
+                Today · {formatMoneyCompact(lastPast.value)}
+              </span>
+            )}
           </div>
+          {future.length > 0 && (
+            <p className="flex flex-wrap gap-x-3 text-[11px] text-muted-foreground" data-testid="asset-graph-legend">
+              <span>── value</span><span>╌╌ projected</span>
+              {win && win.x1 > win.x0 && <span className="text-amber-400">▮ best time to sell</span>}
+              {salvageLine != null && <span>┄ salvage {formatMoneyCompact(salvageLine)}</span>}
+            </p>
+          )}
         </>
       ) : (
         <p className="py-2 text-[12px] text-muted-foreground" data-testid="asset-value-graph-empty">
@@ -299,9 +339,20 @@ export function ValueCard({ profile, spent = 0 }: {
   const write = useFieldWrite(profile.id);
   const fields = profile.fields || {};
   const priceKey = PURCHASE_PRICE_KEYS.find((k) => parseMoney(fields[k]) > 0) || "purchasePrice";
-  const salvage = parseMoney(fields[SALVAGE_KEY]);
-  const salvageBy = salvage > 0 ? salvageSource(fields) : null;
-  const salvageNone = salvageJudgedNone(fields);
+  // The lifecycle engine's answer (shared/asset-lifecycle.ts) is the salvage
+  // value and the projection every screen shows; the stored fields are the
+  // fallback while it loads (Rule 1: one source, the same number).
+  const lc = useAssetLifecycle(profile.id).row?.lifecycle;
+  const lcOn = !!lc?.applicable;
+  const storedSalvage = parseMoney(fields[SALVAGE_KEY]);
+  const lcSalvage = lcOn && lc!.valueModel === "depreciating" && lc!.salvage.source !== "none" ? lc!.salvage : null;
+  const salvage = lcSalvage ? Math.max(0, lcSalvage.value ?? 0) : storedSalvage;
+  const disposalCost = lcSalvage?.disposalCost ? Math.abs(lcSalvage.value ?? 0) : 0;
+  const salvageBy: "estimate" | "user" | "typical" | null = lcSalvage
+    ? (lcSalvage.source === "user" ? "user" : lcSalvage.source === "typical" ? "typical" : "estimate")
+    : storedSalvage > 0 ? salvageSource(fields) : null;
+  const holdsValue = lcOn && lc!.valueModel !== "depreciating";
+  const salvageNone = holdsValue || (!lcSalvage && salvageJudgedNone(fields));
   const salvageBasis = (salvageBy === "estimate" || salvageNone) && typeof fields[SALVAGE_BASIS_KEY] === "string" ? String(fields[SALVAGE_BASIS_KEY]) : "";
   const history = useAssetValuationHistory(profile.id, v.supported);
   const purchaseDateKey = Object.keys(fields).find((k) => PURCHASE_DATE_RE.test(k) && fields[k]);
@@ -311,7 +362,13 @@ export function ValueCard({ profile, spent = 0 }: {
     [history.data, v.paid, purchaseDate, v.now],
   );
   const moved = useMemo(() => recentChange(points), [points]);
-  const ahead = projectDepreciation({ purchasePrice: v.paid, purchaseDate, currentValue: v.now, salvageValue: parseMoney(fields[SALVAGE_KEY]), now: new Date() });
+  // One projection: the lifecycle engine's when it has answered, else the
+  // simple purchase-price rate (no second number that could disagree).
+  const ahead = lcOn ? null : projectDepreciation({ purchasePrice: v.paid, purchaseDate, currentValue: v.now, salvageValue: storedSalvage, now: new Date() });
+  const graphAhead: GraphAhead | null = lcOn && lc!.projection.length > 1 ? {
+    projection: lc!.projection, salvage: lcSalvage && (lcSalvage.value ?? 0) >= 0 ? lcSalvage.value : null,
+    window: lc!.sellingWindow && lc!.sellingWindow.status !== "passed" ? lc!.sellingWindow : null,
+  } : null;
   const valuedAt = v.record?.valuedAt || null;
   const failed = v.record?.status === "error";
   const up = v.delta > 0;
@@ -376,12 +433,17 @@ export function ValueCard({ profile, spent = 0 }: {
             : !v.refreshing && <span>Not valued yet.</span>}
         </p>
       )}
-      {v.supported && <ValueGraph id={profile.id} points={points} />}
-      {(moved || ahead) && (
+      {v.supported && <ValueGraph id={profile.id} points={points} ahead={graphAhead} />}
+      {(moved || ahead || (lcOn && lc!.valueIn12m != null)) && (
         <div className="mt-1 mb-1 space-y-0.5 text-[12px] text-muted-foreground">
           {moved && (
             <p data-testid="asset-value-recent-change">
               Latest change: <span className={`font-semibold tabular-nums ${moved.delta < 0 ? "text-red-400" : "text-emerald-400"}`}>{signed(moved.delta)} ({signedPct(moved.pct)})</span> since {dayLabel(moved.since)}.
+            </p>
+          )}
+          {lcOn && lc!.valueIn12m != null && (
+            <p data-testid="asset-value-projection">
+              Projected about <span className="font-semibold tabular-nums text-foreground">{formatMoneyCompact(lc!.valueIn12m)}</span> a year from now.
             </p>
           )}
           {ahead && (
@@ -401,11 +463,17 @@ export function ValueCard({ profile, spent = 0 }: {
       {v.paid > 0 && spent > 0 && (
         <Line label="Total invested" display={formatMoneyCompact(v.paid + spent)} testId="asset-value-row-total-invested" />
       )}
-      <Line label="Salvage value" kind="money"
-        display={salvage > 0 ? (
+      <Line label={disposalCost > 0 ? "Disposal cost" : "Salvage value"} kind="money"
+        display={disposalCost > 0 ? (
+          <span className="inline-flex items-center gap-1.5 text-red-400" data-testid="asset-salvage-disposal">
+            {formatMoneyCompact(disposalCost)}
+            <span className="rounded bg-primary/15 px-1 py-px text-[11px] font-semibold text-primary" data-testid="asset-salvage-ai">{salvageBy === "typical" ? "Typical" : "AI"}</span>
+          </span>
+        ) : salvage > 0 || (lcSalvage && lcSalvage.value === 0) ? (
           <span className="inline-flex items-center gap-1.5">
             {formatMoneyCompact(salvage)}
             {salvageBy === "estimate" && <span className="rounded bg-primary/15 px-1 py-px text-[11px] font-semibold text-primary" data-testid="asset-salvage-ai">AI</span>}
+            {salvageBy === "typical" && <span className="rounded bg-muted px-1 py-px text-[11px] font-semibold text-muted-foreground" data-testid="asset-salvage-typical">Typical</span>}
           </span>
         ) : salvageNone ? (
           <span className="inline-flex items-center gap-1.5 font-normal text-muted-foreground">
@@ -421,7 +489,15 @@ export function ValueCard({ profile, spent = 0 }: {
         testId="asset-value-salvage" inputTestId={`overview-field-input-${SALVAGE_KEY}`} removeTestId="overview-field-remove-salvageValue" />
       {(salvageBy === "estimate" || salvageNone) && (
         <p className="pt-1 text-[11px] text-muted-foreground" data-testid="asset-salvage-basis">
-          {salvageNone ? "The AI found no salvage value — it tends to hold its value" : "AI estimate"}{salvageBasis ? `: ${salvageBasis}` : "."} Tap to use your own figure.
+          {holdsValue ? `No salvage value to plan for — it tends to ${lc!.valueModel === "appreciating" ? "gain" : "hold"} its value`
+            : salvageNone ? "The AI found no salvage value — it tends to hold its value"
+            : disposalCost > 0 ? "AI estimate: getting rid of it costs money"
+            : "AI estimate"}{salvageBasis ? `: ${salvageBasis}` : "."} Tap to use your own figure.
+        </p>
+      )}
+      {salvageBy === "typical" && (
+        <p className="pt-1 text-[11px] text-muted-foreground" data-testid="asset-salvage-typical-note">
+          Typical for its category until Portol's AI analyses it. Tap to use your own figure.
         </p>
       )}
       {salvageBy === "user" && v.auto && v.supported && (
@@ -429,11 +505,13 @@ export function ValueCard({ profile, spent = 0 }: {
           Your figure. Remove it to let the AI estimate it on the next refresh.
         </p>
       )}
-      {salvage <= 0 && !salvageNone && v.auto && v.supported && (
+      {salvage <= 0 && !salvageNone && !lcSalvage && v.auto && v.supported && (
         <p className="pt-1 text-[11px] text-muted-foreground" data-testid="asset-salvage-pending">
           {v.refreshing ? "The AI is estimating the salvage value…" : "The AI estimates the salvage value when this asset is valued."}
         </p>
       )}
+
+      <LifecycleSection profileId={profile.id} />
 
       {v.supported && (
         <>
@@ -581,7 +659,7 @@ export function AssetOverviewBody({
   const purchaseDate = fields[purchaseDateKey] ? String(fields[purchaseDateKey]) : "";
   const location = typeof fields.location === "string" ? fields.location.trim() : "";
   // Drawn by this layout itself, so the composition's copy is not repeated.
-  const staple = new Set([priceKey, purchaseDateKey, "purchasePrice", "purchaseDate", "userEnteredValue", "location", "ownershipPercentage", SALVAGE_KEY, ...SALVAGE_BOOKKEEPING_KEYS]);
+  const staple = new Set([priceKey, purchaseDateKey, "purchasePrice", "purchaseDate", "userEnteredValue", "location", "ownershipPercentage", SALVAGE_KEY, ...SALVAGE_BOOKKEEPING_KEYS, "lifecycleAssumptions"]);
 
   const keyOf = (v: OverviewValue) => v.editable?.fieldKey || v.semanticKey;
   const fieldSections: OverviewSection[] = spec.sections.filter((s) => !SPECIAL.has(s.component));

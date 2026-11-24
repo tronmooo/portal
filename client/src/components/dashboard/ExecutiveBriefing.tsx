@@ -91,6 +91,8 @@ import type { AttentionItem } from "@shared/attention";
 import { dayLabel } from "@shared/now-rank";
 import { groupDocumentDates, summarizeDocumentUrgency } from "@shared/document-dates";
 import { selectAttentionRows } from "@shared/executive-attention";
+import { lifecycleAttentionItems } from "@shared/asset-lifecycle";
+import { useAssetLifecycles } from "@/components/asset/AssetLifecycle";
 import { buildExecutiveSections, normalizeAiSuggestions, type AiSuggestion, type ExecSectionId } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
@@ -1040,13 +1042,20 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // what is easy to forget and costly to miss: expiring/expired documents,
   // renewals, deadlines, a goal past due, a dose not taken, a reading out of
   // range, an alert about one of those. The rule is shared/executive-attention.
+  // Significant asset recommendations (Consider Selling / Replace / Dispose)
+  // join the card, derived from the same lifecycle answer the asset page shows
+  // and dismissed into the same server list (shared/asset-lifecycle.ts).
+  const lifecycleQuery = useAssetLifecycles(ready, { mode, ids });
+  const lifecycleItems = useMemo(
+    () => lifecycleAttentionItems(lifecycleQuery.data?.rows || [], dismissedIds).filter((i) => !goneKeys.has(i.key)),
+    [lifecycleQuery.data, dismissedIds, goneKeys]);
   const attentionItems = useMemo(
     () => selectAttentionRows(
-      { immediate: secItems("immediate"), health: secItems("health"), documents: secItems("documents") },
+      { immediate: secItems("immediate"), health: secItems("health"), documents: secItems("documents"), lifecycle: lifecycleItems },
       prefs.minTier,
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sections, prefs.minTier]);
+    [sections, prefs.minTier, lifecycleItems]);
 
   // UPCOMING = everything dated from tomorrow on, across every domain, soonest
   // first. Records were already claimed once by the router, so nothing here

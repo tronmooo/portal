@@ -325,6 +325,10 @@ export const DERIVED_ENDPOINT_DEPENDENCIES: Readonly<Record<string, readonly Dom
   // Net worth moves with every asset value, liability balance and owner share.
   "/api/net-worth/history": ["assets", "liabilities", "profiles", "people"],
   "/api/cashflow": ["expenses", "incomes", "obligations", "liabilities", "assets"],
+  // server/asset-lifecycle-service.ts computeLifecycles: profiles (assets, their
+  // stored assumptions and values), valuation records (assets), expenses
+  // (repair costs), documents (warranty dates).
+  "/api/assets/lifecycle": ["profiles", "assets", "expenses", "documents"],
 };
 
 /**

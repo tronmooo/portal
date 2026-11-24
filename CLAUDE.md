@@ -789,21 +789,12 @@ summary then evaluation"):
    salvage value). No confidence figure here. Then the money lines: Purchase
    price, Current value, Total invested and **Salvage value**, plus Refresh
    and the estimate's details and tracking switch under the disclosure.
-   **The salvage value is the AI's** (owner, 2026-11-24: "salvage value
-   should be determined by AI"): each value-tracking run asks for it beside
-   the market research (`estimateSalvageValue`, `server/valuation/salvage.ts`)
-   and stores it with its provenance and one-line reason
-   (`shared/asset-salvage.ts`; labelled "AI" on the card). An asset whose
-   value is already current gets it on open: the snapshot's `salvageDue`
-   makes the page send an unforced refresh, which the server answers with the
-   one quick model call and no market research. An AI answer of "none" (it
-   holds its value) is stamped and shown as None. It is re-asked only
-   when missing, when what it was estimated from changes, or after
-   `SALVAGE_MAX_AGE_MS`. A figure the user types (page or chat:
-   `stampSalvageProvenance`) is theirs and never replaced; removing it hands
-   it back to the AI. The salvage keys are valuation OUTPUTS
-   (`PRIOR_VALUATION_KEYS`), never inputs. No model, no figure — never a guess.
-   *Guard:* `tests/asset-salvage-ai.test.ts`. *Live:* `npx tsx tests/live-salvage-check.ts`.
+   **The salvage value is the lifecycle engine's** (owner, 2026-11-24): see
+   "Asset lifecycle rules" below. A figure the user types (page or chat:
+   `stampSalvageProvenance`, `shared/asset-salvage.ts`) is theirs and never
+   replaced; removing it hands it back. Under the money lines sits the
+   lifecycle section (`LifecycleSection`); the graph's "All" range adds the
+   projection (dashed), the salvage line and the best time to sell.
 2. **AI Asset Summary** (`AISummaryCard compact`) — a title and the text. The
    text is three short sentences: what it is worth, how much it has
    depreciated, and WHEN it would make sense to sell or replace it, with the
@@ -878,6 +869,68 @@ and Delete (which only opens the page's confirmation).
 **Financials** (rollup, breakdown, linked liabilities, the loan, bills and
 expenses); a saved `/money` link opens Financials. Subscriptions and the other
 sets that never had Financials keep Money.
+
+## Asset lifecycle rules (the AI chooses assumptions; arithmetic decides)
+
+Owner, 2026-11-24: "an AI-powered Asset Lifecycle Intelligence Engine … The
+AI should gather relevant evidence and determine appropriate valuation
+assumptions. A deterministic calculation engine should perform the financial
+calculations." Read these before touching `shared/asset-lifecycle.ts`,
+`server/valuation/lifecycle-ai.ts`, `server/asset-lifecycle-service.ts` or
+`client/src/components/asset/AssetLifecycle.tsx`.
+*Guards:* `tests/asset-lifecycle-engine.test.ts`, `tests/asset-lifecycle-service.test.ts`,
+`tests/asset-lifecycle-integrations.test.ts`, `tests/asset-lifecycle.dom.test.tsx`,
+`tests/asset-salvage-ai.test.ts`.
+*Live check (deployed app, smoke account):* `npx tsx tests/live-asset-lifecycle-check.ts`.
+
+**LC1. The AI only chooses assumptions.** One model call per asset during the
+value-tracking run (`estimateLifecycleAssumptions`, beside the market
+research, so no extra wait): value model (depreciating / appreciating /
+stable), useful life, yearly rate, salvage value (NEGATIVE = a net disposal
+cost), disposal route, replacement cost, confidence, plain-language
+assumptions. Its answer passes `sanitizeLifecycleAssumptions` — an
+out-of-bounds figure is DROPPED, never clamped into a plausible number — and is
+stored as `fields.lifecycleAssumptions` (a valuation OUTPUT,
+`PRIOR_VALUATION_KEYS`; never an input). It is re-asked when the valuation
+input fingerprint changes, after `LIFECYCLE_MAX_AGE_MS`, or when missing; an
+asset whose value is already current gets it on open (`salvageDue` → an
+unforced refresh → one quick call). No model or no valid answer: the
+category's `typicalAssumptions`, labelled "Typical" and low confidence, never
+presented as analysed. An unrecognised item on typical figures is never told
+to sell or replace (capped at Monitor).
+**LC2. Every figure is the engine's, computed on read.** `computeAssetLifecycle`
+is pure: projection, accumulated and next-12-month depreciation, remaining
+useful life, selling window (60–85 % of life), replacement cost (the AI's, else
+the purchase price inflated 3 %/yr, labelled), recommended replacement date,
+repair-versus-replace, ONE recommendation (Keep / Monitor / Consider Selling /
+Replace / Dispose-Recycle) with its money reasons, confidence (the weaker of
+the value's and the assumptions'), sources and timestamps. Nothing derived is
+stored (Rule 5). Every screen reads `GET /api/assets/lifecycle`
+(`computeLifecycles`; cache-bus: profiles, assets, expenses, documents) — the
+asset page, the Assets tab pill, Needs Attention, the Calendar and Finance can
+never disagree (Rule 1). Never add a second projection beside it: the
+purchase-price `projectDepreciation` line shows only while no lifecycle has
+loaded.
+**LC3. Nested assets count once.** A parent's lifecycle uses its OWN value;
+its descendants are summed separately (`nested`, "not included above"). An
+expense linked to a parent and a child belongs to the deepest
+(`attributeAssetExpenses`; a tie splits it). Repair-versus-replace reads only
+repair/maintenance spending, never loan payments (`payment:` /
+`payment-cost:` tags, A4).
+**LC4. Significant recommendations surface once, and nothing acts on its own.**
+Consider Selling, Replace and Dispose/Recycle join Needs Attention
+(`lifecycleAttentionItems`, after the expirations) as a row that OPENS the
+asset — no task, no notification, no stored flag. Dismissing stores
+`lifecycleAlertId(asset, action)` in the server's dismissed list (Rule 8;
+listed and restorable in `DismissedAlertsList`); a different recommendation
+later is a new row. The Calendar shows "Replace:" / "Sell by:" / "Best time to
+sell opens:" one-off dates (`seriesFromLifecycles`) that are READ-ONLY
+(`capabilitiesFor`: only Edit, which opens the asset). Portol never sells,
+disposes of or deletes an asset.
+*Not built (2026-11-24):* tracker readings (a mileage tracker) as usage input;
+a live web price for the replacement cost (the AI's is model knowledge, and
+says so); the Executive Timeline card does not list lifecycle dates (the
+Calendar does).
 
 ## Recurring occurrence rules (one date at a time; the series keeps its schedule)
 

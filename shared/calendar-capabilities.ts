@@ -143,6 +143,14 @@ export function capabilitiesFor(series: CalendarSeries): ActionCapability[] {
   const cap = (action: CalendarAction, enabled: boolean, reason?: string): ActionCapability =>
     enabled ? { action, enabled } : { action, enabled, reason };
 
+  // An asset's lifecycle dates are worked out from the asset (shared/
+  // asset-lifecycle.ts): the only action is opening it. Never a delete that
+  // could reach the asset.
+  if (series.id.startsWith("lifecycle:")) {
+    return CALENDAR_ACTIONS.map((action) => action === "edit"
+      ? cap("edit", true)
+      : cap(action, false, "Worked out from the asset — it moves when the asset's value or details change."));
+  }
   return CALENDAR_ACTIONS.map((action) => {
     switch (action) {
       case "edit":

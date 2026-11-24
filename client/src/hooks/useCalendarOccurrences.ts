@@ -77,7 +77,8 @@ export type CalendarOccurrenceSource =
   | "obligations"
   | "tasks"
   | "documents"
-  | "incomes";
+  | "incomes"
+  | "lifecycles";
 
 const EMPTY_LIST: any[] = [];
 
@@ -130,6 +131,9 @@ export function useCalendarOccurrences(
   // Recurring income. Without this the paycheck adapter existed and ran
   // nowhere: "I get paid every other Friday" was in the finance tables and on
   // no calendar surface at all.
+  // Asset lifecycle dates (replace by, best time to sell): derived, read-only.
+  // A failed request leaves them out and marks the stream degraded (Rule 7).
+  const lifecycles = useQuery<{ rows: any[] }>({ queryKey: ["/api/assets/lifecycle"] });
   const incomes = useQuery<any[]>({
     queryKey: [...scopedKey("/api/incomes", mode, kIds)],
     queryFn: () => get(withFullLimit(`/api/incomes${profileParam}`)),
@@ -157,8 +161,10 @@ export function useCalendarOccurrences(
         tasks: Array.isArray(tasks.data) ? tasks.data : [],
         documents: Array.isArray(documents.data) ? documents.data : [],
         incomes: Array.isArray(incomes.data) ? incomes.data : [],
+        lifecycles: Array.isArray(lifecycles.data?.rows) ? lifecycles.data!.rows : [],
+        today: todayISO,
       }),
-    [profileList, eventList, obligations.data, tasks.data, documents.data, incomes.data],
+    [profileList, eventList, obligations.data, tasks.data, documents.data, incomes.data, lifecycles.data, todayISO],
   );
 
   // Self ids drive the soft-orphan rule: an unassigned record belongs to the
@@ -292,6 +298,7 @@ export function useCalendarOccurrences(
     { source: "tasks" as const, isError: tasks.isError, error: tasks.error },
     { source: "documents" as const, isError: documents.isError, error: documents.error },
     { source: "incomes" as const, isError: incomes.isError, error: incomes.error },
+    { source: "lifecycles" as const, isError: lifecycles.isError, error: lifecycles.error },
   ].filter(({ isError }) => isError)
     .map(({ source, error }) => ({ source, error }));
 

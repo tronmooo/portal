@@ -58,6 +58,7 @@ import { loanPayoff, loanStoredTermMonths } from "@shared/loan-facts";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { ActiveFilterNotice } from "@/components/ActiveFilterNotice";
 import { netWorthChange } from "@shared/net-worth-change";
+import { LifecycleFinanceSummary } from "@/components/asset/AssetLifecycle";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { useToast } from "@/hooks/use-toast";
@@ -1572,6 +1573,11 @@ export default function FinancePage() {
           one record per account, never a second copy of the same money. */}
       <AccountsSection profiles={scopedProfiles} people={(profiles as any[]) || []}
         debtBreakdown={Array.isArray(enhanced?.financeSnapshot?.liabilityBreakdown) ? enhanced.financeSnapshot.liabilityBreakdown : undefined} />
+
+      {/* What owned assets lose in value over the next year (Asset Lifecycle
+          Intelligence, shared/asset-lifecycle.ts) — the same figures as each
+          asset's page. */}
+      <LifecycleFinanceSummary filterMode={filterMode} filterIds={filterIds} />
 
       {/* ── Expenses ──────────────────────────────────────────────────────
           THE place you look up a spend, and therefore the place the search,

@@ -36,6 +36,8 @@ const PRIOR_VALUATION_KEYS = new Set([
   "valuationsources", "lastvaluedat", "currentvaluesource", "currentvalueasof",
   // The salvage value is estimated BY the valuation run (shared/asset-salvage.ts).
   "salvagevalue", "salvagevaluesource", "salvagevaluebasis", "salvagevalueasof", "salvagevaluefor",
+  // The AI's lifecycle assumptions (shared/asset-lifecycle.ts) — an output too.
+  "lifecycleassumptions",
 ]);
 export function isPriorValuationKey(key: string): boolean {
   return PRIOR_VALUATION_KEYS.has(String(key || "").toLowerCase());

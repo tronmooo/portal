@@ -47,6 +47,18 @@ export interface AttentionSections {
   health: AttentionItem[];
   /** Expiring / expired documents, renewals and other document dates. */
   documents: AttentionItem[];
+  /**
+   * Significant asset recommendations (Consider Selling / Replace / Dispose),
+   * `lifecycleAttentionItems` in shared/asset-lifecycle.ts. Owner, 2026-11-24:
+   * "surface significant replacement or selling recommendations in Needs
+   * Attention". Listed after the expirations, under "Also needs attention".
+   */
+  lifecycle?: AttentionItem[];
+}
+
+/** A lifecycle recommendation row (shared/asset-lifecycle.ts). */
+export function isLifecycleItem(i: Pick<AttentionItem, "sourceKey">): boolean {
+  return /^lifecycle:/.test(i.sourceKey || "");
 }
 
 /**
@@ -70,9 +82,9 @@ export function selectAttentionRows(s: AttentionSections, minTier: AttentionTier
   const rows: AttentionItem[] = [];
   // `health` stays in the signature (callers pass it) but contributes only an
   // expiry it might carry — never a dose or a reading.
-  for (const i of [...s.immediate, ...s.health, ...s.documents]) {
+  for (const i of [...s.immediate, ...s.health, ...s.documents, ...(s.lifecycle || [])]) {
     if (!belongsInAttention(i)) continue;
-    if (!isExpiryItem(i)) continue;
+    if (!isExpiryItem(i) && !isLifecycleItem(i)) continue;
     if (TIER_RANK[i.tier] > TIER_RANK[minTier]) continue;
     if (seen.has(i.key)) continue;
     seen.add(i.key);

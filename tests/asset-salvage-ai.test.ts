@@ -11,6 +11,14 @@ import {
   normalizeSalvageEstimate, salvageNeedsEstimate, salvageSource, stampSalvageProvenance, SALVAGE_MAX_AGE_MS,
 } from "@shared/asset-salvage";
 import type { ValuationEvidence } from "@shared/valuation/types";
+import type { LifecycleAssumptions } from "@shared/asset-lifecycle";
+
+/** What the AI's lifecycle step answers, with the salvage value in it. */
+const A = (salvageValue: number | null, basis = "", over: Partial<LifecycleAssumptions> = {}): LifecycleAssumptions => ({
+  source: "ai", valueModel: salvageValue == null ? "stable" : "depreciating", usefulLifeYears: salvageValue == null ? null : 15,
+  annualChangePct: salvageValue == null ? 0 : -0.15, salvageValue, disposal: "scrap", replacementCost: null,
+  confidence: "medium", basis, assumptions: [], ...over,
+});
 
 const NOW = new Date("2026-11-24T12:00:00Z");
 const DAY = 86_400_000;
@@ -84,8 +92,8 @@ describe("the value-tracking run stores the AI's salvage value", () => {
   it("writes the estimate with its reason, and does not ask again on the next run", async () => {
     const p = await seed(storage);
     let calls = 0;
-    const estimateSalvage = async () => { calls++; return { value: 1500, basis: "Scrap and parts value of a worn-out compact SUV." }; };
-    const out = await refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW, allowModel: true, estimateSalvage });
+    const estimateLifecycle = async () => { calls++; return A(1500, "Scrap and parts value of a worn-out compact SUV."); };
+    const out = await refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW, allowModel: true, estimateLifecycle });
     expect(out.wrote).toBe(true);
     const f = (await storage.getProfile(p.id))!.fields as any;
     expect(f.salvageValue).toBe(1500);
@@ -93,26 +101,25 @@ describe("the value-tracking run stores the AI's salvage value", () => {
     expect(f.salvageValueBasis).toContain("Scrap");
     expect(calls).toBe(1);
     // The write did not make the asset look changed, and a forced re-run keeps the estimate.
-    await refreshValuation(storage, p.id, { reason: "user_requested", force: true, now: new Date(NOW.getTime() + DAY), allowModel: true, estimateSalvage });
+    await refreshValuation(storage, p.id, { reason: "user_requested", force: true, now: new Date(NOW.getTime() + DAY), allowModel: true, estimateLifecycle });
     expect(calls).toBe(1);
   });
 
-  it("never replaces a figure the user typed", async () => {
+  it("never replaces a figure the user typed (the rest of the lifecycle is still the AI's)", async () => {
     const p = await seed(storage, { salvageValue: 3000 });
-    let calls = 0;
-    const estimateSalvage = async () => { calls++; return { value: 1500, basis: "" }; };
-    await refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW, allowModel: true, estimateSalvage });
-    expect(calls).toBe(0);
+    const estimateLifecycle = async () => A(1500, "");
+    await refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW, allowModel: true, estimateLifecycle });
+    expect(((await storage.getProfile(p.id))!.fields as any).lifecycleAssumptions.salvageValue).toBe(1500);
     expect((await storage.getProfile(p.id))!.fields.salvageValue).toBe(3000);
   });
 
   it("a figure typed while the AI was answering wins", async () => {
     const p = await seed(storage);
-    const estimateSalvage = async () => {
+    const estimateLifecycle = async () => {
       await storage.updateProfile(p.id, stampSalvageProvenance({ fields: { salvageValue: 2500 } }) as any);
-      return { value: 1500, basis: "" };
+      return A(1500, "");
     };
-    await refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW, allowModel: true, estimateSalvage });
+    await refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW, allowModel: true, estimateLifecycle });
     const f = (await storage.getProfile(p.id))!.fields as any;
     expect(f.salvageValue).toBe(2500);
     expect(f.salvageValueSource).toBe("user");
@@ -129,7 +136,7 @@ describe("the value-tracking run stores the AI's salvage value", () => {
       // The snapshot (what the page opens with) says the salvage value is due…
       expect((await getValuationSnapshot(storage, p.id, { now: NOW }))!.salvageDue).toBe(true);
       // …and the unforced refresh the page then sends fills it with one quick call.
-      const out = await refreshValuation(storage, p.id, { reason: "scheduled", now: NOW, estimateSalvage: async () => ({ value: 1200, basis: "Scrap value." }) });
+      const out = await refreshValuation(storage, p.id, { reason: "scheduled", now: NOW, estimateLifecycle: async () => A(1200, "Scrap value.") });
       expect(out.wrote).toBe(true);
       expect(research).toBe(1);
       expect((await storage.getProfile(p.id))!.fields.salvageValue).toBe(1200);
@@ -140,9 +147,9 @@ describe("the value-tracking run stores the AI's salvage value", () => {
   it("an AI answer of none is remembered, so it is not asked on every open", async () => {
     const p = await seed(storage);
     let calls = 0;
-    const estimateSalvage = async () => { calls++; return { value: null, basis: "Holds its value." }; };
-    await refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW, allowModel: true, estimateSalvage });
-    await refreshValuation(storage, p.id, { reason: "scheduled", now: NOW, allowModel: true, estimateSalvage });
+    const estimateLifecycle = async () => { calls++; return A(null, "Holds its value."); };
+    await refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW, allowModel: true, estimateLifecycle });
+    await refreshValuation(storage, p.id, { reason: "scheduled", now: NOW, allowModel: true, estimateLifecycle });
     expect(calls).toBe(1);
     const f = (await storage.getProfile(p.id))!.fields as any;
     expect(f.salvageValueSource).toBe("estimate");

@@ -797,6 +797,38 @@ export function seriesFromIncomes(incomes: readonly any[]): CalendarSeries[] {
   return out;
 }
 
+// ─── Asset lifecycle dates (shared/asset-lifecycle.ts) ───────────────────────
+
+/** A calendar series that is worked out from an asset, never stored. */
+export function isLifecycleSeries(series: Pick<CalendarSeries, "id">): boolean {
+  return series.id.startsWith("lifecycle:");
+}
+
+/**
+ * The recommended replacement date and the selling window, as one-off dates
+ * on the calendar. They are DERIVED (GET /api/assets/lifecycle): read-only
+ * here (`capabilitiesFor`), opening the asset — a calendar action can never
+ * sell, dispose of, delete or change the asset.
+ */
+export function seriesFromLifecycles(rows: ReadonlyArray<{ profileId: string; name: string; lifecycle: any }>, today: string): CalendarSeries[] {
+  const out: CalendarSeries[] = [];
+  const horizon = `${Number(today.slice(0, 4)) + 10}${today.slice(4, 10)}`;
+  for (const r of rows || []) {
+    const l = r?.lifecycle;
+    if (!l?.applicable || l.valueModel !== "depreciating") continue;
+    const source = { system: "profile" as const, id: r.profileId, profileId: r.profileId, ownerIds: [r.profileId], label: r.name, href: `/profiles/${r.profileId}` };
+    const push = (key: string, date: string | null | undefined, title: string, subtitle: string) => {
+      if (!isISO(date) || date! < today || date! > horizon) return;
+      out.push({ id: `lifecycle:${r.profileId}:${key}`, kind: "maintenance", title, subtitle, source, baseDate: clip(date!), recurrence: "none" });
+    };
+    const rec = l.recommendation;
+    push("replace", l.recommendedReplacementDate, `Replace: ${r.name}`, rec?.action === "replace" || rec?.action === "dispose" ? rec.headline : "Recommended replacement date (end of its useful life)");
+    if (l.sellingWindow?.status === "ahead") push("sell-window", l.sellingWindow.start, `Best time to sell opens: ${r.name}`, `Until ${l.sellingWindow.end}`);
+    else if (l.sellingWindow?.status === "open") push("sell-by", l.sellingWindow.end, `Sell by: ${r.name}`, "End of its best selling window");
+  }
+  return out;
+}
+
 // ─── The whole calendar ──────────────────────────────────────────────────────
 
 export interface CalendarInputs {
@@ -806,6 +838,9 @@ export interface CalendarInputs {
   tasks?: readonly any[];
   documents?: readonly any[];
   incomes?: readonly any[];
+  /** GET /api/assets/lifecycle rows, with today's date (YYYY-MM-DD). */
+  lifecycles?: readonly any[];
+  today?: string;
 }
 
 /**
@@ -845,6 +880,7 @@ export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
     ...seriesFromObligations(input.obligations || []),
     ...seriesFromTasks(input.tasks || []),
     ...seriesFromIncomes(input.incomes || []),
+    ...(input.lifecycles?.length ? seriesFromLifecycles(input.lifecycles as any[], input.today || new Date().toISOString().slice(0, 10)) : []),
   ];
 }
 

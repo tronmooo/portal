@@ -45,6 +45,7 @@ import { enrichNutritionEntry, rescaleNutritionEntry, forgetEnrichmentMode } fro
 import { enrichItem, type EnrichmentTarget } from "./item-enrichment";
 import { isNutritionTrackerLike } from "@shared/nutrition-enrichment";
 import { getValuationSnapshot, refreshValuation, isValuableProfile, getValuationStatus } from "./valuation/service";
+import { computeLifecycles } from "./asset-lifecycle-service";
 import { isAutoValuationEnabled } from "@shared/valuation/context";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -6494,6 +6495,26 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const profileIds = idsParam ? idsParam.split(",").filter(Boolean) : undefined;
     const rows = await getValuationStatus(storage, { profileIds });
     res.json({ rows, checkedAt: new Date().toISOString() });
+  }));
+
+  // Asset Lifecycle Intelligence (shared/asset-lifecycle.ts): every owned
+  // asset's lifecycle, computed on read from the AI's stored assumptions and
+  // the records — the one answer the asset page, the Assets tab, Needs
+  // Attention, the Calendar and Finance all read. Writes nothing.
+  // `?profileIds=` scopes it like every other list (shared/profile-filter): an
+  // asset is in scope for the people who own it, by parent chain or co-ownership.
+  app.get("/api/assets/lifecycle", asyncHandler(async (req, res) => {
+    let rows = await computeLifecycles(storage);
+    const selected = typeof req.query.profileIds === "string" ? req.query.profileIds.split(",").filter(Boolean) : [];
+    if (selected.length > 0) {
+      const [allProfiles, assetPartyLinks] = await Promise.all([
+        storage.getProfiles(),
+        storage.getAssetPartyLinks().catch(() => [] as any[]),
+      ]);
+      const ctx = { selectedIds: selected, allProfiles: allProfiles as any[], assetPartyLinks: assetPartyLinks as any[] };
+      rows = rows.filter((r) => passesProfileFilter([r.profileId], ctx));
+    }
+    res.json({ rows, computedAt: new Date().toISOString() });
   }));
 
   app.post("/api/profiles/:id/valuation/refresh", asyncHandler(async (req, res) => {
