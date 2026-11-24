@@ -168,6 +168,7 @@ import { useAssetValuation } from "@/hooks/useAssetValuation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CommitDateInput } from "@/components/CommitDateInput";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { resolveProfileTab, slugForProfileTab } from "@/lib/profile-tab-slugs";
@@ -8208,7 +8209,7 @@ function TasksTab({
 // EDIT PROFILE DIALOG
 // ============================================================
 
-function EditProfileDialog({
+export function EditProfileDialog({
   open,
   profile,
   onClose,
@@ -8304,6 +8305,10 @@ function EditProfileDialog({
         try {
           await apiRequest("PATCH", `/api/profiles/${profile.id}`, patch);
         } catch (err: any) {
+          // A value typed WHILE this save was failing is not the one that
+          // failed: send it rather than drop it (the dialog may already be
+          // closing, and nothing else would).
+          if (flushAgain.current && pendingProfilePatch(sent, currentRef.current).patch) continue;
           if (aliveRef.current) setSaveState("error");
           toast({ title: `Couldn't save "${sent.name || profile.name}"`, description: formatApiError(err), variant: "destructive" });
           return;
@@ -8466,11 +8471,31 @@ function EditProfileDialog({
                       ))}
                     </SelectContent>
                   </Select>
+                ) : isDate ? (
+                  /* A date is saved whole or not at all (Rule 6). A plain
+                     date input reports every keystroke — "0002-12-05",
+                     "0020-12-05", "0202-12-05" while 2026 is typed, and ""
+                     while any part is blank — and the autosave below sent
+                     each one: half-typed years were refused or stored, and a
+                     blank part cleared the stored date ("Next Billing" read
+                     blank after the dialog said "All changes saved",
+                     2026-11-24). CommitDateInput hands over a whole day, or
+                     "" when the box is emptied, and nothing in between. */
+                  <CommitDateInput
+                    className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 md:text-sm"
+                    value={toDateInputValue(fields[key])}
+                    onCommit={(day) => {
+                      const next = { ...currentRef.current.fields, [key]: day };
+                      currentRef.current = { ...currentRef.current, fields: next };
+                      setFields(next);
+                      void flush();
+                    }}
+                    data-testid={`input-field-${key}`}
+                  />
                 ) : (
                   <Input
                     className="mt-1"
-                    type={isDate ? "date" : undefined}
-                    value={isDate ? toDateInputValue(fields[key]) : (fields[key] ?? "")}
+                    value={fields[key] ?? ""}
                     placeholder={sg?.placeholder || ""}
                     onChange={e => setFields(prev => ({ ...prev, [key]: e.target.value }))}
                     onBlur={() => { void flush(); }}

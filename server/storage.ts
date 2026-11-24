@@ -14,7 +14,7 @@ import { analyzeFitnessEntry, calorieContextForOwner, caloriesForStoredEntry, ty
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { formatMoneyMajor } from "@shared/money";
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
-import { assertEventSpan } from "@shared/event-span";
+import { assertEventSpan, carryEventSpan } from "@shared/event-span";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { canonicalIncomeFrequency } from "@shared/obligation-windows";
 import { buildBillsTimeline, rollBillsForward } from "@shared/bills-timeline";
@@ -1664,7 +1664,7 @@ export class MemStorage implements IStorage {
   async updateEvent(id: string, data: Partial<CalendarEvent>): Promise<CalendarEvent | undefined> {
     const event = this.events.get(id);
     if (!event) return undefined;
-    const updated = { ...event, ...data };
+    const updated = { ...event, ...carryEventSpan(event as any, data as any) };
     assertEventSpan(updated as any);
     this.events.set(id, updated);
     this.logActivity("event", `Updated event: ${updated.title}`);

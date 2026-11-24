@@ -22,6 +22,7 @@ import {
   ListOrdered, Plus, Repeat, Trash2, X, AlertTriangle, PauseCircle,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { isCommittableDay } from "@/lib/date-input";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { refreshCalendarSurfaces } from "@/lib/calendar-mutations";
@@ -286,8 +287,9 @@ export function EditSeriesScreen({
 
   const problem: string | null = !form ? null
     : !form.title.trim() ? `Give the ${noun.toLowerCase()} a name.`
-    : !ISO.test(form.date) ? "Pick a date."
-    : repeats && form.end === "date" && !ISO.test(form.endDate) ? "Pick the date the series ends on."
+    // A year still being typed ("0202-11-26") is not a date to save (Rule 6).
+    : !isCommittableDay(form.date) ? "Pick a date."
+    : repeats && form.end === "date" && !isCommittableDay(form.endDate) ? "Pick the date the series ends on."
     : repeats && form.end === "date" && form.endDate < form.date ? "The end date is before the first date."
     : repeats && form.end === "count" && !(parseInt(form.endCount, 10) >= 1) ? "Enter how many occurrences before it ends."
     : (form.choice === "custom" || (form.choice === "weekly" && form.interval > 1)) && !(form.interval >= 1) ? "Enter how often it repeats."
