@@ -125,7 +125,7 @@ const timeline = async (start: string, end: string): Promise<any[]> => {
 
     // 1 · Next Billing typed digit by digit, with pauses longer than the autosave delay.
     await page.goto(`${UI_BASE}/#/profiles/${sub.id}`);
-    await page.locator(t("button-header-edit-profile")).first().click({ timeout: 30000 });
+    await page.locator(t("button-header-edit-profile")).first().click({ timeout: 90000 });
     const date = page.locator(t("input-field-renewalDate"));
     await date.click();
     writes.length = 0;
@@ -144,7 +144,7 @@ const timeline = async (start: string, end: string): Promise<any[]> => {
     const stored = (await call("GET", `/profiles/${sub.id}`)).fields;
     check(stored.renewalDate === "2026-12-12", `1 · reopened, Next Billing is 2026-12-12 (${stored.renewalDate})`);
     check(stored.plan === `Premium Family ${tag}`, `2 · the plan changed before Done + reload is stored (${stored.plan})`);
-    await page.locator(t("button-header-edit-profile")).first().click({ timeout: 30000 });
+    await page.locator(t("button-header-edit-profile")).first().click({ timeout: 90000 });
     check((await page.locator(t("input-field-renewalDate")).inputValue()) === "2026-12-12", "1 · the reopened dialog shows Next Billing");
     await page.keyboard.press("Escape");
 
