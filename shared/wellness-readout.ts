@@ -29,7 +29,7 @@ import { entryValueProvenance } from "./estimation-engine";
 import {
   resolveCanonicalMetric, validateCanonicalValue, flagAgainstReference,
   formatReference, getCanonicalMetric, LAB_PANELS, PANEL_LABELS,
-  flagLabelFor, flagIsConcern, isRestingHeartRateReading,
+  flagLabelFor, flagIsConcern, isRestingHeartRateReading, isVehicleTravelTracker,
   type CanonicalMetric, type MetricPanel, type RangeFlag,
 } from "./wellness-canon";
 import { BLOOD_PRESSURE_REFERENCE } from "./blood-pressure";
@@ -180,6 +180,8 @@ export function collectMetrics(
             ? byField
             : resolveCanonicalMetric(name, category, field);
         if (!metric) continue;
+        // Miles driven are travel, not the person's distance (QA 2026-11-24).
+        if (metric.panel === "activity" && isVehicleTravelTracker(t as any)) continue;
         // A heart rate logged mid-workout is not a resting reading; it would
         // only drag the average toward a number that describes nothing.
         if ((metric.id === "heart_rate" || metric.id === "resting_hr") && !isRestingHeartRateReading(e.values)) continue;
@@ -710,6 +712,8 @@ export interface WorkoutGroup {
  */
 export function isWorkoutTracker(t: Tracker | null | undefined): boolean {
   if (!t) return false;
+  // A drive is not a workout, however many miles it logged (QA 2026-11-24).
+  if (isVehicleTravelTracker(t as any)) return false;
   const hay = `${t.name || ""} ${(t as any).category || ""}`;
   const shaped = (t.fields || []).some((f: any) => DISTANCE_FIELD.test(f?.name || ""));
   if (!ACTIVITY_NAME.test(hay) && !shaped) return false;

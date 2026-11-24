@@ -13,6 +13,7 @@
 import type { Tracker, TrackerEntry } from "@shared/schema";
 import { getCanonicalGroup } from "./tracker-health";
 import { caloriesForStoredEntry, calorieContextForOwner } from "@shared/fitness-metrics";
+import { isVehicleTravelTracker } from "@shared/wellness-canon";
 
 export interface WellnessMetric {
   /** Latest numeric value, or null when no numeric entry exists. */
@@ -201,6 +202,8 @@ const CALORIE_FIELD_RE = /(calorie|kcal|\bcal\b|burn)/i;
 
 /** Does this tracker record physical activity? Name/category first, then shape. */
 export function isActivityTracker(t: Tracker): boolean {
+  // A drive / commute / car mileage is travel, not movement (QA 2026-11-24).
+  if (isVehicleTravelTracker(t as any)) return false;
   if (ACTIVITY_RE.test(`${t.name || ""} ${t.category || ""}`)) return true;
   return (t.fields || []).some((f) =>
     STEPS_FIELD_RE.test(f.name || "") || DISTANCE_FIELD_RE.test(f.name || ""));

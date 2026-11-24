@@ -171,6 +171,26 @@ describe("activity is recognised however the user named it", () => {
     expect(isActivityTracker(tracker({ name: "Blood Pressure" }))).toBe(false);
   });
 
+  it("a drive or a car's mileage is travel, not activity (QA 2026-11-24)", () => {
+    for (const name of ["Drive", "Mileage", "Car commute"]) {
+      expect(isActivityTracker(tracker({ name, fields: [{ name: "miles", type: "number" }] })), name).toBe(false);
+    }
+    const drive = tracker({
+      id: "d", name: "Drive", category: "travel",
+      fields: [{ name: "miles", type: "number", unit: "mi", isPrimary: true }],
+      entries: [todayEntry({ miles: 140 })],
+    });
+    const run = tracker({
+      id: "r", name: "Running", category: "fitness",
+      fields: [{ name: "distance", type: "number", unit: "mi", isPrimary: true }],
+      entries: [todayEntry({ distance: 1.5 })],
+    });
+    const a = readActivity([drive, run], { now: NOW });
+    expect(a.distance).toBe(1.5);
+    expect(a.sessions).toBe(1);
+    expect(a.trackerCount).toBe(1);
+  });
+
   it("counts a walk logged as distance", () => {
     const t = tracker({
       id: "w", name: "Walking", category: "fitness",

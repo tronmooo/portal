@@ -236,7 +236,32 @@ export interface TrendRow {
 
 const TREND_ORDER = ["weight", "bp_systolic", "sleep_hours", "resting_hr", "hrv", "steps", "hydration", "body_fat", "bmi"];
 
-/** Where each measurement started in the range and where it is now. */
+/**
+ * One measurement's readings split by the record they came from. A trend
+ * compares a start with an end, and both must come from the SAME tracker: a
+ * series merged from a Run tracker and another tracker compared a 140-mile
+ * entry with a 1.5-mile run ("−139 mi"), and the row opened the Running
+ * tracker, where the 140 was nowhere (QA 2026-11-24). Readings read off
+ * documents stay together as one group (they have no tracker to open).
+ */
+function seriesBySource(m: MetricSeries): Array<{ series: MetricSeries; trackerId: string | null; name: string | null }> {
+  const groups = new Map<string, MetricSeries["readings"]>();
+  for (const r of m.readings) {
+    const key = String(r.trackerId || "").startsWith("doc:") ? "doc:" : String(r.trackerId || "");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(r);
+  }
+  return [...groups.entries()].map(([key, readings]) => {
+    const latest = readings[readings.length - 1] || null;
+    return {
+      series: { ...m, readings, latest, previous: readings.length > 1 ? readings[readings.length - 2] : null },
+      trackerId: key === "doc:" || !key ? null : key,
+      name: key === "doc:" ? "Documents" : latest?.trackerName || null,
+    };
+  });
+}
+
+/** Where each measurement started in the range and where it is now — per source tracker. */
 export function trendRows(i: WellnessCardsInput, max = 6): TrendRow[] {
   const rows: TrendRow[] = [];
   const ids = [...i.metrics.keys()].filter((id) => {
@@ -244,36 +269,44 @@ export function trendRows(i: WellnessCardsInput, max = 6): TrendRow[] {
     return !LAB_PANELS.includes(m.panel) && id !== "height" && id !== "bp_diastolic";
   });
   ids.sort((a, b) => (TREND_ORDER.indexOf(a) + 1 || 99) - (TREND_ORDER.indexOf(b) + 1 || 99));
+  const dia = i.metrics.get("bp_diastolic");
+  const diaParts = dia ? seriesBySource(dia) : [];
   for (const id of ids) {
     if (rows.length >= max) break;
-    const m = i.metrics.get(id)!;
-    const s = sum(m, i);
-    if (!s.first || !s.last || s.days < 2) continue;
-    const unit = m.metric.unit;
-    const tid = m.latest?.trackerId;
-    const href = tid && !String(tid).startsWith("doc:") ? routeForEntity("tracker", String(tid)) : undefined;
-    if (id === "bp_systolic") {
-      const pairs = pairedPressure(s.points, summarize(metricDailyPoints(i.metrics.get("bp_diastolic")), i.range, i.todayISO).points);
-      if (pairs.length < 2) continue;
-      const a = pairs[0], b = pairs[pairs.length - 1];
-      const dia = i.metrics.get("bp_diastolic")!.metric;
-      const gs = moveIsGood(m.metric, a.sys, b.sys), gd = moveIsGood(dia, a.dia, b.dia);
-      const good = gs === false || gd === false ? (gs === true || gd === true ? null : false) : gs === true || gd === true ? true : null;
+    const parts = seriesBySource(i.metrics.get(id)!);
+    const qualifying = parts.filter((p) => { const s = sum(p.series, i); return !!s.first && !!s.last && s.days >= 2; });
+    for (const part of qualifying) {
+      if (rows.length >= max) break;
+      const m = part.series;
+      const s = sum(m, i);
+      const unit = m.metric.unit;
+      const href = part.trackerId ? routeForEntity("tracker", String(part.trackerId)) : undefined;
+      // Name the tracker only when the measurement has more than one in the range.
+      const suffix = qualifying.length > 1 && part.name ? ` · ${part.name}` : "";
+      const keySuffix = qualifying.length > 1 ? `:${part.trackerId ?? "doc"}` : "";
+      if (id === "bp_systolic") {
+        const diaPart = diaParts.find((d) => d.trackerId === part.trackerId);
+        const pairs = pairedPressure(s.points, summarize(metricDailyPoints(diaPart?.series), i.range, i.todayISO).points);
+        if (pairs.length < 2 || !dia) continue;
+        const a = pairs[0], b = pairs[pairs.length - 1];
+        const gs = moveIsGood(m.metric, a.sys, b.sys), gd = moveIsGood(dia.metric, a.dia, b.dia);
+        const good = gs === false || gd === false ? (gs === true || gd === true ? null : false) : gs === true || gd === true ? true : null;
+        rows.push({
+          key: `bp${keySuffix}`, label: `Blood Pressure${suffix}`, span: `${Math.round(a.sys)}/${Math.round(a.dia)} → ${Math.round(b.sys)}/${Math.round(b.dia)}`,
+          change: good === true ? "Improved" : good === false ? "Higher" : a.sys === b.sys && a.dia === b.dia ? "No change" : "Mixed",
+          good, series: sparkValues(s.points), href,
+        });
+        continue;
+      }
+      const change = s.change ?? 0;
+      const sign = change > 0 ? "+" : change < 0 ? "−" : "";
       rows.push({
-        key: "bp", label: "Blood Pressure", span: `${Math.round(a.sys)}/${Math.round(a.dia)} → ${Math.round(b.sys)}/${Math.round(b.dia)}`,
-        change: good === true ? "Improved" : good === false ? "Higher" : a.sys === b.sys && a.dia === b.dia ? "No change" : "Mixed",
-        good, series: sparkValues(s.points), href,
+        key: `${id}${keySuffix}`, label: `${m.metric.label}${suffix}`,
+        span: `${round1(s.first!.value).toLocaleString("en-US")} → ${formatWellnessValue(round1(s.last!.value), unit === "h" ? "hrs" : unit)}`,
+        change: change === 0 ? "No change" : `${sign}${formatWellnessValue(round1(Math.abs(change)), unit === "h" ? "hrs" : unit)}${id === "weight" && s.changePct != null ? ` (${Math.abs(round1(s.changePct))}%)` : ""}`,
+        good: moveIsGood(m.metric, s.first!.value, s.last!.value), series: sparkValues(s.points), href,
       });
-      continue;
     }
-    const change = s.change ?? 0;
-    const sign = change > 0 ? "+" : change < 0 ? "−" : "";
-    rows.push({
-      key: id, label: m.metric.label,
-      span: `${round1(s.first.value).toLocaleString("en-US")} → ${formatWellnessValue(round1(s.last.value), unit === "h" ? "hrs" : unit)}`,
-      change: change === 0 ? "No change" : `${sign}${formatWellnessValue(round1(Math.abs(change)), unit === "h" ? "hrs" : unit)}${id === "weight" && s.changePct != null ? ` (${Math.abs(round1(s.changePct))}%)` : ""}`,
-      good: moveIsGood(m.metric, s.first.value, s.last.value), series: sparkValues(s.points), href,
-    });
   }
   return rows;
 }

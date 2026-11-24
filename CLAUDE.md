@@ -1102,12 +1102,20 @@ reads a series through `summarize` (`shared/wellness-period.ts`): an additive
 measure (water, steps, sessions, dollars) is a day's total, a reading (weight,
 blood pressure, sleep) the day's last. Never average or count in a component.
 A move is judged against the metric's healthy range (`moveIsGood`); weight is
-never judged.
+never judged. A trend row compares readings of ONE tracker and opens that
+tracker (`trendRows` splits a merged series by source, naming each when there
+are several). Miles driven are travel, not exercise: a drive / car commute /
+car mileage tracker (`isVehicleTravelTracker`, `shared/wellness-canon.ts`) is
+never a workout, an activity tracker or the Distance measurement. (QA
+2026-11-24: a 140-mile drive in the workout distance; "Distance 140 → 1.5 mi"
+opening the Running tracker.)
 **H4. A range is a filter (Rule 4).** A range with no reading names the last
 one ("Last: Oct 21"), never "no data"; a latest-reading tile (weight, blood
 pressure) still shows that reading, dated. Something never recorded is "not
 tracked", never a zero. The on-screen range tabs change the VIEW and are not
-saved; the stored default is a display option set in Customize.
+saved; the stored default is a display option set in Customize. The picked
+range rides in the URL (`#/wellness?range=7d`, `client/src/lib/wellness-range-url.ts`)
+so a reload keeps it — never browser storage, never the account.
 **H5. Nothing hidden reads as missing.** A card the layout switches off is
 named under the grid and opens in place; a card with nothing ever recorded
 folds into a named quiet row (only once the data has loaded, and the row says

@@ -20,7 +20,7 @@ import {
   addWellnessDashboard, addWellnessWidget, defaultWellnessBoards, parseWellnessBoards, serializeWellnessBoards,
 } from "../shared/wellness-dashboards";
 import { WELLNESS_WIDGET_IDEAS } from "../shared/wellness-widgets";
-import { NOW, daysAgo, fixtureTrackers } from "./helpers/wellness-fixture";
+import { NOW, daysAgo, entry, fixtureTrackers, tracker } from "./helpers/wellness-fixture";
 
 vi.mock("../client/src/lib/auth", () => ({ useAuth: () => ({ getAuthHeader: () => ({}) }) }));
 
@@ -54,7 +54,8 @@ beforeEach(() => {
     return json([]);
   }));
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+// The picked range lives in the URL: each test starts from a clean address.
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); window.history.replaceState(null, "", "/"); });
 
 async function openTab() {
   const { default: WellnessPage } = await import("../client/src/pages/wellness");
@@ -234,5 +235,75 @@ describe("cards the user built and several dashboards", () => {
     expect(cls("activity")).toContain("col-span-1");
     expect(cls("sleep")).toContain("col-span-2 sm:col-span-1"); // lonely: nutrition after it is full width
     expect(cls("overview")).toMatch(/(^| )col-span-2( |$)/);
+  });
+});
+
+// QA 2026-11-24 (live demo account): a 140-mile DRIVE counted as a workout and
+// as workout distance; Health Trends compared it with a 1.5-mile run
+// ("139-mile decline") and opened the Running tracker, where the 140 was not.
+describe("a drive is travel, not exercise; a trend is one tracker", () => {
+  it("leaves a drive out of the Activity Summary and Health Trends", async () => {
+    trackers = [...fixtureTrackers(), tracker("t-drive", "Drive", "travel", [{ name: "miles", unit: "mi" }], [
+      entry(daysAgo(3), { miles: 140 }), entry(daysAgo(12), { miles: 60 }),
+    ])];
+    await openTab();
+    await screen.findByTestId("wellness-tile-sleep-value");
+    expect(text("wellness-activity-sessions")).toContain("5");
+    expect(text("wellness-activity-distance")).toContain("10 mi");
+    expect(text("wellness-activity-distance")).not.toContain("210");
+    expect(text("wellness-tile-activity-value")).toBe("5 sessions");
+    const trends = text("wellness-card-trends");
+    expect(trends).not.toMatch(/140|60 mi|Drive/);
+    // The distance trend is the run's, and opens the run's tracker.
+    const row = screen.getByTestId("wellness-trend-distance");
+    expect(row.textContent).toContain("2 → 2 mi");
+    expect(row.getAttribute("href")).toContain("t-run");
+  });
+
+  it("never compares two trackers' readings as one trend; each row opens its own tracker", async () => {
+    trackers = [...fixtureTrackers(), tracker("t-bike", "Cycling", "fitness", [{ name: "distance", unit: "mi" }], [
+      entry(daysAgo(9), { distance: 10 }, { hour: 7 }), entry(daysAgo(1), { distance: 15 }, { hour: 7 }),
+    ])];
+    await openTab();
+    await screen.findByTestId("wellness-tile-sleep-value");
+    expect(screen.queryByTestId("wellness-trend-distance")).toBeNull();
+    const run = screen.getByTestId("wellness-trend-distance:t-run");
+    const bike = screen.getByTestId("wellness-trend-distance:t-bike");
+    expect(run.textContent).toContain("Distance · Running");
+    expect(run.textContent).toContain("2 → 2 mi");
+    expect(run.getAttribute("href")).toContain("t-run");
+    expect(bike.textContent).toContain("Distance · Cycling");
+    expect(bike.textContent).toContain("10 → 15 mi");
+    expect(bike.getAttribute("href")).toContain("t-bike");
+  });
+});
+
+// QA 2026-11-24: 7D, reload, and the tab was back on 30D. The picked range is
+// the view's address (H4: not saved; Rule 4: never in browser storage).
+describe("the picked range survives a reload through the URL only", () => {
+  it("writes the range into the hash, and a fresh mount opens on it, with nothing stored", async () => {
+    window.history.replaceState(null, "", "/#/wellness");
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    await openTab();
+    await screen.findByTestId("wellness-tile-sleep-value");
+    fireEvent.click(screen.getByTestId("wellness-range-7d"));
+    expect(window.location.hash).toBe("#/wellness?range=7d");
+    expect(setItem.mock.calls.filter(([k]) => /wellness|range/i.test(String(k)))).toEqual([]);
+    expect(writes).toEqual([]);
+    setItem.mockRestore();
+
+    // "Reload": a new page mount reads the address.
+    cleanup();
+    await openTab();
+    await screen.findByTestId("wellness-tile-sleep-value");
+    expect(screen.getByTestId("wellness-dashboard").getAttribute("data-range")).toBe("7d");
+    expect(screen.getByTestId("wellness-range-7d").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("an unknown range in the URL falls back to the saved default", async () => {
+    window.history.replaceState(null, "", "/#/wellness?range=bogus");
+    await openTab();
+    await screen.findByTestId("wellness-tile-sleep-value");
+    expect(screen.getByTestId("wellness-dashboard").getAttribute("data-range")).toBe("30d");
   });
 });

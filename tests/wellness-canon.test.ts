@@ -5,8 +5,9 @@
 import { describe, it, expect } from "vitest";
 import {
   resolveCanonicalMetric, validateCanonicalValue, flagAgainstReference,
-  formatReference, CANONICAL_METRICS,
+  formatReference, CANONICAL_METRICS, isVehicleTravelTracker,
 } from "../shared/wellness-canon";
+import { collectMetrics, activityHistory, isWorkoutTracker } from "../shared/wellness-readout";
 import { sanitizeTrackerEntryValues } from "../server/tracker-entry-guard";
 import { isHealthDocument } from "../shared/health-documents";
 import { trackerNamesMatch } from "../shared/tracker-identity";
@@ -178,5 +179,37 @@ describe("duplicate lab trackers are never created in the first place", () => {
   it("does not collapse two workouts that share a unit", () => {
     expect(trackerNamesMatch("Running distance", "Cycling distance")).toBe(false);
     expect(trackerNamesMatch("Bench Press", "Leg Press")).toBe(false);
+  });
+});
+
+// QA 2026-11-24: a 140-mile drive counted as a workout and as the person's distance.
+describe("vehicle travel is not exercise", () => {
+  const NOW = new Date("2026-11-23T18:00:00Z");
+  const t = (id: string, name: string, category: string, field: string, value: number) => ({
+    id, name, category, fields: [{ name: field, type: "number", unit: "mi" }],
+    entries: [{ id: `${id}-1`, timestamp: "2026-11-20T08:00:00Z", values: { [field]: value }, computed: {} }],
+    linkedProfiles: [], createdAt: "2026-01-01T00:00:00Z",
+  }) as any;
+
+  it("names a drive, a car commute and a car's mileage as travel; a bike commute or a run as movement", () => {
+    for (const [name, cat] of [["Drive", "travel"], ["Driving", ""], ["Mileage", ""], ["Car mileage", "auto"], ["Commute", ""], ["Road trip", ""], ["Trips", "Vehicle"], ["Uber rides", ""]]) {
+      expect(isVehicleTravelTracker({ name, category: cat }), name).toBe(true);
+    }
+    for (const [name, cat] of [["Running", "fitness"], ["Bike commute", ""], ["Walk to work", "commute"], ["Running mileage", ""], ["Cycling", ""], ["Weight", "health"]]) {
+      expect(isVehicleTravelTracker({ name, category: cat }), name).toBe(false);
+    }
+  });
+
+  it("a drive is not a workout and adds no distance; a run still does", () => {
+    const drive = t("d", "Drive", "travel", "miles", 140);
+    const mileage = t("m", "Mileage", "", "miles", 80);
+    const run = t("r", "Running", "fitness", "distance", 1.5);
+    expect(isWorkoutTracker(drive)).toBe(false);
+    expect(isWorkoutTracker(mileage)).toBe(false);
+    expect(isWorkoutTracker(run)).toBe(true);
+    expect(activityHistory([drive, mileage, run], { now: NOW }).map((g) => g.type)).toEqual(["Running"]);
+    const dist = collectMetrics([drive, mileage, run], { now: NOW }).get("distance");
+    expect(dist?.readings.map((r) => r.value)).toEqual([1.5]);
+    expect(dist?.sources.map((x) => x.id)).toEqual(["r"]);
   });
 });
