@@ -3796,6 +3796,9 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
 // ANTHROPIC TOOL DEFINITIONS
 // ============================================================
 
+/** "$14.50" for a refund's confirmation line. */
+const formatRefundMoney = (n: number): string => `$${(Math.round(n * 100) / 100).toFixed(2)}`;
+
 export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- Data Query Tools ---
   {
@@ -11484,13 +11487,20 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (remaining <= 0) {
         const retractedRefund = await retractPaymentOfExpense(storage, expense as any, aiUserTimezone());
         if (!retractedRefund?.ok) await storage.deleteExpense(expense.id);
-        return { result: { refunded: refundAmount, fullRefund: true, expenseId: expense.id, description: expense.description, ...(retractedRefund?.ok ? { reversedPaymentId: retractedRefund.paymentId } : {}) } };
+        // A full refund takes the expense out of the ledger. Say so: the
+        // envelope's default was "Updated expense." for a row that is gone
+        // (chat tool sweep, 2026-11-24).
+        const fullMsg = `Refunded ${formatRefundMoney(refundAmount)} in full for "${expense.description}". It is no longer counted in your spending.`;
+        return { result: { refunded: refundAmount, fullRefund: true, expenseId: expense.id, description: expense.description, ...(retractedRefund?.ok ? { reversedPaymentId: retractedRefund.paymentId } : {}) }, message: fullMsg };
       }
       const updated = await storage.updateExpense(expense.id, {
         amount: remaining,
         tags: [...((expense as any).tags || []), refundTag],
       } as any);
-      return { result: { refunded: refundAmount, fullRefund: false, newAmount: remaining, expenseId: expense.id, description: expense.description, updated: !!updated } };
+      return {
+        result: { refunded: refundAmount, fullRefund: false, newAmount: remaining, expenseId: expense.id, description: expense.description, updated: !!updated },
+        message: `Refunded ${formatRefundMoney(refundAmount)} of "${expense.description}". It now counts as ${formatRefundMoney(remaining)}.`,
+      };
     }
 
     case "create_event": {
@@ -19747,7 +19757,8 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   create_expense: "log_expense",
   update_expense: "update_entity",
   delete_expense: "delete_entity",
-  refund_expense: "log_expense",
+  // Not "log_expense": the card for a refund read "Log Expense" (2026-11-24).
+  refund_expense: "update_entity",
   log_income: "log_income",
   update_income: "update_entity",
   delete_income: "delete_entity",

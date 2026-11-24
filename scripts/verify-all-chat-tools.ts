@@ -31,6 +31,7 @@ import os from "os";
 import path from "path";
 import { api, getSmokeToken } from "../tests/smoke/fixture/api";
 import { API_BASE } from "../tests/smoke/fixture/account";
+import { acquireGateLock, preferenceLockIo } from "../tests/smoke/fixture/gate-lock";
 import { TOOL_DEFINITIONS, TOOL_ACTION_MAP, READ_ONLY_TOOLS } from "../server/ai-engine";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -69,6 +70,10 @@ const STEPS: Step[] = [
   s("merge_profiles", `Merge the profile ${T} Alicia into ${T} Alice`,
     { confirm: `Yes, I confirm — go ahead with the pending profile merge of ${T} Alicia into ${T} Alice.` }),
   s("", `Add a vehicle asset called ${T} Truck, a 2015 Ford F-150 worth $18,000`),
+  // Characteristics (D1–D5): a typed value on a record, read back and reported on.
+  s("set_record_detail", `Record that the condition of ${T} Truck is Good`),
+  s("get_record_details", `What characteristics do I have recorded on ${T} Truck?`),
+  s("find_records_by_detail", `Which of my things have a condition of Good or better?`),
   s("", `Add a vehicle asset called ${T} Van worth $5,000`),
   s("revalue_asset", `Re-estimate the current market value of my ${T} Truck`),
   s("link_asset_owner", `${T} Truck belongs to ${T} Alice — make her the owner`),
@@ -95,7 +100,9 @@ const STEPS: Step[] = [
   s("create_task", `Add a task called ${T} Task due tomorrow`),
   s("update_task", `Change the ${T} Task task's priority to high`),
   s("query_tasks", `List my tasks due this week`),
-  s("get_summary", `How many tasks do I have?`),
+  // Counts the prompt's own snapshot does not carry, so the tool has to run
+  // ("How many tasks do I have?" is answered, correctly, without it).
+  s("get_summary", `Give me summary statistics across all of my data: how many expenses, habits, trackers, events and documents do I have?`),
   s("explain_dashboard_item", `Why is ${T} Task showing on my dashboard?`),
   s("get_entity_history", `What's the change history of the task ${T} Task?`),
   s("complete_task", `Mark ${T} Task as done`),
@@ -141,7 +148,11 @@ const STEPS: Step[] = [
   s("refund_expense", `I got a full refund for the ${T} Coffee expense`),
   s("", `Log a $900 expense called ${T} Laptop`),
   s("convert_expense_to_asset", `Convert the ${T} Laptop expense into an asset`),
-  s("delete_expense", `Delete the ${T} Coffee expense`, { confirm: YES }),
+  // Its own expense: the full refund above took the Coffee expense out of the
+  // ledger, and asked for a record that is gone the assistant offered a
+  // look-alike ("Smoke Coffee") instead (2026-11-24).
+  s("", `Log a $6 expense called ${T} Snack`),
+  s("delete_expense", `Delete the ${T} Snack expense`, { confirm: YES }),
   s("log_income", `Add income of $137 from ${T} Freelance`),
   s("update_income", `Change the ${T} Freelance income to $150`),
   s("get_cashflow", `What's my cash flow this month?`),
@@ -186,6 +197,8 @@ const STEPS: Step[] = [
   // ── Journal, notes, artifacts, memory ──
   s("journal_entry", `Journal entry: ${T} felt great today, productive morning`),
   s("append_journal_entry", `Add to today's journal: ${T} also went for a long walk`),
+  // J4: a question about the journal is answered from the stored entries.
+  s("read_journal", `Summarize what I wrote in my journal this week`),
   s("update_journal", `Change today's journal entry mood to okay`),
   s("delete_journal", `Delete my journal entry for today`, { confirm: YES }),
   s("create_note", `Make a note called ${T} Note: living room paint color is OC-17`),
@@ -379,6 +392,18 @@ const month = new Date().toISOString().slice(0, 7);
   const version = (await api("GET", "/version")).data?.sha;
   console.log(`\n── Chat tool sweep (${T}) — ${steps.length} step(s), ${toolNames.length} tools, ${API_BASE} @ ${String(version).slice(0, 8)} ──\n`);
 
+  // The sweep writes as the smoke account for most of an hour. The contract
+  // suite WIPES that account when it starts, so the sweep holds the account's
+  // gate lock like every other gate: a push made mid-sweep would otherwise
+  // delete the records the remaining steps are about.
+  const releaseGate = await acquireGateLock(preferenceLockIo((m, p, b) => api(m, p, b)), { gate: "chat-tool-sweep" });
+
+  // "Copy last month's budgets" needs a last month to copy: the smoke account
+  // has none, and the tool then (rightly) refuses. Seeded here, removed below.
+  const [yy, mm] = month.split("-").map(Number);
+  const prevMonth = mm === 1 ? `${yy - 1}-12` : `${yy}-${String(mm - 1).padStart(2, "0")}`;
+  const seededBudget = await api("POST", "/budgets", { month: prevMonth, category: `${T.toLowerCase()} seed`, amount: 50 });
+
   // Everything present before the run is off limits to cleanup.
   const before: Record<string, Set<string>> = {};
   for (const ep of [...CLEANUP_ENDPOINTS, `/budgets?month=${month}`]) {
@@ -484,5 +509,7 @@ const month = new Date().toISOString().slice(0, 7);
       if (r.ok) removed++;
     }
   } catch { /* budgets are best effort */ }
+  if (seededBudget.data?.id) await api("DELETE", `/budgets/${seededBudget.data.id}?month=${prevMonth}`).catch(() => undefined);
   console.log(`\ncleanup: removed ${removed} row(s) created by the sweep. Results: ${logFile}\n`);
+  await releaseGate();
 })();

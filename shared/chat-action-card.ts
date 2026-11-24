@@ -39,6 +39,7 @@ const LABEL_OVERRIDES: Record<string, string> = {
   manage_document: "Update document",
   upload_document: "Upload document",
   set_record_detail: "Detail saved",
+  refund_expense: "Refund recorded",
 };
 
 /** "unlink_asset_from_liability" → "Unlink asset from liability". */

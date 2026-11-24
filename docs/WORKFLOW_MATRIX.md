@@ -11,12 +11,12 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 |---|---:|---:|---:|
 | API write routes | 184 | 31 | 66 |
 | API read routes | 111 | 32 | 53 |
-| Chat tools that write | 111 | 0 | 1 |
-| Chat tools that read | 42 | 0 | 3 |
+| Chat tools that write | 111 | 0 | 0 |
+| Chat tools that read | 42 | 0 | 0 |
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 617. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 620. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -40,7 +40,7 @@ Test files read: 617. Test files no config runs: 2 (`tests/critical-flows.test.t
 | Documents & artifacts | 20 | 5 | 7 | 7 | 12 | 0 |
 | Workspaces | 5 | 1 | 4 | 0 | 0 | 0 |
 | Journal & notes | 9 | 0 | 3 | 4 | 9 | 0 |
-| Record details | 6 | 0 | 6 | 4 | 3 | 1 |
+| Record details | 6 | 0 | 6 | 4 | 3 | 0 |
 | AI chat | 9 | 2 | 4 | 5 | 22 | 0 |
 | System (not a user workflow) | 8 | 5 | 8 | 9 | 0 | 0 |
 
@@ -108,8 +108,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/import/bank-csv` | yes | **0** | **0** |
 | `GET /api/onboarding-status` | yes | **0** | 1 |
 | `POST /api/onboarding/complete` | yes | **0** | **0** |
-| `GET /api/preferences/:key` | yes | 9 | 3 |
-| `PUT /api/preferences/:key` | yes | 2 | 2 |
+| `GET /api/preferences/:key` | yes | 9 | 4 |
+| `PUT /api/preferences/:key` | yes | 2 | 3 |
 | `GET /api/public/artifacts/:token` | yes | 1 | 1 |
 
 ### Profiles
@@ -123,10 +123,10 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/profile-bootstrap/:id` | yes | 5 | **0** |
 | `GET /api/profile-types` | yes | **0** | **0** |
 | `GET /api/profile-types/:typeKey` | **no** | **0** | **0** |
-| `GET /api/profiles` | yes | 40 | 15 |
-| `POST /api/profiles` | yes | 3 | 26 |
-| `DELETE /api/profiles/:id` | yes | 3 | 27 |
-| `GET /api/profiles/:id` | yes | 4 | 6 |
+| `GET /api/profiles` | yes | 40 | 17 |
+| `POST /api/profiles` | yes | 3 | 27 |
+| `DELETE /api/profiles/:id` | yes | 3 | 28 |
+| `GET /api/profiles/:id` | yes | 4 | 7 |
 | `PATCH /api/profiles/:id` | yes | 12 | 4 |
 | `GET /api/profiles/:id/ai-summary` | yes | 1 | **0** |
 | `GET /api/profiles/:id/detail` | yes | **0** | 2 |
@@ -220,7 +220,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/liabilities/:id/occurrences/:date/status` | **no** | 1 | 1 |
 | `GET /api/liabilities/:id/parties` | yes | **0** | 1 |
 | `POST /api/liabilities/:id/pause` | yes | **0** | 2 |
-| `GET /api/liabilities/:id/payments` | yes | 5 | 4 |
+| `GET /api/liabilities/:id/payments` | yes | 5 | 5 |
 | `POST /api/liabilities/:id/payments` | yes | 3 | 4 |
 | `POST /api/liabilities/:id/resume` | yes | **0** | 2 |
 | `GET /api/liabilities/:id/schedule` | yes | **0** | 5 |
@@ -262,7 +262,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
 | `POST /api/autopay/reconcile` | **no** | **0** | 1 |
-| `POST /api/autopay/run` | **no** | 1 | 4 |
+| `POST /api/autopay/run` | **no** | 1 | 5 |
 
 ### Bills & obligations
 
@@ -293,13 +293,13 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 |---|---|---:|---:|
 | `GET /api/anomalies` | yes | **0** | **0** |
 | `GET /api/budgets` | yes | 2 | 4 |
-| `POST /api/budgets` | yes | 2 | 3 |
+| `POST /api/budgets` | yes | 2 | 4 |
 | `DELETE /api/budgets/:id` | yes | 1 | 3 |
 | `PATCH /api/budgets/:id` | yes | 2 | 1 |
 | `POST /api/budgets/copy` | yes | 1 | 1 |
 | `GET /api/cashflow` | yes | 3 | 1 |
 | `POST /api/cashflow` | yes | 1 | 1 |
-| `GET /api/expenses` | yes | 12 | 20 |
+| `GET /api/expenses` | yes | 12 | 21 |
 | `POST /api/expenses` | yes | 6 | 16 |
 | `DELETE /api/expenses/:id` | yes | 1 | 22 |
 | `GET /api/expenses/:id` | **no** | **0** | 3 |
@@ -361,7 +361,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `create_budget` | write | 1 | 1 |
 | `update_budget` | write | 3 | 1 |
 | `copy_budgets_previous_month` | write | 3 | 2 |
-| `refund_expense` | write | 1 | 1 |
+| `refund_expense` | write | 2 | 1 |
 | `get_financial_summary` | read | 1 | 1 |
 | `search_financial_transactions` | read | 1 | 1 |
 | `get_spending_breakdown` | read | 1 | 1 |
@@ -611,7 +611,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `create_note` | write | 3 | 1 |
 | `update_note` | write | 2 | 1 |
 | `delete_note` | write | 3 | 1 |
-| `read_journal` | read | 1 | **0** |
+| `read_journal` | read | 1 | 1 |
 | `search_notes` | read | 2 | 1 |
 | `append_journal_entry` | write | 3 | 1 |
 | `delete_journal` | write | **0** | 1 |
@@ -634,9 +634,9 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `set_record_detail` | write | 2 | **0** |
-| `get_record_details` | read | 1 | **0** |
-| `find_records_by_detail` | read | 1 | **0** |
+| `set_record_detail` | write | 2 | 1 |
+| `get_record_details` | read | 1 | 1 |
+| `find_records_by_detail` | read | 1 | 1 |
 
 ### AI chat
 
@@ -672,7 +672,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `undo_last_action` | write | 3 | 3 |
 | `get_entity_history` | read | **0** | 2 |
 | `preview_bulk_action` | read | 3 | 1 |
-| `execute_bulk_action` | write | 3 | 1 |
+| `execute_bulk_action` | write | 4 | 1 |
 | `find_orphans` | read | **0** | 2 |
 | `repair_relations` | write | 2 | 1 |
 | `repair_profile_types` | write | 1 | 1 |

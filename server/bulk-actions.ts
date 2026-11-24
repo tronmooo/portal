@@ -264,6 +264,8 @@ export async function executeBulkPlan(storage: IStorage, planId?: string): Promi
     ...(Object.keys(failed).length ? { failed } : {}),
     ...(profileCascade ? { profile_deleted: criteria.profile_name } : {}),
     total: totalDeleted,
+    // What the chat's card names (the confirming turn's input is only { confirm: true }).
+    _displayData: { description: `Deleted ${totalDeleted} record${totalDeleted === 1 ? "" : "s"}${profileCascade ? ` and the ${criteria.profile_name} profile` : ""}` },
     message: `Deleted ${totalDeleted} record${totalDeleted === 1 ? "" : "s"}${profileCascade ? ` including the "${criteria.profile_name}" profile` : ""}.${hardTypes.length ? ` Note: ${hardTypes.join(", ")} deletions are permanent.` : " This can be undone."}`,
   };
 }
