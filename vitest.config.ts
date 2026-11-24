@@ -64,6 +64,8 @@ export default defineConfig({
       'tests/tracker-normalize.test.ts',
       'tests/tracker-entry-update.test.ts',
       'tests/tracker-entry-rederive.test.ts',
+      'tests/tracker-entry-create-derive.test.ts',
+      'tests/tracker-add-entry-form.dom.test.tsx',
       'tests/tracker-read-no-write.test.ts',
       'tests/scoped-child-query.test.ts',
       'tests/create-tracker-universal.test.ts',
