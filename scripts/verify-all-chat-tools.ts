@@ -76,7 +76,8 @@ const STEPS: Step[] = [
   s("refresh_ai_summary", `Refresh the AI summary for ${T} Alice`),
   s("", `Create a person profile named ${T} Alicia`),
   s("merge_profiles", `Merge the profile ${T} Alicia into ${T} Alice`,
-    { confirm: `Yes, I confirm — go ahead with the pending profile merge of ${T} Alicia into ${T} Alice.` }),
+    // The confirming turn runs the plan, so its card is the plan's.
+    { confirm: `Yes, I confirm — go ahead with the pending profile merge of ${T} Alicia into ${T} Alice.`, also: ["execute_bulk_action"] }),
   s("", `Add a vehicle asset called ${T} Truck, a 2015 Ford F-150 worth $18,000`),
   // Characteristics (D1–D5): a typed value on a record, read back and reported on.
   s("set_record_detail", `Record that the condition of ${T} Truck is Good`),

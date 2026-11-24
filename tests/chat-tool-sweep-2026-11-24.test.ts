@@ -115,3 +115,30 @@ describe("\"show me …\" opens a document only when it names one", () => {
     expect(db.modelCalls).toBe(0);
   });
 });
+
+describe("\"Forget my …\" asks for a saved memory to go", () => {
+  it("is the user's own request to delete (it was refused as not asked for)", async () => {
+    const { hasExplicitDestructiveIntent } = await import("../shared/destructive-intent");
+    expect(hasExplicitDestructiveIntent("Forget my locker code")).toBe(true);
+    expect(hasExplicitDestructiveIntent("Please forget that I like sushi")).toBe(true);
+    expect(hasExplicitDestructiveIntent("You can stop remembering it — forgetting the wifi name is fine")).toBe(true);
+  });
+
+  it("but not when it is about remembering, or a refusal", async () => {
+    const { hasExplicitDestructiveIntent } = await import("../shared/destructive-intent");
+    expect(hasExplicitDestructiveIntent("Don't forget my locker code")).toBe(false);
+    expect(hasExplicitDestructiveIntent("Remind me so I don't forget to call the dentist")).toBe(false);
+    expect(hasExplicitDestructiveIntent("I always forget to water the ferns")).toBe(false);
+    expect(hasExplicitDestructiveIntent("What is my locker code?")).toBe(false);
+  });
+});
+
+describe("the summary that replaces a contradicted reply", () => {
+  it("says a refund was recorded, not \"Updated expense.\"", async () => {
+    const { groundedSummary } = await import("../shared/ai-claim-check");
+    expect(groundedSummary([{ tool: "refund_expense", status: "ok", raw: "refund_expense" }])).toBe("Recorded the refund.");
+    expect(groundedSummary([{ tool: "refund_expense", status: "ok", raw: "Corner Coffee" }])).toBe('Recorded the refund "Corner Coffee".');
+    // Every other tool reads as before.
+    expect(groundedSummary([{ tool: "update_expense", status: "ok", raw: "Corner Coffee" }])).toBe('Updated expense "Corner Coffee".');
+  });
+});

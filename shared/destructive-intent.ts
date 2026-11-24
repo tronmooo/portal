@@ -27,6 +27,10 @@ const DESTRUCTIVE =
   "revers(?:e|es|ed|ing)|tak(?:e|es|ing)\\s+(?:it\\s+|that\\s+|this\\s+|them\\s+)?(?:off|out|away)|" +
   "throw(?:s|ing)?\\s+(?:it\\s+|that\\s+|this\\s+|them\\s+)?(?:out|away)|" +
   "nuke(?:s|d)?|kill(?:s|ed|ing)?|eliminat(?:e|es|ed|ing)|unlog|un-log|" +
+  // "Forget my locker code" is how a person asks for a saved memory to go
+  // (it was refused as not asked for, 2026-11-24). Not "forget to …", which
+  // is about remembering; "don't forget X" is caught as a negation below.
+  "forget(?:s|ting)?(?!\\s+to\\b)|" +
   "merg(?:e|es|ed|ing)|combin(?:e|es|ed|ing)|dedup(?:e|es|ed|ing|licate|licated|licating)?|consolidat(?:e|es|ed|ing)";
 
 const DESTRUCTIVE_RE = new RegExp(`\\b(?:${DESTRUCTIVE})\\b`, "i");
