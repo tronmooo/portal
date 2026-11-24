@@ -393,7 +393,11 @@ const month = new Date().toISOString().slice(0, 7);
   const custom: Step[] | null = arg("steps")
     ? JSON.parse(fs.readFileSync(arg("steps")!, "utf8").replace(/\{T\}/g, T))
     : null;
-  const steps = custom || (only ? STEPS.filter((x) => only.includes(x.tool)) : STEPS);
+  // --only keeps the named tools' steps, and a fixture step ("" tool) that sits
+  // directly before one of them: it makes the record that step acts on.
+  const steps = custom || (only
+    ? STEPS.filter((x, i) => only.includes(x.tool) || (x.tool === "" && only.includes(STEPS.slice(i + 1).find((y) => y.tool !== "")?.tool ?? "")))
+    : STEPS);
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const logFile = path.join(OUT_DIR, "results.jsonl");
   fs.writeFileSync(logFile, "");
