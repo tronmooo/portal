@@ -6,7 +6,8 @@ import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "./lib/queryClient";
 import { getUserCurrentMonth } from "@shared/timezone";
 import { pageTitleFor } from "@shared/domain/route-metadata";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter, needsDefaultScope } from "@/lib/profileFilter";
+import { resolveDefaultScope } from "@/lib/scope-ready";
 import { warmup } from "@/lib/warmup";
 import { hashNavigate } from "./lib/hashNavigate";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -475,6 +476,9 @@ function DataPrefetch() {
   useEffect(() => {
     if (!user || prefetched.current) return;
     prefetched.current = true;
+    // With no saved scope the default is settled first (lib/scope-ready.ts),
+    // so this is the bootstrap for the scope the screen will actually show.
+    void resolveDefaultScope(user.id).then(() => {
     const { mode, selectedIds: ids } = getProfileFilter();
     // The user's month (not UTC's): the budget hooks key on the browser-zone
     // month, so a UTC key seeded the wrong slot on the last evening of a month.
@@ -500,6 +504,7 @@ function DataPrefetch() {
         return b ?? null;
       },
     }).catch(() => { /* best-effort */ });
+    });
 
     // Do not automatically fetch the full "Everyone" scope when the user
     // saved a narrower scope. That bootstrap is the broadest server fan-out
@@ -570,9 +575,26 @@ function PointerEventsGuard() {
 // switcher + tab chips) mounts ONCE here — outside AppRouter's <Suspense> —
 // so it persists across tab switches while lazy page chunks stream in. Pages
 // under a hub route read HubChromeContext to hide their duplicate headers.
+/** False only while a signed-in user has no scope yet (lib/scope-ready.ts):
+ *  the screens wait for it so they load their data once, not twice. */
+function useScopeReady(): boolean {
+  const { user } = useAuth();
+  const uid = user?.id || "";
+  const [readyFor, setReadyFor] = useState<string>(() => (uid && !needsDefaultScope(uid) ? uid : ""));
+  useEffect(() => {
+    if (!uid || readyFor === uid) return;
+    let live = true;
+    void resolveDefaultScope(uid).then(() => { if (live) setReadyFor(uid); });
+    return () => { live = false; };
+  }, [uid, readyFor]);
+  return !!uid && readyFor === uid;
+}
+
 function HubArea() {
   const [location] = useLocation();
   const isHub = isHubRoute(location);
+  const scopeReady = useScopeReady();
+  if (!scopeReady) return <div className="flex-1 min-h-0" data-testid="scope-resolving"><PageLoader /></div>;
   return (
     <>
       {isHub && <HubShell />}

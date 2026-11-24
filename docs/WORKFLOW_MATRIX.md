@@ -16,7 +16,7 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 613. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 614. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -142,7 +142,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/profiles/:id/photo` | yes | **0** | 1 |
 | `GET /api/profiles/:id/tree` | yes | **0** | 1 |
 | `POST /api/profiles/:id/unlink` | yes | 2 | 1 |
-| `GET /api/profiles/lite` | yes | 3 | 7 |
+| `GET /api/profiles/lite` | yes | 4 | 7 |
 | `GET /api/relationships/graph/:id` | yes | 1 | **0** |
 | `POST /api/relationships/move-liability` | **no** | **0** | **0** |
 

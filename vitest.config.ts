@@ -12,6 +12,7 @@ export default defineConfig({
     environment: 'node',
     include: [
       'tests/workflow-matrix.test.ts',
+      'tests/scope-ready.dom.test.ts',
       'tests/warm-profile-detail.test.ts',
       'tests/schema-expectations.test.ts',
       'tests/qa-2026-11-24-dashboard-calendar.test.ts',

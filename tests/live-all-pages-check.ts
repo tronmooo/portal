@@ -103,10 +103,31 @@ async function run(browser: any, mode: "desktop" | "phone", routes: Array<{ path
   await email.waitFor({ timeout: 30000 });
   await email.fill(LIVE_EMAIL);
   await page.fill(t("input-signin-password"), LIVE_PASSWORD);
+  // What the first screen asks for, with its scope (lib/scope-ready.ts).
+  const firstLoads: string[] = [];
+  const recordFirst = (r: any) => { const u = new URL(r.url()); if (u.pathname.startsWith("/api/")) firstLoads.push(u.pathname + u.search); };
+  page.on("request", recordFirst);
+  const tSign = Date.now();
   await press(t("button-signin"));
   await page.waitForSelector(t("page-dashboard"), { timeout: 30000 });
+  const shownMs = Date.now() - tSign;
   await settle();
-  check(true, `[${mode}] sign in → the dashboard`);
+  page.off("request", recordFirst);
+  check(true, `[${mode}] sign in → the dashboard, on screen in ${shownMs}ms`);
+  // A fresh browser has no saved scope. The app settles on the user's own
+  // profile, and must do so BEFORE loading the dashboard — not load it for
+  // Everyone first and again for the person (2026-11-24: 30 requests, ~6 s).
+  const savedScope = await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => x.startsWith("portol_profile_filter_v5:"));
+    return k ? JSON.parse(localStorage.getItem(k) || "null") : null;
+  });
+  const LISTS = /^\/api\/(tasks|stats|incomes|trackers|habits|dashboard-enhanced|dashboard-bootstrap)(\?|$)/;
+  const unscoped = firstLoads.filter((u) => LISTS.test(u) && !u.includes("profileIds="));
+  if (savedScope?.mode === "selected") {
+    check(unscoped.length === 0, `[${mode}] the first screen loads its lists once, for the person it shows (unscoped loads: ${unscoped.join(", ") || "none"})`);
+  } else {
+    console.log(`NOTE  [${mode}] the account opened on ${JSON.stringify(savedScope?.mode)}; the load-once check needs a profile of its own`);
+  }
 
   const slow: string[] = [];
   for (const r of routes) {

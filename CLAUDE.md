@@ -1172,6 +1172,21 @@ at phone width, not only with a desktop mouse.
 *Guard:* `tests/swipe-guard.dom.test.tsx`.
 *Live check (phone, real touch events, smoke account):* `npx tsx tests/live-touch-gestures-check.ts`.
 
+**T3. The first screen loads once.** With no scope saved for the user (a
+first sign-in, and every sign-in after a sign-out) the scope is settled
+BEFORE any screen asks for data: one slim profile list, then the default
+(`resolveDefaultScope`, `client/src/lib/scope-ready.ts`; `useScopeReady` gates
+`HubArea` and the bootstrap prefetch in `App.tsx`). Never mount a scoped
+screen on the unchosen "everyone" and let it re-key when the profile list
+lands (2026-11-24, measured: the dashboard loaded for Everyone, painted
+household totals, then loaded again for the person — 32 requests, 3.9 s to
+the dashboard; 23 and 1.4 s after). A saved scope never waits; a failed or
+slow list opens the screen as before. A background request reads its
+response to the end (`warmProfileDetail`): one nobody reads never finishes.
+*Guards:* `tests/scope-ready.dom.test.ts`, `tests/warm-profile-detail.test.ts`.
+*Live check (every page, desktop and phone, and the sign-in load):*
+`npx tsx tests/live-all-pages-check.ts`.
+
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
 
