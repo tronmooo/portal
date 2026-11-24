@@ -36,6 +36,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { localTodayISO } from "@/lib/dates";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
+import { hashNavigate } from "@/lib/hashNavigate";
 
 function PWAInstallCard() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -86,11 +87,18 @@ function PWAInstallCard() {
 // every document on the account while a profile's tab shows only that profile's.
 // A tester read the two numbers as a contradiction (9 vs 3, 30 vs 1) rather than
 // as two different questions, so each tile now says which question it answers.
-function StatCard({ icon: Icon, label, hint, value, href, accent }: { icon: any; label: string; hint?: string; value: number | string; href: string; accent: string }) {
+// Each tile opens the list its number counts, in one tap: Active Tasks opens
+// the task list (not the Executive dashboard), Documents opens Artifacts
+// already on its Documents filter. A target with a query goes through
+// hashNavigate: wouter's navigate would move "?type=…" out of the hash into
+// location.search, where the hash router's page never sees it.
+function StatCard({ icon: Icon, label, hint, value, href, accent, testId }: { icon: any; label: string; hint?: string; value: number | string; href: string; accent: string; testId?: string }) {
   const [, navigate] = useLocation();
   return (
     <button
-      onClick={() => navigate(href)}
+      type="button"
+      data-testid={testId}
+      onClick={() => (href.includes("?") ? hashNavigate(href) : navigate(href))}
       className="flex items-center gap-3 p-3 bubble  active:scale-[0.98] transition-all text-left card-lift w-full"
       style={{ ["--accent-hsl" as any]: accent }}
     >
@@ -103,6 +111,28 @@ function StatCard({ icon: Icon, label, hint, value, href, accent }: { icon: any;
         {hint && <p className="text-[11px] leading-tight text-muted-foreground/70">{hint}</p>}
       </div>
     </button>
+  );
+}
+
+// A settings switch is named by its visible label (and described by the line
+// under it), so a screen reader says "Fast-Path Commands, switch, on" — not
+// just "switch" (QA 2026-11-24: six switches had no accessible name).
+function PrefSwitchRow({ prefKey, label, description, checked, onCheckedChange }: { prefKey: string; label: string; description: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
+  return (
+    <div className="flex items-center justify-between">
+      <div className="flex-1 mr-4">
+        <Label id={`label-${prefKey}`} htmlFor={`switch-${prefKey}`} className="text-sm font-medium">{label}</Label>
+        <p id={`desc-${prefKey}`} className="text-xs text-muted-foreground mt-0.5">{description}</p>
+      </div>
+      <Switch
+        id={`switch-${prefKey}`}
+        aria-labelledby={`label-${prefKey}`}
+        aria-describedby={`desc-${prefKey}`}
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+        data-testid={`switch-${prefKey}`}
+      />
+    </div>
   );
 }
 
@@ -135,11 +165,18 @@ function NotificationToggle({ prefKey, label, description, icon }: { prefKey: st
       <div className="flex items-center gap-3">
         {icon}
         <div>
-          <Label className="text-sm font-medium">{label}</Label>
-          <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+          <Label id={`label-${prefKey}`} htmlFor={`switch-${prefKey}`} className="text-sm font-medium">{label}</Label>
+          <p id={`desc-${prefKey}`} className="text-xs text-muted-foreground mt-0.5">{description}</p>
         </div>
       </div>
-      <Switch checked={enabled} onCheckedChange={toggle} data-testid={`switch-${prefKey}`} />
+      <Switch
+        id={`switch-${prefKey}`}
+        aria-labelledby={`label-${prefKey}`}
+        aria-describedby={`desc-${prefKey}`}
+        checked={enabled}
+        onCheckedChange={toggle}
+        data-testid={`switch-${prefKey}`}
+      />
     </div>
   );
 }
@@ -496,10 +533,10 @@ export default function SettingsPage() {
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-2">Your Data</p>
               <div className="grid grid-cols-2 gap-2">
-                <StatCard icon={Users} label="Profiles" hint="People, pets, property & accounts" value={profiles.length} href="/profiles/list" accent="188 55% 50%" />
-                <StatCard icon={ListTodo} label="Active Tasks" hint="Open · all profiles" value={stats?.activeTasks || 0} href="/dashboard" accent="262 65% 62%" />
-                <StatCard icon={Activity} label="Trackers" hint="All profiles" value={stats?.totalTrackers || 0} href="/linked" accent="173 60% 44%" />
-                <StatCard icon={FileText} label="Documents" hint="Across all profiles" value={allDocs.length} href="/artifacts" accent="25 80% 54%" />
+                <StatCard icon={Users} label="Profiles" hint="People, pets, property & accounts" value={profiles.length} href="/profiles/list" accent="188 55% 50%" testId="stat-profiles" />
+                <StatCard icon={ListTodo} label="Active Tasks" hint="Open · all profiles" value={stats?.activeTasks || 0} href="/dashboard/tasks" accent="262 65% 62%" testId="stat-active-tasks" />
+                <StatCard icon={Activity} label="Trackers" hint="All profiles" value={stats?.totalTrackers || 0} href="/linked" accent="173 60% 44%" testId="stat-trackers" />
+                <StatCard icon={FileText} label="Documents" hint="Across all profiles" value={allDocs.length} href="/artifacts?type=documents" accent="25 80% 54%" testId="stat-documents" />
               </div>
             </div>
 
@@ -739,7 +776,7 @@ export default function SettingsPage() {
                 value={aiChatModel}
                 onValueChange={(value) => setAiPreference("ai_chat_model", value)}
               >
-                <SelectTrigger className="w-[200px] h-8 text-xs">
+                <SelectTrigger className="w-[200px] h-8 text-xs" aria-label="Chat Model">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -763,49 +800,37 @@ export default function SettingsPage() {
               </Badge>
             </div>
             <Separator />
-            <div className="flex items-center justify-between">
-              <div className="flex-1 mr-4">
-                <Label className="text-sm font-medium">Fast-Path Commands</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">Instant logging (weight, BP, mood) bypasses AI for speed</p>
-              </div>
-              <Switch
-                checked={aiFastPath}
-                onCheckedChange={(checked) => setAiPreference("ai_fast_path", String(checked))}
-              />
-            </div>
+            <PrefSwitchRow
+              prefKey="ai_fast_path"
+              label="Fast-Path Commands"
+              description="Instant logging (weight, BP, mood) bypasses AI for speed"
+              checked={aiFastPath}
+              onCheckedChange={(checked) => setAiPreference("ai_fast_path", String(checked))}
+            />
             <Separator />
-            <div className="flex items-center justify-between">
-              <div className="flex-1 mr-4">
-                <Label className="text-sm font-medium">Auto-Expense from Documents</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">Automatically create expenses when scanning receipts</p>
-              </div>
-              <Switch
-                checked={aiAutoExpense}
-                onCheckedChange={(checked) => setAiPreference("ai_auto_expense", String(checked))}
-              />
-            </div>
+            <PrefSwitchRow
+              prefKey="ai_auto_expense"
+              label="Auto-Expense from Documents"
+              description="Automatically create expenses when scanning receipts"
+              checked={aiAutoExpense}
+              onCheckedChange={(checked) => setAiPreference("ai_auto_expense", String(checked))}
+            />
             <Separator />
-            <div className="flex items-center justify-between">
-              <div className="flex-1 mr-4">
-                <Label className="text-sm font-medium">Smart Data Routing</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">AI routes extracted data to correct profile, calendar, and trackers</p>
-              </div>
-              <Switch
-                checked={aiSmartRouting}
-                onCheckedChange={(checked) => setAiPreference("ai_smart_routing", String(checked))}
-              />
-            </div>
+            <PrefSwitchRow
+              prefKey="ai_smart_routing"
+              label="Smart Data Routing"
+              description="AI routes extracted data to correct profile, calendar, and trackers"
+              checked={aiSmartRouting}
+              onCheckedChange={(checked) => setAiPreference("ai_smart_routing", String(checked))}
+            />
             <Separator />
-            <div className="flex items-center justify-between">
-              <div className="flex-1 mr-4">
-                <Label className="text-sm font-medium">Auto-Create Trackers</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">When you log something without an existing tracker, create one automatically</p>
-              </div>
-              <Switch
-                checked={aiAutoCreateTrackers}
-                onCheckedChange={(checked) => setAiPreference("ai_auto_create_trackers", String(checked))}
-              />
-            </div>
+            <PrefSwitchRow
+              prefKey="ai_auto_create_trackers"
+              label="Auto-Create Trackers"
+              description="When you log something without an existing tracker, create one automatically"
+              checked={aiAutoCreateTrackers}
+              onCheckedChange={(checked) => setAiPreference("ai_auto_create_trackers", String(checked))}
+            />
             <Separator />
             <div className="flex items-center justify-between">
               <div className="flex-1 mr-4">
@@ -816,7 +841,7 @@ export default function SettingsPage() {
                 value={itemEnrichment}
                 onValueChange={(v) => { void setAiPreference("item_enrichment", v); void setAiPreference("nutrition_enrichment", v); }}
               >
-                <SelectTrigger className="w-[200px] h-8 text-xs" data-testid="select-item-enrichment">
+                <SelectTrigger className="w-[200px] h-8 text-xs" data-testid="select-item-enrichment" aria-label="Enhanced Item Lookup">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

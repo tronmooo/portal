@@ -490,12 +490,14 @@ function ManageAccountsDialog({
 
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <Label className="text-xs font-medium">Include in net worth</Label>
+                  <Label htmlFor={`switch-networth-${a.id}`} className="text-xs font-medium">Include in net worth</Label>
                   <p className="text-[11px] text-muted-foreground">
                     Turn off if you already track this account manually.
                   </p>
                 </div>
                 <Switch
+                  id={`switch-networth-${a.id}`}
+                  aria-label={`Include ${accountLabel(a)} in net worth`}
                   checked={a.includeInNetWorth}
                   onCheckedChange={(checked) => patchMut.mutate({ id: a.id, patch: { includeInNetWorth: checked } })}
                   data-testid={`switch-networth-${a.id}`}
@@ -504,12 +506,14 @@ function ManageAccountsDialog({
 
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <Label className="text-xs font-medium">Hide from Finance</Label>
+                  <Label htmlFor={`switch-hidden-${a.id}`} className="text-xs font-medium">Hide from Finance</Label>
                   <p className="text-[11px] text-muted-foreground">
                     Hidden accounts stop appearing in lists. Imported data is kept.
                   </p>
                 </div>
                 <Switch
+                  id={`switch-hidden-${a.id}`}
+                  aria-label={`Hide ${accountLabel(a)} from Finance`}
                   checked={a.isHidden}
                   onCheckedChange={(checked) => patchMut.mutate({ id: a.id, patch: { isHidden: checked } })}
                   data-testid={`switch-hidden-${a.id}`}

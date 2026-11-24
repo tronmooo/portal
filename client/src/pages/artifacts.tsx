@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { formatListDate } from "@/lib/format";
@@ -87,6 +88,28 @@ const FILTER_TABS: { key: FilterTab; label: string; icon: React.ElementType }[] 
   { key: "ai_reports", label: "AI Outputs", icon: Brain },
   { key: "scans",      label: "Scans",      icon: Camera },
 ];
+
+/** The type filter a link asks for: `/artifacts?type=documents` (Settings →
+ *  Documents opens the list already filtered). The URL is the only place this
+ *  filter is read from — it is never stored (Rule 4), and a chip tap changes
+ *  the view only. The hash router keeps the query inside the location
+ *  ("/artifacts?type=documents"); the hash itself is read as a fallback. */
+export function typeFilterFromLocation(location: string): FilterTab | null {
+  const readType = (q: string): FilterTab | null => {
+    const t = new URLSearchParams(q).get("type");
+    return t && FILTER_TABS.some(f => f.key === t) ? (t as FilterTab) : null;
+  };
+  try {
+    const q = location.includes("?") ? location.split("?")[1] : "";
+    if (q) return readType(q);
+    if (typeof window !== "undefined") {
+      const hash = window.location.hash || "";
+      const hq = hash.includes("?") ? hash.split("?")[1] : "";
+      if (hq) return readType(hq);
+    }
+  } catch { /* malformed query: no filter */ }
+  return null;
+}
 
 // ─── Document sub-type grouping ─────────────────────────────
 const DOC_TYPE_GROUPS: Record<string, { label: string; icon: React.ElementType }> = {
@@ -734,7 +757,11 @@ export default function ArtifactsPage() {
   useEffect(() => { document.title = "Artifacts — Portol"; }, []);
 
   const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<FilterTab>("all");
+  const [location] = useLocation();
+  const linkedType = typeFilterFromLocation(location);
+  const [activeTab, setActiveTab] = useState<FilterTab>(() => linkedType ?? "all");
+  // A fresh link to the already-open page (?type=…) moves the chip too.
+  useEffect(() => { if (linkedType) setActiveTab(linkedType); }, [linkedType]);
   const [selectedArtifact, setSelectedArtifact] = useState<UnifiedArtifact | null>(null);
   // For doc/sheet artifacts, route to /editor/:id instead of opening the dialog.
   const handleSelect = (item: UnifiedArtifact) => {
@@ -1138,6 +1165,7 @@ export default function ArtifactsPage() {
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
+              aria-pressed={isActive}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
                 isActive
                   ? "bg-primary text-primary-foreground"
