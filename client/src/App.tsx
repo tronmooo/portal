@@ -238,7 +238,11 @@ function RoutePreloader() {
         .finally(schedule);
     };
 
-    schedule();
+    // Idle preloading is for AFTER the first screen is up. While the scope is
+    // still being settled the page is idle only because its own screen has not
+    // been asked for yet (lib/scope-ready.ts): starting here put twenty chunks
+    // of other tabs ahead of the one the user is waiting for.
+    void resolveDefaultScope(user.id).then(() => { if (!cancelled) schedule(); });
     return () => {
       cancelled = true;
       if (idleHandle !== null && typeof window.cancelIdleCallback === "function") {
@@ -584,6 +588,10 @@ function useScopeReady(): boolean {
   useEffect(() => {
     if (!uid || readyFor === uid) return;
     let live = true;
+    // The wait is for data, not for code: fetch the landing screen's chunk
+    // meanwhile, so it is ready to mount the moment the scope is.
+    const at = window.location.hash.replace(/^#/, "").split("?")[0];
+    if (at === "" || at === "/" || at.startsWith("/dashboard")) void _dashImport().catch(() => undefined);
     void resolveDefaultScope(uid).then(() => { if (live) setReadyFor(uid); });
     return () => { live = false; };
   }, [uid, readyFor]);

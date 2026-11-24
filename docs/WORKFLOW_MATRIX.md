@@ -10,13 +10,13 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 | | Total | No test at all | Not exercised on the deployed app |
 |---|---:|---:|---:|
 | API write routes | 184 | 31 | 66 |
-| API read routes | 111 | 33 | 54 |
+| API read routes | 111 | 32 | 53 |
 | Chat tools that write | 111 | 0 | 1 |
 | Chat tools that read | 42 | 0 | 3 |
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 614. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 615. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -371,9 +371,9 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `GET /api/tasks` | yes | 25 | 13 |
+| `GET /api/tasks` | yes | 25 | 14 |
 | `POST /api/tasks` | yes | 7 | 13 |
-| `DELETE /api/tasks/:id` | yes | 4 | 14 |
+| `DELETE /api/tasks/:id` | yes | 4 | 15 |
 | `GET /api/tasks/:id` | yes | 5 | **0** |
 | `PATCH /api/tasks/:id` | yes | 6 | 2 |
 | `POST /api/tasks/:id/occurrence` | yes | 3 | 1 |
@@ -424,10 +424,10 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `GET /api/habits` | yes | 3 | 5 |
+| `GET /api/habits` | yes | 3 | 6 |
 | `POST /api/habits` | yes | 1 | 4 |
-| `DELETE /api/habits/:id` | yes | 2 | 4 |
-| `GET /api/habits/:id` | **no** | **0** | **0** |
+| `DELETE /api/habits/:id` | yes | 2 | 5 |
+| `GET /api/habits/:id` | **no** | **0** | 1 |
 | `PATCH /api/habits/:id` | yes | 2 | **0** |
 | `POST /api/habits/:id/checkin` | yes | **0** | 2 |
 | `DELETE /api/habits/:id/checkin/:checkinId` | yes | 1 | 1 |
@@ -470,7 +470,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/tracker-entries/:entryId/rescale` | yes | **0** | **0** |
 | `GET /api/trackers` | yes | 11 | 19 |
 | `POST /api/trackers` | yes | 2 | 10 |
-| `DELETE /api/trackers/:id` | yes | 1 | 8 |
+| `DELETE /api/trackers/:id` | yes | 1 | 9 |
 | `GET /api/trackers/:id` | yes | 1 | 3 |
 | `PATCH /api/trackers/:id` | yes | 1 | 2 |
 | `POST /api/trackers/:id/entries` | yes | 2 | 4 |
