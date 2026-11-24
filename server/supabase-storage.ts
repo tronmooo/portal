@@ -35,7 +35,7 @@ async function withTrackerCreateLock<T>(key: string, fn: () => Promise<T>): Prom
     if (trackerCreateLocks.get(key) === chain) trackerCreateLocks.delete(key);
   }
 }
-import { assertEventSpan } from "@shared/event-span";
+import { assertEventSpan, carryEventSpan } from "@shared/event-span";
 import { searchCorpus, searchRowHref } from "@shared/search-match";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { formatDollars } from "@shared/money";
@@ -128,6 +128,8 @@ import {
 import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-ownership";
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
+import { debtPaymentRows, isCalendarDebtProfile, mergeBillsTimelines } from "../shared/debt-payments-timeline";
+import type { BillTimelineRow } from "../shared/bills-timeline";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurrence, effectiveDueDate, resolveOccurrenceKey, isEndedBillFields, currentBillDueDate, readDueDate } from "../shared/liability-recurrence";
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
@@ -4583,6 +4585,8 @@ export class SupabaseStorage implements IStorage {
     // [P0.2] Optimistic concurrency: compare against the trigger-maintained
     // updated_at column (fetched only when the caller sent expectedUpdatedAt).
     const eventVersion = await this.assertNoWriteConflictFor("events", id, data as Record<string, any>);
+    // Moving the start moves the end with it (shared/event-span).
+    data = carryEventSpan(existing as any, data as any) as Partial<CalendarEvent>;
     const merged = { ...existing, ...data };
     assertEventSpan(merged as any); // the edited record as a whole must still run forwards
     const { error } = await this.guardedWrite(this.supabase.from("events").update(onlyPatched({
@@ -4883,22 +4887,19 @@ export class SupabaseStorage implements IStorage {
     }
 
     for (const task of tasks) {
-      // Use dueDate if available, otherwise fall back to createdAt so every task appears on the calendar
-      const rawDate = task.dueDate || task.createdAt;
-      if (!rawDate) continue;
+      // A task with NO due date is not on the calendar (QA 2026-11-24, second
+      // pass): placing it on the day it was added drew it as an all-day item
+      // "today" on the Calendar and in the Executive Timeline while its own
+      // row said "No due date". An undated task lives in the task list
+      // (Unscheduled), and nothing date-driven shows it.
+      if (!task.dueDate) continue;
       const taskColor = task.priority === "high" ? "#A13544" : task.priority === "medium" ? "#BB653B" : "#797876";
       // A task carries its own clock time now (Portol has two entities, events
       // and tasks — see shared/schema.ts Task), and a repeating task is
       // projected across the window instead of appearing once on its stored due
       // date. Without the projection "every Tuesday at 9 AM" occupied one
       // Tuesday and the rest of the year was blank.
-      // An undated task sits on the day it was CREATED — in the user's zone.
-      // createdAt is a UTC instant, so `slice(0, 10)` put an evening task on
-      // tomorrow for every negative-offset user.
-      const createdDay = task.dueDate ? null : localDayOf(rawDate, this._timezone);
-      const taskDates = task.dueDate
-        ? taskOccurrenceDates({ dueDate: task.dueDate, tags: task.tags, status: task.status }, startDate, endDate, { todayISO: rdTodayISO })
-        : (createdDay && createdDay >= startDate && createdDay <= endDate ? [createdDay] : []);
+      const taskDates = taskOccurrenceDates({ dueDate: task.dueDate, tags: task.tags, status: task.status }, startDate, endDate, { todayISO: rdTodayISO });
       const isSeries = taskRepeats(task as any);
       for (const d of taskDates) {
         items.push({
@@ -4913,10 +4914,7 @@ export class SupabaseStorage implements IStorage {
           // are always still to do.
           completed: isTaskOccurrenceDone(task, d),
           linkedProfiles: task.linkedProfiles, sourceId: task.id,
-          // `undated`: the task has NO due date and sits on the day it was
-          // added. The Calendar says so ("No due date") instead of letting that
-          // day read as the due date the Dashboard says is blank.
-          meta: { priority: task.priority, status: task.status, tags: task.tags, recurring: isSeries, ...(task.dueDate ? {} : { undated: true }) },
+          meta: { priority: task.priority, status: task.status, tags: task.tags, recurring: isSeries },
         });
       }
     }
@@ -8548,6 +8546,33 @@ export class SupabaseStorage implements IStorage {
       } catch { return null; }
     })();
 
+    // Loans and cards in Bills & Payments (shared/debt-payments-timeline). A
+    // debt is in scope when its owner chain is — parent plus every party on
+    // it, the Calendar's rule — and its payments are read in one query.
+    // A failed payments read fails the snapshot (Rule 7): an empty list here
+    // would read as "Nothing due" beside a payment on the Calendar.
+    const debtTimelineEnh = await (async () => {
+      {
+        const partiesByDebt = new Map<string, string[]>();
+        for (const l of (allLiabLinks as any[]) || []) {
+          if (!l?.liabilityProfileId || !l?.partyProfileId) continue;
+          partiesByDebt.set(l.liabilityProfileId, [...(partiesByDebt.get(l.liabilityProfileId) || []), l.partyProfileId]);
+        }
+        const debts = (allProfiles as any[]).filter((p: any) => isCalendarDebtProfile(p)
+          && matchesProfileEnhanced(Array.from(new Set([...(p.parentProfileId ? [p.parentProfileId] : []), ...(partiesByDebt.get(p.id) || [])]))));
+        if (debts.length === 0) return { upcoming: [] as BillTimelineRow[], past: [] as BillTimelineRow[] };
+        const { data: payRows, error: payErr } = await this.supabase
+          .from("liability_payments").select("id,payment_date,amount,liability_profile_id")
+          .eq("user_id", this.userId).in("liability_profile_id", debts.map((p: any) => p.id));
+        if (payErr) throw payErr;
+        const byDebt = new Map<string, Array<{ id: string; paymentDate: string; amount: number }>>();
+        for (const r of payRows || []) {
+          byDebt.set(r.liability_profile_id, [...(byDebt.get(r.liability_profile_id) || []), { id: r.id, paymentDate: r.payment_date, amount: Number(r.amount) || 0 }]);
+        }
+        return debtPaymentRows(debts, allProfiles as any[], byDebt, today);
+      }
+    })();
+
     // A recurring event happens today when today is one of its occurrences,
     // not only on the day it was created (a daily standup never appeared).
     const todaysEvents = allEvents.filter(e => eventOccursOn(e as any, today)).map(e => ({ id: e.id, title: e.title, time: e.time, endTime: e.endTime, category: e.category, location: e.location }));
@@ -8561,7 +8586,10 @@ export class SupabaseStorage implements IStorage {
         spendByCategory, upcomingBills,
         // The Finance tab's Bills & Payments view (shared/bills-timeline): a
         // recurring bill's elapsed due dates are assumed paid (owner 2026-11-21).
-        billsTimeline: buildBillsTimeline(allObligations as any[], today),
+        // …and each loan's or card's next payment, from the series the
+        // Calendar draws (shared/debt-payments-timeline): the panel said
+        // "Nothing due" beside a loan payment on the grid (QA 2026-11-24).
+        billsTimeline: mergeBillsTimelines(buildBillsTimeline(allObligations as any[], today), debtTimelineEnh),
         monthlyObligationTotal,
         // See the block where these are computed. Cash flow on EVERY surface is
         //   IN  = monthlyIncome

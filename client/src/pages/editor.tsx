@@ -618,6 +618,15 @@ export default function EditorPage() {
   // An autosave, or the save the X does on its way out, must not move the URL
   // (the route change remounts the editor and drops the caret mid-sentence).
   const quietSaveRef = useRef(false);
+  // A save outlives the editor: Save pressed, then Calendar before the answer
+  // came back — the answer moved the URL to /editor/<id> and the document
+  // opened again over the Calendar (QA 2026-11-24, second pass). Only an
+  // editor that is still on screen, at the address it opened on, follows its
+  // first save to the saved document's address.
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+  const stillOnNewEditor = () => mountedRef.current && typeof window !== "undefined"
+    && /^#\/editor\/new\//.test(window.location.hash || "");
   const saveMut = useMutation({
     mutationFn: async () => {
       // Cancel any in-flight save so the latest payload wins.
@@ -645,7 +654,7 @@ export default function EditorPage() {
       qc.invalidateQueries({ queryKey: ["/api/documents"] });
       qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       // Update URL so refresh re-opens the right artifact.
-      if (isNew && !quietSaveRef.current) {
+      if (isNew && !quietSaveRef.current && stillOnNewEditor()) {
         const qs = fromChat ? "?source=chat" : "";
         setLocation(`/editor/${saved.id}${qs}`);
       }
@@ -850,7 +859,8 @@ export default function EditorPage() {
       qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setDeleteOpen(false);
       toast({ title: "Deleted" });
-      setLocation("/artifacts");
+      // Not if the user has already gone elsewhere (same race as the save).
+      if (mountedRef.current) setLocation("/artifacts");
     },
     onError: (err: any) => {
       setDeleteOpen(false);
@@ -874,7 +884,7 @@ export default function EditorPage() {
       qc.invalidateQueries({ queryKey: ["/api/documents"] });
       qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: "Copy created" });
-      setLocation(`/editor/${copy.id}`);
+      if (mountedRef.current) setLocation(`/editor/${copy.id}`);
     },
     onError: (err: any) => toast({ title: "Copy failed", description: err?.message, variant: "destructive" }),
   });

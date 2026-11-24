@@ -12,6 +12,9 @@ export default defineConfig({
     environment: 'node',
     include: [
       'tests/workflow-matrix.test.ts',
+      'tests/qa-2026-11-24b-findings.dom.test.tsx',
+      'tests/bills-timeline-debts.test.ts',
+      'tests/edit-profile-dialog-save.dom.test.tsx',
       'tests/bills-all-tab.dom.test.tsx',
       'tests/chat-tool-sweep-2026-11-24.test.ts',
       'tests/scope-ready.dom.test.ts',
@@ -19,6 +22,7 @@ export default defineConfig({
       'tests/schema-expectations.test.ts',
       'tests/qa-2026-11-24-dashboard-calendar.test.ts',
       'tests/commit-date-input.dom.test.tsx',
+      'tests/qa-2026-11-24-date-edits-persist.dom.test.tsx',
       'tests/swipe-guard.dom.test.tsx',
       'tests/recurring-occurrence-actions.test.ts',
       'tests/calendar-detail-redesign.dom.test.tsx',
