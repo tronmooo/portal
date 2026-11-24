@@ -11,6 +11,8 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
+      'tests/qa-2026-11-24-dashboard-calendar.test.ts',
+      'tests/commit-date-input.dom.test.tsx',
       'tests/swipe-guard.dom.test.tsx',
       'tests/recurring-occurrence-actions.test.ts',
       'tests/calendar-detail-redesign.dom.test.tsx',

@@ -17,7 +17,8 @@
  * collide with their own UI.
  */
 import { localTodayISO } from "@/lib/dates";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { dateInputState, UNFINISHED_DATE_MESSAGE } from "@/lib/date-input";
 import { useLocation } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { Plus, X,
@@ -196,6 +197,7 @@ function QuickTaskDialog({ open, onClose }: { open: boolean; onClose: () => void
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState<"low" | "medium" | "high">("medium");
   const [dueDate, setDueDate] = useState("");
+  const dueRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { if (!open) { setTitle(""); setPriority("medium"); setDueDate(""); } }, [open]);
 
@@ -256,12 +258,18 @@ function QuickTaskDialog({ open, onClose }: { open: boolean; onClose: () => void
             </div>
             <div>
               <Label htmlFor="qt-due">Due date</Label>
-              <Input id="qt-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+              <Input id="qt-due" ref={dueRef} type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="ghost" onClick={onClose}>Cancel</Button>
             <Button onClick={() => {
+              // A half-typed date is not "no date" (lib/date-input).
+              if (dateInputState(dueRef.current) === "partial") {
+                toast({ title: "Due date isn't finished", description: UNFINISHED_DATE_MESSAGE, variant: "destructive" });
+                dueRef.current?.focus();
+                return;
+              }
               const payload: any = { title: title.trim(), priority };
               if (dueDate) payload.dueDate = dueDate;
               m.mutate(payload);

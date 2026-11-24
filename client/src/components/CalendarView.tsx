@@ -1,5 +1,6 @@
 import { changedFieldsOnly } from "@shared/field-patch";
 import { GridDetailHost } from "@/components/calendar/GridDetailHost";
+import { liveTimelineItem } from "@/lib/calendar-live-item";
 import { formatApiError } from "@/lib/formatError";
 import { setEventOccurrence } from "@/lib/event-occurrence";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -234,6 +235,9 @@ const RECURRENCE_LABELS: Record<string, string> = {
 /** "Bill · $2,400", "Birthday · Yearly", "Task · Weekly": what the thing is, then its one fact. */
 function itemSubtitle(item: CalendarTimelineItem): string {
   const parts = [itemLabel(item)];
+  // A task with no due date sits on the day it was added; say so, or that day
+  // reads as a due date the task does not have.
+  if (isUndatedTask(item)) parts.push("No due date");
   const amount = Number(item.meta?.amount);
   if (Number.isFinite(amount) && amount > 0) {
     parts.push(amount.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: amount % 1 === 0 ? 0 : 2 }));
@@ -243,6 +247,9 @@ function itemSubtitle(item: CalendarTimelineItem): string {
   if (item.location) parts.push(item.location);
   return parts.join(" · ");
 }
+/** A task the timeline placed on its creation day because it has no due date. */
+const isUndatedTask = (item: { type: string; meta?: Record<string, any> }) =>
+  item.type === "task" && item.meta?.undated === true;
 const isRecurring = (item: CalendarTimelineItem) => {
   const r = String(item.meta?.recurrence ?? "");
   return !!r && r !== "none" && r !== "once";
@@ -897,24 +904,27 @@ export function EventDetailDialog({
     },
   });
 
-  const toggleTaskMutation = useMutation<any, Error, void, { prevTimeline: [readonly unknown[], unknown][]; prevTasks: [readonly unknown[], unknown][] }>({
-    mutationFn: async () => {
-      const newStatus = item.completed ? "todo" : "done";
+  // The variable is the state being ASKED for. `item` follows the live
+  // timeline, so by the time the write lands it has already flipped; reading
+  // `item.completed` then announced a completion as "reopened".
+  const toggleTaskMutation = useMutation<any, Error, boolean, { prevTimeline: [readonly unknown[], unknown][]; prevTasks: [readonly unknown[], unknown][] }>({
+    mutationFn: async (newCompleted) => {
+      const newStatus = newCompleted ? "done" : "todo";
       const res = await apiRequest("PATCH", `/api/tasks/${item.sourceId}`, { status: newStatus });
       return res.json();
     },
-    onMutate: async () => {
+    onMutate: async (newCompleted) => {
       // Optimistically flip the calendar timeline item & the underlying task
       await queryClient.cancelQueries({ queryKey: ["/api/calendar/timeline"] });
       await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
       const prevTimeline = queryClient.getQueriesData<any>({ queryKey: ["/api/calendar/timeline"] });
       const prevTasks = queryClient.getQueriesData<any>({ queryKey: ["/api/tasks"] });
-      const newCompleted = !item.completed;
       const newStatus = newCompleted ? "done" : "todo";
       // Calendar timeline: items can live under .items or be the array itself
       queryClient.setQueriesData<any>({ queryKey: ["/api/calendar/timeline"] }, (old: any) => {
         if (!old) return old;
-        const flip = (it: any) => (it && it.sourceId === item.sourceId && (it.kind === "task" || it.type === "task") ? { ...it, completed: newCompleted, status: newStatus } : it);
+        // Only THIS occurrence: a repeating task's other dates stay to do.
+        const flip = (it: any) => (it && it.id === item.id && (it.kind === "task" || it.type === "task") ? { ...it, completed: newCompleted, meta: { ...(it.meta || {}), status: newStatus } } : it);
         if (Array.isArray(old)) return old.map(flip);
         if (Array.isArray(old.items)) return { ...old, items: old.items.map(flip) };
         return old;
@@ -925,8 +935,8 @@ export function EventDetailDialog({
       );
       return { prevTimeline, prevTasks };
     },
-    onSuccess: () => {
-      toast({ title: item.completed ? `"${item.title}" reopened` : `"${item.title}" completed` });
+    onSuccess: (_d, newCompleted) => {
+      toast({ title: newCompleted ? `"${item.title}" completed` : `"${item.title}" reopened` });
     },
     onError: (err: Error, _v: any, ctx: any) => {
       if (ctx?.prevTimeline) { for (const [k, d] of ctx.prevTimeline) queryClient.setQueryData(k, d); }
@@ -954,8 +964,8 @@ export function EventDetailDialog({
             </div>
             <div className="flex-1 min-w-0">
               <DialogTitle className="text-base">{item.title}</DialogTitle>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {fmtDateFull(item.date)}
+              <p className="text-xs text-muted-foreground mt-0.5" data-testid="calendar-detail-date">
+                {isUndatedTask(item) ? `No due date · added ${fmtDateFull(item.date)}` : fmtDateFull(item.date)}
               </p>
             </div>
           </div>
@@ -1012,7 +1022,7 @@ export function EventDetailDialog({
             <div className="flex items-center gap-2">
               <Checkbox
                 checked={item.completed}
-                onCheckedChange={() => toggleTaskMutation.mutate()}
+                onCheckedChange={() => toggleTaskMutation.mutate(!item.completed)}
                 disabled={toggleTaskMutation.isPending}
               />
               <span className="text-sm">
@@ -1554,6 +1564,11 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
       return;
     }
   };
+
+  // The open detail follows the LIVE timeline row, not the snapshot taken at
+  // the tap: after "Mark as done" the dialog must read Completed, the same as
+  // the day panel behind it (owner report 2026-11-24).
+  const liveDetailItem = liveTimelineItem(detailItem, timelineItems);
 
   // Filtered items for the selected date
   const selectedDateItems = itemsByDate[selectedDate] || [];
@@ -2263,15 +2278,15 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
       {/* The grid opens the SAME detail screen as the Recurring list
           (CalendarItemDetail); the dialog below is only the fallback for an
           item the occurrence stream does not carry. */}
-      {detailItem && (
+      {liveDetailItem && (
         <GridDetailHost
-          item={detailItem}
+          item={liveDetailItem}
           onClose={() => setDetailItem(null)}
           fallback={
             <EventDetailDialog
-              open={!!detailItem}
+              open={!!liveDetailItem}
               onClose={() => setDetailItem(null)}
-              item={detailItem}
+              item={liveDetailItem}
               onEdit={handleEditFromDetail}
             />
           }

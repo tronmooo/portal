@@ -53,6 +53,15 @@ green. After a push to `main`:
    `currentAssetValue` (`shared/valuation/context.ts`). Never write
    `fields.currentValue || fields.value || …`.
    *Guard:* `tests/sync-rules-guards.test.ts`.
+   **Text written ABOUT the dashboard is held to its counts.** The AI summary
+   (`POST /api/ai/summary`) is given `briefingFacts` (`shared/dashboard-briefing.ts`):
+   the tiles' own counts (`countTasksByDay`, today's events, the snapshot's
+   bills), from lists that must be present — a missing list throws, it is never
+   a zero. `reconcileBriefing` replaces a paragraph that denies a non-zero
+   count with the plain facts, and the cache key carries the facts'
+   fingerprint. (2026-11-24: "no tasks, overdue items or events" beside
+   "7 tasks due, 1 late" — the route counted keys the payload never had.)
+   *Guard:* `tests/qa-2026-11-24-dashboard-calendar.test.ts`.
 2. **Writes propagate everywhere.** Mutations go through `apiRequest`. The
    server's write manifest patches the cache and invalidates the right
    domains. If you add a server payload computed from other records, declare
@@ -85,7 +94,12 @@ green. After a push to `main`:
    boundaries are history (`isReportingPeriodBoundary`). A newer document of
    the same kind and subject supersedes an older one's alert
    (`markSupersededDocumentRules`). Don't add a stored "resolved" flag.
-   *Guard:* `tests/sync-rules-notifications.test.ts`.
+   A field is an expiration for what it says ENDS, not for the noun it starts
+   with: `warrantyStartDate` (purchase, registration, effective…) is
+   informational (`WARRANTY_ORIGIN_RE`). (2026-11-24: a tyre warranty read
+   "Expired" from its start date.)
+   *Guards:* `tests/sync-rules-notifications.test.ts`,
+   `tests/qa-2026-11-24-dashboard-calendar.test.ts`.
 6. **No stale overwrite.** Don't merge an older row over a newer one
    (`isOlderRow` in `client/src/lib/cache-patch.ts`). Don't do a client
    read-modify-write of a whole array (tags, lists): add a server endpoint
@@ -97,8 +111,25 @@ green. After a push to `main`:
    field that has a `.default()`, so a rename would also write `tags: []`,
    `fields: {}`, `extractedData: {}`, `linkedProfiles: []` over the stored
    values. (2026-11-23, caught while upgrading zod 3 → 4, before it shipped.)
+   **A date is saved whole or not at all.** A native date input reports a
+   value on every keystroke (typing 2026 reports years 2, 20, 202 first) and
+   "" while any part is blank. A date field that SAVES is a `CommitDateInput`
+   (`client/src/components/CommitDateInput.tsx`): a whole day commits, a
+   half-typed one is held, "" clears. Never `onChange={e => mutate(e.target.value)}`
+   on `type="date"`. A form that saves on submit refuses a half-typed date
+   (`dateInputState(...) === "partial"`, `client/src/lib/date-input.ts`) rather
+   than filing the record with no date. (2026-11-24: the task editor sent
+   "0002-11-25", got a 400 and reset; the task stayed Unscheduled.)
+   **The Calendar and the task agree.** A task's occurrence is done by
+   `isTaskOccurrenceDone` (`shared/task-occurrences.ts`): an undated task is
+   done when its row is. An undated task sits on the day it was added and is
+   labelled "No due date" (`meta.undated`), never shown as due that day. The
+   open detail renders the LIVE timeline row (`liveTimelineItem`), not the
+   snapshot from the tap.
    *Guards:* `tests/sync-rules-valuation*.test.*`, `tests/sync-rules-followups.test.ts`,
-   `tests/patch-keeps-unsent-fields.test.ts`.
+   `tests/patch-keeps-unsent-fields.test.ts`, `tests/commit-date-input.dom.test.tsx`,
+   `tests/qa-2026-11-24-dashboard-calendar.test.ts`.
+   *Live check:* `npx tsx tests/live-task-date-and-calendar-check.ts`.
 7. **A failed request is not an empty account.** No `queryFn` may turn a
    failure into `[]`/`null`. Let React Query keep the last good data.
    The server holds the same rule: a list a payload embeds is read with a
