@@ -77,7 +77,9 @@ describe("the Edit dialog is wired to autosave", () => {
   it("saves after typing stops, on leaving a field, and on close", () => {
     expect(body).toMatch(/setTimeout\(\(\) => \{ void flush\(\); \}, 800\)/);
     expect(body).toMatch(/onBlur=\{\(\) => \{ void flush\(\); \}\}/);
-    expect(body).toMatch(/const closeAfterSaving = \(\) => \{ void flush\(\); onClose\(\); \}/);
+    // Done waits for the save (tests/edit-profile-dialog-save.dom.test.tsx).
+    expect(body).toMatch(/const ok = await flush\(\);/);
+    expect(body).not.toMatch(/void flush\(\); onClose\(\)/);
   });
   it("sends only the pending patch, never the whole field map", () => {
     expect(body).toMatch(/apiRequest\("PATCH", `\/api\/profiles\/\$\{profile\.id\}`, patch\)/);

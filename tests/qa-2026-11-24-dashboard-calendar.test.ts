@@ -73,11 +73,17 @@ describe("2 · a completed task is completed on the Calendar", () => {
     expect(isTaskOccurrenceDone({ status: "done", dueDate: "2026-11-25" }, "2026-12-02")).toBe(false);
     expect(isTaskOccurrenceDone({ status: "todo", dueDate: "2026-11-25" }, "2026-11-25")).toBe(false);
   });
-  it("the timeline asks that rule, and marks an undated task as undated", () => {
+  it("the timeline asks that rule, and leaves a task with no due date off the calendar", () => {
     const storage = read("server/supabase-storage.ts");
     expect(storage).toContain("completed: isTaskOccurrenceDone(task, d)");
     expect(storage).not.toMatch(/completed:\s*task\.status === "done" && d ===/);
-    expect(storage).toContain("{ undated: true }");
+    // QA 2026-11-24 (second pass): an undated task was drawn as an all-day
+    // item on the day it was added — on the Calendar and in the Executive
+    // Timeline — while its row said "No due date".
+    const timeline = storage.slice(storage.indexOf("async getCalendarTimeline("));
+    const taskLoop = timeline.slice(timeline.indexOf("for (const task of tasks)"), timeline.indexOf("for (const task of tasks)") + 800);
+    expect(taskLoop).toContain("if (!task.dueDate) continue;");
+    expect(storage).not.toContain("task.dueDate || task.createdAt");
   });
   it("the open detail follows the live timeline row, not the snapshot from the tap", () => {
     const opened = { id: "task-1", completed: false };

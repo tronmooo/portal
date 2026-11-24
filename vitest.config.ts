@@ -12,6 +12,9 @@ export default defineConfig({
     environment: 'node',
     include: [
       'tests/workflow-matrix.test.ts',
+      'tests/qa-2026-11-24b-findings.dom.test.tsx',
+      'tests/bills-timeline-debts.test.ts',
+      'tests/edit-profile-dialog-save.dom.test.tsx',
       'tests/bills-all-tab.dom.test.tsx',
       'tests/chat-tool-sweep-2026-11-24.test.ts',
       'tests/scope-ready.dom.test.ts',

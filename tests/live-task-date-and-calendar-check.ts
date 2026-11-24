@@ -2,8 +2,9 @@
 //   1. a due date TYPED into the task editor is saved whole, in one write
 //      (it used to send "0002-11-25" on the first year digit and reset);
 //   2. a task completed from the Calendar reads completed there at once —
-//      the day panel's count and the open dialog — dated or not, and a task
-//      with no due date is labelled "No due date";
+//      the day panel's count and the open dialog — and a task with no due
+//      date is not on the Calendar at all (QA 2026-11-24, second pass: it was
+//      drawn as an all-day item on the day it was added);
 //   3. a warranty's START date raises no expired-document alert (its
 //      expiration still does);
 //   4. the AI summary is given the dashboard's own counts and does not deny
@@ -88,12 +89,16 @@ async function main() {
     const notes = list(await api("GET", "/notifications"), "notifications");
     check(!notes.some((n) => n.entityId === started.data.id || String(n.title || "").includes(`Start ${tag}`)), "the bell raises nothing for the start date");
 
-    // ── 2 · an undated task on the Calendar ──────────────────────────────
-    const undated = await api("POST", "/tasks", { title: `Pack tripod ${tag}`, priority: "medium", status: "todo" });
+    // ── 2 · an undated task is not on the Calendar; a dated one completes ─
+    const undated = await api("POST", "/tasks", { title: `Check tripod screws ${tag}`, priority: "medium", status: "todo" });
     if (!undated.ok) throw new Error(`could not create the task: ${undated.status}`);
     taskIds.push(undated.data.id);
-    const before = await timelineItems(undated.data.id);
-    check(before.length === 1 && before[0].meta?.undated === true && before[0].completed === false, "the timeline marks the task as undated (and not done)");
+    check((await timelineItems(undated.data.id)).length === 0, "the timeline leaves a task with no due date off the calendar");
+    const dated = await api("POST", "/tasks", { title: `Pack tripod ${tag}`, priority: "medium", status: "todo", dueDate: today });
+    if (!dated.ok) throw new Error(`could not create the task: ${dated.status}`);
+    taskIds.push(dated.data.id);
+    const before = await timelineItems(dated.data.id);
+    check(before.length === 1 && before[0].date === today && before[0].completed === false, "the timeline has the dated task on its day (and not done)");
 
     // ── 4 · the AI summary is given the dashboard's counts ───────────────
     const tasksNow = list(await api("GET", "/tasks"), "tasks").filter((x) => !isTestDataRow(x.title) && !isTestDataRow(x.description));
@@ -124,18 +129,17 @@ async function main() {
     await page.click(t("button-signin"));
     await page.waitForSelector(t("page-dashboard"), { timeout: 30000 });
 
-    // Calendar: the undated task is labelled, then completed from its dialog.
+    // Calendar: the undated task is not there; the dated one is completed from its dialog.
     await page.goto(`${UI_BASE}/#/calendar`);
-    const row = page.locator(t(`agenda-item-task-${undated.data.id}`));
+    const row = page.locator(t(`agenda-item-task-${dated.data.id}`));
     await row.waitFor({ timeout: 30000 });
-    check(/No due date/.test(await row.innerText()), "Calendar: the row says \"No due date\"");
+    check((await page.locator(t(`agenda-item-task-${undated.data.id}`)).count()) === 0, "Calendar: the task with no due date is not on today");
     const agenda = page.locator(t("section-day-agenda"));
     const doneCount = async () => Number((/(\d+) completed/.exec(await agenda.innerText()) || [])[1] ?? NaN);
     const doneBefore = await doneCount();
     await row.click();
     const dialog = page.getByRole("dialog");
     await dialog.waitFor({ timeout: 15000 });
-    check(/No due date/.test(await dialog.locator(t("calendar-detail-date")).innerText()), "Calendar: the dialog says \"No due date\", not a due day");
     check(/Mark as done/.test(await dialog.innerText()), "Calendar: the open task offers Mark as done");
     await dialog.getByRole("checkbox").click();
     await page.getByText(new RegExp(`Pack tripod ${tag}.*completed`)).first().waitFor({ timeout: 20000 });
@@ -144,8 +148,8 @@ async function main() {
     const dialogText = await dialog.innerText();
     check(/Completed/.test(dialogText) && !/Mark as done/.test(dialogText), "Calendar: the dialog reads Completed after the write and its refetch");
     check((await doneCount()) === doneBefore + 1, `Calendar: the day panel counts it (${doneBefore} → ${await doneCount()} completed)`);
-    const after = await timelineItems(undated.data.id);
-    check(after.length === 1 && after[0].completed === true, "the timeline says the undated task is completed");
+    const after = await timelineItems(dated.data.id);
+    check(after.length === 1 && after[0].completed === true, "the timeline says the task is completed");
     await page.keyboard.press("Escape");
 
     // Dashboard: type a due date into the task editor, digit by digit.
