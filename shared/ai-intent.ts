@@ -537,6 +537,16 @@ const ANAPHORA: RegExp[] = [
   /\b(?:do|make|create|add|log|run|repeat|try)\s+(?:it|that|those|them|the\s+same)\b/,
   // "delete that", "change it", "rename those"
   /\b(?:delete|remove|change|update|edit|rename|fix|move|cancel|finish|complete)\s+(?:it|that|those|them|the\s+(?:last|previous|first|one))\b/,
+  // "mark that done", "mark it as done", "check that off", "cross it off",
+  // "I finished it", "pay it", "skip that", "push it back a week", "set it to
+  // 5pm": the thing was named in the turn before, and the user is now saying
+  // what to do with it. Only complete / finish (present tense) were listed,
+  // so the three most natural ways to finish a task just added were refused
+  // as a replay of the earlier message ("I'm being blocked from completing
+  // the task due to a system restriction", chat variations, 2026-11-24).
+  /\b(?:mark|check|cross|tick|pay|paid|skip|pause|resume|archive|restore|reschedule|postpone|push|bump|snooze|set|put|finished|completed|did|done\s+with|close|reopen|uncheck|unmark)\s+(?:it|that|this|those|these|them)\b/,
+  // "that's done", "it is finished", "those are paid"
+  /\b(?:it|that|this|those|these|they)(?:'s|'re|\s+is|\s+are|\s+was|\s+were)\s+(?:all\s+)?(?:done|finished|complete|completed|paid|handled|taken\s+care\s+of)\b/,
   /\b(?:that|the)\s+one\b/,
   /\b(?:i\s+)?just\s+(?:made|created|added|did|logged)\b/,
   /\b(?:previous|earlier|last\s+one|same\s+(?:one|thing|as))\b/,
