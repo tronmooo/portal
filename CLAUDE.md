@@ -803,7 +803,7 @@ summary then evaluation"):
    `stampSalvageProvenance`) is theirs and never replaced; removing it hands
    it back to the AI. The salvage keys are valuation OUTPUTS
    (`PRIOR_VALUATION_KEYS`), never inputs. No model, no figure — never a guess.
-   *Guard:* `tests/asset-salvage-ai.test.ts`.
+   *Guard:* `tests/asset-salvage-ai.test.ts`. *Live:* `npx tsx tests/live-salvage-check.ts`.
 2. **AI Asset Summary** (`AISummaryCard compact`) — a title and the text. The
    text is three short sentences: what it is worth, how much it has
    depreciated, and WHEN it would make sense to sell or replace it, with the
