@@ -16,7 +16,7 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 616. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 617. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -446,9 +446,9 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `GET /api/goals` | yes | 2 | 2 |
+| `GET /api/goals` | yes | 2 | 3 |
 | `POST /api/goals` | yes | 2 | 3 |
-| `DELETE /api/goals/:id` | yes | **0** | 2 |
+| `DELETE /api/goals/:id` | yes | **0** | 3 |
 | `GET /api/goals/:id` | **no** | **0** | 1 |
 | `PATCH /api/goals/:id` | yes | 1 | 1 |
 | `POST /api/goals/:id/restore` | **no** | **0** | 1 |
