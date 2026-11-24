@@ -1042,9 +1042,12 @@ build-your-own order is its ingredients (`restaurantBuildPhrases`: "no X"
 leaves X out, "double" is two). With no record, the estimate says what ONE
 serving holds and the server scales it by a stated weight
 (`amountFromStatedWeight`); only then does an estimate replace the figures
-already on the entry. The lookup runs INSIDE the chat turn (bounded,
-`IN_TURN_LOOKUP_MS`) so the reply quotes the stored figures; the after-reply
-pass is only what ran out of time. Needs `FDC_API_KEY` in the deployment
+already on the entry. The chat turn itself does only the table lookup
+(microseconds); the databases are asked AFTER the reply is on screen (the
+client posts the candidate back), because asking inside the turn took a food
+log from 3.6 s to 5.6 s and a three-food sentence from 6.9 s to 14.3 s
+(measured 2026-11-25; `NUTRITION_INTURN_LOOKUP=1` turns it on). Never put a
+network lookup back in the turn without measuring it. Needs `FDC_API_KEY` in the deployment
 (`GET /api/nutrition/sources` says whether it is set); without it USDA's
 shared demo key allows 10 requests an hour and generic foods fall to estimates.
 **N1b. A scanned label is read, shown, then logged.** `Scan label` in the

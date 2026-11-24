@@ -88,7 +88,12 @@ async function attachEnrichmentCandidate(entry: any, tracker: { id: string; name
         // The tables could not pin it: ask the food databases NOW, inside the
         // turn, so the reply quotes the figures that are stored. Bounded; when
         // it runs out of time the after-reply pass still has its turn.
-        if (needsMore && sync.status !== "failed" && process.env.NUTRITION_INTURN_LOOKUP !== "0") {
+        // OFF unless NUTRITION_INTURN_LOOKUP=1: measured on the preview
+        // (2026-11-25) it took a food log from a 3.6 s median to 5.6 s and a
+        // three-food sentence from 6.9 s to 14.3 s. The reply goes out at once
+        // and the lookup runs right after it (the client posts the candidate
+        // back), exactly as before.
+        if (needsMore && sync.status !== "failed" && process.env.NUTRITION_INTURN_LOOKUP === "1") {
           const full = await enrichNutritionEntry(storage, { entryId: entry.id, trackerId: tracker.id, entry, tracker: tracker as any, message: candidate.message, deps: { deadlineMs: IN_TURN_LOOKUP_MS } }).catch(() => null);
           if (full) logger.info("ai", `In-turn database lookup [${tracker.name}]: ${full.status}${full.reason ? ` (${full.reason})` : ""} in ${full.ms}ms`);
           if (full?.status === "applied" && full.enrichment && full.entry) {
