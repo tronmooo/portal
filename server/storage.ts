@@ -9,6 +9,7 @@ import { searchCorpus } from "@shared/search-match";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
+import { rederiveEditedEntry } from "@shared/entry-rederive";
 import { analyzeFitnessEntry, calorieContextForOwner, caloriesForStoredEntry, type CalorieContext } from "@shared/fitness-metrics";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { formatMoneyMajor } from "@shared/money";
@@ -1489,12 +1490,23 @@ export class MemStorage implements IStorage {
     const idx = tracker.entries.findIndex(e => e.id === entryId);
     if (idx === -1) return undefined;
     const existing = tracker.entries[idx];
+    // Parity with SupabaseStorage: a derived figure the user did not touch is
+    // derived again from the edited entry (shared/entry-rederive).
+    const rederived = rederiveEditedEntry({
+      trackerName: tracker.name,
+      storedValues: existing.values,
+      enrichment: (existing.computed as any)?.enrichment,
+      patchValues: patch.values,
+      valuesToDelete: (patch as any).valuesToDelete,
+      ctx: { category: tracker.category, fields: tracker.fields as any },
+    });
     const updated: TrackerEntry = {
       ...existing,
       // Parity with SupabaseStorage: provenance written by the enrichment
       // layers merges into computed and survives the edit.
-      computed: { ...(existing.computed || {}), ...(patch.computed || {}) } as any,
+      computed: { ...(existing.computed || {}), ...(rederived ? { enrichment: rederived.enrichment } : {}), ...(patch.computed || {}) } as any,
       values: (() => {
+        if (rederived) return rederived.values;
         const merged = patch.values ? { ...existing.values, ...patch.values } : { ...existing.values };
         // Parity with SupabaseStorage: `valuesToDelete` names keys to drop.
         for (const k of ((patch as any).valuesToDelete || [])) delete (merged as any)[k];

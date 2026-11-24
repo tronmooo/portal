@@ -3565,16 +3565,17 @@ function EntryEditor({
   const [newFieldValue, setNewFieldValue] = useState("");
 
   const editMutation = useMutation<any, Error, Record<string, any>, { prev: [readonly unknown[], unknown][] }>({
-    mutationFn: (vals: Record<string, any>) => {
+    mutationFn: async (vals: Record<string, any>) => {
       // Keys that existed on the entry but are gone from the final values →
       // explicit delete signal. Remaining keys are upserted.
       const orig = Object.keys(entry.values || {}).filter((k) => k !== "_notes");
       const valuesToDelete = orig.filter((k) => !(k in vals));
-      return apiRequest("PATCH", `/api/trackers/${tracker.id}/entries/${entry.id}`, {
+      const res = await apiRequest("PATCH", `/api/trackers/${tracker.id}/entries/${entry.id}`, {
         values: vals,
         valuesToDelete,
         notes: editNotes,
       });
+      return res.json().catch(() => null);
     },
     // Optimistic: rebuild the entry's values from the final values so adds, edits
     // AND deletes reflect instantly. Roll back if the server rejects. Handles
@@ -3605,7 +3606,21 @@ function EntryEditor({
       onClose();
       return { prev };
     },
-    onSuccess: () => {
+    onSuccess: (saved: any) => {
+      // The server's row is the entry now: it re-derives what follows from
+      // the edit (pace and speed from a new distance, the calorie estimate),
+      // which the optimistic row above cannot know. Written straight into the
+      // lists so the history row and the card agree before the refetch lands.
+      if (saved && typeof saved === "object" && saved.id === entry.id && saved.values && typeof saved.values === "object") {
+        queryClient.setQueriesData({ queryKey: ["/api/trackers"] }, (old: any) => {
+          const put = (t: any) => (t?.id !== tracker.id || !Array.isArray(t.entries)
+            ? t
+            : { ...t, entries: t.entries.map((e: any) => (e?.id === saved.id ? { ...e, ...saved } : e)) });
+          if (Array.isArray(old)) return old.map(put);
+          if (old && typeof old === "object" && old.id === tracker.id) return put(old);
+          return old;
+        });
+      }
       toast({ title: "Entry updated" });
     },
     onError: (err: Error, _vars, context) => {

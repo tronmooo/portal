@@ -57,12 +57,14 @@ const TASKS = [
 const ALL: CalendarSeries[] = [...seriesFromEvents(EVENTS), ...seriesFromTasks(TASKS)];
 const onClose = vi.fn();
 
-function mount(seriesId: string) {
+function mount(seriesId: string, tappedDate?: string) {
   const series = ALL.find((s) => s.id === seriesId)!;
   const occ = generateSeriesOccurrences(series, {
     todayISO: TODAY, lookbackDays: 62, requireComplete: seriesId === "event:ev-trash",
   });
-  const open = occ.find((o) => o.effectiveDate >= TODAY && o.status !== "done" && o.status !== "skipped")!;
+  const open = tappedDate
+    ? occ.find((o) => o.date === tappedDate)!
+    : occ.find((o) => o.effectiveDate >= TODAY && o.status !== "done" && o.status !== "skipped")!;
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, queryFn: async () => [] } } })}>
       <CalendarItemDetail occurrence={open} seriesOccurrences={occ} todayISO={TODAY}
@@ -273,6 +275,51 @@ describe("Edit Event", () => {
     fireEvent.click(screen.getByTestId("cal-edit-save"));
     await waitFor(() => expect(writes().length).toBe(1));
     expect(writes()[0]).toEqual({ m: "PATCH", u: "/api/events/ev-kelly", b: { title: "Kelly's Bday" } });
+  });
+});
+
+// QA 2026-11-24: the December 8 date of a weekly series was tapped; More →
+// Edit opened the series' editor dated December 1, with nothing saying the
+// change was for every date and no way to the one date that was opened.
+describe("one date of a series was tapped: Edit says how far it reaches (O4)", () => {
+  it("More offers changing only that date, and names the other Edit as the series", () => {
+    mount("event:ev-trash", "2026-12-07");
+    expect(screen.getByTestId("cal-detail-selected").textContent).toContain("Dec 7, 2026");
+    fireEvent.click(screen.getByTestId("cal-action-more"));
+    expect(screen.getByTestId("cal-more-edit-one").textContent).toContain("Change only Dec 7, 2026");
+    expect(screen.getByTestId("cal-more-edit").textContent).toContain("Edit series");
+    expect(screen.getByTestId("cal-more-edit").textContent).toContain("for every date");
+
+    // It leads to that date's own actions, and the list says whose they are.
+    fireEvent.click(screen.getByTestId("cal-more-edit-one"));
+    expect(screen.getByTestId("cal-action-sheet-title").textContent).toBe("Dec 7, 2026");
+    expect(screen.getByTestId("cal-action-sheet-scope").textContent).toBe("Only this date");
+    expect(screen.getByTestId("cal-menu-move").textContent).toContain("Move just this occurrence");
+    expect(writes()).toEqual([]);
+  });
+
+  it("the series editor says it changes every date and leads back to the one date", async () => {
+    mount("event:ev-trash", "2026-12-07");
+    fireEvent.click(screen.getByTestId("cal-action-more"));
+    fireEvent.click(screen.getByTestId("cal-more-edit"));
+    await waitFor(() => expect((screen.getByTestId("cal-edit-title") as HTMLInputElement).value).toBe("Trash day"));
+    expect(screen.getByTestId("cal-edit-scope").textContent).toContain("every date in this series");
+    expect(screen.getByText("Series starts")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("cal-edit-only-date"));
+    // Still the same sheet, on that date's actions — nothing closed, nothing written.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("cal-action-sheet-title").textContent).toBe("Dec 7, 2026");
+    fireEvent.click(screen.getByTestId("cal-menu-move"));
+    expect((screen.getByTestId("cal-move-date") as HTMLInputElement).value).toBe("2026-12-07");
+    expect(writes()).toEqual([]);
+  });
+
+  it("a one-time item keeps a plain Edit and offers no per-date row", () => {
+    mount("event:ev-kelly");
+    fireEvent.click(screen.getByTestId("cal-action-more"));
+    // A birthday has nothing to do to one date: no row that leads nowhere.
+    expect(screen.queryByTestId("cal-more-edit-one")).toBeNull();
   });
 });
 

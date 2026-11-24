@@ -54,6 +54,7 @@ export default defineConfig({
       'tests/chart-data.test.ts',
       'tests/tracker-normalize.test.ts',
       'tests/tracker-entry-update.test.ts',
+      'tests/tracker-entry-rederive.test.ts',
       'tests/tracker-read-no-write.test.ts',
       'tests/scoped-child-query.test.ts',
       'tests/create-tracker-universal.test.ts',

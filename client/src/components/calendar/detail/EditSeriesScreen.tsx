@@ -55,6 +55,10 @@ export interface EditSeriesScreenProps {
   onSaved: (info: { split: boolean }) => void;
   /** The series was deleted or paused and has nothing left to show. */
   onGone: () => void;
+  /** The one date the user opened this from, when the series has others. */
+  onlyDate?: string;
+  /** Leave this screen for that one date's own actions (move, skip, remove). */
+  onEditOnly?: () => void;
 }
 
 interface FormState {
@@ -150,11 +154,13 @@ const labelCls = "block text-[13px] font-semibold mb-1.5";
 
 export function EditSeriesScreen({
   series, mode, fromDate, initialTab = "details", accent, todayISO, getEventRow, onBack, onSaved, onGone,
+  onlyDate, onEditOnly,
 }: EditSeriesScreenProps) {
   const { toast } = useToast();
   const isTask = series.source.system === "task";
   const id = series.source.id;
   const noun = isTask ? "Task" : "Event";
+  const seriesRepeats = !!series.recurrence && series.recurrence !== "none";
 
   const rowQuery = useQuery<any>({
     queryKey: [isTask ? `/api/tasks/${id}` : `/api/events/${id}`],
@@ -406,7 +412,7 @@ export function EditSeriesScreen({
           <ArrowLeft className="h-5 w-5" />
         </button>
         <h2 className="flex-1 text-center text-lg font-bold tracking-tight">
-          {mode === "future" ? "Edit Future" : `Edit ${noun}`}
+          {mode === "future" ? "Edit Future" : seriesRepeats ? "Edit Series" : `Edit ${noun}`}
         </h2>
         <button type="button" onClick={() => void save()}
           disabled={!form || !!problem || saving || (!dirty && mode !== "future")}
@@ -435,6 +441,23 @@ export function EditSeriesScreen({
             Changes apply from <span className="font-semibold text-foreground">{fmtShort(fromDate)}</span> forward.
             Earlier occurrences keep their dates and history.
           </p>
+        )}
+        {/* How far this screen reaches (O4). Opened from one date of a series,
+            "Edit" used to show the series' first date with nothing saying the
+            change was for every date, and no way to the one that was tapped. */}
+        {mode === "series" && seriesRepeats && (
+          <div className="rounded-xl border border-border bg-muted/40 px-3.5 py-2.5 text-[13px] text-muted-foreground" data-testid="cal-edit-scope">
+            <p>
+              Changes here apply to <span className="font-semibold text-foreground">every date in this series</span>.
+            </p>
+            {onlyDate && onEditOnly && (
+              <button type="button" onClick={onEditOnly}
+                className="mt-1.5 inline-flex items-center gap-1 font-semibold text-[hsl(var(--accent-hsl))] hover:underline"
+                data-testid="cal-edit-only-date">
+                Change only {fmtShort(onlyDate)} instead
+              </button>
+            )}
+          </div>
         )}
 
         {rowQuery.isError && !form ? (
@@ -480,7 +503,7 @@ export function EditSeriesScreen({
                 <div className={isTask ? "grid grid-cols-2 gap-3" : ""}>
                   <div>
                     <label className={labelCls} htmlFor="cal-edit-date">
-                      {mode === "future" ? "Applies from" : isTask ? "Next due" : "Date"}
+                      {mode === "future" ? "Applies from" : isTask ? "Next due" : seriesRepeats ? "Series starts" : "Date"}
                     </label>
                     <input id="cal-edit-date" type="date" className={fieldCls} value={form.date}
                       onChange={(e) => set("date", e.target.value)} data-testid="cal-edit-date" />

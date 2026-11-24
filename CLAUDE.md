@@ -218,6 +218,18 @@ green. After a push to `main`:
     *Guards:* `tests/tracker-create-no-duplicates.test.ts`,
     `tests/bp-heart-rate-split.test.ts`.
 
+11b. **An edit re-derives what was derived.** Pace, speed, steps and the
+    calorie estimate the engine filled into an entry (its provenance,
+    `computed.enrichment`) are the engine's until the user changes THAT
+    figure: `updateTrackerEntry` drops every derived value the edit left
+    alone and derives it again from the edited entry (`rederiveEditedEntry`,
+    `shared/entry-rederive.ts`, both storages). The edit form sends every
+    field it shows, so merging them back stored the old figures as if typed.
+    The form writes the server's row into the lists on success. (QA,
+    2026-11-24: a run changed from 1.25 to 1.5 miles kept "11:12/mi · 5.36
+    mph" in its history row while the card said 9:20.)
+    *Guard:* `tests/tracker-entry-rederive.test.ts`.
+
 11a. **One food = one entry.** Every separate food or drink the user reports
     is its own Nutrition entry with its own numbers ("a banana and a
     doughnut" = two). The chat prompt asks the model for one log per food,
@@ -993,6 +1005,11 @@ Never PATCH a rebuilt `tags` array from the client.
 offers is `occurrenceMenuFor` (a birthday: nothing; a task: only its open
 occurrence can be completed). Never render a disabled button whose reason is
 a tooltip. Each action says how far it reaches (`hint`).
+On one date of a series, the More menu leads with "Change only <date>" (that
+date's own actions) and the other row reads "Edit series … for every date";
+the series editor says it changes every date, labels its date "Series starts"
+and links back to the one date (`onEditOnly`). (QA, 2026-11-24: December 8
+was tapped and Edit opened a form dated December 1, with nothing for the 8th.)
 **O5. History is derived** (`shared/occurrence-history.ts`) from the marks
 and rows the series already has (Rule 5). No stored outcome table.
 **O6. Edit happens where the schedule lives** (`editsInPlace`): an event and
