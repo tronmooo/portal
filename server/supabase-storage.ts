@@ -4,7 +4,8 @@ import {
   valuationKey, valuationHistoryKey, readValuationRecord, readValuationHistory,
   appendValuationHistory, VALUATION_HISTORY_LIMIT, understandingKey, readUnderstanding,
 } from "./valuation/storage-codec";
-import { writeWithOptionalColumns } from "./optional-columns";
+import { writeWithOptionalColumns, isMissingColumnError } from "./optional-columns";
+import { EXPECTED_COLUMNS, EXPECTED_TABLES, isMissingSchemaError, type SchemaGap } from "../shared/schema-expectations";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { dedupeActivityRows } from "@shared/activity-description";
 import { randomUUID, createHash } from "crypto";
@@ -5836,10 +5837,22 @@ export class SupabaseStorage implements IStorage {
     if (!linkedTrackerId) return null;
     // Fail CLOSED: any doubt means the tracker stays. (A lookup error once
     // made the `every` below vacuously true and retired a user's own tracker.)
-    const [{ data: tracker, error: tErr }, { data: entries, error: eErr }] = await Promise.all([
-      this.supabase.from("trackers").select("name, linked_habit_id").eq("id", linkedTrackerId).eq("user_id", this.userId).maybeSingle(),
+    const readTracker = (cols: string) =>
+      this.supabase.from("trackers").select(cols).eq("id", linkedTrackerId).eq("user_id", this.userId).maybeSingle();
+    let [{ data: tracker, error: tErr }, { data: entries, error: eErr }] = await Promise.all([
+      readTracker("name, linked_habit_id") as PromiseLike<{ data: any; error: any }>,
       this.supabase.from("tracker_entries").select("entry_values").eq("tracker_id", linkedTrackerId).eq("user_id", this.userId).is("deleted_at", null).limit(500),
     ]);
+    // A database that has not run migrations/20260922 has no stamp column.
+    // That is not doubt about THIS tracker: read it without the stamp and let
+    // the entries and the name decide, as they did before the stamp existed.
+    // (2026-11-24: production had never received the migration, this read
+    // failed for every habit, and "fail closed" meant no deleted habit ever
+    // took its tracker with it.)
+    if (tErr && isMissingColumnError(tErr)) {
+      console.warn(`[habitMirrorTrackerId] trackers.linked_habit_id is missing (${tErr.message}); deciding without the stamp`);
+      ({ data: tracker, error: tErr } = await readTracker("name") as { data: any; error: any });
+    }
     if (tErr || eErr || !tracker) return null;
     // Rules 19/20: the RELATIONSHIP decides mirror-hood. A tracker stamped as
     // another habit's mirror is never this one's, whatever its entries say.
@@ -5851,10 +5864,31 @@ export class SupabaseStorage implements IStorage {
     // An EMPTY tracker is only a mirror if it is the one auto-created for this
     // habit: stamped with its id (migrations/20260922), or — for a legacy
     // mirror created before the stamp existed — still carrying the habit's
-    // name. A tracker the user made and linked, with nothing logged yet, is
-    // theirs.
-    if (rows.length === 0 && stampedFor !== habitId && String(tracker.name || "").trim() !== String(habitName || "").trim()) return null;
+    // name. The mirror's name is the habit's name re-cased by the tracker
+    // namer ("stretch" → "Stretch"), so the comparison ignores case and
+    // spacing. A tracker the user made and linked, with nothing logged yet
+    // and a name of its own, is theirs.
+    const sameName = (a: unknown, b: unknown) =>
+      String(a || "").trim().replace(/\s+/g, " ").toLowerCase() === String(b || "").trim().replace(/\s+/g, " ").toLowerCase();
+    if (rows.length === 0 && stampedFor !== habitId && !sameName(tracker.name, habitName)) return null;
     return linkedTrackerId;
+  }
+
+  /** Which of the migrations' tables and columns this database lacks
+   *  (shared/schema-expectations.ts). Reads no rows. */
+  async probeSchema(): Promise<SchemaGap[]> {
+    const gaps: SchemaGap[] = [];
+    const probe = async (table: string, column: string) =>
+      (await this.supabase.from(table).select(column, { head: true, count: "exact" }).limit(1)).error;
+    await Promise.all([
+      ...EXPECTED_TABLES.map(async (t) => {
+        if (isMissingSchemaError(await probe(t.table, "*"))) gaps.push({ kind: "table", table: t.table, migration: t.migration });
+      }),
+      ...EXPECTED_COLUMNS.map(async (c) => {
+        if (isMissingSchemaError(await probe(c.table, c.column))) gaps.push({ kind: "column", table: c.table, column: c.column, migration: c.migration });
+      }),
+    ]);
+    return gaps.sort((a, b) => `${a.table}.${a.column || ""}`.localeCompare(`${b.table}.${b.column || ""}`));
   }
 
   async deleteHabit(id: string): Promise<boolean> {

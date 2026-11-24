@@ -41,6 +41,23 @@ green. After a push to `main`:
   (`acquireGateLock`, `tests/smoke/fixture/gate-lock.ts`) while it writes.
   Any new script that writes as the smoke account must take it too.
   *Guard:* `tests/live-gate-rate-limit.test.ts`.
+- **A merged migration is not an applied migration.** Twice a file in
+  `migrations/` was never run on production and the code's "safe" fallback
+  hid it (2026-11-09: two months of chat actions unrecorded; 2026-11-24:
+  `trackers.linked_habit_id` and `auth_rate_limits` missing — a deleted habit
+  left its tracker behind and the shared sign-in limit was not in force).
+  Everything a migration adds is listed in `shared/schema-expectations.ts`;
+  `GET /api/diagnostics/schema` names what the database lacks. After applying
+  a migration, and after a deploy: `npx tsx tests/live-schema-drift-check.ts`.
+  A fallback for a missing optional column must keep the feature working
+  (`isMissingColumnError`), not switch it off.
+  *Guard:* `tests/schema-expectations.test.ts`.
+- **Every door into the app is in the workflow matrix**
+  (`docs/WORKFLOW_MATRIX.md`, from `npx tsx scripts/gen-workflow-matrix.ts`):
+  each API route, chat tool and screen with the tests that reference it. A
+  new route or tool must be placed in a domain. Live workflow checks
+  (`tests/live-*-workflows-check.ts`) share `tests/helpers/live-workflow.ts`.
+  *Guard:* `tests/workflow-matrix.test.ts`.
 - Node version: `.nvmrc` → `package.json` `engines.node` (what Vercel builds
   with) → every workflow (`node-version-file`). Change all of them together;
   `tests/ops-guards.test.ts` enforces it.

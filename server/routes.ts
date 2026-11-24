@@ -4551,6 +4551,16 @@ ${JSON.stringify(ctx, null, 2)}`;
   // count of entity rows for this user whose JSONB linked_profiles disagrees
   // with the matching profile_<type> junction table. After Stage 2 backfill
   // this is 0 everywhere; the smoke contract asserts it stays 0.
+  // Which tables / columns the migrations add are missing from this database
+  // (shared/schema-expectations.ts). Names only, no rows.
+  app.get("/api/diagnostics/schema", asyncHandler(async (_req, res) => {
+    if (typeof (storage as any).probeSchema !== "function") {
+      return res.status(501).json({ error: "not implemented" });
+    }
+    const missing = await (storage as any).probeSchema();
+    res.json({ ok: missing.length === 0, missing });
+  }));
+
   app.get("/api/diagnostics/ownership-consistency", asyncHandler(async (req, res) => {
     if (typeof (storage as any).getOwnershipConsistency !== "function") {
       return res.status(501).json({ error: "not implemented" });
@@ -9502,6 +9512,9 @@ Rules:
   app.post("/api/artifacts/:id/toggle/:itemId", asyncHandler(async (req, res) => {
     const result = await storage.toggleChecklistItem(req.params.id, req.params.itemId);
     if (!result) return res.status(404).json({ error: "Not found" });
+    // The storage answers the artifact unchanged when the item is not on it
+    // (a stale id): that is "not found", not a successful tick.
+    if (!(result.items || []).some((i) => i.id === req.params.itemId)) return res.status(404).json({ error: "Checklist item not found" });
     const uid_a3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_a3}`); bustCache(`stats:${uid_a3}`);
     res.json(result);
