@@ -31,6 +31,8 @@ import {
   List,
   Home,
   Calendar,
+  CalendarCheck,
+  CalendarPlus,
   CreditCard,
   Landmark,
   Shield,
@@ -49,7 +51,9 @@ import { userVisibleTags } from "@shared/system-tags";
 import { documentHasFile } from "@shared/document-file";
 import EditableTitle from "@/components/EditableTitle";
 import { hashNavigate } from "@/lib/hashNavigate";
-import { classifyDateField, bareDateOf, daysBetweenISO, countdownLabel } from "@shared/date-rules";
+import { classifyDateField, bareDateOf, daysBetweenISO, countdownLabel, rulesFromDocuments, CALENDAR_OPT_OUT_KEY, normalizeFieldKey, type DateRule } from "@shared/date-rules";
+import { isSystemFieldKey } from "@shared/system-fields";
+import { readSmartFill, SMART_FILL_KEY, type SmartFillRecord } from "@shared/smart-fill-fields";
 import { UPCOMING_WINDOW_DAYS } from "@shared/extraction-calendar";
 
 // PDF.js renderer is code-split — only loaded when a PDF is actually viewed.
@@ -110,6 +114,94 @@ function getDateFieldStatus(key: string, value: any, docContext?: string): {
     tone: days < 0 ? "past" : days <= UPCOMING_WINDOW_DAYS ? "soon" : "ok",
     label: countdownLabel(iso, today, cls.ruleType),
   };
+}
+
+/**
+ * The fields the page lists as the document's data: its own extracted fields,
+ * without the bookkeeping keys (`_calendarOptOut`, `_docFields`…) and without
+ * the Smart Fill record, which is listed as its filled fields instead.
+ */
+function visibleEntries(doc: Document, smartFill: SmartFillRecord | null): [string, any][] {
+  return Object.entries(doc.extractedData || {})
+    .filter(([k]) => !isSystemFieldKey(k) && !(smartFill && k === SMART_FILL_KEY));
+}
+
+/**
+ * The Date Rule the engine derives from each of this document's fields, by
+ * field path. The calendar draws exactly these rules (seriesFromDateRules over
+ * rulesFromAll), so a rule here IS the date on the calendar: nothing is
+ * created to put it there, and a second event would be a duplicate.
+ */
+function useDocumentDateRules(doc: Document): Map<string, DateRule> {
+  return useMemo(() => {
+    const out = new Map<string, DateRule>();
+    try {
+      for (const r of rulesFromDocuments([doc])) {
+        if (r.active && r.sourcePath && !out.has(r.sourcePath)) out.set(r.sourcePath, r);
+      }
+    } catch { /* a malformed field never takes the page down */ }
+    return out;
+  }, [doc]);
+}
+
+const optOutNorm = (v: unknown) => String(v ?? "").split(".").map(normalizeFieldKey).filter(Boolean).join(".");
+
+/**
+ * Whether a dated field is on the calendar, and the way to it.
+ *
+ * A document's expiration (renewal, due date…) is put on the calendar by the
+ * Date Rule engine on its own (Rule 5) — so the honest answer is "On your
+ * calendar" with a link to that day, never an "Add" that would file a second
+ * event beside it. Only a date the user kept OFF the calendar during
+ * extraction review (`_calendarOptOut`) offers "Add to calendar", and that tap
+ * — nothing else (Rule 3) — takes it off the opt-out list, which puts the
+ * same derived date back (QA 2026-11-24, #16).
+ */
+function CalendarPresence({
+  doc,
+  fieldKey,
+  rule,
+  onUpdate,
+  isUpdating,
+}: {
+  doc: Document;
+  fieldKey: string;
+  rule: DateRule;
+  onUpdate: (patch: Partial<Document>) => void;
+  isUpdating: boolean;
+}) {
+  if (rule.calendarVisible) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); hashNavigate(`/calendar?date=${rule.date}`); }}
+        className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+        title="Open the calendar on this day"
+        data-testid={`calendar-on-${fieldKey}`}
+      >
+        <CalendarCheck className="h-3 w-3 shrink-0" />
+        On your calendar · {formatFullDate(rule.date)}
+      </button>
+    );
+  }
+  const addBack = () => {
+    const current = (doc.extractedData || {})[CALENDAR_OPT_OUT_KEY];
+    const drop = new Set([optOutNorm(rule.sourcePath), optOutNorm(fieldKey)]);
+    const next = (Array.isArray(current) ? current : []).filter((v: unknown) => !drop.has(optOutNorm(v)));
+    onUpdate({ extractedData: { ...(doc.extractedData || {}), [CALENDAR_OPT_OUT_KEY]: next } });
+  };
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); addBack(); }}
+      disabled={isUpdating}
+      className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline disabled:opacity-50"
+      data-testid={`calendar-add-${fieldKey}`}
+    >
+      <CalendarPlus className="h-3 w-3 shrink-0" />
+      Add to calendar
+    </button>
+  );
 }
 
 function DateFieldBadge({ status }: { status: NonNullable<ReturnType<typeof getDateFieldStatus>> }) {
@@ -490,16 +582,23 @@ function OverviewPanel({
   fileLabel,
   noFile,
   onOpenTab,
+  onUpdate,
+  isUpdating,
 }: {
   doc: Document;
   noFile: boolean;
   file: DocumentBlobState;
   fileLabel: string;
   onOpenTab: (tab: DocTab) => void;
+  onUpdate: (patch: Partial<Document>) => void;
+  isUpdating: boolean;
 }) {
   const fileDiscarded = wasFileDiscarded(doc);
   const kind = classifyDocument(doc.mimeType);
-  const entries = Object.entries(doc.extractedData || {});
+  const smartFill = readSmartFill(doc.extractedData);
+  const filledRows = smartFill?.rows ?? [];
+  const entries = visibleEntries(doc, smartFill);
+  const dateRules = useDocumentDateRules(doc);
   // A field the overview can print on one line.
   const simple = entries.filter(([, v]) => v !== null && v !== undefined && typeof v !== "object" && String(v).trim() !== "");
 
@@ -516,7 +615,9 @@ function OverviewPanel({
   const tiles = [...simple.filter(isHeadline), ...simple.filter((e) => !isHeadline(e))]
     .filter(([k, v]) => displayFieldValue(k, v).length <= 28)
     .slice(0, 6);
-  const previewRows = entries.slice(0, 8);
+  const previewRows = entries.slice(0, Math.max(0, 8 - filledRows.length));
+  const filledPreview = filledRows.slice(0, 8);
+  const fieldTotal = entries.length + filledRows.length;
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-4 p-4" data-testid="doc-overview">
@@ -575,6 +676,32 @@ function OverviewPanel({
                 </span>
               </div>
             ))}
+            {/* Where each of those dates stands on the calendar. */}
+            {statuses.some(({ key }) => dateRules.has(key)) && (
+              <div className="flex flex-col items-start gap-1 px-1" data-testid="doc-calendar-presence">
+                {statuses.filter(({ key }) => dateRules.has(key)).map(({ key }) => (
+                  <CalendarPresence key={key} doc={doc} fieldKey={key} rule={dateRules.get(key)!} onUpdate={onUpdate} isUpdating={isUpdating} />
+                ))}
+              </div>
+            )}
+            {/* A Smart Fill copy: what was written into the form. */}
+            {filledRows.length > 0 && (
+              <ul className="divide-y divide-border/60" data-testid="doc-smartfill-insights">
+                {filledRows.slice(0, 4).map((r, i) => (
+                  <li key={i} className="flex items-start gap-2.5 py-1.5 text-sm">
+                    <FileText className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 break-words">
+                      <span className="text-muted-foreground">{r.label}</span> · {r.value}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {smartFill && filledRows.length === 0 && smartFill.fieldCount > 0 && (
+              <p className="text-sm text-muted-foreground" data-testid="doc-smartfill-count-only">
+                {smartFill.fieldCount} field{smartFill.fieldCount === 1 ? " was" : "s were"} filled into this copy. Open the {fileLabel} to read {smartFill.fieldCount === 1 ? "it" : "them"}.
+              </p>
+            )}
             {facts.length > 0 && (
               <ul className="divide-y divide-border/60">
                 {facts.map(([key, val]) => {
@@ -588,7 +715,7 @@ function OverviewPanel({
                 })}
               </ul>
             )}
-            {statuses.length === 0 && facts.length === 0 && (
+            {statuses.length === 0 && facts.length === 0 && filledRows.length === 0 && !(smartFill && smartFill.fieldCount > 0) && (
               <p className="text-sm text-muted-foreground">Nothing has been extracted from this document.</p>
             )}
           </div>
@@ -624,13 +751,30 @@ function OverviewPanel({
             className="flex items-center gap-1 text-sm font-medium text-primary"
             data-testid="btn-view-all-fields"
           >
-            {entries.length > 0 ? `View All (${entries.length})` : "Add a field"}
+            {fieldTotal > 0 ? `View All (${fieldTotal})` : "Add a field"}
             <ChevronRight className="h-4 w-4" />
           </button>
         </div>
-        {previewRows.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-muted-foreground">No extracted data</p>
-        ) : (
+        {filledPreview.length > 0 && (
+          <ul className="divide-y divide-border/50 px-4" data-testid="doc-smartfill-preview">
+            {filledPreview.map((r, i) => (
+              <li key={i} className="flex items-start justify-between gap-4 py-2 text-sm">
+                <span className="flex items-center gap-2.5 min-w-0 text-muted-foreground">
+                  <FileText className="h-4 w-4 shrink-0" />
+                  <span className="break-words">{r.label}</span>
+                </span>
+                <span className="min-w-0 text-right break-words">{r.value}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {previewRows.length === 0 && filledPreview.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-muted-foreground">
+            {smartFill && smartFill.fieldCount > 0
+              ? `${smartFill.fieldCount} field${smartFill.fieldCount === 1 ? "" : "s"} filled — the values are in the ${fileLabel}.`
+              : "No extracted data"}
+          </p>
+        ) : previewRows.length === 0 ? null : (
           <ul className="divide-y divide-border/50 px-4">
             {previewRows.map(([key, val]) => {
               const Icon = fieldIcon(key, val);
@@ -711,12 +855,46 @@ function DataPanel({
     [doc.linkedProfiles]
   );
 
-  const extractedEntries = Object.entries(doc.extractedData || {});
+  const smartFill = readSmartFill(doc.extractedData);
+  const extractedEntries = visibleEntries(doc, smartFill);
+  const dateRules = useDocumentDateRules(doc);
 
   return (
     <div className="mx-auto w-full max-w-3xl p-4" data-testid="doc-data-panel">
       <div className="bubble">
         <div className="px-4 py-4 space-y-5">
+
+          {/* A Smart Fill copy: every field written into the form, label →
+              value. They are what the file holds, so they are read here,
+              not edited (changing one would not change the filled file). */}
+          {smartFill && (
+            <section data-testid="smartfill-fields">
+              <h3 className="micro-label text-muted-foreground mb-2">Filled Fields</h3>
+              {smartFill.rows.length > 0 ? (
+                <ul className="space-y-1">
+                  {smartFill.rows.map((r, i) => (
+                    <li key={i} className="rounded-md px-2 py-2 border border-transparent" data-testid={`smartfill-field-${i}`}>
+                      <p className="micro-label text-muted-foreground mb-0.5 break-words">{r.label}</p>
+                      <p className="text-sm text-foreground/90 break-words">{r.value}</p>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-muted-foreground py-2" data-testid="smartfill-count-only">
+                  {smartFill.fieldCount > 0
+                    ? `${smartFill.fieldCount} field${smartFill.fieldCount === 1 ? " was" : "s were"} filled into this copy. Their values are in the file; this copy was saved before Portol kept them here.`
+                    : "No fields were filled into this copy."}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground mt-1" data-testid="smartfill-provenance">
+                {[
+                  smartFill.originalName ? `Filled from ${smartFill.originalName}` : "Filled with Smart Fill",
+                  smartFill.filledAt ? `on ${docDateLabel(smartFill.filledAt)}` : null,
+                ].filter(Boolean).join(" ")}
+                {smartFill.sources.length > 0 ? ` · from ${smartFill.sources.join(", ")}` : ""}
+              </p>
+            </section>
+          )}
 
           {/* Extracted fields */}
           <section>
@@ -725,7 +903,7 @@ function DataPanel({
             </h3>
             <div className="space-y-1" data-testid="extracted-data-list">
               {extractedEntries.length === 0 && (
-                <p className="text-xs text-muted-foreground italic py-2">No extracted data</p>
+                <p className="text-xs text-muted-foreground italic py-2">{smartFill ? "No other fields" : "No extracted data"}</p>
               )}
               {extractedEntries.map(([key, val]) => {
                 const expStatus = getDateFieldStatus(key, val, `${doc.type ?? ""} ${doc.name ?? ""}`);
@@ -748,6 +926,9 @@ function DataPanel({
                           {formatFieldLabel(key)}
                         </span>
                         {expStatus && <DateFieldBadge status={expStatus} />}
+                        {dateRules.get(key) && (
+                          <CalendarPresence doc={doc} fieldKey={key} rule={dateRules.get(key)!} onUpdate={onUpdate} isUpdating={isUpdating} />
+                        )}
                       </div>
                       {isEditing ? (
                         <Input
@@ -1153,7 +1334,7 @@ function DocumentBody({
         <div className="flex-1 min-h-0 overflow-y-auto">
           {tab === "overview" ? (
             <SectionErrorBoundary name="document-overview" inline>
-              <OverviewPanel doc={doc} file={file} fileLabel={fileLabel} noFile={noFile} onOpenTab={setTab} />
+              <OverviewPanel doc={doc} file={file} fileLabel={fileLabel} noFile={noFile} onOpenTab={setTab} onUpdate={onUpdate} isUpdating={isUpdating} />
             </SectionErrorBoundary>
           ) : (
             <SectionErrorBoundary name="document-data-panel" inline>

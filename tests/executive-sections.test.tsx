@@ -16,12 +16,15 @@ vi.mock("../client/src/lib/auth", () => ({
   useAuth: () => ({ getAuthHeader: () => ({}) }),
 }));
 
+// The location's navigate, so a test can read where a tap went.
+const navigateSpy = vi.fn();
+
 function wrap(ui: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   // Static-location wouter Router so useLocation works without a real history.
   return render(
     <QueryClientProvider client={qc}>
-      <Router hook={() => ["/dashboard", () => {}] as any}>{ui}</Router>
+      <Router hook={() => ["/dashboard", navigateSpy] as any}>{ui}</Router>
     </QueryClientProvider>,
   );
 }
@@ -207,6 +210,25 @@ describe("ExecutiveBriefing", () => {
     });
     await mount(enhancedWith());
     await waitFor(() => expect(screen.getByTestId("exec-docs-recent-dr1").textContent).toContain("Lease agreement"));
+  });
+
+  // QA 2026-11-24 #15: a recently added document opened the expirations
+  // popup (dates only), never the document. It opens the same full document
+  // page Artifacts opens (/documents/:id: Overview, Extracted Data, file).
+  it("opens a recently added document's own page, the one Artifacts opens", async () => {
+    stubRoutes({
+      "/api/documents": [{ id: "dr1", name: "Driver's license", type: "drivers_license", createdAt: new Date().toISOString() }],
+    });
+    navigateSpy.mockClear();
+    await mount(enhancedWith());
+    const row = await screen.findByTestId("exec-docs-recent-dr1");
+    fireEvent.click(row);
+    expect(navigateSpy.mock.calls.map((c) => c[0])).toEqual(["/documents/dr1"]);
+    // Not the Document Dates popup.
+    expect(screen.queryByText("Document Dates · Due & Expiring")).toBeNull();
+    navigateSpy.mockClear();
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(navigateSpy.mock.calls.map((c) => c[0])).toEqual(["/documents/dr1"]);
   });
 
   it("keeps overdue tasks and bill alerts out of Needs Attention", async () => {

@@ -190,6 +190,8 @@ export default defineConfig({
       'tests/profile-creation-rules.test.ts',
       'tests/profile-suggestion-card.dom.test.tsx',
       'tests/document-detail-tabs.dom.test.tsx',
+      'tests/document-detail-qa-2026-11-24.dom.test.tsx',
+      'tests/smart-fill-saved-fields.test.ts',
       'tests/recurring-important-dates.test.tsx',
       'tests/recurring-scope-and-purity.test.ts',
       'tests/calendar-crud.test.ts',
