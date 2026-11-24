@@ -21,6 +21,10 @@ const ACK_BUDGET_MS = 300;
 /** A chat reply the user is not left waiting on. */
 const REPLY_BUDGET_MS = 8000;
 
+// A message's test id carries its role and its id: message-user-<id>, message-assistant-<id>.
+const USER = '[data-testid^="message-user-"]';
+const ASSISTANT = '[data-testid^="message-assistant-"]';
+
 let failed = false;
 const check = (ok: boolean, what: string) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); if (!ok) failed = true; };
 const slow: string[] = [];
@@ -38,21 +42,24 @@ async function run(browser: any, surface: Surface, undo: Array<() => Promise<unk
     const box = page.locator(t("input-chat")).locator("visible=true").first();
     await box.waitFor({ timeout: 30000 });
     await box.fill(line);
-    const assistantBefore = await page.locator(t("message-assistant")).count();
     const t0 = Date.now();
     await press(t("button-send"));
-    await page.locator(t("message-user"), { hasText: line }).last().waitFor({ timeout: 15000 });
+    const mine = page.locator(USER, { hasText: line }).last();
+    await mine.waitFor({ timeout: 15000 });
     const ackMs = Date.now() - t0;
-    // The reply is a NEW assistant message whose text has stopped changing.
-    await page.waitForFunction(
-      ({ sel, n }) => document.querySelectorAll(sel).length > n,
-      { sel: t("message-assistant"), n: assistantBefore }, { timeout: 60000 },
-    );
-    const last = page.locator(t("message-assistant")).last();
+    // The reply is the assistant message that comes AFTER mine (the greeting
+    // sits above it), once its text has stopped changing.
+    const mineId = String(await mine.getAttribute("data-testid"));
+    const replyAfterMine = () => page.evaluate(({ id, sel }) => {
+      const all = [...document.querySelectorAll('[data-testid^="message-user-"], [data-testid^="message-assistant-"]')];
+      const at = all.findIndex((el) => el.getAttribute("data-testid") === id);
+      const next = at < 0 ? undefined : all.slice(at + 1).filter((el) => el.matches(sel)).pop();
+      return next ? (next as HTMLElement).innerText.trim() : "";
+    }, { id: mineId, sel: ASSISTANT });
     let text = ""; let stable = 0;
     for (let i = 0; i < 240 && stable < 4; i++) {
       await page.waitForTimeout(250);
-      const now = (await last.innerText().catch(() => "")).trim();
+      const now = await replyAfterMine();
       stable = now && now === text ? stable + 1 : 0;
       text = now;
     }
@@ -91,7 +98,7 @@ async function run(browser: any, surface: Surface, undo: Array<() => Promise<unk
     // ── A task ────────────────────────────────────────────────────────────
     await page.evaluate(() => { window.location.hash = "#/chat"; });
     await page.waitForSelector(t("page-chat"), { timeout: 30000 });
-    check(await page.locator(t("message-user"), { hasText: what }).last().isVisible().catch(() => false), L("coming back to chat, the conversation is still there"));
+    check(await page.locator(USER, { hasText: what }).last().isVisible().catch(() => false), L("coming back to chat, the conversation is still there"));
     const chore = `${tag} test the grill`;
     const k = await send(`add a task to ${chore} tomorrow`);
     check(true, L(`my message is on screen ${k.ackMs}ms after Send; the reply finished in ${k.replyMs}ms`));
@@ -109,10 +116,26 @@ async function run(browser: any, surface: Surface, undo: Array<() => Promise<unk
     // ── Pointing back: "mark that done" ───────────────────────────────────
     await page.evaluate(() => { window.location.hash = "#/chat"; });
     await page.waitForSelector(t("page-chat"), { timeout: 30000 });
-    const d = await send("mark that done");
-    check(true, L(`"mark that done": shown in ${d.ackMs}ms, answered in ${d.replyMs}ms — ${d.text.replace(/\s+/g, " ").slice(0, 90)}`));
-    const after = made[0] ? (await tasks()).find((x) => x.id === made[0].id) : undefined;
+    // The conversation above also holds an expense, so "that" could be either;
+    // "that task" can only be the task just added.
+    const d = await send("mark that task done");
+    check(true, L(`"mark that task done": shown in ${d.ackMs}ms, answered in ${d.replyMs}ms — ${d.text.replace(/\s+/g, " ").slice(0, 90)}`));
+    // Ask the server until it agrees (this check does not carry the app's
+    // data-version header, so its first read can be a moment behind).
+    let after: any;
+    for (let i = 0; i < 24; i++) {
+      after = made[0] ? (await tasks()).find((x) => x.id === made[0].id) : undefined;
+      if (after?.status === "done") break;
+      await page.waitForTimeout(500);
+    }
     check(after?.status === "done", L(`the task I had just added is done (${after?.status})`));
+    // … and the Tasks page shows it finished without a reload.
+    await page.evaluate(() => { window.location.hash = "#/tasks"; });
+    await page.waitForSelector(t("page-tasks"), { timeout: 30000 });
+    if (made[0]) {
+      await page.locator(`[data-testid^="tasks-group-rows-"] ${t(`card-task-${made[0].id}`)}`).first().waitFor({ state: "detached", timeout: 15000 });
+      check(true, L("Tasks no longer lists it among the open tasks, without a reload"));
+    }
     const p = s.problems();
     check(p.length === 0, L(`Chat: no script or server error${p.length ? ` — ${p.join("; ")}` : ""}`));
   } catch (err: any) {
@@ -120,6 +143,7 @@ async function run(browser: any, surface: Surface, undo: Array<() => Promise<unk
     if (process.env.SHOT_DIR) await page.screenshot({ path: `${process.env.SHOT_DIR}/${surface}-chat-stopped.png` }).catch(() => undefined);
   } finally {
     await s.close();
+    for (const u of undo.splice(0).reverse()) await u().catch(() => undefined);
   }
 }
 

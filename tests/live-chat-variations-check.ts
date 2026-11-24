@@ -273,7 +273,8 @@ const CASES: Case[] = [
     const f = p[0].fields || {};
     if (!money(f.balance, 5000)) return `its balance is ${f.balance}, expected 5000`;
     if (!money(f.interestRate, 22)) return `its rate is ${f.interestRate}, expected 22 (a percent)`;
-    return money(f.monthlyPayment, 150) ? "" : `its payment is ${f.monthlyPayment}, expected 150`;
+    // A card's minimum is its own field; a loan's instalment is monthlyPayment.
+    return money(f.minimumPayment ?? f.monthlyPayment, 150) ? "" : `its payment is ${f.minimumPayment ?? f.monthlyPayment}, expected 150`;
   } },
   { group: "money", say: "got paid $2,400 today", expect: (c) => (c.made.incomes.length === 1 && money(c.made.incomes[0].amount, 2400) ? (c.made.expenses.length ? "it also logged an expense" : "") : `expected one income of 2400, got ${c.made.incomes.map((i) => i.amount).join(", ") || "none"}; expenses: ${c.made.expenses.map((e) => e.amount).join(", ") || "none"}`) },
   { group: "money", say: "I want to save $3,000 for a vacation by June", expect: (c) => (c.made.goals.length === 1 && money(c.made.goals[0].target, 3000) ? "" : `expected one goal with target 3000, got ${c.made.goals.map((g) => `${g.title} ${g.target}`).join(" | ") || "none"}`) },
@@ -302,7 +303,8 @@ const CASES: Case[] = [
     const e = c.now.expenses.filter((x) => has(x.description, "jacket"));
     if (e.length !== 1) return `expected ONE jacket expense, got ${e.length}`;
     if (!money(e[0].amount, 60)) return `its amount changed to ${e[0].amount}`;
-    return has(e[0].category, "cloth") ? "" : `its category is "${e[0].category}"`;
+    // There is no "clothing" category: asking which one to use instead is a right answer.
+    return has(e[0].category, "cloth") || /\?/.test(c.reply) ? "" : `its category is "${e[0].category}" and the reply did not ask: ${c.reply.slice(0, 100)}`;
   } },
   { group: "edits", say: "dinner with Priya on Saturday at 7pm", then: "move it to 8pm", expect: (c) => {
     const e = c.now.events.filter((x) => has(x.title, "priya"));
