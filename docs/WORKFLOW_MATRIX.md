@@ -16,7 +16,7 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 615. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 616. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -299,9 +299,9 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/budgets/copy` | yes | 1 | 1 |
 | `GET /api/cashflow` | yes | 3 | 1 |
 | `POST /api/cashflow` | yes | 1 | 1 |
-| `GET /api/expenses` | yes | 12 | 19 |
+| `GET /api/expenses` | yes | 12 | 20 |
 | `POST /api/expenses` | yes | 6 | 16 |
-| `DELETE /api/expenses/:id` | yes | 1 | 21 |
+| `DELETE /api/expenses/:id` | yes | 1 | 22 |
 | `GET /api/expenses/:id` | **no** | **0** | 3 |
 | `PATCH /api/expenses/:id` | yes | 3 | 5 |
 | `POST /api/expenses/:id/restore` | **no** | **0** | 1 |
@@ -596,9 +596,9 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `DELETE /api/captures/:id` | **no** | 1 | **0** |
 | `GET /api/captures/:id` | **no** | 1 | **0** |
 | `PATCH /api/captures/:id` | **no** | 2 | **0** |
-| `GET /api/journal` | yes | 7 | 5 |
+| `GET /api/journal` | yes | 7 | 6 |
 | `POST /api/journal` | yes | 7 | 5 |
-| `DELETE /api/journal/:id` | yes | 1 | 6 |
+| `DELETE /api/journal/:id` | yes | 1 | 7 |
 | `PATCH /api/journal/:id` | yes | 4 | 2 |
 | `GET /api/notes` | yes | 3 | 2 |
 | `POST /api/notes` | yes | 5 | 2 |
