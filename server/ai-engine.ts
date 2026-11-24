@@ -243,6 +243,7 @@ import { groupMaterializedSeries, stemKey } from "@shared/series-detect";
 import { expenseAttributionName, thingNamedInSpend } from "@shared/expense-attribution";
 import { recordProfileEdit } from "./profile-history";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
+import { stampSalvageProvenance } from "@shared/asset-salvage";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
 import { paymentReceiptLine, paymentNotRecordedLine, composePaymentReply } from "@shared/payment-receipt";
@@ -8586,6 +8587,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         }
       }
 
+      // A salvage value the user tells the chat is theirs, never re-estimated
+      // (shared/asset-salvage.ts) — the same stamp the page's PATCH applies.
+      stampSalvageProvenance(changes as any);
       const updated = await storage.updateProfile(profile.id, changes);
       // History tab: what this chat edit changed (server/profile-history).
       await recordProfileEdit(storage, userId || (storage as any).userId, profile, updated, "chat");

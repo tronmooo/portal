@@ -34,6 +34,8 @@ const PRIOR_VALUATION_KEYS = new Set([
   "valuationmethod", "valuationconfidence", "valuationrange", "valuationdate",
   "valuationlow", "valuationhigh", "valuationfactors", "valuationmissinginfo",
   "valuationsources", "lastvaluedat", "currentvaluesource", "currentvalueasof",
+  // The salvage value is estimated BY the valuation run (shared/asset-salvage.ts).
+  "salvagevalue", "salvagevaluesource", "salvagevaluebasis", "salvagevalueasof", "salvagevaluefor",
 ]);
 export function isPriorValuationKey(key: string): boolean {
   return PRIOR_VALUATION_KEYS.has(String(key || "").toLowerCase());

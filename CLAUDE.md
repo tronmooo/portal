@@ -787,9 +787,19 @@ summary then evaluation"):
    (`projectDepreciation`, `shared/asset-depreciation.ts`: a dated purchase,
    six months owned, a value that fell, a plausible rate; never below the
    salvage value). No confidence figure here. Then the money lines: Purchase
-   price, Current value, Total invested and **Salvage value** (`SALVAGE_KEY`,
-   the user's own figure — never estimated), plus Refresh and the estimate's
-   details and tracking switch under the disclosure.
+   price, Current value, Total invested and **Salvage value**, plus Refresh
+   and the estimate's details and tracking switch under the disclosure.
+   **The salvage value is the AI's** (owner, 2026-11-24: "salvage value
+   should be determined by AI"): each value-tracking run asks for it beside
+   the market research (`estimateSalvageValue`, `server/valuation/salvage.ts`)
+   and stores it with its provenance and one-line reason
+   (`shared/asset-salvage.ts`; labelled "AI" on the card). It is re-asked only
+   when missing, when what it was estimated from changes, or after
+   `SALVAGE_MAX_AGE_MS`. A figure the user types (page or chat:
+   `stampSalvageProvenance`) is theirs and never replaced; removing it hands
+   it back to the AI. The salvage keys are valuation OUTPUTS
+   (`PRIOR_VALUATION_KEYS`), never inputs. No model, no figure — never a guess.
+   *Guard:* `tests/asset-salvage-ai.test.ts`.
 2. **AI Asset Summary** (`AISummaryCard compact`) — a title and the text. The
    text is three short sentences: what it is worth, how much it has
    depreciated, and WHEN it would make sense to sell or replace it, with the

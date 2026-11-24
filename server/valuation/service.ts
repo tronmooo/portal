@@ -50,6 +50,8 @@ import { bundleFromDetail, resolveAssetBundle } from "./resolver";
 import { runProviders } from "./providers/registry";
 import { loadCachedUnderstanding, resolveUnderstanding } from "./understanding";
 import { MS_PER_HOUR } from "@shared/valuation/planner";
+import { estimateSalvageValue } from "./salvage";
+import { salvageEstimatePatch, salvageInputsKey, salvageNeedsEstimate, type SalvageEstimate } from "@shared/asset-salvage";
 
 // Itemized market research runs several web searches; the lock outlives the
 // whole provider budget so a second open joins the run instead of starting one.
@@ -117,8 +119,10 @@ export interface RefreshOptions {
   now?: Date;
   /** Wall-clock budget for the external providers, all together. */
   providerBudgetMs?: number;
-  /** Allow the semantic-understanding model call (default true when a key is configured). */
+  /** Allow the semantic-understanding and salvage model calls (default true when a key is configured). */
   allowModel?: boolean;
+  /** The salvage-value estimator (tests inject one). */
+  estimateSalvage?: typeof estimateSalvageValue;
 }
 
 export interface RefreshOutcome {
@@ -374,15 +378,28 @@ export async function refreshValuation(
     ctx = buildValuationContext(bundle, now);
     plan = planValuation(ctx, now);
 
+    const allowModel = opts.allowModel ?? !!process.env.ANTHROPIC_API_KEY;
     // The model is consulted only when deterministic planning came up short.
     if (plan.needsAi) {
-      const allowModel = opts.allowModel ?? !!process.env.ANTHROPIC_API_KEY;
       const understanding: AssetUnderstanding | null = await trace.measure("understanding.model", () => resolveUnderstanding(storage, ctx, { allowModel, now }));
       if (understanding) {
         ctx = buildValuationContext({ ...bundle, understanding }, now);
         plan = planValuation(ctx, now);
       }
     }
+
+    // The salvage value is the AI's (shared/asset-salvage.ts): asked beside
+    // the market research so it adds no wait, and only when the stored figure
+    // is not the user's and is missing or out of date.
+    const salvageKey = salvageInputsKey({
+      name: ctx.name, kind: ctx.classification.semanticCategory,
+      purchasePrice: ctx.purchase.price, purchaseDate: ctx.purchase.date, condition: ctx.condition,
+    });
+    const salvagePending: Promise<SalvageEstimate | null> | null = allowModel && salvageNeedsEstimate(detail.fields, salvageKey, now)
+      ? trace.measure("salvage", () => (opts.estimateSalvage ?? estimateSalvageValue)(ctx, {
+        currentValue: previous?.value ?? ctx.estimatorValue ?? ctx.userValue?.value ?? null,
+      })).catch(() => null)
+      : null;
 
     const internal = deriveInternalEvidence(ctx, plan, now);
     const external = plan.needsExternal
@@ -473,6 +490,17 @@ export async function refreshValuation(
       }
     } else {
       await trace.measure("persist.touch", () => storage.touchAssetValuation(profileId, record));
+    }
+    // Store the AI's salvage value — unless the user typed one while it ran.
+    const salvage = salvagePending ? await salvagePending : null;
+    if (salvage) {
+      const now2 = await storage.getProfile(profileId).catch(() => null);
+      const fields = (now2?.fields as any) || {};
+      if (now2 && isAutoValuationEnabled(fields) && salvageNeedsEstimate(fields, salvageKey, now)) {
+        await trace.measure("persist.salvage", () => storage.updateProfile(profileId, { fields: salvageEstimatePatch(salvage, salvageKey, now) } as any));
+        wrote = true;
+        trace.set("salvage", salvage.value);
+      }
     }
     trace.set("status", record.status); trace.set("changed", changed); trace.set("value", record.value);
     trace.end();
