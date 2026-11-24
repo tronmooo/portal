@@ -42,12 +42,21 @@ export function useFullScreenWorkspace(): void {
     // On <html> too: the desktop scrollbar gutters are reserved there.
     document.body.setAttribute("data-workspace", "1");
     document.documentElement.setAttribute("data-workspace", "1");
+    // The app behind a workspace is covered, so it must not be reachable
+    // either: its sidebar links stayed in the tab order and the accessibility
+    // tree, where a keyboard, a screen reader or a browsing agent found
+    // "Dashboard" / "Artifacts", activated them at their on-screen position,
+    // and hit the workspace instead (2026-11-24: "clicking Artifacts left me
+    // in the Fill In workspace"). `inert` takes the covered shell out of both.
+    const shells = Array.from(document.querySelectorAll<HTMLElement>("[data-app-shell]")).filter((el) => !el.hasAttribute("inert"));
+    for (const el of shells) el.setAttribute("inert", "");
     const meta = document.querySelector('meta[name="viewport"]');
     const before = meta?.getAttribute("content") ?? null;
     if (meta && before != null && !/maximum-scale/i.test(before)) meta.setAttribute("content", `${before}, maximum-scale=1`);
     return () => {
       document.body.removeAttribute("data-workspace");
       document.documentElement.removeAttribute("data-workspace");
+      for (const el of shells) el.removeAttribute("inert");
       if (meta && before != null) meta.setAttribute("content", before);
     };
   }, []);

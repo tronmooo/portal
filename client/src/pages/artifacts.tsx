@@ -808,13 +808,13 @@ export default function ArtifactsPage() {
   const handleDelete = (item: UnifiedArtifact) => setPendingDelete(item);
 
   // Fetch all three data sources in parallel
-  const { data: documents = [], isLoading: docsLoading } = useQuery<Document[]>({
+  const { data: documents = [], isLoading: docsLoading, isError: docsFailed, refetch: refetchDocs, data: documentsData } = useQuery<Document[]>({
     queryKey: ["/api/documents"],
     queryFn: () => apiRequest("GET", "/api/documents").then(r => r.json()),
   });
 
   // Journal entries deliberately NOT fetched here — they have their own page.
-  const { data: artifacts = [], isLoading: artifactsLoading } = useQuery<Artifact[]>({
+  const { data: artifacts = [], isLoading: artifactsLoading, isError: artifactsFailed, refetch: refetchArtifacts, data: artifactsData } = useQuery<Artifact[]>({
     queryKey: ["/api/artifacts"],
     queryFn: () => apiRequest("GET", "/api/artifacts").then(r => r.json()),
   });
@@ -1019,6 +1019,11 @@ export default function ArtifactsPage() {
   }, [profileFiltered, activeTab, activeTag, search]);
 
   const isLoading = docsLoading || artifactsLoading;
+  // A list that failed with nothing cached is not an empty library (Rule 7),
+  // and a list still loading has no count yet: "0 artifacts" over a skeleton
+  // read as "your saved records are gone" until they appeared (2026-11-24).
+  const loadFailed = (docsFailed && documentsData === undefined) || (artifactsFailed && artifactsData === undefined);
+  const countsReady = !isLoading && !loadFailed;
 
   // Group documents by type when Documents tab is active
   const documentGroups = useMemo(() => {
@@ -1054,8 +1059,10 @@ export default function ArtifactsPage() {
               Artifacts", which read as a contradiction on a page called
               Artifacts. */}
           <p className="text-xs text-muted-foreground truncate" data-testid="artifacts-header-count">
-            {filtered.length !== profileFiltered.length ? `${filtered.length} of ` : ""}
-            {profileFiltered.length} artifact{profileFiltered.length === 1 ? "" : "s"} · Documents, notes &amp; AI reports in one place
+            {!countsReady
+              ? (isLoading ? "Loading your artifacts…" : "Couldn't load your artifacts")
+              : <>{filtered.length !== profileFiltered.length ? `${filtered.length} of ` : ""}
+                {profileFiltered.length} artifact{profileFiltered.length === 1 ? "" : "s"}</>} · Documents, notes &amp; AI reports in one place
           </p>
         </div>
         <div className="shrink-0 flex items-center gap-2">
@@ -1092,7 +1099,7 @@ export default function ArtifactsPage() {
         ].map(s => (
           <div key={s.label} className=" bubble  p-2.5 text-center card-lift transition-all"
             style={{ ["--accent-hsl" as any]: s.color }} data-testid={s.testId}>
-            <p className="metric-value text-lg leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
+            <p className="metric-value text-lg leading-none" style={{ color: `hsl(${s.color})` }} aria-busy={isLoading || undefined}>{countsReady ? s.value : "—"}</p>
             <p className="mt-1 micro-label text-muted-foreground">{s.label}</p>
           </div>
         ))}
@@ -1141,7 +1148,7 @@ export default function ArtifactsPage() {
               <Icon className="h-3 w-3" />
               {tab.label}
               <span className={`text-xs ${isActive ? "text-primary-foreground/70" : "text-muted-foreground/60"}`}>
-                {count}
+                {countsReady ? count : ""}
               </span>
             </button>
           );
@@ -1215,10 +1222,16 @@ export default function ArtifactsPage() {
           the whole page (SectionErrorBoundary shows an inline retry). */}
       <SectionErrorBoundary name="artifacts-list" inline>
       {isLoading ? (
-        <div className="space-y-3">
+        <div className="space-y-3" data-testid="artifacts-loading">
           {[1, 2, 3, 4, 5].map(i => (
             <div key={i} className="h-20 rounded-lg bg-muted animate-pulse" />
           ))}
+        </div>
+      ) : loadFailed ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-center space-y-2" role="alert" data-testid="artifacts-load-error">
+          <p className="text-sm font-medium">Couldn't load your artifacts</p>
+          <p className="text-xs text-muted-foreground">Nothing was deleted. Check your connection and try again.</p>
+          <Button size="sm" variant="outline" onClick={() => { void refetchDocs(); void refetchArtifacts(); }} data-testid="artifacts-load-retry">Try again</Button>
         </div>
       ) : filtered.length === 0 ? (
         // "No artifacts yet" is reserved for a genuinely empty scope. When the

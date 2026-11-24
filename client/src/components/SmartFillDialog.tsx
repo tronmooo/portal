@@ -24,7 +24,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, FileText, CheckCircle2, AlertTriangle, Sparkles, Search, ExternalLink, X } from "lucide-react";
+import { Loader2, FileText, CheckCircle2, AlertTriangle, Sparkles, Search, ExternalLink, FolderOpen, X } from "lucide-react";
+import { hashNavigate } from "@/lib/hashNavigate";
 import type { Profile, Document as DocumentT } from "@shared/schema";
 
 export interface SmartFillSource {
@@ -487,6 +488,16 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
               <div className="flex flex-col gap-2">
                 <Button onClick={openFilledPdf} className="w-full" data-testid="button-open-filled-pdf">
                   <ExternalLink className="h-4 w-4 mr-2" /> {isImageInput ? "Open filled form" : "Open filled PDF"}
+                </Button>
+                {/* The filled copy is a saved document: say where it is and
+                    go there, so the last step is never a dead end. */}
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => { onOpenChange(false); hashNavigate("/artifacts"); }}
+                  data-testid="button-smart-fill-view-artifacts"
+                >
+                  <FolderOpen className="h-4 w-4 mr-2" /> Show it in Artifacts
                 </Button>
               </div>
             </div>

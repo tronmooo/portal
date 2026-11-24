@@ -47,6 +47,9 @@ export interface FieldReceipt {
   action?: "created" | "updated";
   /** Whose record, when it isn't the user's own ("Jim's Honda"). */
   ownerName?: string;
+  /** The THING this record is nested inside ("Tutorial Camera" for its lens),
+   *  read back from the saved row's parent — never the model's sentence. */
+  parentName?: string;
   /** Some field needed a second write before it read back. */
   retried?: boolean;
 }
@@ -171,9 +174,17 @@ const SECTION_BY_TYPE: Record<string, string> = {
   medical: "Profiles → Services",
 };
 
-export function receiptSavedTo(type: string | undefined, name: string): string {
+export function receiptSavedTo(type: string | undefined, name: string, parentName?: string | null): string {
   const section = SECTION_BY_TYPE[String(type || "")] || "Profiles";
-  return `${section} → ${name}`;
+  return parentName ? `${section} → ${parentName} → ${name}` : `${section} → ${name}`;
+}
+
+/** A parent that is a person (or pet) is the OWNER, already said as "Jim's …".
+ *  Only a thing the record sits inside is a nesting parent. */
+const OWNER_PARENT_TYPES = new Set(["self", "person", "pet"]);
+export function receiptNestingParentName(parent: { name?: string | null; type?: string | null } | null | undefined): string | undefined {
+  if (!parent || !parent.name || OWNER_PARENT_TYPES.has(String(parent.type || ""))) return undefined;
+  return String(parent.name);
 }
 
 // ── Build ────────────────────────────────────────────────────────────────────
@@ -182,6 +193,8 @@ export interface BuildFieldReceiptInput {
   /** The profile as READ BACK from the database after the write. Undefined
    *  when the read-back found nothing — every line is then unverified. */
   stored: { id: string; name: string; type?: string; fields?: Record<string, any> | null; notes?: string | null } | null | undefined;
+  /** The stored row's parent profile, as READ BACK (not the one requested). */
+  parent?: { name?: string | null; type?: string | null } | null;
   /** Fallbacks for the header when the read-back failed. */
   profileId: string;
   profileName: string;
@@ -242,11 +255,13 @@ export function buildFieldReceipt(input: BuildFieldReceiptInput): FieldReceipt {
   const name = stored?.name || input.profileName;
   const type = stored?.type || input.profileType;
   const failedKeys = lines.filter((l) => !l.verified).map((l) => l.key);
+  const parentName = receiptNestingParentName(input.parent);
   return {
     profileId: stored?.id || input.profileId,
     name,
     ...(type ? { type } : {}),
-    savedTo: receiptSavedTo(type, name),
+    savedTo: receiptSavedTo(type, name, parentName),
+    ...(parentName ? { parentName } : {}),
     lines,
     allVerified: lines.length > 0 && failedKeys.length === 0,
     verifiedCount: lines.length - failedKeys.length,
@@ -326,7 +341,7 @@ export function receiptReplyBlock(r: FieldReceipt): string {
       : `✅ Saved **${l.display}** as the **${inlineLabel(l.label)}** in ${subject}.`);
   } else {
     const head = created
-      ? `✅ Created a new ${receiptProfileKind(r.type)} for ${r.ownerName ? `${r.ownerName}'s` : "your"} **${r.name}**`
+      ? `✅ Created a new ${receiptProfileKind(r.type)} for ${r.ownerName ? `${r.ownerName}'s` : "your"} **${r.name}**${r.parentName ? `, inside **${r.parentName}**` : ""}`
       : `✅ Saved ${countWord(saved.length)} details in ${subject}`;
     out.push(saved.length > 0 ? `${head}${created ? ` and saved ${countWord(saved.length)} detail${saved.length === 1 ? "" : "s"}` : ""}:` : `${head}.`);
     if (saved.length > 0) {
@@ -365,6 +380,11 @@ function isReceiptRestatement(line: string, receipts: FieldReceipt[]): boolean {
   if (/^(?:done|all\s+set|got\s+it|updated|saved|you'?re\s+all\s+set)[.!]*$/i.test(t.replace(/\*/g, ""))) return true;
   const lower = t.toLowerCase().replace(/\*/g, "");
   const claimsWrite = /\b(?:updated|saved|changed|set|added|recorded|stored|created|now)\b/.test(lower);
+  // Where the record sits is the receipt's to say, from the saved row's own
+  // parent. The model's version ("filed under …") named a different parent
+  // than the record had (2026-11-24).
+  if (/\b(?:nested|filed|placed|parented|grouped|linked|attached)\b[^.!?]*\b(?:under|inside|within|beneath|to)\b/.test(lower)) return true;
+  if (/\b(?:as a (?:child|sub-?asset|nested asset) of|parent (?:asset|profile|record)?\s*(?:is|:))/.test(lower)) return true;
   if (/^(?:i'?ve|i have)\s+(?:saved|updated|stored|added|set|recorded|created)\b/.test(lower)) return true;
   for (const r of receipts) {
     for (const l of r.lines) {

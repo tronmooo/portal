@@ -49,6 +49,12 @@ export async function verifyProfileWrite(
     readBack = await read();
     receipt = buildFieldReceipt({ ...input, stored: readBack });
   }
+  // Where it sits comes from the saved row too: the parent it actually has.
+  if (readBack?.parentProfileId) {
+    let parent: any = null;
+    try { parent = (await storage.getProfile(readBack.parentProfileId)) ?? null; } catch { parent = null; }
+    if (parent) receipt = buildFieldReceipt({ ...input, stored: readBack, parent });
+  }
   if (retried) receipt.retried = true;
   return { receipt, readBack };
 }

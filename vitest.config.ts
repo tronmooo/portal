@@ -269,6 +269,9 @@ export default defineConfig({
       'tests/resume-refresh.test.ts',
       'tests/recurring-profile-dep.test.ts',
       'tests/curated-persistence.test.ts',
+      'tests/persisted-record-cache.test.ts',
+      'tests/qa-2026-11-24-findings.test.ts',
+      'tests/qa-2026-11-24-findings.dom.test.tsx',
       'tests/model-router.test.ts',
       'tests/chat-frontdoor.test.ts',
       // The `navigate` chat tool: its result must reach the router.

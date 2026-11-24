@@ -1717,6 +1717,15 @@ export class SupabaseStorage implements IStorage {
     // and SILENTLY returns zero rows — that was the bug where a profile's own
     // documents/trackers/tasks never appeared in its tabs. journal_entries is a
     // text[] column, so it (and only it) keeps the bare `[id]` array form.
+    // A failed read is not an empty list (Rule 7). Each of these used to end in
+    // `r.data || []`, so a query that errored served "No expenses logged" /
+    // no documents / no tasks as if the profile had none — and that empty
+    // payload was then cached. Now the request fails and the page keeps what
+    // it had and offers a retry.
+    const rowsOrThrow = (r: { data: any[] | null; error: any }): any[] => {
+      if (r.error) throw r.error;
+      return r.data || [];
+    };
     const [
       allProfiles,
       trackersRes, expensesRes, tasksRes, eventsRes, documentsRes, obligationsRes,
@@ -1731,20 +1740,20 @@ export class SupabaseStorage implements IStorage {
       // with explicit JSON array syntax instead.
       this.supabase.from("trackers").select("*")
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
-        .then(r => r.data || []),
+        .then(rowsOrThrow),
       this.supabase.from("expenses").select("*")
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
-        .then(r => r.data || []),
+        .then(rowsOrThrow),
       this.supabase.from("tasks").select("*")
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
-        .then(r => r.data || []),
+        .then(rowsOrThrow),
       this.supabase.from("events").select("*")
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
-        .then(r => r.data || []),
+        .then(rowsOrThrow),
       this.supabase.from("documents")
         .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
-        .then(r => r.data || []),
+        .then(rowsOrThrow),
       // Obligations retired — recurring bills are liability child profiles now,
       // so the profile timeline no longer needs a separate obligation feed.
       Promise.resolve([] as any[]),
@@ -1755,13 +1764,13 @@ export class SupabaseStorage implements IStorage {
         .is("deleted_at", null)
         .contains("linked_profiles", [id])
         .order("created_at", { ascending: false })
-        .then(r => r.data || []),
+        .then(rowsOrThrow),
       // habits.linked_profiles is JSONB → JSON containment form.
       this.supabase.from("habits").select("*")
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
         // Same stable ordering as getHabits — see the note there.
         .order("created_at", { ascending: true }).order("id", { ascending: true })
-        .then(r => r.data || []),
+        .then(rowsOrThrow),
     ]);
 
     const trackerIds = (trackersRes as any[]).map((r: any) => r.id);

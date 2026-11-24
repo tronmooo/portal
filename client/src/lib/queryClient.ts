@@ -545,6 +545,28 @@ export function isEssentialToPersist(queryKey: any): boolean {
   return ESSENTIAL_PERSIST_PREFIXES.some((p) => first === p);
 }
 
+/**
+ * A per-RECORD key under a persisted prefix: ["/api/profiles", id, "detail"],
+ * […, id, "tree"], […, id, "valuation"], […, id, "ai-summary"] …
+ *
+ * These ride along in the snapshot because their head is "/api/profiles", but
+ * nothing refreshes them after a restore: the bootstrap refetch re-seeds the
+ * LISTS (bootstrapSeedEntries), never one record's page. Restored as fresh,
+ * a profile's page kept the copy from before the reload for as long as the
+ * tab lived — and the detail query only refetches a cache that is marked
+ * invalidated, which a snapshot does not carry. (2026-11-24: an expense and a
+ * nested asset added from chat showed in Finance and the Assets list, while
+ * the asset's own Financials and Contained tabs said "No expenses logged" /
+ * "No child assets yet" — and still did after a manual refresh.)
+ *
+ * So a restored record entry is the instant first paint and nothing more: it
+ * keeps its real age and is marked invalidated, and its page refetches on
+ * mount. Guard: tests/persisted-record-cache.test.ts.
+ */
+export function isRecordScopedPersistKey(queryKey: any): boolean {
+  return Array.isArray(queryKey) && queryKey[0] === "/api/profiles" && queryKey.length > 1;
+}
+
 // Per-entry / total localStorage budgets. A single oversize payload is dropped
 // on its OWN (see snapshotCache) so it can never disable persistence of the
 // other essential keys — the failure mode the old total-only cap created.
@@ -726,7 +748,11 @@ export function hydrateQueryCache(): void {
       const existing = queryClient.getQueryData(entry.k as any);
       if (existing !== undefined) continue;
       const isBootstrap = Array.isArray(entry.k) && entry.k[0] === "/api/dashboard-bootstrap";
-      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: isBootstrap ? entry.t : seededAt });
+      const recordScoped = isRecordScopedPersistKey(entry.k);
+      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: isBootstrap || recordScoped ? entry.t : seededAt });
+      // One record's page: painted from the snapshot, then refetched on mount
+      // (see isRecordScopedPersistKey). Never trusted as current.
+      if (recordScoped) void queryClient.getQueryCache().find({ queryKey: entry.k as any, exact: true })?.invalidate();
       if (isBootstrap) {
         bootstrapEntry = entry as { k: any; d: any; t: number };
       }

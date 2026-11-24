@@ -293,9 +293,16 @@ export default function EditorPage() {
   const [mentionEntities, setMentionEntities] = useState<MentionEntity[]>([]);
   const [mentionLoading, setMentionLoading] = useState(false);
 
-  // Hydrate state from loaded artifact.
+  // Hydrate state from the loaded artifact — ONCE per artifact. `existing` is
+  // refetched after every save (the save invalidates ["/api/artifacts"]), and
+  // re-hydrating from that refetch put the saved copy back over whatever was
+  // typed since, moved the caret, and re-marked the document unsaved.
+  const hydratedFor = useRef<string | null>(null);
   useEffect(() => {
     if (existing) {
+      setShareToken(existing.shareToken);
+      if (hydratedFor.current === existing.id) return;
+      hydratedFor.current = existing.id;
       setTitle(existing.title || "");
       if (existing.type === "doc") {
         setDocHtml(existing.content || "<p></p>");
@@ -305,7 +312,6 @@ export default function EditorPage() {
         setSheet(sd && sd.rows > 0 && sd.cols > 0 ? sd : emptySheet());
       }
       setSavedId(existing.id);
-      setShareToken(existing.shareToken);
       setDirty(false);
     }
   }, [existing]);
@@ -422,10 +428,18 @@ export default function EditorPage() {
     },
   }, [type === "doc"]);
 
-  // Sync editor when artifact loads.
+  // Put the loaded document into the editor: once per artifact (and per
+  // editor instance), and WITHOUT an update event. Loading is not an edit:
+  // TipTap 3's setContent emits `update` by default, which marked a document
+  // that had just been opened "Unsaved" and then autosaved it (a write on
+  // open, W3). (2026-11-24: saved, reopened, the header said "Unsaved".)
+  const syncedFor = useRef<{ editor: unknown; id: string } | null>(null);
   useEffect(() => {
-    if (editor && existing?.type === "doc" && existing.content && editor.getHTML() !== existing.content) {
-      editor.commands.setContent(existing.content || "<p></p>");
+    if (!editor || existing?.type !== "doc") return;
+    if (syncedFor.current?.editor === editor && syncedFor.current.id === existing.id) return;
+    syncedFor.current = { editor, id: existing.id };
+    if (existing.content && editor.getHTML() !== existing.content) {
+      editor.commands.setContent(existing.content || "<p></p>", { emitUpdate: false });
     }
   }, [editor, existing]);
 

@@ -101,7 +101,25 @@ green. After a push to `main`:
    `tests/patch-keeps-unsent-fields.test.ts`.
 7. **A failed request is not an empty account.** No `queryFn` may turn a
    failure into `[]`/`null`. Let React Query keep the last good data.
-   *Guard:* `tests/sync-rules-failed-request.dom.test.tsx`.
+   The server holds the same rule: a list a payload embeds is read with a
+   helper that THROWS on a query error (`rowsOrThrow` in `getProfileDetail`),
+   never `r.data || []`. A list still loading has no count either: say
+   "Loading…", never "0 items" (Artifacts, 2026-11-24).
+   **A saved snapshot is a first paint, not the truth.** The query cache is
+   saved to localStorage and restored on reload (`hydrateQueryCache`,
+   `client/src/lib/queryClient.ts`). The LISTS it restores are re-seeded by
+   the bootstrap refetch; ONE record's page is not, so a per-record entry
+   (`isRecordScopedPersistKey`: `["/api/profiles", id, …]`) is restored with
+   its real age and marked invalidated, and its page refetches on mount. Any
+   new persisted key that the bootstrap does not re-seed needs the same.
+   (2026-11-24: an expense and a nested asset added from chat showed in
+   Finance and Assets, while the asset's own Financials and Contained tabs
+   said "No expenses logged" / "No child assets yet" — and still did after a
+   manual refresh, because the refresh restored the old page as fresh.)
+   *Guards:* `tests/sync-rules-failed-request.dom.test.tsx`,
+   `tests/persisted-record-cache.test.ts`, `tests/qa-2026-11-24-findings.test.ts`,
+   `tests/qa-2026-11-24-findings.dom.test.tsx`.
+   *Live check (real browser, smoke account):* `npx tsx tests/live-qa-2026-11-24-check.ts`.
 8. **Destructive buttons take two taps** (`useConfirmArm`). A "snooze" hides
    an alert (`useAlertSnoozes`, synced across devices). It never moves the
    record's real date.
@@ -320,6 +338,10 @@ canonical value when an alias (`currentBalance`, `annualInterestRate`)
 disagrees with it, so an alias write is silently discarded — the chat said
 "refinanced" and the record kept 6.25% / $311,172. The chat's confirmation is
 built from a read-back of the saved record, never from the model's sentence.
+That includes WHERE a record sits: the parent named in a confirmation is the
+saved row's own parent (`verifyProfileWrite` → `FieldReceipt.parentName`,
+"Assets → Tutorial Camera → 50mm Lens"), and the model's line about placement
+is dropped (2026-11-24: chat named a different parent than the lens had).
 *Guards:* `tests/chat-liability-one-record.test.ts`, `tests/profile-field-canon.test.ts`.
 
 **L3. A rate is a percent, and the record says so.** `interestRate` is stored
@@ -499,6 +521,12 @@ and a fixed box inside it does not reach the window's edges. While one is open
 `useFullScreenWorkspace` marks `<html>`/`<body>`, which hides the floating
 chrome (`data-app-floating`) and releases the desktop scrollbar gutters. Stay
 at `z-40`: menus and dialogs opened inside a workspace portal at `z-50`.
+The app behind an open workspace is covered, so it is also `inert`
+(`data-app-shell`, set and handed back by `useFullScreenWorkspace`): its
+sidebar links are out of the tab order and the accessibility tree. (2026-11-24:
+"Dashboard" / "Artifacts" were found behind the Fill In workspace, clicked at
+their position, and nothing happened.) A workspace's last step is never a dead
+end: Smart Fill's "done" offers "Show it in Artifacts".
 **W2. The X saves, then leaves; it never discards on its own.** Each
 workspace hands `WorkspaceCloseButton` a function that flushes what is pending
 and then goes to `/chat`. A failed save keeps the workspace open: the
@@ -541,6 +569,11 @@ saves itself once it has content. EVERY document autosave leaves the URL alone
 (`quietSaveRef`: the route change remounts the editor and drops the caret —
 2026-11-23, the second autosave reloaded the page mid-typing); only the Save
 button moves it. A new sheet still waits for its first Save.
+Loading a document is not an edit: the editor takes the saved content ONCE per
+document and without an update event (`setContent(…, { emitUpdate: false })`;
+TipTap 3 emits by default), and a refetch of the saved copy never re-hydrates
+the page. (2026-11-24: a saved document, reopened, said "Unsaved" and then
+autosaved itself.)
 **W4. A save never adopts another record (J1).** When `POST /api/notes`
 answers `deduped`, the Notes workspace does not take that id: it would
 overwrite the other note with whatever is typed next.

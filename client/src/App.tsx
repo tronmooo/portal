@@ -741,7 +741,7 @@ function App() {
                 {/* h-dvh (dynamic viewport) instead of h-screen so iOS Safari's URL bar
                     doesn't push content off-screen. Falls back to 100vh on browsers
                     that don't support dvh. */}
-                <div className="flex h-dvh w-full max-w-[90rem] mx-auto overflow-x-hidden">
+                <div className="flex h-dvh w-full max-w-[90rem] mx-auto overflow-x-hidden" data-app-shell>
                   {/* Sidebar hidden on mobile */}
                   <div className="hidden md:block">
                     <AppSidebar />
