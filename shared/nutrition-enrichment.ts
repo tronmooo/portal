@@ -350,7 +350,9 @@ export function normalizeQuantity(text: string): QuantityNormalization {
   const pkg = detectPackageFraction(spoken);
   if (pkg) { base.packageFraction = pkg.fraction; base.packageWord = pkg.word; }
   // "a third of a cup" → "0.3333 cup": the share is OF the measure that follows it.
-  let lc = spokenAmountsToDigits(spoken).replace(/(\d+(?:\.\d+)?)\s+of\s+(?:a|an|one)\s+(?=[a-z])/g, "$1 ");
+  let lc = spokenAmountsToDigits(spoken).replace(/(\d+(?:\.\d+)?)\s+of\s+(?:a|an|one)\s+(?=[a-z])/g, "$1 ")
+    // "170g", "12oz", "250ml": a unit written against its number is still that amount.
+    .replace(/(\d)(?=(?:kg|g|grams?|mg|oz|ml|l|lbs?|cups?|tbsp|tsp)\b)/g, "$1 ");
   const ate = lc.match(MADE_THEN_ATE_RE);
   if (ate && new RegExp(AMOUNT_RE).test(ate[2])) lc = ate[2].trim();
 

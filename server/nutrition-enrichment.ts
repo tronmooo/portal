@@ -58,6 +58,7 @@ import {
 } from "@shared/nutrition-enrichment";
 import { NUTRITION_DB, lookupNutritionDb, nutritionCandidates, phraseNamesDbItem, resolveServings, type NutritionDbItem } from "@shared/nutrition-db";
 import { ITEM_ENRICHMENT_PREF_KEY } from "@shared/item-identity";
+import { splitSeparateFoods } from "@shared/food-split";
 import { isFullLabel, parseStatedLabel, type StatedLabel } from "@shared/nutrition-label";
 import { barcodeIn, resolveFromSources, type SourceAsk } from "./nutrition-sources";
 import { verificationOf } from "@shared/nutrition-enrichment";
@@ -222,7 +223,72 @@ export async function learnAlias(storage: IStorage, phrase: string, target: Lear
   try { await storage.setPreference(PRODUCT_ALIASES_PREF_KEY, JSON.stringify(all)); } catch { /* best effort */ }
 }
 
+/** Reference facts for one basis, as the chat model states them in its log call. */
+export interface ModelBasis {
+  /** How much the facts describe: 100 (g), 240 (ml), 1 (piece), 3 (cookies). */
+  amount: number;
+  /** "g", "ml", or the countable thing: "piece", "slice", "cookie", "serving". */
+  unit: string;
+  nutrients: Record<string, unknown>;
+}
+
+/** A model's basis cut down to what can be multiplied: a positive amount, a unit, canonical non-negative numbers. */
+export function sanitizeBasis(raw: any): ModelBasis | null {
+  if (!raw || typeof raw !== "object") return null;
+  const amount = Number(raw.amount);
+  const unit = String(raw.unit || "").toLowerCase().trim().slice(0, 24);
+  if (!isFinite(amount) || amount <= 0 || amount > 5000 || !unit) return null;
+  const nutrients = cleanVector(raw.nutrients && typeof raw.nutrients === "object" ? raw.nutrients : {});
+  delete (nutrients as any).fluidMl;
+  if (typeof nutrients.calories !== "number") return null;
+  return { amount, unit, nutrients };
+}
+
+/**
+ * The food priced from the model's reference facts and the user's amount.
+ * Null when the amount cannot be read against the basis (a weight basis and
+ * "a bowl"): then the figures the model logged stand as they are.
+ */
+function componentFromBasis(basis: ModelBasis, phrase: Phrase, now: string): NutritionComponent | null {
+  const qty = normalizeQuantity(phrase.quantityText);
+  const own = normalizeQuantity(phrase.text);
+  const q = qty.grams != null || qty.ml != null || qty.count != null ? qty : own;
+  const unit = basis.unit.replace(/s$/, "");
+  const isG = /^(g|gram)$/.test(unit);
+  const isMl = /^(ml|milliliter|millilitre)$/.test(unit);
+  let servings: number | null = null;
+  let method = "";
+  const r = (n: number) => String(Math.round(n * 100) / 100);
+  if (isG && q.grams != null && !q.assumption) { servings = q.grams / basis.amount; method = `${r(q.grams)} g ÷ ${r(basis.amount)} g`; }
+  else if (isMl && q.ml != null && !q.assumption) { servings = q.ml / basis.amount; method = `${r(q.ml)} ml ÷ ${r(basis.amount)} ml`; }
+  else if (!isG && !isMl && q.count != null) { servings = q.count / basis.amount; method = `${r(q.count)} ÷ ${r(basis.amount)} ${unit}`; }
+  else if (!isG && !isMl && q.amount == null && q.grams == null && q.ml == null) { servings = 1 / basis.amount; method = `1 ${unit} (no amount stated)`; }
+  if (servings == null || !isFinite(servings) || servings <= 0 || servings > 200) return null;
+  const perServing = basis.nutrients as NutrientVector;
+  const label = `${r(basis.amount)} ${isG ? "g" : isMl ? "ml" : unit}`;
+  const source = `AI reference values per ${label} · ${method}`;
+  return {
+    name: phrase.text,
+    userQuantity: phrase.quantityText,
+    normalizedQuantity: q,
+    servings: round3(servings),
+    matchedServing: { amount: basis.amount, unit: isG ? "g" : isMl ? "ml" : unit, grams: isG ? basis.amount : null, ml: isMl ? basis.amount : null, label },
+    sourceType: "model_estimate",
+    source,
+    sourceItem: phrase.text,
+    confidence: "medium",
+    perServing,
+    nutrients: componentNutrients(perServing, servings, { source, sourceType: "model_estimate", sourceItem: phrase.text, confidence: "medium", enrichedAt: now }),
+    isBeverage: isMl,
+    servingAssumed: method.includes("no amount stated"),
+    amountFromStatedWeight: true,
+    sourceRef: { provider: "internal", id: "model-basis" },
+  };
+}
+
 export interface EnrichmentDeps {
+  /** The chat model's reference facts for this entry's food (one food, one basis). */
+  basis?: ModelBasis | null;
   /** Product database lookup for a branded phrase. Null when nothing matched. `strict` when the phrase carries no known brand, only a proper name. */
   productLookup?: (phrase: string, opts?: { strict?: boolean }) => Promise<ExternalProductMatch | null>;
   /** Shorthand the user confirmed earlier (loadLearnedAliases). */
@@ -577,6 +643,18 @@ export function restaurantBuildPhrases(item: string, message: string): Phrase[] 
   return out;
 }
 
+/** A single food's name with the punctuation that would cut it in two taken out (commas, "No. 5", an em dash). Parentheses are kept. */
+function flattenName(item: string): string {
+  let depth = 0;
+  let out = "";
+  for (const ch of String(item || "")) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth = Math.max(0, depth - 1);
+    out += depth === 0 && /[,;.—–]/.test(ch) ? " " : ch;
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+
 export function componentPhrases(item: string, message: string): Phrase[] {
   const build = restaurantBuildPhrases(item, message);
   if (build) return build;
@@ -590,7 +668,13 @@ export function componentPhrases(item: string, message: string): Phrase[] {
     if (eggs.yolks > 0) out.push({ text: "egg yolks", quantityText: `${eggs.yolks} yolks`, userQuantityStated: true });
     if (out.length > 0) return out;
   }
-  const itemParts = splitComponentPhrases(item);
+  // One food in the user's own sentence is one component, however the agent
+  // punctuated its name: "Atlantic Salmon, raw, farmed (120g)" and "Barilla
+  // Spaghetti No. 5, dry (100 g)" were each priced twice. Only what was added
+  // TO it ("with …", "+", "and") still makes a second component.
+  const saidFoods = splitSeparateFoods(String(message || "").trim().replace(/[.!?]+$/, "").replace(/[,;]?\s*\(?\b(?:barcode|upc|ean)\b[\s:#]*[\d -]{8,}\)?/gi, " ")).length;
+  const oneFood = String(message || "").trim().length > 0 && saidFoods < 2;
+  const itemParts = splitComponentPhrases(oneFood ? flattenName(item) : item);
   const msgParts = splitComponentPhrases(message);
   const parts = itemParts.length > 0 ? itemParts : msgParts;
   const haveMessage = String(message || "").trim().length > 0;
@@ -834,6 +918,12 @@ export async function lookupComponents(
     if ((m.item.kind === "generic" && branded) || m.item.confidence === "low" || hasBarcode) fallback[i] = componentFromDb(m.item, ph, now);
     else components[i] = componentFromDb(m.item, ph, now);
   });
+  // The chat model's own reference facts, multiplied here: no network, no
+  // key, no added time. Used when the table has no label-grade row.
+  if (deps.basis && phrases.length === 1 && !components[0]) {
+    const c = componentFromBasis(deps.basis, phrases[0], now);
+    if (c) components[0] = c;
+  }
   if (deps.syncOnly) {
     const unresolved = phrases.filter((_, i) => !components[i]).map((p) => p.text);
     return { components: components.filter((c): c is NutritionComponent => !!c), unresolved, usedNetwork: false };
@@ -927,6 +1017,12 @@ export interface EnrichOptions {
   deps?: EnrichmentDeps;
   /** The in-turn pass: deterministic tables only, applies only exact/high, never a proposal. */
   sync?: boolean;
+  /**
+   * The reference facts the chat model knows for this food, for ONE stated
+   * basis (per 100 g, per piece, per serving). The server multiplies them by
+   * the amount the user said: the model's knowledge, the server's arithmetic.
+   */
+  basis?: ModelBasis;
   /** Look the food up afresh even though the entry is already enriched (its food was replaced). */
   refresh?: boolean;
   /** The entry was logged from a scanned label (or a barcode match): the label is its whole source. */
@@ -974,6 +1070,7 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
   const deps: EnrichmentDeps = opts.sync
     ? { now: () => new Date().toISOString(), syncOnly: true, aliases: {}, ...(opts.deps || {}) }
     : { ...defaultDeps(), ...(opts.deps || {}) };
+  if (opts.basis) deps.basis = sanitizeBasis(opts.basis);
   const now = deps.now!();
   const done = (o: Omit<EnrichOutcome, "ms">): EnrichOutcome => ({ ...o, ms: Date.now() - started });
 
@@ -1099,7 +1196,8 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
 
   // The in-turn pass writes only what a label or a menu states (exact/high)
   // and never leaves a proposal behind; anything less waits for the full pass.
-  if (opts.sync && !opts.scan && (confidence === "medium" || !appliesAutomatically(mode, confidence))) {
+  const fromBasis = lookup.components.some((c) => c.sourceRef?.id === "model-basis");
+  if (opts.sync && !opts.scan && !fromBasis && (confidence === "medium" || !appliesAutomatically(mode, confidence))) {
     return done({ status: "skipped", reason: `sync pass: ${confidence} — left for the full lookup`, needsMore: true, trackerId: tracker.id, trackerName: tracker.name });
   }
   const shouldApply = intent === "force" || !!opts.scan || (intent === "auto" && appliesAutomatically(mode, confidence));

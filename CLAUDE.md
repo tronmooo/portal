@@ -1050,6 +1050,18 @@ log from 3.6 s to 5.6 s and a three-food sentence from 6.9 s to 14.3 s
 network lookup back in the turn without measuring it. Needs `FDC_API_KEY` in the deployment
 (`GET /api/nutrition/sources` says whether it is set); without it USDA's
 shared demo key allows 10 requests an hour and generic foods fall to estimates.
+**N1c. The model knows the facts; the server does the math — and nothing
+needs a key.** (Owner, 2026-11-25: "Why does it need an API key and need to
+be connected to USDA? … ChatGPT already knows the nutritional facts … make
+it fast.") With every food log the chat model passes `basis`: the reference
+facts it knows for ONE basis (per 100 g, per 100 ml, per piece or label
+serving). The server multiplies them by the amount the user said
+(`componentFromBasis`, in the turn, no network) and stores that; it is
+labelled Estimated, never Verified. The mistake this removes is the model's
+multiplication, not its knowledge (150 g of quinoa was logged with the
+per-cup figure). A label-grade row in the table still wins. USDA is OPTIONAL:
+with no key it is not asked at all; Open Food Facts needs none and is used
+for barcodes.
 **N1b. A scanned label is read, shown, then logged.** `Scan label` in the
 chat box (`NutritionScanDialog`) or a picture sent in chat with words that ask
 for it to be logged (`asksToLogPicturedFood`) is read by a vision model into

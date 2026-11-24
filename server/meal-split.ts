@@ -81,8 +81,10 @@ export async function splitCombinedFoodLog(
 
   const rest: Record<string, any> = {};
   for (const [k, v] of Object.entries(values)) if (!totalKeys.includes(k) && k !== itemKey) rest[k] = v;
+  // A basis described the combined item; it is not any one food's.
+  const { basis: _basis, ...shared } = input;
   return foods.map((food, i) => ({
-    ...input,
+    ...shared,
     values: { ...rest, [itemKey]: foodLabel(food), ...shares[i] },
   }));
 }

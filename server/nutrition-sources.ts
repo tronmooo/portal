@@ -211,6 +211,9 @@ function fdcCandidate(f: any): SourceCandidate | null {
 }
 
 export async function fdcSearch(query: string, kind: "generic" | "branded", deps: SourceDeps = {}): Promise<SourceCandidate[]> {
+  // USDA is OPTIONAL. With no key configured it is not asked at all (the
+  // shared demo key allows ten requests an hour: every miss was wasted time).
+  if (!deps.fetchJson && !fdcKey()) return [];
   // (A phrase that may be either is searched both ways by the caller.)
   const q = String(query || "").trim();
   if (!q) return [];

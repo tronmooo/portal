@@ -360,7 +360,7 @@ describe("7. Regressions the live run exposed", () => {
         modelEstimate: async () => { throw new Error("the model must not be asked when a database answered"); } },
     });
     expect(out.status).toBe("applied");
-    expect(asked).toEqual(["Teff, cooked (200 g)|false"]);
+    expect(asked).toEqual(["Teff cooked (200 g)|false"]);
     const stored = (await storage.getTrackerEntry(entry!.id))! as any;
     expect(stored.values).toMatchObject({ calories: 202, protein: 7.74, carbs: 39.72, fat: 1.3 });
     expect(stored.computed.nutrition.components[0].sourceRef).toEqual({ provider: "fdc", id: "168918", dataType: "SR Legacy" });
@@ -404,5 +404,55 @@ describe("9. Found by the full real-model run (2026-11-25)", () => {
     expect(asked).toHaveLength(1);
     expect(asked[0].quantityText).toContain("5010029000023");
     expect(asked[0].branded).toBe(true);
+  });
+});
+
+// Owner, 2026-11-25: "Why does it need an API key and need to be connected to
+// USDA? … ChatGPT already knows the nutritional facts … make it fast."
+// The chat model states the reference facts it knows for ONE basis in the log
+// call it already makes; the server multiplies. No network, no key.
+describe("10. The model knows the facts; the server does the math (no network)", () => {
+  const noNetwork = { now: () => NOW, sourceLookup: async () => { throw new Error("no network in the turn"); }, modelEstimate: async () => { throw new Error("no second model call"); } };
+  async function withBasis(item: string, message: string, basis: any, base: Record<string, number> = WRONG) {
+    const entry = await storage.logEntry({ trackerId, values: { item, ...base } });
+    const out = await enrichNutritionEntry(storage, { entryId: entry!.id, trackerId, message, mode: "auto", sync: true, basis, deps: noNetwork as any });
+    const stored = (await storage.getTrackerEntry(entry!.id))! as any;
+    return { out, values: stored.values as Record<string, any>, e: stored.computed?.nutrition as NutritionEnrichment | undefined };
+  }
+
+  it("per 100 g × the stated weight replaces the model's own multiplication (150 g of quinoa was logged with the per-cup 222 kcal)", async () => {
+    const r = await withBasis("Quinoa, cooked (150g)", "I ate 150 grams of cooked quinoa.", { amount: 100, unit: "g", nutrients: { calories: 120, protein: 4.4, carbs: 21.3, fat: 1.92, fiber: 2.8 } }, { calories: 222, protein: 8, carbs: 39, fat: 3.5 });
+    expect(r.out.status).toBe("applied");
+    expect(r.values).toMatchObject({ calories: 180, protein: 6.6, carbs: 31.95, fat: 2.88, fiber: 4.2 });
+    expect(r.e!.components[0].source).toBe("AI reference values per 100 g · 150 g ÷ 100 g");
+    // It is the model's knowledge: labelled an estimate, never "verified".
+    expect(r.e!.verification).toBe("estimated");
+  });
+
+  it("an amount written against its unit ('170g') is read", async () => {
+    const r = await withBasis("Baked Atlantic Cod (170g)", "I ate 170g of baked Atlantic cod", { amount: 100, unit: "g", nutrients: { calories: 105, protein: 22.8, carbs: 0, fat: 0.9 } });
+    expect(r.values).toMatchObject({ calories: 178.5, protein: 38.76, fat: 1.53 });
+  });
+
+  it("a countable basis: 12 crackers of a 6-cracker serving, 1.5 bars, a drink per 100 ml", async () => {
+    expect((await withBasis("Triscuit Original Crackers (12)", "I ate 12 Triscuit Original crackers.", { amount: 6, unit: "crackers", nutrients: { calories: 120, protein: 3, carbs: 20, fat: 3.5 } })).values).toMatchObject({ calories: 240, protein: 6, carbs: 40, fat: 7 });
+    expect((await withBasis("Larabar Peanut Butter Chocolate Chip", "I ate one and a half Larabar Peanut Butter Chocolate Chip bars", { amount: 1, unit: "bar", nutrients: { calories: 210, protein: 6, carbs: 24, fat: 12 } })).values).toMatchObject({ calories: 315, protein: 9, carbs: 36, fat: 18 });
+    expect((await withBasis("Oat milk (350 ml)", "I drank 350 ml of oat milk", { amount: 100, unit: "ml", nutrients: { calories: 46, protein: 1, carbs: 6.6, fat: 1.5 } })).values).toMatchObject({ calories: 161, protein: 3.5, carbs: 23.1, fat: 5.25 });
+  });
+
+  it("a label-grade row in the table still wins over the model's facts", async () => {
+    const r = await withBasis("Chobani Zero Sugar Vanilla Greek Yogurt", "I ate 225 grams of Chobani Zero Sugar Vanilla Greek Yogurt.", { amount: 100, unit: "g", nutrients: { calories: 99, protein: 9, carbs: 9, fat: 9 } });
+    expect(r.values).toMatchObject({ calories: 90, protein: 18, carbs: 7.5 });
+    expect(r.e!.components[0].sourceType).toBe("manufacturer");
+  });
+
+  it("an amount the basis cannot be multiplied by leaves the logged figures alone; unknown stays unknown; a bad basis is ignored", async () => {
+    const bowl = await withBasis("Pho (1 bowl)", "I had a bowl of pho", { amount: 100, unit: "g", nutrients: { calories: 45, protein: 3, carbs: 5, fat: 1 } }, { calories: 420, protein: 28, carbs: 50, fat: 10 });
+    expect(bowl.values).toMatchObject({ calories: 420, protein: 28 });
+    const partial = await withBasis("Kimchi (150 g)", "I ate 150 g of kimchi", { amount: 100, unit: "g", nutrients: { calories: 15, protein: 1.1, carbs: 2.4 } }, { calories: 30, protein: 2, carbs: 4 });
+    expect(partial.values).toMatchObject({ calories: 22.5, protein: 1.65, carbs: 3.6 });
+    expect(partial.e!.totals.fat).toBeUndefined();
+    const bad = await withBasis("Kimchi (150 g)", "I ate 150 g of kimchi", { amount: 0, unit: "g", nutrients: { calories: 15 } }, { calories: 30, protein: 2, carbs: 4 });
+    expect(bad.values.calories).toBe(30);
   });
 });
