@@ -11,6 +11,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
+      'tests/workflow-matrix.test.ts',
       'tests/swipe-guard.dom.test.tsx',
       'tests/recurring-occurrence-actions.test.ts',
       'tests/calendar-detail-redesign.dom.test.tsx',
