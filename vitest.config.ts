@@ -13,6 +13,8 @@ export default defineConfig({
     include: [
       'tests/workflow-matrix.test.ts',
       'tests/schema-expectations.test.ts',
+      'tests/qa-2026-11-24-dashboard-calendar.test.ts',
+      'tests/commit-date-input.dom.test.tsx',
       'tests/swipe-guard.dom.test.tsx',
       'tests/recurring-occurrence-actions.test.ts',
       'tests/calendar-detail-redesign.dom.test.tsx',
@@ -56,6 +58,7 @@ export default defineConfig({
       'tests/chart-data.test.ts',
       'tests/tracker-normalize.test.ts',
       'tests/tracker-entry-update.test.ts',
+      'tests/tracker-entry-rederive.test.ts',
       'tests/tracker-read-no-write.test.ts',
       'tests/scoped-child-query.test.ts',
       'tests/create-tracker-universal.test.ts',

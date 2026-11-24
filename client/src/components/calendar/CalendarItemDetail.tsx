@@ -275,7 +275,15 @@ export function CalendarItemDetail({
   // place it is managed, never the type repeated ("Source: Birthday").
   const sourceLabel = ownerName || series.source.label
     || (series.source.system === "event" ? "Calendar" : isTask ? "Tasks" : KIND_LABELS[series.kind]);
-  const editLabel = inPlace ? "Edit" : actionLabelFor("edit", series.kind);
+  // "Edit" on one date of a series edits the series: the label says so (O4).
+  const editLabel = inPlace ? (isRecurring ? "Edit series" : "Edit") : actionLabelFor("edit", series.kind);
+  /** The tapped date's own actions: the way to change that date alone. */
+  const tappedItems = menuItemsFor(occurrence);
+  const openOnlyThisDate = () => {
+    closeMenus();
+    setScreen({ name: "overview" });
+    setMenuOcc(occurrence);
+  };
 
   /** One row of the schedule list. */
   const OccurrenceRow = ({ o, compact = false }: { o: CalendarOccurrence; compact?: boolean }) => {
@@ -314,8 +322,16 @@ export function CalendarItemDetail({
   /** Series-level actions: the More menu and the Options tab share them. */
   const SeriesOptions = ({ inMenu }: { inMenu: boolean }) => (
     <div className="space-y-2">
+      {/* One date of a series was tapped: changing that date alone comes
+          first, and each row says how far it reaches (O4). */}
+      {isRecurring && tappedItems.length > 0 && (
+        <ActionRow icon={CalendarClock} label={`Change only ${fmtShort(occurrence.effectiveDate)}`}
+          hint="Move, skip or remove just this date. The rest of the series stays."
+          onClick={openOnlyThisDate} testId={inMenu ? "cal-more-edit-one" : "cal-option-edit-one"} />
+      )}
       <ActionRow icon={Pencil} label={editLabel}
-        hint={inPlace ? "Name, schedule and reminders" : "Opens the record this date comes from"}
+        hint={!inPlace ? "Opens the record this date comes from"
+          : isRecurring ? "Name, schedule and reminders, for every date" : "Name, schedule and reminders"}
         onClick={() => openEdit()} testId={inMenu ? "cal-more-edit" : "cal-option-edit"} />
       {inMenu && future.length > 0 && (
         <ActionRow icon={CalendarDays} label="View all occurrences" hint="Every date, with history"
@@ -359,6 +375,8 @@ export function CalendarItemDetail({
               onBack={() => setScreen({ name: "overview" })}
               onSaved={({ split }) => { if (split) onClose(); else setScreen({ name: "overview" }); }}
               onGone={onClose}
+              onlyDate={isRecurring && tappedItems.length > 0 ? occurrence.effectiveDate : undefined}
+              onEditOnly={openOnlyThisDate}
             />
           </>
         ) : (
@@ -699,14 +717,20 @@ export function CalendarItemDetail({
 
             {/* ═══════════ Action list: one date, or the More menu ═══════════ */}
             {(menuOcc || moreOpen) && (
-              <div className="absolute inset-0 z-10 flex flex-col justify-end" data-testid="cal-action-sheet">
+              <div className="absolute inset-0 z-10 flex flex-col justify-end" data-testid="cal-action-sheet"
+                role="group" aria-label={menuOcc ? `Actions for ${fmtShort(menuOcc.effectiveDate)} only` : `Actions for ${series.title}`}>
                 <button type="button" aria-label="Close" className="flex-1 bg-black/50" onClick={closeMenus} />
                 <div className="rounded-t-3xl border-t border-border bg-background px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] max-h-[80%] overflow-y-auto">
                   <div className="flex items-center gap-3 mb-3">
                     <CalendarDays className="h-5 w-5 shrink-0 text-[hsl(var(--accent-hsl))]" />
-                    <p className="flex-1 text-base font-bold tabular-nums" data-testid="cal-action-sheet-title">
-                      {menuOcc ? fmtShort(menuOcc.effectiveDate) : series.title}
-                    </p>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-base font-bold tabular-nums" data-testid="cal-action-sheet-title">
+                        {menuOcc ? fmtShort(menuOcc.effectiveDate) : series.title}
+                      </p>
+                      {menuOcc && isRecurring && (
+                        <p className="text-[12px] text-muted-foreground" data-testid="cal-action-sheet-scope">Only this date</p>
+                      )}
+                    </div>
                     <button type="button" aria-label="Close" onClick={closeMenus}
                       className="h-9 w-9 grid place-items-center rounded-full hover:bg-muted" data-testid="cal-action-sheet-close">
                       <X className="h-5 w-5" />

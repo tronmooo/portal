@@ -73,6 +73,8 @@ import type { Task, Profile } from "@shared/schema";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { changedFieldsOnly } from "@shared/field-patch";
 import { useToast } from "@/hooks/use-toast";
+import { CommitDateInput } from "@/components/CommitDateInput";
+import { dateInputState, UNFINISHED_DATE_MESSAGE } from "@/lib/date-input";
 
 const PRIORITY_COLORS: Record<string, string> = {
   low: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
@@ -257,10 +259,17 @@ function TaskDialog({
     },
   });
 
+  const dueInputRef = useRef<HTMLInputElement>(null);
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
       toast({ title: "Title required", description: "Enter a task title", variant: "destructive" });
+      return;
+    }
+    // A half-typed date is not "no date" (lib/date-input): keep the form open.
+    if (dateInputState(dueInputRef.current) === "partial") {
+      toast({ title: "Due date isn't finished", description: UNFINISHED_DATE_MESSAGE, variant: "destructive" });
+      dueInputRef.current?.focus();
       return;
     }
     // Close dialog immediately for snappy UX — optimistic insert/patch is in onMutate.
@@ -311,6 +320,7 @@ function TaskDialog({
             <div className="space-y-1">
               <Label>Due Date</Label>
               <Input
+                ref={dueInputRef}
                 type="date"
                 value={dueDate}
                 onChange={e => setDueDate(e.target.value)}
@@ -593,17 +603,17 @@ function TaskItem({
                   dialog uses, optimistic, with the row still clickable to
                   open the full editor for notes and tags. */}
               {dateEditing ? (
-                <input
-                  type="date"
+                <CommitDateInput
                   autoFocus
-                  defaultValue={task.dueDate?.slice(0, 10) ?? ""}
+                  value={task.dueDate?.slice(0, 10) ?? ""}
                   className="text-xs bg-transparent border border-border rounded px-1 py-0.5"
                   onClick={e => e.stopPropagation()}
-                  onChange={e => {
-                    const next = e.target.value;
-                    if (next === (task.dueDate?.slice(0, 10) ?? "")) return;
+                  // A WHOLE day only: on plain `onChange` the first typed year
+                  // digit ("0002-11-25") closed the picker and was sent. ""
+                  // clears the date (null fails the schema).
+                  onCommit={(day) => {
                     setDateEditing(false);
-                    patchMutation.mutate({ dueDate: next || null });
+                    patchMutation.mutate({ dueDate: day });
                   }}
                   onBlur={() => setDateEditing(false)}
                   onKeyDown={e => { if (e.key === "Escape") setDateEditing(false); }}

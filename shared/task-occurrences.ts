@@ -195,3 +195,20 @@ export function taskOccurrenceLabel(
 export function taskRepeats(task: TaskLike): boolean {
   return !!parseRecurrence(Array.isArray(task?.tags) ? task.tags.map(String) : []).freq;
 }
+
+/**
+ * Is the task's occurrence on `dateISO` done?
+ *
+ * Only the STORED occurrence can be complete (projected future dates of a
+ * repeating task are always still to do). A task with no due date has exactly
+ * one occurrence — the row itself — so it is done when the row is. Comparing
+ * its date with an empty `dueDate` answered "not done" for every undated task:
+ * the Calendar confirmed the completion, then kept showing "0 completed" and
+ * "Mark as done" while the Dashboard listed the task as Completed (owner
+ * report 2026-11-24).
+ */
+export function isTaskOccurrenceDone(task: TaskLike, dateISO: string): boolean {
+  if (String(task.status || "").toLowerCase() !== "done") return false;
+  const due = String(task.dueDate || "").slice(0, 10);
+  return !due || due === String(dateISO).slice(0, 10);
+}

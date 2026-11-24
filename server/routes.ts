@@ -1,6 +1,8 @@
 import { z } from "zod";
 import express, { type Express, type Request } from "express";
 import { fieldPatchBetween } from "../shared/field-patch";
+import { briefingFacts, briefingFingerprint, reconcileBriefing } from "../shared/dashboard-briefing";
+import { isTestDataRow } from "../shared/test-data";
 import { stampSalvageProvenance } from "@shared/asset-salvage";
 import { resolveProfileTypeForCreate, findDuplicate, dedupRecordFromExpense, dedupRecordFromEvent, dedupRecordFromTask, isObligationFieldKey } from "../shared/domain";
 import { shouldAppendClarifyingQuestion, appendClarifyingQuestion } from "@shared/chat-clarify";
@@ -3132,39 +3134,40 @@ export async function registerRoutes(
       const tz = getTimezone(req);
       const todayISO = new Date().toLocaleDateString("en-CA", { timeZone: tz });
 
+      const enhanced: any = await storage.getDashboardEnhanced(undefined, useFilter ? ids : undefined);
+      const fin = enhanced?.financeSnapshot || {};
+
+      // The counts the model is given are the dashboard's own (Rule 1):
+      // the task list the Tasks Due tile counts, scoped the way /api/tasks
+      // scopes it, and today's events as the Timeline lists them. This used to
+      // read `enhanced.tasks` / `enhanced.events` / `enhanced.habits` — keys
+      // the payload never had — so every count was 0 and the summary said "no
+      // tasks, overdue items or events" beside "7 tasks due, 1 late" (owner
+      // report 2026-11-24). `briefingFacts` throws on a missing list rather
+      // than counting it as empty.
+      let scopedTasks: any[] = await storage.getTasks();
+      if (useFilter) scopedTasks = await filterByProfileScope(scopedTasks, ids, cacheUserKey(req as AuthenticatedRequest, "tasks:"));
+      const facts = briefingFacts({
+        tasks: scopedTasks.filter((t: any) => !isTestDataRow(t?.title) && !isTestDataRow(t?.description)),
+        todaysEvents: enhanced?.todaysEvents,
+        upcomingBills: fin?.upcomingBills,
+        todayISO,
+        timezone: tz,
+      });
+
       // PERF (2026-07-17 live drive): every scope switch regenerated the
       // briefing via a fresh LLM call — 5-7s of skeleton lines that made an
       // otherwise-instant dashboard feel slow. The briefing is a DAILY digest:
-      // cache it per user+scope+day (4h TTL, NOT data-version-stamped — the
-      // manual Refresh button passes force:true to regenerate on demand), so
-      // returning to a scope you've already seen today renders it instantly.
-      const briefingKey = `aisummary:${userId}:${useFilter ? ids.slice().sort().join(",") : "everyone"}:${todayISO}`;
+      // cache it per user+scope+day (4h TTL; the manual Refresh button passes
+      // force:true to regenerate on demand), so returning to a scope you've
+      // already seen today renders it instantly. The key carries the facts'
+      // fingerprint: a summary written for "0 tasks" is never served once a
+      // task exists.
+      const briefingKey = `aisummary:${userId}:${useFilter ? ids.slice().sort().join(",") : "everyone"}:${todayISO}:${briefingFingerprint(facts)}`;
       if (!force) {
         const cachedBriefing = getCached(briefingKey);
         if (cachedBriefing) return res.json(cachedBriefing);
       }
-
-      const enhanced: any = await storage.getDashboardEnhanced(undefined, useFilter ? ids : undefined);
-      const inNextDays = (iso: string, days: number) => {
-        if (!iso) return false;
-        try {
-          const d = new Date(iso); const t = new Date(todayISO);
-          const diff = (d.getTime() - t.getTime()) / 86400000;
-          return diff >= -1 && diff <= days;
-        } catch { return false; }
-      };
-
-      const fin = enhanced?.financeSnapshot || {};
-      const tasksAll: any[] = Array.isArray(enhanced?.tasks) ? enhanced.tasks : [];
-      const obligationsAll: any[] = Array.isArray(enhanced?.upcomingObligations) ? enhanced.upcomingObligations : (Array.isArray(fin?.upcomingBills) ? fin.upcomingBills : []);
-      const habitsAll: any[] = Array.isArray(enhanced?.habits) ? enhanced.habits : [];
-      const eventsAll: any[] = Array.isArray(enhanced?.events) ? enhanced.events : [];
-
-      const tasksDueToday = tasksAll.filter((t) => t?.dueDate?.startsWith(todayISO) && !t.completed).length;
-      const tasksOverdue = tasksAll.filter((t) => t?.dueDate && t.dueDate < todayISO && !t.completed).length;
-      const billsThisWeek = obligationsAll.filter((b) => inNextDays(b?.nextDueDate || b?.dueDate, 7)).length;
-      const eventsToday = eventsAll.filter((e) => (e?.startDate || e?.date || "").startsWith(todayISO)).length;
-      const habitsToday = habitsAll.length;
 
       const ctx = {
         scope: useFilter ? (scopeLabel || `Selected (${ids.length})`) : "Everyone",
@@ -3175,13 +3178,16 @@ export async function registerRoutes(
           monthlySpend: Math.round(fin.totalMonthlySpend || 0),
           topSpendCategories: Array.isArray(fin.spendByCategory) ? fin.spendByCategory.slice(0, 3) : [],
         },
-        today: { tasksDueToday, tasksOverdue, billsThisWeek, eventsToday, habitsTracked: habitsToday },
+        today: facts,
       };
 
       const prompt = `You are a personal-life dashboard briefing.
 Produce a focused, useful 3-4 sentence daily briefing for THIS scope: "${ctx.scope}".
 Be specific with numbers. Mention only what actually has values. Skip empty signals.
 Never fabricate data not provided. End with one concrete suggestion.
+The "today" numbers are the ones shown on the dashboard tiles beside this text:
+state them exactly, and never say there are no tasks, no overdue items or no
+events when the matching number is above zero.
 
 CONTEXT JSON:
 ${JSON.stringify(ctx, null, 2)}`;
@@ -3193,11 +3199,16 @@ ${JSON.stringify(ctx, null, 2)}`;
         messages: [{ role: "user", content: prompt }],
       });
       const text = resp.content[0]?.type === "text" ? (resp.content[0] as any).text.trim() : "";
+      // The model's paragraph is shown only when it agrees with the counts;
+      // one that denies a non-zero count is replaced by the plain facts.
+      const reconciled = reconcileBriefing(text, facts);
+      if (reconciled.replaced && text) log.warn(`[AISummary] model text contradicted the dashboard (${reconciled.contradictions.join(", ")}); showing the facts`);
       const payload = {
-        summary: text || "No summary available.",
+        summary: reconciled.summary,
         scope: ctx.scope,
         scopedIds: useFilter ? ids : null,
         generatedAt: new Date().toISOString(),
+        facts,
       };
       if (text) setCache(briefingKey, payload, 4 * 60 * 60 * 1000);
       res.json(payload);

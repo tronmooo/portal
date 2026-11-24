@@ -131,7 +131,7 @@ import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurrence, effectiveDueDate, resolveOccurrenceKey, isEndedBillFields, currentBillDueDate, readDueDate } from "../shared/liability-recurrence";
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
-import { taskOccurrenceDates, taskOccurrenceLabel, taskRepeats } from "../shared/task-occurrences";
+import { taskOccurrenceDates, isTaskOccurrenceDone, taskOccurrenceLabel, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { formatLoggedValues } from "../shared/tracker-units";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
@@ -185,6 +185,8 @@ import {
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
 import { calorieContextForOwner, caloriesForStoredEntry, type CalorieContext } from "@shared/fitness-metrics";
+import { rederiveEditedEntry } from "@shared/entry-rederive";
+import { derivePersonalMetrics, parseHeightToCm } from "@shared/estimation-engine";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
 import { ProfileLinkFailure } from "./profile-link-failure";
@@ -3852,8 +3854,49 @@ export class SupabaseStorage implements IStorage {
     const editOwnerCtx: CalorieContext = tracker
       ? await this.ownerCalorieContext(tracker, (existing as any).profile_id ?? (patch as any).profileId)
       : {};
+    // The owner's height and their own recent entries, which the engine's
+    // step and pace estimates read — only looked up for an entry that carries
+    // derived figures (shared/entry-rederive).
+    const hasDerived = (row: any) => {
+      const e = row?.computed?.enrichment;
+      return !!e && (Object.keys(e.calculated || {}).length > 0 || Object.keys(e.estimated || {}).length > 0);
+    };
+    let ownerHeightCm: number | null = null;
+    let ownerHistory: any[] = [];
+    if (tracker && hasDerived(existing) && (patchValues || patch.valuesToDelete)) {
+      const ownerId = (existing as any).profile_id || (tracker.linkedProfiles || [])[0];
+      try {
+        const owner: any = ownerId ? await this.getProfile(ownerId) : undefined;
+        const pf = owner?.fields || {};
+        ownerHeightCm = parseHeightToCm(pf.height ?? pf.heightCm ?? pf.height_cm ?? pf.heightInches);
+      } catch { /* a population-average stride is used instead */ }
+      ownerHistory = (tracker.entries || [])
+        .filter((e: any) => e.id !== entryId && (!e.profileId || !ownerId || e.profileId === ownerId))
+        .slice(0, 60);
+    }
     const buildUpdate = (row: any) => {
-    const mergedValues = mergeAndApplyDeletes(
+    // A derived figure the user did not touch is derived again from what the
+    // entry now says, instead of being written back as if they had typed it.
+    const rederived = tracker && hasDerived(row)
+      ? rederiveEditedEntry({
+          trackerName: tracker.name,
+          storedValues: row.entry_values || {},
+          enrichment: row.computed.enrichment,
+          patchValues,
+          valuesToDelete: patch.valuesToDelete,
+          ctx: {
+            heightCm: ownerHeightCm,
+            weightKg: editOwnerCtx.bodyWeightKg ?? null,
+            ageYears: editOwnerCtx.ageYears ?? null,
+            sex: editOwnerCtx.sex ?? null,
+            ownerLabel: editOwnerCtx.ownerLabel ?? null,
+            personal: derivePersonalMetrics(ownerHistory),
+            category: tracker.category,
+            fields: tracker.fields as any,
+          },
+        })
+      : null;
+    const mergedValues = rederived ? rederived.values : mergeAndApplyDeletes(
       row.entry_values || {},
       patchValues,
       patch.valuesToDelete
@@ -3874,6 +3917,7 @@ export class SupabaseStorage implements IStorage {
     for (const k of ["enrichment", "nutrition", "servingFactor"]) {
       if (row.computed && row.computed[k] !== undefined) carried[k] = row.computed[k];
     }
+    if (rederived) carried.enrichment = rederived.enrichment;
     const extra = { ...carried, ...(patch.computed || {}) };
     try {
       if (tracker) {
@@ -4867,9 +4911,12 @@ export class SupabaseStorage implements IStorage {
           color: taskColor, category: "task", description: task.description,
           // Only the stored occurrence can be complete; projected future ones
           // are always still to do.
-          completed: task.status === "done" && d === String(task.dueDate || "").slice(0, 10),
+          completed: isTaskOccurrenceDone(task, d),
           linkedProfiles: task.linkedProfiles, sourceId: task.id,
-          meta: { priority: task.priority, status: task.status, tags: task.tags, recurring: isSeries },
+          // `undated`: the task has NO due date and sits on the day it was
+          // added. The Calendar says so ("No due date") instead of letting that
+          // day read as the due date the Dashboard says is blank.
+          meta: { priority: task.priority, status: task.status, tags: task.tags, recurring: isSeries, ...(task.dueDate ? {} : { undated: true }) },
         });
       }
     }

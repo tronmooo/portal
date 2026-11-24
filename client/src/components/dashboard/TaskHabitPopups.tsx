@@ -32,6 +32,8 @@ import { ActiveFilterNotice } from "@/components/ActiveFilterNotice";
 import { tonePalette } from "@/components/dashboard/visuals";
 import { habitAccent } from "@/lib/habit-visuals";
 import { iconByName } from "@/lib/icon-map";
+import { CommitDateInput } from "@/components/CommitDateInput";
+import { dateInputState, UNFINISHED_DATE_MESSAGE } from "@/lib/date-input";
 import { RingStack, tone } from "@/components/tracker-detail";
 
 // Tasks and habits are Executive-tab concepts; they take its accent so opening
@@ -128,6 +130,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   // keeps the task off the Recurring tab.
   const emptyComposer = { open: false, title: "", kind: "onetime" as "onetime" | "recurring", priority: "medium", recurrence: "", dueDate: "", dueTime: "", category: "" };
   const [composer, setComposer] = useState(emptyComposer);
+  const composerDueRef = useRef<HTMLInputElement>(null);
   // Reveal completed tasks (collapsed by default — no dedicated tab anymore).
   const [showCompleted, setShowCompleted] = useState(false);
   // Sort within a tab.
@@ -620,6 +623,13 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     if (recurrence) tags.push(`recur:${recurrence}`);
     if (composer.priority === "critical") tags.push("prio:critical");
     if (composer.category) tags.push(`cat:${composer.category}`);
+    // A half-typed date is not "no date": say so instead of filing the task
+    // under Unscheduled with what the user typed thrown away.
+    if (dateInputState(composerDueRef.current) === "partial") {
+      toast({ title: "Due date isn't finished", description: UNFINISHED_DATE_MESSAGE, variant: "destructive" });
+      composerDueRef.current?.focus();
+      return;
+    }
     createMutation.mutate({
       title,
       priority: composer.priority === "critical" ? "high" : composer.priority,
@@ -786,7 +796,11 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Calendar className="h-3 w-3" />Due date</label>
-              <input type="date" value={t.dueDate || ""} onChange={e => updateMutation.mutate({ id: t.id, patch: { dueDate: e.target.value || undefined } })}
+              {/* Saves a WHOLE day only (CommitDateInput): saving on every
+                  change wrote year 2 on the first typed year digit, which the
+                  server refused and the field then reset. "" clears the date —
+                  `undefined` is dropped from the JSON and cleared nothing. */}
+              <CommitDateInput value={String(t.dueDate || "").slice(0, 10)} onCommit={(day) => updateMutation.mutate({ id: t.id, patch: { dueDate: day } })}
                 className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-due-date" />
             </div>
             <div>
@@ -1155,7 +1169,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                     ) : (
                       <div className="text-xs text-muted-foreground/60 border border-dashed border-border rounded-lg px-2 py-1.5" data-testid="composer-no-repeat">No repeat</div>
                     )}
-                    <input type="date" value={composer.dueDate} onChange={e => setComposer(c => ({ ...c, dueDate: e.target.value }))}
+                    <input ref={composerDueRef} type="date" value={composer.dueDate} onChange={e => setComposer(c => ({ ...c, dueDate: e.target.value }))}
                       className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="composer-due" />
                   </div>
                   {/* Due time + Category */}

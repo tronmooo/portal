@@ -9,14 +9,14 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 | | Total | No test at all | Not exercised on the deployed app |
 |---|---:|---:|---:|
-| API write routes | 184 | 45 | 86 |
-| API read routes | 111 | 37 | 60 |
+| API write routes | 184 | 45 | 85 |
+| API read routes | 111 | 37 | 59 |
 | Chat tools that write | 111 | 22 | 71 |
 | Chat tools that read | 42 | 20 | 34 |
 
 Screens: 29 pages (48 routes). 15 are opened by no live browser check, 18 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 603. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 608. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -41,7 +41,7 @@ Test files read: 603. Test files no config runs: 2 (`tests/critical-flows.test.t
 | Workspaces | 5 | 1 | 4 | 0 | 0 | 0 |
 | Journal & notes | 9 | 0 | 4 | 4 | 9 | 6 |
 | Record details | 6 | 0 | 6 | 4 | 3 | 1 |
-| AI chat | 9 | 2 | 5 | 5 | 22 | 7 |
+| AI chat | 9 | 2 | 4 | 5 | 22 | 7 |
 | System (not a user workflow) | 8 | 5 | 8 | 9 | 0 | 0 |
 
 ## Screens
@@ -52,9 +52,9 @@ reached only by clicking through is not detected).
 | Page | Routes | Desktop browser | Touch browser | jsdom tests |
 |---|---|---:|---:|---:|
 | ArtifactsPage | `/artifacts` `/dashboard/documents` `/dashboard/artifacts` | **0** | 1 | 2 |
-| CalendarPage | `/calendar` | 2 | **0** | 1 |
+| CalendarPage | `/calendar` | 4 | **0** | 1 |
 | ChatPage | `/chat` | 3 | 1 | **0** |
-| DashboardPage | `/dashboard` `/dashboard/executive` `/dashboard/daily` | 1 | **0** | **0** |
+| DashboardPage | `/dashboard` `/dashboard/executive` `/dashboard/daily` | 2 | **0** | **0** |
 | DetailsPage | `/details` | **0** | **0** | **0** |
 | DocumentDetailPage | `/documents/:id` | **0** | 1 | 1 |
 | DocumentReviewPage | `/documents/:id/review` | **0** | **0** | 1 |
@@ -78,7 +78,7 @@ reached only by clicking through is not detected).
 | ShareViewPage | `/share/:token` | **0** | **0** | **0** |
 | TasksPage | `/dashboard/tasks` `/tasks` | **0** | **0** | 2 |
 | TermsPage | `/terms` | **0** | **0** | **0** |
-| TrackersPage | `/trackers` `/linked` `/liabilities` | 3 | 1 | 2 |
+| TrackersPage | `/trackers` `/linked` `/liabilities` | 4 | 1 | 2 |
 | WellnessPage | `/wellness` `/dashboard/health` `/health` | **0** | 1 | 1 |
 
 ## Every workflow door, by domain
@@ -371,9 +371,9 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `GET /api/tasks` | yes | 25 | 12 |
-| `POST /api/tasks` | yes | 7 | 10 |
-| `DELETE /api/tasks/:id` | yes | 4 | 11 |
+| `GET /api/tasks` | yes | 25 | 13 |
+| `POST /api/tasks` | yes | 7 | 11 |
+| `DELETE /api/tasks/:id` | yes | 4 | 12 |
 | `GET /api/tasks/:id` | yes | 5 | **0** |
 | `PATCH /api/tasks/:id` | yes | 6 | 2 |
 | `POST /api/tasks/:id/occurrence` | yes | 3 | 1 |
@@ -398,13 +398,13 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/calendar/status` | yes | **0** | **0** |
 | `POST /api/calendar/sync` | yes | **0** | **0** |
 | `GET /api/calendar/sync-status` | yes | **0** | **0** |
-| `GET /api/calendar/timeline` | yes | 8 | 3 |
+| `GET /api/calendar/timeline` | yes | 8 | 4 |
 | `GET /api/date-rules` | yes | 2 | **0** |
 | `GET /api/date-rules/:system/:id` | **no** | **0** | **0** |
 | `GET /api/events` | yes | 6 | 4 |
-| `POST /api/events` | yes | 3 | 6 |
-| `DELETE /api/events/:id` | yes | 2 | 3 |
-| `GET /api/events/:id` | yes | 1 | **0** |
+| `POST /api/events` | yes | 3 | 7 |
+| `DELETE /api/events/:id` | yes | 2 | 4 |
+| `GET /api/events/:id` | yes | 1 | 1 |
 | `PATCH /api/events/:id` | yes | 2 | **0** |
 | `POST /api/events/:id/occurrence` | yes | 2 | **0** |
 | `POST /api/events/:id/series-flag` | yes | 1 | **0** |
@@ -468,10 +468,10 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `PATCH /api/tracker-entries/:entryId` | yes | 1 | 1 |
 | `POST /api/tracker-entries/:entryId/enrich` | **no** | **0** | **0** |
 | `POST /api/tracker-entries/:entryId/rescale` | yes | **0** | **0** |
-| `GET /api/trackers` | yes | 11 | 17 |
+| `GET /api/trackers` | yes | 11 | 18 |
 | `POST /api/trackers` | yes | 2 | 9 |
-| `DELETE /api/trackers/:id` | yes | 1 | 6 |
-| `GET /api/trackers/:id` | yes | 1 | 1 |
+| `DELETE /api/trackers/:id` | yes | 1 | 7 |
+| `GET /api/trackers/:id` | yes | 1 | 2 |
 | `PATCH /api/trackers/:id` | yes | 1 | 2 |
 | `POST /api/trackers/:id/entries` | yes | 2 | 3 |
 | `DELETE /api/trackers/:id/entries/:entryId` | yes | **0** | 1 |
@@ -507,11 +507,11 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/activity` | **no** | 1 | **0** |
 | `GET /api/ai-digest` | yes | 1 | **0** |
 | `GET /api/dashboard-bootstrap` | yes | 9 | 2 |
-| `GET /api/dashboard-enhanced` | yes | 13 | 12 |
+| `GET /api/dashboard-enhanced` | yes | 13 | 13 |
 | `GET /api/dashboard/ai-suggestions` | yes | 2 | **0** |
 | `GET /api/exec-widgets/suggest` | yes | 2 | 1 |
 | `GET /api/insights` | yes | 3 | **0** |
-| `GET /api/notifications` | yes | 9 | 5 |
+| `GET /api/notifications` | yes | 9 | 6 |
 | `POST /api/notifications/dismiss` | yes | 5 | 2 |
 | `GET /api/notifications/dismissed` | yes | 2 | 1 |
 | `POST /api/notifications/restore` | **no** | 1 | 2 |
@@ -546,8 +546,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/chat-artifacts` | yes | **0** | **0** |
 | `DELETE /api/chat-artifacts/:id` | **no** | **0** | **0** |
 | `GET /api/documents` | yes | 9 | 3 |
-| `POST /api/documents` | **no** | 2 | 2 |
-| `DELETE /api/documents/:id` | yes | 4 | 5 |
+| `POST /api/documents` | **no** | 2 | 3 |
+| `DELETE /api/documents/:id` | yes | 4 | 6 |
 | `GET /api/documents/:id` | yes | 2 | 1 |
 | `PATCH /api/documents/:id` | yes | 1 | **0** |
 | `GET /api/documents/:id/delete-impact` | yes | **0** | **0** |
@@ -581,7 +581,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `POST /api/smart-fill/analyze` | yes | 1 | **0** |
+| `POST /api/smart-fill/analyze` | yes | 2 | **0** |
 | `POST /api/smart-fill/render` | yes | 1 | **0** |
 | `POST /api/workspace/document/assist` | yes | **0** | **0** |
 | `POST /api/workspace/journal/reflect` | yes | 1 | **0** |
@@ -643,8 +643,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
 | `POST /api/ai-transform` | yes | 1 | **0** |
-| `POST /api/ai/summary` | yes | 1 | **0** |
-| `POST /api/chat` | yes | 3 | 21 |
+| `POST /api/ai/summary` | yes | 2 | 1 |
+| `POST /api/chat` | yes | 3 | 22 |
 | `POST /api/chat/confirm-extraction` | yes | 9 | **0** |
 | `GET /api/chat/runs/:requestId` | yes | **0** | **0** |
 | `GET /api/chat/warmup` | yes | **0** | **0** |
@@ -701,5 +701,5 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/diagnostics/ownership-consistency` | **no** | **0** | 1 |
 | `GET /api/diagnostics/schema` | **no** | 1 | 1 |
 | `POST /api/finance/webhook` | **no** | 1 | **0** |
-| `GET /api/version` | **no** | 1 | 19 |
+| `GET /api/version` | **no** | 1 | 21 |
 | `GET /api/warmup` | yes | 2 | **0** |

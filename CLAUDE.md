@@ -70,6 +70,15 @@ green. After a push to `main`:
    `currentAssetValue` (`shared/valuation/context.ts`). Never write
    `fields.currentValue || fields.value || …`.
    *Guard:* `tests/sync-rules-guards.test.ts`.
+   **Text written ABOUT the dashboard is held to its counts.** The AI summary
+   (`POST /api/ai/summary`) is given `briefingFacts` (`shared/dashboard-briefing.ts`):
+   the tiles' own counts (`countTasksByDay`, today's events, the snapshot's
+   bills), from lists that must be present — a missing list throws, it is never
+   a zero. `reconcileBriefing` replaces a paragraph that denies a non-zero
+   count with the plain facts, and the cache key carries the facts'
+   fingerprint. (2026-11-24: "no tasks, overdue items or events" beside
+   "7 tasks due, 1 late" — the route counted keys the payload never had.)
+   *Guard:* `tests/qa-2026-11-24-dashboard-calendar.test.ts`.
 2. **Writes propagate everywhere.** Mutations go through `apiRequest`. The
    server's write manifest patches the cache and invalidates the right
    domains. If you add a server payload computed from other records, declare
@@ -102,7 +111,12 @@ green. After a push to `main`:
    boundaries are history (`isReportingPeriodBoundary`). A newer document of
    the same kind and subject supersedes an older one's alert
    (`markSupersededDocumentRules`). Don't add a stored "resolved" flag.
-   *Guard:* `tests/sync-rules-notifications.test.ts`.
+   A field is an expiration for what it says ENDS, not for the noun it starts
+   with: `warrantyStartDate` (purchase, registration, effective…) is
+   informational (`WARRANTY_ORIGIN_RE`). (2026-11-24: a tyre warranty read
+   "Expired" from its start date.)
+   *Guards:* `tests/sync-rules-notifications.test.ts`,
+   `tests/qa-2026-11-24-dashboard-calendar.test.ts`.
 6. **No stale overwrite.** Don't merge an older row over a newer one
    (`isOlderRow` in `client/src/lib/cache-patch.ts`). Don't do a client
    read-modify-write of a whole array (tags, lists): add a server endpoint
@@ -114,8 +128,25 @@ green. After a push to `main`:
    field that has a `.default()`, so a rename would also write `tags: []`,
    `fields: {}`, `extractedData: {}`, `linkedProfiles: []` over the stored
    values. (2026-11-23, caught while upgrading zod 3 → 4, before it shipped.)
+   **A date is saved whole or not at all.** A native date input reports a
+   value on every keystroke (typing 2026 reports years 2, 20, 202 first) and
+   "" while any part is blank. A date field that SAVES is a `CommitDateInput`
+   (`client/src/components/CommitDateInput.tsx`): a whole day commits, a
+   half-typed one is held, "" clears. Never `onChange={e => mutate(e.target.value)}`
+   on `type="date"`. A form that saves on submit refuses a half-typed date
+   (`dateInputState(...) === "partial"`, `client/src/lib/date-input.ts`) rather
+   than filing the record with no date. (2026-11-24: the task editor sent
+   "0002-11-25", got a 400 and reset; the task stayed Unscheduled.)
+   **The Calendar and the task agree.** A task's occurrence is done by
+   `isTaskOccurrenceDone` (`shared/task-occurrences.ts`): an undated task is
+   done when its row is. An undated task sits on the day it was added and is
+   labelled "No due date" (`meta.undated`), never shown as due that day. The
+   open detail renders the LIVE timeline row (`liveTimelineItem`), not the
+   snapshot from the tap.
    *Guards:* `tests/sync-rules-valuation*.test.*`, `tests/sync-rules-followups.test.ts`,
-   `tests/patch-keeps-unsent-fields.test.ts`.
+   `tests/patch-keeps-unsent-fields.test.ts`, `tests/commit-date-input.dom.test.tsx`,
+   `tests/qa-2026-11-24-dashboard-calendar.test.ts`.
+   *Live check:* `npx tsx tests/live-task-date-and-calendar-check.ts`.
 7. **A failed request is not an empty account.** No `queryFn` may turn a
    failure into `[]`/`null`. Let React Query keep the last good data.
    The server holds the same rule: a list a payload embeds is read with a
@@ -234,6 +265,18 @@ green. After a push to `main`:
     value another call in the same batch already logs.
     *Guards:* `tests/tracker-create-no-duplicates.test.ts`,
     `tests/bp-heart-rate-split.test.ts`.
+
+11b. **An edit re-derives what was derived.** Pace, speed, steps and the
+    calorie estimate the engine filled into an entry (its provenance,
+    `computed.enrichment`) are the engine's until the user changes THAT
+    figure: `updateTrackerEntry` drops every derived value the edit left
+    alone and derives it again from the edited entry (`rederiveEditedEntry`,
+    `shared/entry-rederive.ts`, both storages). The edit form sends every
+    field it shows, so merging them back stored the old figures as if typed.
+    The form writes the server's row into the lists on success. (QA,
+    2026-11-24: a run changed from 1.25 to 1.5 miles kept "11:12/mi · 5.36
+    mph" in its history row while the card said 9:20.)
+    *Guard:* `tests/tracker-entry-rederive.test.ts`.
 
 11a. **One food = one entry.** Every separate food or drink the user reports
     is its own Nutrition entry with its own numbers ("a banana and a
@@ -1010,6 +1053,11 @@ Never PATCH a rebuilt `tags` array from the client.
 offers is `occurrenceMenuFor` (a birthday: nothing; a task: only its open
 occurrence can be completed). Never render a disabled button whose reason is
 a tooltip. Each action says how far it reaches (`hint`).
+On one date of a series, the More menu leads with "Change only <date>" (that
+date's own actions) and the other row reads "Edit series … for every date";
+the series editor says it changes every date, labels its date "Series starts"
+and links back to the one date (`onEditOnly`). (QA, 2026-11-24: December 8
+was tapped and Edit opened a form dated December 1, with nothing for the 8th.)
 **O5. History is derived** (`shared/occurrence-history.ts`) from the marks
 and rows the series already has (Rule 5). No stored outcome table.
 **O6. Edit happens where the schedule lives** (`editsInPlace`): an event and
