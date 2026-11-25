@@ -16,7 +16,7 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 630. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 638. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -51,16 +51,16 @@ reached only by clicking through is not detected).
 
 | Page | Routes | Desktop browser | Touch browser | jsdom tests |
 |---|---|---:|---:|---:|
-| ArtifactsPage | `/artifacts` `/dashboard/documents` `/dashboard/artifacts` | 3 | 2 | 3 |
+| ArtifactsPage | `/artifacts` `/dashboard/documents` `/dashboard/artifacts` | 3 | 2 | 4 |
 | CalendarPage | `/calendar` | 6 | 1 | 1 |
 | ChatPage | `/chat` | 5 | 2 | **0** |
 | DashboardPage | `/dashboard` `/dashboard/executive` `/dashboard/daily` | 4 | 1 | **0** |
 | DetailsPage | `/details` | 1 | 1 | **0** |
-| DocumentDetailPage | `/documents/:id` | 1 | 1 | 1 |
+| DocumentDetailPage | `/documents/:id` | 1 | 1 | 2 |
 | DocumentReviewPage | `/documents/:id/review` | **0** | **0** | 1 |
 | EditorPage | `/editor/new/:type` `/editor/:id` | 4 | 3 | 2 |
 | FillWorkspacePage | `/workspace/fill` | 2 | 2 | **0** |
-| FinancePage | `/dashboard/finance` `/finance` | 2 | 1 | **0** |
+| FinancePage | `/dashboard/finance` `/finance` | 2 | 1 | 1 |
 | GoalsPage | `/goals` `/dashboard/goals` | 1 | 1 | **0** |
 | HabitsPage | `/dashboard/habits` `/habits` | 1 | 1 | 1 |
 | InsightsPage | `/insights` | 1 | 1 | **0** |
@@ -74,9 +74,9 @@ reached only by clicking through is not detected).
 | ProfilesListPage | `/profiles/list` | 1 | 1 | **0** |
 | ResetPasswordPage | `/reset-password` | **0** | **0** | **0** |
 | RootRedirect | `/` | 2 | 1 | **0** |
-| SettingsPage | `/settings` | 1 | 1 | **0** |
+| SettingsPage | `/settings` | 1 | 1 | 1 |
 | ShareViewPage | `/share/:token` | **0** | **0** | **0** |
-| TasksPage | `/dashboard/tasks` `/tasks` | 2 | 1 | 2 |
+| TasksPage | `/dashboard/tasks` `/tasks` | 2 | 1 | 3 |
 | TermsPage | `/terms` | 1 | 1 | **0** |
 | TrackersPage | `/trackers` `/linked` `/liabilities` | 5 | 2 | 2 |
 | WellnessPage | `/wellness` `/dashboard/health` `/health` | 1 | 2 | 1 |
@@ -123,7 +123,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/profile-bootstrap/:id` | yes | 5 | **0** |
 | `GET /api/profile-types` | yes | **0** | **0** |
 | `GET /api/profile-types/:typeKey` | **no** | **0** | **0** |
-| `GET /api/profiles` | yes | 40 | 17 |
+| `GET /api/profiles` | yes | 43 | 17 |
 | `POST /api/profiles` | yes | 3 | 28 |
 | `DELETE /api/profiles/:id` | yes | 3 | 29 |
 | `GET /api/profiles/:id` | yes | 4 | 8 |
@@ -142,7 +142,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/profiles/:id/photo` | yes | **0** | 1 |
 | `GET /api/profiles/:id/tree` | yes | **0** | 1 |
 | `POST /api/profiles/:id/unlink` | yes | 2 | 1 |
-| `GET /api/profiles/lite` | yes | 4 | 7 |
+| `GET /api/profiles/lite` | yes | 6 | 7 |
 | `GET /api/relationships/graph/:id` | yes | 1 | **0** |
 | `POST /api/relationships/move-liability` | **no** | **0** | **0** |
 
@@ -169,7 +169,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `PATCH /api/asset-party-links/:id` | yes | **0** | 1 |
 | `GET /api/assets/:id/liabilities` | yes | **0** | **0** |
 | `GET /api/assets/:id/parties` | yes | **0** | 1 |
-| `GET /api/assets/lifecycle` | yes | 1 | 1 |
+| `GET /api/assets/lifecycle` | yes | 2 | 1 |
 | `GET /api/assets/stale-valuations` | **no** | **0** | **0** |
 | `GET /api/ownership-history` | yes | **0** | **0** |
 | `DELETE /api/ownership-history/:id` | yes | **0** | **0** |
@@ -299,11 +299,11 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/budgets/copy` | yes | 1 | 1 |
 | `GET /api/cashflow` | yes | 3 | 1 |
 | `POST /api/cashflow` | yes | 1 | 1 |
-| `GET /api/expenses` | yes | 12 | 23 |
-| `POST /api/expenses` | yes | 6 | 17 |
+| `GET /api/expenses` | yes | 14 | 23 |
+| `POST /api/expenses` | yes | 7 | 17 |
 | `DELETE /api/expenses/:id` | yes | 1 | 24 |
 | `GET /api/expenses/:id` | **no** | **0** | 3 |
-| `PATCH /api/expenses/:id` | yes | 3 | 5 |
+| `PATCH /api/expenses/:id` | yes | 4 | 5 |
 | `POST /api/expenses/:id/restore` | **no** | **0** | 1 |
 | `POST /api/finance-import/:id/undo` | yes | **0** | 1 |
 | `POST /api/finance-import/commit` | yes | 2 | 1 |
@@ -371,11 +371,11 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `GET /api/tasks` | yes | 25 | 15 |
+| `GET /api/tasks` | yes | 26 | 15 |
 | `POST /api/tasks` | yes | 7 | 15 |
 | `DELETE /api/tasks/:id` | yes | 4 | 18 |
 | `GET /api/tasks/:id` | yes | 5 | **0** |
-| `PATCH /api/tasks/:id` | yes | 6 | 2 |
+| `PATCH /api/tasks/:id` | yes | 7 | 2 |
 | `POST /api/tasks/:id/occurrence` | yes | 3 | 1 |
 | `PATCH /api/tasks/:id/restore` | yes | 1 | **0** |
 | `POST /api/tasks/:id/schedule` | yes | 2 | **0** |
@@ -401,7 +401,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/calendar/timeline` | yes | 8 | 6 |
 | `GET /api/date-rules` | yes | 2 | **0** |
 | `GET /api/date-rules/:system/:id` | **no** | **0** | **0** |
-| `GET /api/events` | yes | 6 | 5 |
+| `GET /api/events` | yes | 7 | 5 |
 | `POST /api/events` | yes | 3 | 9 |
 | `DELETE /api/events/:id` | yes | 2 | 6 |
 | `GET /api/events/:id` | yes | 1 | 1 |
@@ -468,7 +468,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `PATCH /api/tracker-entries/:entryId` | yes | 1 | 1 |
 | `POST /api/tracker-entries/:entryId/enrich` | **no** | **0** | **0** |
 | `POST /api/tracker-entries/:entryId/rescale` | yes | **0** | **0** |
-| `GET /api/trackers` | yes | 11 | 19 |
+| `GET /api/trackers` | yes | 12 | 19 |
 | `POST /api/trackers` | yes | 2 | 10 |
 | `DELETE /api/trackers/:id` | yes | 1 | 10 |
 | `GET /api/trackers/:id` | yes | 1 | 3 |
@@ -506,8 +506,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 |---|---|---:|---:|
 | `GET /api/activity` | **no** | 1 | **0** |
 | `GET /api/ai-digest` | yes | 1 | **0** |
-| `GET /api/dashboard-bootstrap` | yes | 9 | 2 |
-| `GET /api/dashboard-enhanced` | yes | 14 | 14 |
+| `GET /api/dashboard-bootstrap` | yes | 10 | 2 |
+| `GET /api/dashboard-enhanced` | yes | 15 | 14 |
 | `GET /api/dashboard/ai-suggestions` | yes | 2 | **0** |
 | `GET /api/exec-widgets/suggest` | yes | 2 | 1 |
 | `GET /api/insights` | yes | 3 | **0** |
@@ -515,7 +515,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/notifications/dismiss` | yes | 5 | 2 |
 | `GET /api/notifications/dismissed` | yes | 2 | 1 |
 | `POST /api/notifications/restore` | **no** | 1 | 2 |
-| `GET /api/stats` | yes | 14 | 7 |
+| `GET /api/stats` | yes | 17 | 7 |
 | `POST /api/weekly-review/generate` | yes | 1 | **0** |
 
 | Chat tool | Kind | Local tests | Deployed tests |
@@ -534,7 +534,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `GET /api/artifacts` | yes | 4 | 7 |
+| `GET /api/artifacts` | yes | 5 | 7 |
 | `POST /api/artifacts` | yes | 2 | 5 |
 | `DELETE /api/artifacts/:id` | yes | 1 | 7 |
 | `GET /api/artifacts/:id` | yes | 1 | 1 |
@@ -545,10 +545,10 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/artifacts/:id/toggle/:itemId` | yes | **0** | 1 |
 | `GET /api/chat-artifacts` | yes | **0** | **0** |
 | `DELETE /api/chat-artifacts/:id` | **no** | **0** | **0** |
-| `GET /api/documents` | yes | 9 | 4 |
+| `GET /api/documents` | yes | 10 | 4 |
 | `POST /api/documents` | **no** | 2 | 5 |
 | `DELETE /api/documents/:id` | yes | 4 | 7 |
-| `GET /api/documents/:id` | yes | 2 | 2 |
+| `GET /api/documents/:id` | yes | 3 | 2 |
 | `PATCH /api/documents/:id` | yes | 1 | 1 |
 | `GET /api/documents/:id/delete-impact` | yes | **0** | 1 |
 | `GET /api/documents/:id/file` | yes | 4 | **0** |
@@ -582,7 +582,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
 | `POST /api/smart-fill/analyze` | yes | 2 | **0** |
-| `POST /api/smart-fill/render` | yes | 1 | **0** |
+| `POST /api/smart-fill/render` | yes | 2 | **0** |
 | `POST /api/workspace/document/assist` | yes | **0** | **0** |
 | `POST /api/workspace/journal/reflect` | yes | 1 | **0** |
 | `POST /api/workspace/notes/assist` | yes | **0** | 1 |
