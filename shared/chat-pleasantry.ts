@@ -21,3 +21,13 @@ export function pleasantryReply(message: unknown): string | null {
   if (THANKS.test(m)) return "You're welcome!";
   return null;
 }
+
+/**
+ * True when the chat engine answered this turn by fixed rules, with no model
+ * (its quick path stamps `meta.direct`). Such a reply is final the moment it
+ * exists: the route must not hold it for the capture classifier, whose only
+ * contribution to an unrouted turn is a clarifying question.
+ */
+export function isDirectChatTurn(result: unknown): boolean {
+  return !!result && typeof result === "object" && (result as any).meta?.direct === true;
+}

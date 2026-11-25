@@ -22,3 +22,46 @@ describe("pleasantryReply", () => {
     ]) expect(pleasantryReply(m), m).toBeNull();
   });
 });
+
+// ── The route ships a rule-answered reply at once ──────────────────────────
+// Chat timing probe, 2026-11-25 (production): "hello" took 20 ms in the engine
+// and ~1.7 s on the wire, because an unrouted turn was held up to 2 s for the
+// capture classifier, whose only contribution is a clarifying question.
+import { readFileSync } from "node:fs";
+import { afterAll, beforeAll } from "vitest";
+import { isDirectChatTurn } from "../shared/chat-pleasantry";
+import { startHarness, type Harness } from "./helpers/route-harness";
+
+describe("a direct chat turn", () => {
+  it("is recognised by its stamp, and nothing else is", () => {
+    expect(isDirectChatTurn({ reply: "Hi!", meta: { direct: true } })).toBe(true);
+    for (const r of [null, undefined, {}, { meta: {} }, { meta: { direct: "yes" } }, { meta: { timings: {} } }]) {
+      expect(isDirectChatTurn(r)).toBe(false);
+    }
+  });
+
+  it("is not held for the classifier in the chat route", () => {
+    const src = readFileSync("server/routes.ts", "utf8");
+    const wait = src.match(/const classification = ([^\n]+)\n\s*\? settledClassification/);
+    expect(wait, "the classifier wait is still where this test reads it").toBeTruthy();
+    expect(wait![1]).toMatch(/\bdirect\b/);
+    expect(src).toMatch(/const routed = projections\.length > 0\s*\|\| direct/);
+  });
+
+  describe("POST /api/chat", () => {
+    let h: Harness;
+    beforeAll(async () => { h = await startHarness(); });
+    afterAll(async () => { await h.close(); });
+
+    it("answers a greeting by rule, stamped direct, well inside the old 2 s hold", async () => {
+      const t0 = Date.now();
+      const r = await h.api("POST", "/api/chat", { message: "hello" });
+      const ms = Date.now() - t0;
+      expect(r.status).toBe(200);
+      expect(String(r.data?.reply)).toMatch(/^Hi!/);
+      expect(r.data?.meta?.direct).toBe(true);
+      expect(Array.isArray(r.data?.actions) ? r.data.actions : []).toHaveLength(0);
+      expect(ms).toBeLessThan(1500);
+    });
+  });
+});

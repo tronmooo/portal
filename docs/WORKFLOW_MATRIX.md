@@ -644,7 +644,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 |---|---|---:|---:|
 | `POST /api/ai-transform` | yes | 1 | **0** |
 | `POST /api/ai/summary` | yes | 2 | 1 |
-| `POST /api/chat` | yes | 3 | 23 |
+| `POST /api/chat` | yes | 4 | 23 |
 | `POST /api/chat/confirm-extraction` | yes | 9 | **0** |
 | `GET /api/chat/runs/:requestId` | yes | **0** | **0** |
 | `GET /api/chat/warmup` | yes | **0** | **0** |

@@ -494,6 +494,7 @@ import {
   parsePatch,
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
+import { isDirectChatTurn } from "@shared/chat-pleasantry";
 import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE, toCents, validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
 import { normalizeMonthKey, budgetCategoryKey, spendByCategory } from "@shared/budget-ledger";
 import { canonicalizeRegistryFields } from "@shared/registry-fields";
@@ -2176,7 +2177,13 @@ export async function registerRoutes(
       // ("captures must never be lost") is preserved; only the user-visible
       // wait stops paying for it. Unrouted turns keep the old order because
       // the classifier's clarifyingQuestion may still amend the reply.
+      // A DIRECT turn — the quick path answered by fixed rules, no model — is
+      // final as well: there is no clarifying question to add to "Hi!" or to
+      // the help text, and holding it for the classifier cost up to 2 s on a
+      // reply that took 20 ms to produce (chat timing probe, 2026-11-25).
+      const direct = isDirectChatTurn(result);
       const routed = projections.length > 0
+        || direct
         || !!(result as any)?.documentPreview
         || ((result as any)?.documentPreviews?.length ?? 0) > 0;
       let finalSent = false;
@@ -2207,7 +2214,7 @@ export async function registerRoutes(
           // be appended to the reply below. On timeout the heuristic
           // fallbacks in this block handle classification=null as before.
           const tClassifierStart = Date.now();
-          const classification = projections.length > 0
+          const classification = projections.length > 0 || direct
             ? settledClassification
             : await Promise.race([
                 classifierPromise,

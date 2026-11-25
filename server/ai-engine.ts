@@ -16835,6 +16835,8 @@ async function processMessageInner(userMessage: string, conversationHistory: Arr
     route?: string;
     model?: string;
     attempts?: Array<{ model: string; error?: string }>;
+    /** The quick path answered by fixed rules, with no model (shared/chat-pleasantry.ts). */
+    direct?: boolean;
     /** Per-stage pipeline timings (ms) — see PERF notes in processMessage. */
     timings?: { aiMs: number; tools: Array<{ tool: string; execMs: number; verifyMs: number }> };
   };
@@ -17491,7 +17493,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             : {}),
         ...(fp.documentPreview ? { documentPreview: fp.documentPreview } : {}),
         ...(fp.documentPreviews?.length ? { documentPreviews: fp.documentPreviews } : {}),
-        meta: { timings: { aiMs: Date.now() - turnStartedAt, tools: [] } },
+        // `direct`: this reply was produced by fixed rules, with no model. The
+        // route ships it at once instead of holding it for the classifier.
+        meta: { direct: true, timings: { aiMs: Date.now() - turnStartedAt, tools: [] } },
       };
     }
   } catch { /* fall through to AI */ }
