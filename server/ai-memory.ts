@@ -8,7 +8,7 @@
 import { randomUUID } from "crypto";
 import { storage } from "./storage";
 import {
-  EMPTY_MEMORY, addMemories, appendExchange, memoryKey, parseAiMemory, removeMemory, MEMORY_PER_REPLY,
+  EMPTY_MEMORY, addMemories, appendExchange, explicitMemoryRequest, memoryKey, parseAiMemory, removeMemory, MEMORY_PER_REPLY,
   type AiMemory, type MemoryApp, type MemoryItem,
 } from "@shared/ai-memory";
 
@@ -42,8 +42,14 @@ async function change(app: MemoryApp, fn: (m: AiMemory) => AiMemory): Promise<Ai
 export async function rememberExchange(app: MemoryApp, user: string, assistant: string, proposed: string[]): Promise<{ memory: AiMemory; added: MemoryItem[] }> {
   let added: MemoryItem[] = [];
   const now = new Date();
+  // Asked outright to remember something, and the model proposed nothing:
+  // what they asked is kept in their own words. Being remembered when you
+  // ask to be does not depend on the model choosing to.
+  const asked = proposed.length === 0 ? explicitMemoryRequest(user) : null;
   const memory = await change(app, (m) => {
-    const r = addMemories(appendExchange(m, user, assistant, now), proposed, { by: "ai", now, ids: proposed.map(() => randomUUID()), max: MEMORY_PER_REPLY });
+    const r = asked
+      ? addMemories(appendExchange(m, user, assistant, now), [asked], { by: "you", now, ids: [randomUUID()] })
+      : addMemories(appendExchange(m, user, assistant, now), proposed, { by: "ai", now, ids: proposed.map(() => randomUUID()), max: MEMORY_PER_REPLY });
     added = r.added;
     return r.memory;
   });

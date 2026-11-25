@@ -339,6 +339,22 @@ describe("Journal: the coach remembers, and sounds like a person", () => {
     expect(system).toMatch(/never a diagnosis or a label/); // what it may remember
   });
 
+  it("asked outright to remember, it is kept even when the model proposes nothing — in the person's own words", async () => {
+    modelReply = "Of course. Porto sounds lovely."; // no REMEMBER line at all
+    const r = ok(await intel.journalCoach({ messages: ask("Please remember this: my sister Ana lives in Porto and I miss her.") }));
+    expect(r.remembered).toEqual(["My sister Ana lives in Porto and I miss her."]);
+    expect(stored("journal").memories.map((m) => [m.text, m.by])).toEqual([["My sister Ana lives in Porto and I miss her.", "you"]]);
+    // When the model does propose, its wording is the one kept: not both.
+    modelReply = 'Got it.\nREMEMBER: ["Their brother Leo is moving to Canada"]';
+    ok(await intel.journalCoach({ messages: ask("Remember that my brother Leo is moving to Canada.") }));
+    expect(stored("journal").memories.map((m) => m.text)).toEqual(["My sister Ana lives in Porto and I miss her.", "Their brother Leo is moving to Canada"]);
+    // A question about its memory adds nothing.
+    modelReply = "Your sister Ana is in Porto.";
+    ok(await intel.journalCoach({ messages: ask("Do you remember where my sister lives?") }));
+    expect(stored("journal").memories).toHaveLength(2);
+    expect(String(modelCalls[0].system)).toMatch(/you MUST end your reply with one last line: REMEMBER:/);
+  });
+
   it("a failed answer saves nothing: the conversation is not left with a question and no reply", async () => {
     modelReply = new Error("boom");
     expect(await intel.journalCoach({ messages: ask("Are you there?") })).toMatchObject({ ok: false, status: 502 });

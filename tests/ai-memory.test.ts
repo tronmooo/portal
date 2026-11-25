@@ -10,7 +10,7 @@ import { requestStorageContext } from "../server/storage";
 import { registerRoutes } from "../server/routes";
 import { makeFakeStorage, type FakeDb } from "./helpers/route-harness";
 import {
-  CHAT_SAVED_TURNS, EMPTY_MEMORY, MEMORY_MAX_ITEMS, MEMORY_PER_REPLY, addMemories, appendExchange, looksClinical, memoryKey, parseAiMemory,
+  CHAT_SAVED_TURNS, EMPTY_MEMORY, MEMORY_MAX_ITEMS, MEMORY_PER_REPLY, addMemories, appendExchange, explicitMemoryRequest, looksClinical, memoryKey, parseAiMemory,
   removeMemory, sinceLastTalked, splitReplyAndMemories,
 } from "../shared/ai-memory";
 import { WORKSPACE_AI_ACCESS_PREF, DEFAULT_WORKSPACE_AI_ACCESS, serializeWorkspaceAiAccess, withAccess } from "../shared/workspace-access";
@@ -27,6 +27,21 @@ describe("the reply and what it proposes to remember", () => {
     expect(splitReplyAndMemories('Okay.\nREMEMBER: {"a":1}')).toEqual({ answer: "Okay.", remember: [] });
     // At most a few per reply, and only strings.
     expect(splitReplyAndMemories(`Hi.\nREMEMBER: ${JSON.stringify(["a fact one", 7, "a fact two", "a fact three", "a fact four"])}`).remember).toHaveLength(MEMORY_PER_REPLY);
+  });
+});
+
+describe("asked outright to remember", () => {
+  it("what they asked is taken in their own words", () => {
+    expect(explicitMemoryRequest("Please remember this: my sister Ana lives in Porto and I miss her.")).toBe("My sister Ana lives in Porto and I miss her.");
+    expect(explicitMemoryRequest("Rough day. Don't forget that Sam's birthday is June 3rd")).toBe("Sam's birthday is June 3rd");
+    expect(explicitMemoryRequest("Can you remember that I prefer short answers")).toBe("I prefer short answers");
+    expect(explicitMemoryRequest("ok, keep in mind — mornings are hardest for me")).toBe("Mornings are hardest for me");
+  });
+
+  it("a question about its memory is not a request to remember", () => {
+    for (const q of ["Do you remember my nickname?", "What do you remember about my family?", "Can you remember my nickname?", "Remember when we talked about Sam?", "I can't remember what I said.", "Remember?", "I remember that day well."]) {
+      expect(explicitMemoryRequest(q), q).toBeNull();
+    }
   });
 });
 

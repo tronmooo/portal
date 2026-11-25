@@ -797,7 +797,11 @@ MEMORIES — short things the person said. The model proposes memories in a
 `REMEMBER: [...]` tail that is always stripped from what is shown
 (`splitReplyAndMemories`); a duplicate is not kept twice, and a label the AI
 came up with is never kept (`looksClinical` — what the person says about
-themselves is theirs to keep). A failed answer saves nothing. Every memory is
+themselves is theirs to keep). Being remembered when you ASK does not depend
+on the model: "please remember that …" with no proposal from the model is kept
+in the person's own words (`explicitMemoryRequest`; a question about its
+memory is not a request) — on the preview the model twice volunteered nothing
+for exactly that message. A failed answer saves nothing. Every memory is
 on screen (`MemoryPanel`): the person can add their own, forget one or
 everything (two taps, Rule 8), and start a new conversation (two taps; the
 memories stay). One switch (`memory` in AI access, on by default — it is the

@@ -183,8 +183,8 @@ function memoryBlock(memory: AiMemory | null): string {
 }
 
 const REMEMBER_RULE =
-  `REMEMBERING: after your reply you MAY add one last line starting with ${REMEMBER_MARK} followed by a JSON array of up to 3 short statements, in the third person, of lasting things they told you in THIS message that would help next time (people in their life, what they are working on, what matters to them, how they like you to talk with them). ` +
-  `Only what they said themselves: never your interpretation, never a diagnosis or a label, nothing that is already in what you remember, nothing that only matters today. Most replies need none: then write no ${REMEMBER_MARK} line. If they ask you to forget something, tell them the list of what you remember is on this screen and they can remove anything from it.`;
+  `REMEMBERING: you keep a memory of this person between conversations, and it only grows when you write to it. Whenever THIS message tells you something lasting about their life that is not already in what you remember — a person and who they are to them, their work, something they are working on or struggling with, what helps them, what matters to them, how they like you to talk with them — or they ask you to remember something, you MUST end your reply with one last line: ${REMEMBER_MARK} followed by a JSON array of up to 3 short statements in the third person. ` +
+  `Only what they said themselves: never your interpretation, never a diagnosis or a label, nothing that is already in what you remember, nothing that only matters today (a mood, what they ate). When the message holds nothing like that, write no ${REMEMBER_MARK} line. They never see that line, so do not mention it. If they ask you to forget something, tell them the list of what you remember is on this screen and they can remove anything from it.`;
 
 /** Keep the exchange and what was proposed. Never fails the answer it rides on. */
 async function keep(app: MemoryApp, convo: Conversation, answer: string, proposed: string[]): Promise<string[]> {

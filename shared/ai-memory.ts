@@ -153,6 +153,29 @@ export function splitReplyAndMemories(raw: string): { answer: string; remember: 
   return { answer, remember };
 }
 
+const ASK_CUE = /^(?:(?:please|pls|hey|ok|okay|so|and|also|oh|can you|could you|will you|i want you to|i'd like you to|i need you to)[\s,]+)*(?:remember|don'?t forget|do not forget|keep in mind|make a note)\b(?:\s+(?:this|that|for next time|for later))*\s*[:,\-–—]?\s*(.*)$/is;
+
+/**
+ * "Please remember that my sister lives in Porto" → "my sister lives in
+ * Porto". When the person ASKS for something to be remembered, keeping it
+ * does not depend on the model choosing to: this is what is kept, in their
+ * own words, if the model proposed nothing. A question ("do you remember…?",
+ * "can you remember my nickname?") is not a request to remember.
+ */
+export function explicitMemoryRequest(message: string): string | null {
+  const text = String(message || "").trim();
+  // The cue may open any sentence of the message.
+  const starts = [0, ...[...text.matchAll(/[.!?\n]\s+/g)].map((m) => (m.index ?? 0) + m[0].length)];
+  for (const at of starts) {
+    const m = ASK_CUE.exec(text.slice(at));
+    if (!m) continue;
+    const said = clean(m[1], MEMORY_ITEM_MAX).replace(/^(?:that|this)\s+/i, "");
+    if (said.length < 6 || /\?\s*$/.test(said) || /^(?:what|when|who|how|why|if|whether)\b/i.test(said)) continue;
+    return said.charAt(0).toUpperCase() + said.slice(1);
+  }
+  return null;
+}
+
 /** "today", "yesterday", "3 days ago", "2 weeks ago", "about 4 months ago": how long since they last talked. */
 export function sinceLastTalked(lastTalked: string | null, now: Date): string | null {
   if (!lastTalked) return null;
