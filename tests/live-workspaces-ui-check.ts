@@ -126,7 +126,7 @@ async function main() {
     await tid("input-note-category").fill(`Trip ${tag}`);
     check(await until(async () => ((await noteRow())?.tags || []).includes(`category:Trip ${tag}`)), "Notes: a category is saved on the note");
     check(await until(() => tid(`notes-category-Trip ${tag}`).isVisible(), 10000), "…and becomes a filter beside the list");
-    await tid("input-note-attach").setInputFiles({ name: `packing-${tag}.txt`, mimeType: "text/plain", buffer: Buffer.from(`packing list ${tag}`) });
+    await tid("input-note-attach-file").setInputFiles({ name: `packing-${tag}.txt`, mimeType: "text/plain", buffer: Buffer.from(`packing list ${tag}`) });
     const attached = await until(async () => /\(#\/documents\/[A-Za-z0-9-]+\)/.test(String((await noteRow())?.content || "")), 30000);
     check(attached && await tid("note-attachments").isVisible(), "Notes: an attached file is saved to Documents and linked from the note");
     // Reopen it: what was saved is what the editor shows.
@@ -153,7 +153,7 @@ async function main() {
     check(await tid("journal-prompts").isVisible() && await tid("button-mood-good").isVisible() && await tid("journal-week").isVisible(), "Journal: the page has guided prompts, mood buttons and the week's moods");
     const entryText = `Workspace journal ${tag}: a calm and good day.`;
     await tid("input-journal-free-text").fill(entryText);
-    await tid("input-journal-photo").setInputFiles({ name: `photo-${tag}.png`, mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVQI12P8z8DAwMDEwMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg==", "base64") });
+    await tid("input-journal-attach-library").setInputFiles({ name: `photo-${tag}.png`, mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVQI12P8z8DAwMDEwMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg==", "base64") });
     const photoShown = await page.locator('[data-testid^="journal-photo-"] img').first().waitFor({ timeout: 30000 }).then(() => true).catch(() => false);
     check(photoShown, "Journal: an added photo shows on the entry");
     await shot("2-journal");
