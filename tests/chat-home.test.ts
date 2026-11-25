@@ -51,20 +51,28 @@ const insight = (h: ReturnType<typeof buildChatHome>, key: string) => {
   return g;
 };
 
-describe("headline figures", () => {
+const OWN = () => [
+  tracker("t-coffee", "Coffee", "custom", [{ name: "cups", unit: "cups" }], [entry(TODAY, { cups: 2 }), entry("2026-11-22", { cups: 3 }), entry("2026-11-12", { cups: 1 })]),
+  tracker("t-read", "Reading", "custom", [{ name: "pages", unit: "pages" }], [entry("2026-10-02", { pages: 20 }), entry("2026-10-01", { pages: 30 })]),
+  tracker("t-med", "Meditation", "custom", [], [entry(TODAY, {}), entry("2026-11-21", {})]),
+];
+
+describe("headline tiles: whatever this person has (owner, 2026-11-25)", () => {
   const h = buildChatHome(full());
 
-  it("are six, in the design's order", () => {
-    expect(h.kpis.map((k) => k.key)).toEqual(["activity", "sleep", "rhr", "weight", "spending", "networth"]);
+  it("a tile exists only for something with records behind it — none is 'not tracked'", () => {
+    // The fixture person tracks workouts, sleep, weight and food; no resting heart rate, no water.
+    expect(h.kpis.map((k) => k.key)).toEqual(["activity", "sleep", "weight", "nutrition", "spending", "networth"]);
+    for (const k of h.kpis) { expect(k.state).toBe("ready"); expect(k.value).not.toBeNull(); }
+    expect(h.kpis.some((k) => k.key === "rhr" || k.key === "hydration")).toBe(false);
   });
-  it("the wellness ones are the Wellness tab's own tiles over 7 days", () => {
+  it("the standard ones are the Wellness tab's own tiles over 7 days", () => {
     const trackers = fixtureTrackers();
     const tiles = overviewTiles({ metrics: fixtureMetrics(trackers), trackers, range: "7d", todayISO: TODAY, timezone: TZ });
-    for (const key of ["activity", "sleep", "weight"] as const) {
+    for (const key of ["activity", "sleep", "weight", "nutrition"] as const) {
       const t = tiles.find((x) => x.key === key)!;
       const k = kpi(h, key);
       expect(t.tracked).toBe(true);
-      expect(k.state).toBe("ready");
       expect(`${k.value}${k.unit ? ` ${k.unit}` : ""}`).toBe(String(t.value).replace(/ avg$/, ""));
     }
   });
@@ -72,21 +80,39 @@ describe("headline figures", () => {
     expect(kpi(h, "spending")).toMatchObject({ value: "$562", note: "this month", delta: { text: "+14%", dir: "up", good: false } });
     expect(kpi(h, "networth")).toMatchObject({ value: "$42,350", state: "ready" });
   });
-  it("something never recorded is untracked, with a way to start — never a zero", () => {
-    const none = buildChatHome(full({ trackers: [], metrics: fixtureMetrics([]) }));
-    for (const key of ["activity", "sleep", "rhr", "weight"]) {
-      const k = kpi(none, key);
-      expect(k.state).toBe("untracked");
-      expect(k.value).toBeNull();
-      expect(typeof k.prompt).toBe("string");
-    }
+  it("a person's own trackers are tiles: an amount totalled, a plain log counted, an old one dated and last", () => {
+    const trackers = OWN();
+    const own = buildChatHome(full({ trackers, metrics: fixtureMetrics(trackers), snapshot: {} }));
+    expect(own.kpis.map((k) => k.key)).toEqual(["tracker:t-coffee:cups", "tracker:t-med", "tracker:t-read:pages"]);
+    expect(kpi(own, "tracker:t-coffee:cups")).toMatchObject({ label: "Coffee Cups", value: "5", unit: "cups", href: "/trackers?tracker=t-coffee" });
+    expect(kpi(own, "tracker:t-med")).toMatchObject({ label: "Meditation", value: "2", unit: "entries" });
+    expect(kpi(own, "tracker:t-read:pages")).toMatchObject({ label: "Reading Pages", value: null, note: "Last: Oct 2" });
+  });
+  it("never more than six; money keeps its place and figures inside the week lead", () => {
+    const trackers = [...fixtureTrackers(), ...OWN()];
+    const many = buildChatHome(full({ trackers, metrics: fixtureMetrics(trackers) }));
+    expect(many.kpis.length).toBe(6);
+    expect(many.kpis.slice(-2).map((k) => k.key)).toEqual(["spending", "networth"]);
+    expect(many.kpis.every((k) => k.value !== null)).toBe(true);
+  });
+  it("a workout or food tracker is not listed twice (they are Activity and Nutrition)", () => {
+    const trackers = fixtureTrackers();
+    const noMoney = buildChatHome(full({ trackers, metrics: fixtureMetrics(trackers), snapshot: {} }));
+    const labels = noMoney.kpis.map((k) => k.label);
+    expect(labels.filter((l) => /running/i.test(l))).toEqual([]);
+    expect(labels.filter((l) => /nutrition/i.test(l))).toEqual(["Nutrition"]);
+    expect(new Set(noMoney.kpis.map((k) => k.key)).size).toBe(noMoney.kpis.length);
+  });
+  it("an account with nothing recorded has no tiles — no zero is invented", () => {
+    const none = buildChatHome(full({ trackers: [], metrics: fixtureMetrics([]), snapshot: {} }));
+    expect(none.kpis).toEqual([]);
   });
 });
 
 describe("a list that has not loaded is not an empty list (Rule 7)", () => {
-  it("loading figures have no value", () => {
+  it("while loading there is one placeholder per source, with no value", () => {
     const h = buildChatHome({ todayISO: TODAY, timezone: TZ });
-    expect(h.kpis.length).toBe(6);
+    expect(h.kpis.map((k) => k.key)).toEqual(["health", "money"]);
     for (const k of h.kpis) { expect(k.state).toBe("loading"); expect(k.value).toBeNull(); }
     for (const g of h.glance) expect(g.state).toBe("loading");
     for (const x of h.insights) expect(x.state).toBe("loading");
@@ -95,9 +121,10 @@ describe("a list that has not loaded is not an empty list (Rule 7)", () => {
   it("a failed list says so, and the others still read", () => {
     const h = buildChatHome(full({ tasks: undefined, snapshot: undefined, failed: new Set<HomeList>(["tasks", "snapshot"]) }));
     expect(glance(h, "tasks")).toMatchObject({ state: "error", detail: "Couldn't load" });
-    expect(kpi(h, "networth")).toMatchObject({ state: "error", value: null });
+    expect(kpi(h, "money")).toMatchObject({ state: "error", value: null });
     expect(insight(h, "finance").state).toBe("error");
     expect(kpi(h, "sleep").state).toBe("ready");
+    expect(h.kpis.length).toBeLessThanOrEqual(6);
   });
 });
 
@@ -154,7 +181,7 @@ describe("the daily summary", () => {
     const h = buildChatHome({ todayISO: TODAY, timezone: TZ, trackers: [], metrics: fixtureMetrics([]), snapshot: {}, tasks: [], eventsToday: [], expiring: [], journal: [] });
     expect(h.lines).toEqual([]);
     expect(h.insights.map((x) => x.state)).toEqual(["untracked", "untracked", "untracked", "untracked"]);
-    expect(kpi(h, "spending").value).toBe("$0");
+    expect(h.kpis).toEqual([]);
   });
 });
 

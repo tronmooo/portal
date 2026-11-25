@@ -3,6 +3,12 @@
 // 2026-11-25): a daily summary, six headline figures, one insight per domain
 // and today at a glance.
 //
+// THE HEADLINE TILES ARE WHAT THIS PERSON HAS (owner, 2026-11-25: "the six
+// cards should show whatever the user has, not just those predetermined
+// ones"). `pickHeadlineTiles` offers a tile only for something with records
+// behind it — a measurement, one of their own trackers, spending, net worth —
+// and shows at most six. Nothing is ever listed as "not tracked".
+//
 // EVERY FIGURE IS ONE ANOTHER SCREEN ALREADY SHOWS (Rule 1). Nothing here
 // invents a number or keeps a copy:
 //   · wellness figures are the Wellness tab's own (`overviewTiles`,
@@ -21,7 +27,8 @@
 import { countTasksByDay, type CountableTask } from "./task-counts";
 import { overviewTiles, periodInsights, moodSummary, type OverviewTile, type WellnessCardsInput } from "./wellness-cards";
 import { summarize, metricDailyPoints, pctChange } from "./wellness-period";
-import { moveIsGood, resolveSeries } from "./wellness-widgets";
+import { buildWellnessWidgetView, findTrackerByName, moveIsGood, resolveSeries, suggestWellnessWidgets } from "./wellness-widgets";
+import { isWorkoutTracker } from "./wellness-readout";
 import type { MetricSeries } from "./wellness-readout";
 import { isQuietAutoPayBill } from "./autopay";
 import { categoryLabel } from "./category-canon";
@@ -34,13 +41,14 @@ export type HomeState = "ready" | "loading" | "error" | "untracked";
 export type HomeIcon =
   | "activity" | "sleep" | "heart" | "weight" | "spending" | "networth"
   | "tasks" | "event" | "bill" | "document" | "workout" | "water"
-  | "wellness" | "finance" | "mindset" | "assets";
+  | "wellness" | "finance" | "mindset" | "assets" | "tracker" | "nutrition";
 
 /** Where a tap goes: a route, or a message put in the chat box. */
 export interface HomeTarget { href?: string; prompt?: string }
 
 export interface HomeKpi extends HomeTarget {
-  key: "activity" | "sleep" | "rhr" | "weight" | "spending" | "networth";
+  /** "sleep", "spending", or "tracker:<id>:<field>" for one of the user's own trackers. */
+  key: string;
   icon: HomeIcon;
   label: string;
   state: HomeState;
@@ -127,56 +135,128 @@ function splitValue(v: string): { value: string; unit?: string } {
 const stateOf = (i: ChatHomeInput, list: HomeList, loaded: boolean): HomeState | null =>
   i.failed?.has(list) ? "error" : loaded ? null : "loading";
 
-// ── Wellness tiles ───────────────────────────────────────────────────────────
+// ── Headline tiles: whatever this person has ─────────────────────────────────
 
-const TILE_PROMPT: Record<string, string> = { activity: "Log a workout: ", sleep: "I slept ", weight: "Track my weight: " };
+/** How many headline tiles the home shows. */
+export const MAX_HOME_TILES = 6;
 
-function kpiFromTile(key: "activity" | "sleep" | "weight", icon: HomeIcon, t: OverviewTile | undefined): HomeKpi {
-  const base = { key, icon, label: t?.label ?? key } as const;
-  if (!t || !t.tracked) return { ...base, state: "untracked", value: null, prompt: TILE_PROMPT[key] };
+/** A tile and whether it has a figure inside the 7 days (those lead). */
+interface Candidate { kpi: HomeKpi; recent: boolean }
+
+const TILE_ICON: Record<string, HomeIcon> = { sleep: "sleep", activity: "activity", weight: "weight", bp: "heart", hydration: "water", nutrition: "nutrition" };
+/** Measurements the overview tiles (and the resting-heart-rate tile) already show. */
+const TILE_METRICS = new Set(["sleep_hours", "weight", "bp_systolic", "bp_diastolic", "hydration", "resting_hr", "steps"]);
+const FOOD_TRACKER = /nutrition|calorie|food|meal|diet|macro/i;
+
+function tileCandidate(t: OverviewTile): Candidate {
   const parts = t.value ? splitValue(t.value) : { value: null as string | null, unit: undefined };
   return {
-    ...base, state: "ready", value: parts.value, unit: parts.unit,
-    delta: t.delta ? { text: t.delta.text.replace(/ vs prior.*$/, ""), dir: t.delta.dir, good: t.delta.good } : undefined,
-    note: !t.value || t.stale ? t.last : undefined,
-    href: t.href ?? "/wellness",
+    recent: !!t.value && !t.stale,
+    kpi: {
+      key: t.key, icon: TILE_ICON[t.key] ?? "tracker", label: t.key === "bp" ? "Blood Pressure" : t.label, state: "ready",
+      value: parts.value, unit: parts.unit,
+      delta: t.delta ? { text: t.delta.text.replace(/ vs prior.*$/, ""), dir: t.delta.dir, good: t.delta.good } : undefined,
+      note: !t.value || t.stale ? t.last : t.note,
+      href: t.href ?? "/wellness",
+    },
   };
 }
 
-function restingHeartRate(i: ChatHomeInput): HomeKpi {
-  const base = { key: "rhr", icon: "heart", label: "RHR" } as const;
+function restingHeartRate(i: ChatHomeInput): Candidate | null {
   const m = i.metrics!.get("resting_hr");
   const s = summarize(metricDailyPoints(m), HOME_RANGE, i.todayISO);
-  if (!m || !s.latestEver) return { ...base, state: "untracked", value: null, prompt: "My resting heart rate is " };
+  if (!m || !s.latestEver) return null;
   const d = s.avg != null && s.priorAvg != null ? Math.round(s.avg - s.priorAvg) : null;
   return {
-    ...base, state: "ready", value: String(Math.round(s.latestEver.value)), unit: "bpm",
-    delta: d != null && d !== 0 ? { text: `${d > 0 ? "+" : "−"}${Math.abs(d)}`, dir: d > 0 ? "up" : "down", good: moveIsGood(m.metric, s.priorAvg!, s.avg!) } : undefined,
-    note: !s.last ? `Last: ${s.latestEver.day.slice(5).replace("-", "/")}` : undefined,
-    href: "/wellness",
+    recent: !!s.last,
+    kpi: {
+      key: "rhr", icon: "heart", label: "RHR", state: "ready", value: String(Math.round(s.latestEver.value)), unit: "bpm",
+      delta: d != null && d !== 0 ? { text: `${d > 0 ? "+" : "−"}${Math.abs(d)}`, dir: d > 0 ? "up" : "down", good: moveIsGood(m.metric, s.priorAvg!, s.avg!) } : undefined,
+      note: !s.last ? `Last: ${shortDay(s.latestEver.day)}` : undefined,
+      href: "/wellness",
+    },
   };
+}
+
+/**
+ * The person's OTHER measurements and their own trackers — the cards the
+ * Wellness tab would offer for them (`suggestWellnessWidgets`: only what has
+ * entries; an amount totalled, a level averaged), read over the 7 days by the
+ * widget engine itself. Busiest first.
+ */
+function ownTrackerCandidates(i: ChatHomeInput): Candidate[] {
+  const data = { metrics: i.metrics!, trackers: i.trackers!, timezone: i.timezone };
+  const out: Candidate[] = [];
+  for (const sug of suggestWellnessWidgets(data, [], 40)) {
+    const src = sug.widget.source;
+    if (!src) continue;
+    if (src.kind === "metric" && TILE_METRICS.has(String(src.key))) continue;
+    if (src.kind === "tracker") {
+      // Workouts are the Activity tile; food is the Nutrition tile.
+      const t = findTrackerByName(i.trackers!, String(src.key));
+      if (!t || isWorkoutTracker(t) || FOOD_TRACKER.test(`${t.name || ""} ${t.category || ""}`)) continue;
+    }
+    const view = buildWellnessWidgetView({ ...sug.widget, id: sug.key }, data, HOME_RANGE, i.todayISO);
+    if (!view) continue;
+    const parts = view.headline ? splitValue(view.headline.value) : { value: null as string | null, unit: undefined };
+    const pct = view.delta && /%/.test(view.delta.text) ? view.delta.text.replace(/ vs prior.*$/, "") : null;
+    out.push({
+      recent: !!view.headline,
+      kpi: {
+        key: sug.key, icon: src.kind === "metric" ? "heart" : "tracker", state: "ready",
+        label: sug.widget.title.replace(/ (Log|Trend|Per Day)$/, ""),
+        value: parts.value, unit: parts.unit,
+        delta: pct ? { text: pct, dir: pct.startsWith("+") ? "up" : /^[−-]/.test(pct) ? "down" : "flat", good: view.delta!.good } : undefined,
+        note: view.headline ? undefined : sug.hint.replace(/^.* · last /, "Last: "),
+        href: view.href ?? "/trackers",
+      },
+    });
+  }
+  return out;
+}
+
+/**
+ * At most six tiles, from what there is: figures inside the 7 days first
+ * (the standard measurements, then the person's own trackers, busiest first),
+ * money keeps its place when there is any, and older readings fill what is
+ * left. An account with nothing recorded gets no tiles.
+ */
+export function pickHeadlineTiles(health: readonly Candidate[], money: readonly HomeKpi[], max = MAX_HOME_TILES): HomeKpi[] {
+  const room = Math.max(0, max - money.length);
+  const ordered = [...health.filter((c) => c.recent), ...health.filter((c) => !c.recent)];
+  return [...ordered.slice(0, room).map((c) => c.kpi), ...money].slice(0, max);
+}
+
+function shortDay(day: string): string {
+  const [, m, d] = day.split("-").map(Number);
+  return `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][(m || 1) - 1]} ${d}`;
 }
 
 // ── The build ────────────────────────────────────────────────────────────────
 
 export function buildChatHome(i: ChatHomeInput): ChatHome {
   const lines: Array<HomeLine & { urgent: boolean }> = [];
-  const kpis: HomeKpi[] = [];
   const insights: HomeInsight[] = [];
   const glance: HomeGlance[] = [];
 
   // ── Wellness: the Wellness tab's own tiles over the last 7 days ───────────
+  const health: Candidate[] = [];
+  const money: HomeKpi[] = [];
+  const pending: HomeKpi[] = [];
   const wellState = stateOf(i, "trackers", !!i.metrics && !!i.trackers);
   if (wellState) {
-    for (const [key, icon, label] of [["activity", "activity", "Activity"], ["sleep", "sleep", "Sleep"], ["rhr", "heart", "RHR"], ["weight", "weight", "Weight"]] as const) {
-      kpis.push({ key, icon, label, state: wellState, value: null, href: "/wellness" });
-    }
+    // What this person tracks is not known yet: one placeholder, not six guesses.
+    pending.push({ key: "health", icon: "wellness", label: "Health", state: wellState, value: null, href: "/wellness" });
     insights.push({ key: "wellness", icon: "wellness", title: "Wellness", state: wellState, text: wellState === "error" ? "Couldn't load your trackers." : "Loading…", href: "/wellness" });
   } else {
     const input: WellnessCardsInput = { metrics: i.metrics!, trackers: i.trackers!, range: HOME_RANGE, todayISO: i.todayISO, timezone: i.timezone };
-    const tiles = overviewTiles(input);
+    const tiles = overviewTiles(input).filter((t) => t.tracked);
     const tile = (k: string) => tiles.find((t) => t.key === k);
-    kpis.push(kpiFromTile("activity", "activity", tile("activity")), kpiFromTile("sleep", "sleep", tile("sleep")), restingHeartRate(i), kpiFromTile("weight", "weight", tile("weight")));
+    const rhr = restingHeartRate(i);
+    for (const k of ["activity", "sleep"]) { const t = tile(k); if (t) health.push(tileCandidate(t)); }
+    if (rhr) health.push(rhr);
+    for (const k of ["weight", "bp", "hydration", "nutrition"]) { const t = tile(k); if (t) health.push(tileCandidate(t)); }
+    health.push(...ownTrackerCandidates(i));
 
     // Summary lines, from the same summaries the tiles read.
     const workouts = resolveSeries({ kind: "workouts" }, { metrics: i.metrics!, trackers: i.trackers!, timezone: i.timezone });
@@ -225,8 +305,7 @@ export function buildChatHome(i: ChatHomeInput): ChatHome {
   // ── Money: the dashboard's finance snapshot ───────────────────────────────
   const moneyState = stateOf(i, "snapshot", i.snapshot != null);
   if (moneyState) {
-    kpis.push({ key: "spending", icon: "spending", label: "Spending", state: moneyState, value: null, href: "/dashboard/finance" });
-    kpis.push({ key: "networth", icon: "networth", label: "Net Worth", state: moneyState, value: null, href: "/dashboard/finance" });
+    pending.push({ key: "money", icon: "networth", label: "Money", state: moneyState, value: null, href: "/dashboard/finance" });
     for (const [key, title, icon, href] of [["finance", "Finance", "finance", "/dashboard/finance"], ["assets", "Assets", "assets", "/linked?tab=assets"]] as const) {
       insights.push({ key, icon, title, state: moneyState, text: moneyState === "error" ? "Couldn't load your finances." : "Loading…", href });
     }
@@ -236,14 +315,18 @@ export function buildChatHome(i: ChatHomeInput): ChatHome {
     const spend = Number(snap.totalMonthlySpend) || 0;
     const lastMonth = Number(snap.lastMonthTotal) || 0;
     const trend = lastMonth > 0 ? Math.round(((spend - lastMonth) / lastMonth) * 100) : null;
-    kpis.push({
-      key: "spending", icon: "spending", label: "Spending", state: "ready", value: homeMoneyCompact(spend), note: "this month",
-      delta: trend != null && trend !== 0 ? { text: `${trend > 0 ? "+" : "−"}${Math.abs(trend)}%`, dir: trend > 0 ? "up" : "down", good: trend < 0 } : undefined,
-      href: "/dashboard/finance",
-    });
     const assets = Number(snap.totalAssetValue) || 0;
     const debt = Number(snap.totalLiabilities) || 0;
-    kpis.push({ key: "networth", icon: "networth", label: "Net Worth", state: "ready", value: homeMoneyCompact(assets - debt), href: "/dashboard/finance" });
+    // A tile only for money there is: spending once anything was spent this
+    // month or last, net worth once anything is owned or owed.
+    if (spend > 0 || lastMonth > 0) {
+      money.push({
+        key: "spending", icon: "spending", label: "Spending", state: "ready", value: homeMoneyCompact(spend), note: "this month",
+        delta: trend != null && trend !== 0 ? { text: `${trend > 0 ? "+" : "−"}${Math.abs(trend)}%`, dir: trend > 0 ? "up" : "down", good: trend < 0 } : undefined,
+        href: "/dashboard/finance",
+      });
+    }
+    if (assets !== 0 || debt !== 0) money.push({ key: "networth", icon: "networth", label: "Net Worth", state: "ready", value: homeMoneyCompact(assets - debt), href: "/dashboard/finance" });
 
     if (spend > 0) {
       lines.push(trend != null && trend !== 0
@@ -366,7 +449,7 @@ export function buildChatHome(i: ChatHomeInput): ChatHome {
   const ordered = [...lines.filter((l) => l.urgent), ...lines.filter((l) => !l.urgent)].slice(0, 5);
   return {
     lines: ordered.map(({ urgent: _u, ...l }) => l),
-    kpis,
+    kpis: [...pickHeadlineTiles(health, money, MAX_HOME_TILES - pending.length), ...pending],
     insights: (["wellness", "finance", "mindset", "assets"] as const).map((k) => insights.find((x) => x.key === k)!).filter(Boolean),
     glance: GLANCE_ORDER.map((k) => glance.find((g) => g.key === k)!).filter(Boolean),
   };

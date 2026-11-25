@@ -19,7 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Activity, BarChart3, Brain, CalendarDays, Car, CheckSquare, ChevronRight, Coins, Droplet, Dumbbell,
   FileText, HeartPulse, Lightbulb, Moon, Receipt, RefreshCw, Scale, Sparkles, Target, TrendingDown,
-  TrendingUp, Wallet, ArrowUp, ArrowDown, NotebookPen, Layers, MessageCircle, type LucideIcon,
+  TrendingUp, Wallet, ArrowUp, ArrowDown, NotebookPen, Layers, MessageCircle, LineChart, Utensils, type LucideIcon,
 } from "lucide-react";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { hashNavigate } from "@/lib/hashNavigate";
@@ -47,7 +47,7 @@ import { WORKSPACES, type WorkspaceKind } from "@/components/workspace/Workspace
 const ICONS: Record<HomeIcon, LucideIcon> = {
   activity: Activity, sleep: Moon, heart: HeartPulse, weight: Scale, spending: Wallet, networth: BarChart3,
   tasks: CheckSquare, event: CalendarDays, bill: Receipt, document: FileText, workout: Dumbbell, water: Droplet,
-  wellness: HeartPulse, finance: Coins, mindset: Brain, assets: Car,
+  wellness: HeartPulse, finance: Coins, mindset: Brain, assets: Car, tracker: LineChart, nutrition: Utensils,
 };
 
 /** One hue per kind of thing, as an HSL triple — the same hues the tabs use. */
@@ -56,6 +56,7 @@ const HUE: Record<HomeIcon, string> = {
   spending: "38 95% 58%", networth: "152 70% 50%", tasks: "262 85% 70%", event: "190 92% 52%",
   bill: "43 95% 58%", document: "350 85% 62%", workout: "152 70% 50%", water: "200 95% 60%",
   wellness: "152 70% 50%", finance: "43 95% 58%", mindset: "262 85% 70%", assets: "200 95% 60%",
+  tracker: "190 92% 52%", nutrition: "25 95% 60%",
 };
 
 function greetingFor(now: Date): string {
@@ -210,13 +211,13 @@ function KpiTile({ k, go }: { k: HomeKpi; go: (t: HomeTarget) => void }) {
       data-state={k.state}
     >
       <Icon className="h-5 w-5 mb-1" style={{ color: `hsl(${HUE[k.icon]})` }} aria-hidden="true" />
-      <span className="text-[11px] font-medium text-muted-foreground leading-tight">{k.label}</span>
+      <span className="max-w-full truncate text-[11px] font-medium text-muted-foreground leading-tight">{k.label}</span>
       <span className="text-[17px] font-bold leading-tight tabular-nums mt-0.5 whitespace-nowrap">
         {k.state === "loading" ? "…" : k.state === "error" ? "—" : k.value ?? "—"}
         {!quiet && k.value && k.unit && <span className="text-[11px] font-semibold text-muted-foreground ml-0.5">{k.unit}</span>}
       </span>
       <span className="min-h-[16px] mt-0.5 flex items-center justify-center text-[10.5px] text-muted-foreground leading-tight">
-        {k.state === "untracked" ? "Not tracked" : k.state === "error" ? "Couldn't load" : k.delta ? <Delta d={k.delta} /> : k.note ?? ""}
+        {k.state === "error" ? "Couldn't load" : k.delta ? <Delta d={k.delta} /> : k.note ?? ""}
       </span>
     </button>
   );
@@ -384,10 +385,19 @@ export function ChatHomeView({ home, name, todayISO, suggestions, onPick, onSend
 
       {/* Headline figures */}
       <section aria-label="Headline figures">
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-          {home.kpis.map((k) => <KpiTile key={k.key} k={k} go={go} />)}
-        </div>
-        <p className="mt-1.5 text-[11px] text-muted-foreground" data-testid="home-kpi-caption">Health: last 7 days against the 7 before. Spending: this month against last.</p>
+        {/* Whatever this person has — up to six. The columns follow the count. */}
+        {home.kpis.length > 0 ? (
+          <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(104px, 1fr))" }} data-testid="home-kpis">
+            {home.kpis.map((k) => <KpiTile key={k.key} k={k} go={go} />)}
+          </div>
+        ) : (
+          <button type="button" onClick={() => onPick("Track my ")} className="aurora-tile pressable w-full px-3 py-3 text-left text-[13px] text-muted-foreground" data-testid="home-kpis-empty">
+            Nothing tracked yet. Tell me a weigh-in, a workout or what you spent, and it shows here.
+          </button>
+        )}
+        {home.kpis.some((k) => k.state === "ready") && (
+          <p className="mt-1.5 text-[11px] text-muted-foreground" data-testid="home-kpi-caption">Trackers: last 7 days against the 7 before. Spending: this month against last.</p>
+        )}
         {anyFailed && onRetry && (
           <button type="button" onClick={onRetry} className={`${linkCls} mt-2`} data-testid="home-retry">
             <RefreshCw className="h-3 w-3" aria-hidden="true" /> Some figures couldn't load. Try again

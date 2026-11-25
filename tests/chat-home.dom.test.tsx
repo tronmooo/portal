@@ -16,7 +16,7 @@ import { ChatHomeView } from "../client/src/components/chat/ChatHome";
 import { ChatComposer } from "../client/src/components/chat/ChatComposer";
 import { buildChatHome, type HomeList } from "../shared/chat-home";
 import { buildChatSuggestions } from "../shared/chat-suggestions";
-import { TODAY, TZ, fixtureMetrics, fixtureTrackers } from "./helpers/wellness-fixture";
+import { TODAY, TZ, fixtureMetrics, fixtureTrackers, tracker, entry } from "./helpers/wellness-fixture";
 
 afterEach(() => { cleanup(); navigated.length = 0; });
 
@@ -46,12 +46,37 @@ describe("chat home", () => {
     expect(screen.getByTestId("home-line-tasks").textContent).toContain("1 task open");
   });
 
-  it("shows the six figures the builder decided, with their units", () => {
+  it("shows the tiles the builder picked — only what this person has", () => {
     render(<Home />);
     expect(screen.getByTestId("home-kpi-networth").textContent).toContain("$42,350");
     expect(screen.getByTestId("home-kpi-spending").textContent).toContain("$562");
     expect(screen.getByTestId("home-kpi-spending").textContent).toContain("+14%");
-    for (const key of ["activity", "sleep", "rhr", "weight"]) expect(screen.getByTestId(`home-kpi-${key}`)).toBeTruthy();
+    for (const key of ["activity", "sleep", "weight"]) expect(screen.getByTestId(`home-kpi-${key}`)).toBeTruthy();
+    // No resting heart rate in the fixture: no tile, and nothing reads "Not tracked".
+    expect(screen.queryByTestId("home-kpi-rhr")).toBeNull();
+    expect(screen.getByTestId("home-kpis").textContent).not.toContain("Not tracked");
+    expect(screen.getByTestId("home-kpis").children.length).toBe(HOME.kpis.length);
+  });
+
+  it("a person's own tracker is a tile that opens that tracker", () => {
+    const own = [tracker("t-coffee", "Coffee", "custom", [{ name: "cups", unit: "cups" }], [entry(TODAY, { cups: 2 }), entry("2026-11-22", { cups: 3 })])];
+    const home = buildChatHome({ todayISO: TODAY, timezone: TZ, trackers: own, metrics: fixtureMetrics(own), snapshot: {}, tasks: [], eventsToday: [], journal: [] });
+    render(<Home home={home} />);
+    const tile = screen.getByTestId("home-kpi-tracker:t-coffee:cups");
+    expect(tile.textContent).toContain("Coffee Cups");
+    expect(tile.textContent).toContain("5");
+    fireEvent.click(tile);
+    expect(navigated).toEqual(["/trackers?tracker=t-coffee"]);
+  });
+
+  it("an account with nothing recorded gets an invitation, not six empty tiles", () => {
+    const onPick = vi.fn();
+    const home = buildChatHome({ todayISO: TODAY, timezone: TZ, trackers: [], metrics: fixtureMetrics([]), snapshot: {}, tasks: [], eventsToday: [], journal: [] });
+    render(<Home home={home} onPick={onPick} />);
+    expect(screen.queryByTestId("home-kpis")).toBeNull();
+    expect(screen.queryByTestId("home-kpi-caption")).toBeNull();
+    fireEvent.click(screen.getByTestId("home-kpis-empty"));
+    expect(onPick).toHaveBeenCalledWith("Track my ");
   });
 
   it("a row with a route goes there; a row that starts something fills the chat box", () => {
@@ -61,11 +86,13 @@ describe("chat home", () => {
     fireEvent.click(screen.getByTestId("home-glance-events"));
     fireEvent.click(screen.getByTestId("home-insights-all"));
     expect(navigated).toEqual(["/dashboard/finance", "/calendar", "/insights"]);
-    // RHR is not in the fixture: tapping it starts the reading in the box.
-    expect(screen.getByTestId("home-kpi-rhr").getAttribute("data-state")).toBe("untracked");
-    expect(screen.getByTestId("home-kpi-rhr").textContent).toContain("Not tracked");
-    fireEvent.click(screen.getByTestId("home-kpi-rhr"));
-    expect(onPick).toHaveBeenCalledWith("My resting heart rate is ");
+    // An insight with nothing behind it starts the entry in the box instead.
+    const bare = buildChatHome({ todayISO: TODAY, timezone: TZ, trackers: [], metrics: fixtureMetrics([]), snapshot: {}, tasks: [], eventsToday: [], journal: [] });
+    cleanup();
+    render(<Home home={bare} onPick={onPick} />);
+    expect(screen.getByTestId("home-insight-finance").getAttribute("data-state")).toBe("untracked");
+    fireEvent.click(screen.getByTestId("home-insight-finance"));
+    expect(onPick).toHaveBeenCalledWith("I spent $");
     expect(navigated.length).toBe(3);
   });
 
@@ -85,7 +112,7 @@ describe("chat home", () => {
     const retry = vi.fn();
     const failed = buildChatHome({ todayISO: TODAY, timezone: TZ, failed: new Set<HomeList>(["snapshot", "tasks", "trackers", "events", "journal"]) });
     render(<Home home={failed} onRetry={retry} />);
-    const nw = screen.getByTestId("home-kpi-networth");
+    const nw = screen.getByTestId("home-kpi-money");
     expect(nw.getAttribute("data-state")).toBe("error");
     expect(nw.textContent).toContain("Couldn't load");
     expect(nw.textContent).not.toMatch(/\$|\d/);
@@ -95,7 +122,7 @@ describe("chat home", () => {
 
   it("a figure still loading shows a placeholder, never a zero", () => {
     render(<Home home={buildChatHome({ todayISO: TODAY, timezone: TZ })} />);
-    for (const key of ["activity", "spending", "networth"]) {
+    for (const key of ["health", "money"]) {
       const el = screen.getByTestId(`home-kpi-${key}`);
       expect(el.getAttribute("data-state")).toBe("loading");
       expect(el.textContent).not.toMatch(/\d/);

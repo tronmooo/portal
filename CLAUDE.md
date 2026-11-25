@@ -1197,7 +1197,7 @@ custom score replacing the header's Wellness chip.
 
 ## Chat home rules (what the chat page shows before the first message)
 
-Owner's design, 2026-11-25 (a picture: greeting, daily summary, six figures,
+Owner's design, 2026-11-25 (a picture: greeting, daily summary, headline tiles,
 insights, today at a glance, suggestions, AI Modes, the chat box). Read these
 before touching `shared/chat-home.ts`, `client/src/components/chat/ChatHome.tsx`
 or the modes row in `ChatComposer.tsx`.
@@ -1211,11 +1211,24 @@ snapshot (spending, net worth, categories, assets, `upcomingBills`) and
 `countTasksByDay`. The hook uses those screens' query keys. Add a line or a
 tile by reading a store that exists; never compute a second version of a
 number another screen shows, and never let a model write the summary lines.
-**CH2. Loading, failed, untracked and zero are four things (Rule 7, H4).** An
-input is `undefined` while loading and named in `failed` when its request
-failed; the figure then has no value ("…" / "Couldn't load", with a retry).
-Something never recorded is "Not tracked" and its tap starts it in the chat
-box. Only a loaded list may read as a zero.
+**CH1a. The headline tiles are what this person has** (owner, 2026-11-25:
+"the six cards should show whatever the user has, not just those
+predetermined ones"). `pickHeadlineTiles` offers a tile only for something
+with records behind it: the Wellness overview tiles that are tracked, resting
+heart rate, the person's other measurements and OWN trackers (the cards
+`suggestWellnessWidgets` would offer, read by `buildWellnessWidgetView` over
+the 7 days: an amount totalled, a level averaged, a plain log counted),
+spending once anything was spent, net worth once anything is owned or owed.
+At most `MAX_HOME_TILES`; figures inside the week lead, money keeps its place,
+an older reading is shown dated. A workout or food tracker is not listed
+beside Activity / Nutrition. Never bring back a fixed list, and never a tile
+that reads "Not tracked"; an account with nothing gets one invitation.
+**CH2. Loading, failed and zero are three things (Rule 7, H4).** An input is
+`undefined` while loading and named in `failed` when its request failed; the
+source then has ONE placeholder tile ("…" / "Couldn't load", with a retry) —
+what the person tracks is not known yet, so six guesses are not drawn. An
+insight with nothing behind it says so and its tap starts the entry in the
+chat box. Only a loaded list may read as a zero.
 **CH3. Every row goes somewhere.** A route (`href`) or text put in the chat
 box (`prompt`); a whole request ("AI Suggestions", AI Briefing) is sent as
 typed. Opening the page writes nothing (Rule 3). Rows that scroll sideways
