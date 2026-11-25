@@ -11874,7 +11874,7 @@ No emojis. No prose outside the JSON.`,
       const key = req.params.key;
       // `details:` rows and the detail catalog are written only through
       // /api/details/*, which validates each value against its definition.
-      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_", "details:", "detail_definitions", "versions:"];
+      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_", "details:", "detail_definitions", "versions:", "ai_memory:"];
       const PREF_KEY_DENYLIST = new Set([
         "gcal_refresh_token", "gcal_access_token",
         "onboarding_completed", "ai_digest", "admin_override",

@@ -299,6 +299,7 @@ export default function JournalWorkspacePage() {
     const extra = [j.used?.wellness ? "your tracker readings" : "", j.used?.activity ? "your tasks and calendar" : ""].filter(Boolean);
     return {
       answer: j.answer,
+      remembered: Array.isArray(j.remembered) ? j.remembered.map(String) : [],
       note: `${j.used?.pastEntries ? `Read ${read} of ${Math.max(read, Number(j.entriesTotal) || 0)} entries` : read ? "Read only the page you are writing" : "Past entries are switched off: read only this conversation"}${extra.length ? `, and ${extra.join(" and ")}` : ""}. Your entries are not changed.`,
     };
   };
@@ -537,8 +538,11 @@ export default function JournalWorkspacePage() {
       {tab === "past" && <PastEntries entries={entries} list={listState} today={today} onOpen={openInEditor} ownerOf={ownerOf} scopeNotice={scopeNotice} />}
       {tab === "coach" && (
         <AiConversation
-          app="journal" testId="journal-coach" ask={askCoach} boundary={REFLECTION_BOUNDARY}
-          intro="Talk through what is on your mind. The coach listens, reflects back what it hears, and can point to patterns across your own entries. It is private to your journal."
+          app="journal" testId="journal-coach" ask={askCoach} boundary={REFLECTION_BOUNDARY} memoryApp="journal"
+          greet={({ name, since, memories }) => (since
+            ? `${name ? `Hi ${name}. ` : "Hi. "}Good to see you again — we last talked ${since}.${memories ? " I remember what you've told me, so you don't have to start over." : ""} What's on your mind?`
+            : `${name ? `Hi ${name}. ` : "Hi. "}I'm here to listen. Tell me what's on your mind — big or small — and we'll think it through together. I can look back through your journal with you, too.`)}
+          intro="Talk through what is on your mind. I listen, reflect back what I hear, and can point to patterns across your own entries. This is private to your journal."
           suggestions={["How has my mindset changed over the past six months?", "What situations seem to cause me the most stress?", "What patterns do you notice in my journal entries?", "Help me think through something that happened today"]}
           placeholder="What is on your mind?"
         />

@@ -96,6 +96,7 @@ export default defineConfig({
       'tests/workspace-editors-mobile.dom.test.tsx',
       'tests/workspace-rules.test.ts',
       'tests/workspace-intel.test.ts',
+      'tests/ai-memory.test.ts',
       'tests/content-versions-routes.test.ts',
       'tests/workspace-apps.dom.test.tsx',
       'tests/word-workspace.dom.test.tsx',

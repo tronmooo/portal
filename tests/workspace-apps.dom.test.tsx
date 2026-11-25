@@ -32,6 +32,9 @@ let storedAccess: string | null = null;
 let versions: any[] = [];
 let answers: Record<string, any> = {};
 let failUrl: string | null = null;
+/** What the server holds for each assistant's memory; absent = a server without the memory routes. */
+let memory: Record<string, any> = {};
+let memoryFails = false;
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 vi.mock("@/lib/cache-bus", () => ({ invalidateDomain: vi.fn(async () => {}) }));
@@ -55,6 +58,15 @@ vi.mock("@/lib/queryClient", () => ({
     else if (url in answers) data = answers[url];
     else if (method === "POST" && url === "/api/notes") data = { id: "n-new", ...body };
     else if (method === "POST" && url === "/api/journal") data = { id: "j-new", ...body };
+    else if (url.startsWith("/api/workspace/memory/")) {
+      const app = url.split("/")[4];
+      const m = memory[app];
+      if (method === "DELETE" && url.endsWith("/conversation")) m.turns = [];
+      else if (method === "DELETE" && url.includes("/items/")) m.memories = m.memories.filter((x: any) => x.id !== url.split("/").pop());
+      else if (method === "DELETE") { m.memories = []; m.turns = []; m.lastTalked = null; }
+      else if (method === "POST") m.memories = [...m.memories, { id: `own-${m.memories.length}`, text: body.text, at: new Date().toISOString(), by: "you" }];
+      data = { ...m, memories: [...m.memories], turns: [...m.turns] };
+    }
     else if (method === "PUT" && url.startsWith("/api/preferences/")) { storedAccess = body.value; data = { success: true }; }
     else if (method === "POST" && url.endsWith("/restore")) data = { record: { id: "n1", content: "the older text" }, restoredFrom: "2026-11-20T10:00:00.000Z" };
     else if (method === "PATCH") data = { id: url.split("/").pop(), ...body };
@@ -79,6 +91,7 @@ function mount(page: React.ReactElement) {
         if (key === "/api/notes") { if (listFails) throw new Error("500: boom"); return notes; }
         if (key === "/api/profiles") return [{ id: "p1", name: "Tron", type: "self" }];
         if (key === `/api/preferences/${WORKSPACE_AI_ACCESS_PREF}`) { if (prefFails) throw new Error("500: boom"); return { value: storedAccess }; }
+        if (key.startsWith("/api/workspace/memory/")) { if (memoryFails) throw new Error("500: boom"); const m = memory[key.split("/").pop()!]; return m ? { ...m } : []; }
         if (/^\/api\/workspace\/versions\/\w+\/[^/]+$/.test(key)) return { versions: versions.map(({ content: _c, ...v }) => v) };
         if (key.startsWith("/api/workspace/versions/")) return versions.find((v) => key.endsWith(`/${v.id}`));
         return [];
@@ -100,7 +113,7 @@ const NOTES = () => [
 
 beforeEach(() => {
   window.localStorage.clear();
-  calls.length = 0; navigated.length = 0; notes = []; entries = []; listFails = false; prefFails = false; storedAccess = null; versions = []; answers = {}; failUrl = null;
+  calls.length = 0; navigated.length = 0; notes = []; entries = []; listFails = false; prefFails = false; storedAccess = null; versions = []; answers = {}; failUrl = null; memory = {}; memoryFails = false;
 });
 afterEach(cleanup);
 
@@ -314,7 +327,7 @@ describe("what the AI may read", () => {
     expect(screen.getByTestId("ai-access-notes").textContent).toMatch(/Journal entries stay private to the Journal/);
     fireEvent.click(portol);
     await waitFor(() => expect(storedAccess).not.toBeNull());
-    expect(parseWorkspaceAiAccess(storedAccess)).toEqual({ ...DEFAULT_WORKSPACE_AI_ACCESS, notes: { allNotes: true, portol: true } });
+    expect(parseWorkspaceAiAccess(storedAccess)).toEqual({ ...DEFAULT_WORKSPACE_AI_ACCESS, notes: { allNotes: true, portol: true, memory: true } });
     await waitFor(() => expect(screen.getByTestId("ai-access-notes-portol").getAttribute("aria-checked")).toBe("true"));
   });
 
@@ -572,7 +585,7 @@ describe("Journal: the coach, insights, growth and guided prompts", () => {
     fireEvent.click(screen.getByTestId("button-ai-access-journal"));
     expect((await screen.findByTestId("ai-access-journal-wellness")).getAttribute("aria-checked")).toBe("false");
     fireEvent.click(screen.getByTestId("ai-access-journal-wellness"));
-    await waitFor(() => expect(parseWorkspaceAiAccess(storedAccess).journal).toEqual({ pastEntries: true, wellness: true, activity: false }));
+    await waitFor(() => expect(parseWorkspaceAiAccess(storedAccess).journal).toEqual({ pastEntries: true, wellness: true, activity: false, memory: true }));
     expect(parseWorkspaceAiAccess(storedAccess).word.journal).toBe(false); // nothing else moved
   });
 
@@ -635,6 +648,122 @@ describe("Journal: the coach, insights, growth and guided prompts", () => {
     await waitFor(() => expect((screen.getByTestId("button-personal-prompts") as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByTestId("button-personal-prompts"));
     await waitFor(() => expect(screen.getByTestId("personal-prompts").textContent).toMatch(/next talk with Sam/));
+  });
+});
+
+const daysAgoIso = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+const COACH_MEMORY = () => ({
+  remember: true, name: "Tron", lastTalked: daysAgoIso(3),
+  memories: [{ id: "m1", text: "Sam is their partner", at: daysAgoIso(3), by: "ai" }, { id: "m2", text: "Works night shifts", at: daysAgoIso(3), by: "ai" }],
+  turns: [{ role: "user", content: "Sam and I argued about money.", at: daysAgoIso(3) }, { role: "assistant", content: "That sounds draining. What set it off?", at: daysAgoIso(3) }],
+});
+
+describe("the coach remembers, and the person is in charge of what it keeps", () => {
+  it("the earlier conversation is there again, and the screen says it is saved and how to stop that", async () => {
+    memory.journal = COACH_MEMORY();
+    mount(<JournalWorkspacePage />);
+    tab("coach");
+    await waitFor(() => expect(screen.getByTestId("journal-coach-user").textContent).toBe("Sam and I argued about money."));
+    expect(screen.getByTestId("journal-coach-assistant").textContent).toBe("That sounds draining. What set it off?");
+    expect(screen.getByTestId("button-memory-journal").textContent).toMatch(/What I remember · 2/);
+    expect(screen.getByTestId("journal-coach-saved-note").textContent).toMatch(/saved privately on your account.*turn remembering off in AI access.*Nothing in your notes or journal is changed/);
+    expect(calls.filter((c) => c.method !== "GET")).toEqual([]); // opening it wrote nothing
+  });
+
+  it("with nothing said yet it greets them by name and says how long it has been", async () => {
+    memory.journal = { ...COACH_MEMORY(), turns: [] };
+    mount(<JournalWorkspacePage />);
+    tab("coach");
+    await waitFor(() => expect(screen.getByTestId("journal-coach-opening").textContent).toBe("Hi Tron. Good to see you again — we last talked 3 days ago. I remember what you've told me, so you don't have to start over. What's on your mind?"));
+    cleanup();
+    memory.journal = { remember: true, name: "Tron", lastTalked: null, memories: [], turns: [] };
+    mount(<JournalWorkspacePage />);
+    tab("coach");
+    await waitFor(() => expect(screen.getByTestId("journal-coach-opening").textContent).toMatch(/^Hi Tron\. I'm here to listen\./));
+  });
+
+  it("what it kept from a reply is shown under it, and the count goes up", async () => {
+    memory.journal = { remember: true, name: "Tron", lastTalked: null, memories: [], turns: [] };
+    answers["/api/workspace/journal/coach"] = { answer: "Porto sounds lovely. What do you miss most about her?", entriesRead: 0, entriesTotal: 0, used: { pastEntries: true, memory: true }, remembered: ["Their sister Ana lives in Porto"] };
+    mount(<JournalWorkspacePage />);
+    tab("coach");
+    await waitFor(() => screen.getByTestId("journal-coach-opening"));
+    fireEvent.change(screen.getByTestId("journal-coach-input"), { target: { value: "I miss my sister Ana, she lives in Porto." } });
+    memory.journal.memories = [{ id: "m9", text: "Their sister Ana lives in Porto", at: new Date().toISOString(), by: "ai" }]; // what the server will hold after the reply
+    fireEvent.click(screen.getByTestId("journal-coach-send"));
+    await waitFor(() => expect(screen.getByTestId("journal-coach-remembered").textContent).toBe("I'll remember: Their sister Ana lives in Porto"));
+    await waitFor(() => expect(screen.getByTestId("button-memory-journal").textContent).toMatch(/What I remember · 1/));
+  });
+
+  it("every memory is listed; forgetting one takes two taps; they can add their own", async () => {
+    memory.journal = COACH_MEMORY();
+    mount(<JournalWorkspacePage />);
+    tab("coach");
+    fireEvent.click(await screen.findByTestId("button-memory-journal"));
+    const panel = screen.getByTestId("memory-panel-journal");
+    expect(panel.textContent).toMatch(/Only this assistant reads them/);
+    expect(within(screen.getByTestId("memory-list")).getAllByRole("listitem").map((li) => li.textContent?.replace(/From our conversation.*$/, ""))).toEqual(["Works night shifts", "Sam is their partner"]);
+    fireEvent.click(screen.getByTestId("button-forget-m1"));
+    expect(calls.filter((c) => c.method === "DELETE")).toEqual([]);
+    fireEvent.click(screen.getByTestId("button-forget-m1"));
+    await waitFor(() => expect(screen.queryByTestId("memory-m1")).toBeNull());
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual(["/api/workspace/memory/journal/items/m1"]);
+    fireEvent.change(screen.getByTestId("input-memory-journal"), { target: { value: "My mother's birthday is hard for me" } });
+    fireEvent.click(screen.getByTestId("button-memory-add-journal"));
+    await waitFor(() => expect(screen.getByTestId("memory-list").textContent).toMatch(/My mother's birthday is hard for me.*You added this/));
+    expect(calls.find((c) => c.url.endsWith("/remember"))!.body).toEqual({ text: "My mother's birthday is hard for me" });
+  });
+
+  it("a new conversation clears the saved one (two taps) and keeps what it remembers; Forget everything clears both", async () => {
+    memory.journal = COACH_MEMORY();
+    mount(<JournalWorkspacePage />);
+    tab("coach");
+    await waitFor(() => screen.getByTestId("journal-coach-user"));
+    fireEvent.click(screen.getByTestId("journal-coach-new"));
+    expect(screen.getByTestId("journal-coach-new").textContent).toMatch(/Tap again to clear this conversation \(what I remember stays\)/);
+    expect(screen.getByTestId("journal-coach-user")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("journal-coach-new"));
+    await waitFor(() => expect(screen.queryByTestId("journal-coach-user")).toBeNull());
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual(["/api/workspace/memory/journal/conversation"]);
+    expect(screen.getByTestId("button-memory-journal").textContent).toMatch(/What I remember · 2/);
+    fireEvent.click(screen.getByTestId("button-memory-journal"));
+    fireEvent.click(screen.getByTestId("button-forget-all-journal"));
+    expect(memory.journal.memories).toHaveLength(2);
+    fireEvent.click(screen.getByTestId("button-forget-all-journal"));
+    await waitFor(() => expect(screen.getByTestId("memory-empty")).toBeTruthy());
+    expect(memory.journal.memories).toEqual([]);
+  });
+
+  it("with remembering off it says so, shows no earlier conversation, and a new conversation is one tap", async () => {
+    memory.journal = { ...COACH_MEMORY(), remember: false };
+    answers["/api/workspace/journal/coach"] = { answer: "I'm listening.", entriesRead: 0, entriesTotal: 0, used: { pastEntries: true, memory: false }, remembered: [] };
+    mount(<JournalWorkspacePage />);
+    tab("coach");
+    await waitFor(() => expect(screen.getByTestId("button-memory-journal").textContent).toBe(" Remembering is off"));
+    expect(screen.queryByTestId("journal-coach-user")).toBeNull();
+    expect(screen.getByTestId("journal-coach-saved-note").textContent).toMatch(/Remembering is off: this conversation is not saved/);
+    fireEvent.change(screen.getByTestId("journal-coach-input"), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByTestId("journal-coach-send"));
+    await waitFor(() => screen.getByTestId("journal-coach-assistant"));
+    fireEvent.click(screen.getByTestId("journal-coach-new"));
+    await waitFor(() => expect(screen.queryByTestId("journal-coach-user")).toBeNull());
+    expect(calls.filter((c) => c.method === "DELETE")).toEqual([]);
+  });
+
+  it("a memory that could not be loaded is an error with a retry, never 'nothing remembered'", async () => {
+    memoryFails = true;
+    mount(<JournalWorkspacePage />);
+    tab("coach");
+    await waitFor(() => expect(screen.getByTestId("journal-coach-memory-error").textContent).toMatch(/Couldn't load what I remember\. Retry/));
+    expect(screen.queryByTestId("button-memory-journal")).toBeNull();
+  });
+
+  it("the Notes assistant remembers too, in its own memory", async () => {
+    memory.notes = { remember: true, name: "Tron", lastTalked: daysAgoIso(1), memories: [{ id: "n1m", text: "Prefers notes grouped by project", at: daysAgoIso(1), by: "ai" }], turns: [{ role: "user", content: "Group by project.", at: daysAgoIso(1) }, { role: "assistant", content: "Will do.", at: daysAgoIso(1) }] };
+    mount(<NotesWorkspacePage />);
+    tab("assistant");
+    await waitFor(() => expect(screen.getByTestId("notes-assistant-assistant").textContent).toBe("Will do."));
+    expect(screen.getByTestId("button-memory-notes").textContent).toMatch(/What I remember · 1/);
   });
 });
 

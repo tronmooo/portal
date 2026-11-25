@@ -10,6 +10,7 @@
 //  - The coach is told it is not a therapist and must not diagnose, and says
 //    so beside every answer.
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { memoryKey, parseAiMemory } from "../shared/ai-memory";
 import { WORKSPACE_AI_ACCESS_PREF, DEFAULT_WORKSPACE_AI_ACCESS, serializeWorkspaceAiAccess, withAccess, type WorkspaceAiAccess } from "../shared/workspace-access";
 
 process.env.ANTHROPIC_API_KEY = "test-key-not-used";
@@ -18,8 +19,8 @@ type Row = Record<string, any>;
 const SELF = { id: "p-self", name: "Tron Moore", type: "self", fields: { email: "tron@example.test", occupation: "Nurse", ssn: "123-45-6789" } };
 const BOB = { id: "p-bob", name: "Bob Robertson", type: "person", fields: {} };
 const CAR = { id: "p-car", name: "Honda CR-V", type: "vehicle", fields: { year: 2019, vin: "VIN123" } };
-const db: { profiles: Row[]; documents: Row[]; journal: Row[]; artifacts: Row[]; trackers: Row[]; tasks: Row[]; events: Row[]; prefs: Record<string, string>; writes: string[] } =
-  { profiles: [], documents: [], journal: [], artifacts: [], trackers: [], tasks: [], events: [], prefs: {}, writes: [] };
+const db: { profiles: Row[]; documents: Row[]; journal: Row[]; artifacts: Row[]; trackers: Row[]; tasks: Row[]; events: Row[]; prefs: Record<string, string>; writes: string[]; prefWrites: string[] } =
+  { profiles: [], documents: [], journal: [], artifacts: [], trackers: [], tasks: [], events: [], prefs: {}, writes: [], prefWrites: [] };
 
 vi.mock("../server/storage", () => {
   const impl: Record<string, any> = {
@@ -33,6 +34,10 @@ vi.mock("../server/storage", () => {
     getTasks: async () => db.tasks,
     getEvents: async () => db.events,
     getPreference: async (key: string) => db.prefs[key] ?? null,
+    // The one row an AI may write: its own memory. Every key written is recorded.
+    setPreference: async (key: string, value: string) => { db.prefWrites.push(key); db.prefs[key] = value; },
+    acquireUserLock: async () => true,
+    releaseUserLock: async () => undefined,
   };
   // Any storage method this test did not define is recorded by name: a write would show.
   return { storage: new Proxy(impl, { get: (t, p: string) => (p in t ? t[p] : async () => { db.writes.push(p); return []; }) }) };
@@ -59,7 +64,7 @@ const setAccess = (change: (a: WorkspaceAiAccess) => WorkspaceAiAccess) => { db.
 let intel: typeof import("../server/workspace-intel");
 let ai: typeof import("../server/workspace-ai");
 beforeEach(async () => {
-  db.profiles = [SELF, BOB, CAR]; db.documents = []; db.trackers = []; db.tasks = []; db.events = []; db.prefs = {}; db.writes = [];
+  db.profiles = [SELF, BOB, CAR]; db.documents = []; db.trackers = []; db.tasks = []; db.events = []; db.prefs = {}; db.writes = []; db.prefWrites = [];
   db.artifacts = [
     note("n1", "Trip plan", "Fly to Lisbon in March.\n- [ ] book flights\n- [x] renew passport", ["category:Travel"]),
     note("n2", "Budget", "Trip fund: 1200 saved of 3000.", []),
@@ -78,7 +83,12 @@ beforeEach(async () => {
 });
 const sentTo = (call: Row) => `${call.system ?? ""}\n${(call.messages || []).map((m: Row) => m.content).join("\n")}`;
 const WRITE_RE = /^(create|update|delete|save|log|link|set|upsert|insert|remove)/i;
-const noWrites = () => expect(db.writes.filter((m) => WRITE_RE.test(m))).toEqual([]);
+/** No record the person owns is written; the only row an AI may write is its own memory. */
+const noWrites = () => {
+  expect(db.writes.filter((m) => WRITE_RE.test(m))).toEqual([]);
+  expect(db.prefWrites.filter((k) => !k.startsWith("ai_memory:"))).toEqual([]);
+};
+const stored = (app: "journal" | "notes") => parseAiMemory(db.prefs[memoryKey(app)] ?? null);
 const ask = (q: string) => [{ role: "user", content: q }];
 const ok = <T extends { ok: boolean }>(r: T) => { expect(r.ok, JSON.stringify(r)).toBe(true); return r as Extract<T, { ok: true }>; };
 
@@ -189,7 +199,7 @@ describe("Journal: the reflection coach", () => {
   it("reads the writer's own entries — not another person's — and nothing else by default", async () => {
     db.trackers = [{ id: "t1", name: "Sleep", unit: "h", linkedProfiles: [], entries: [{ timestamp: `${daysAgo(2)}T07:00:00Z`, values: { hours: 5.5 } }] }];
     const r = ok(await intel.journalCoach({ messages: ask("How has my mindset changed?") }));
-    expect(r).toMatchObject({ entriesRead: 3, entriesTotal: 3, used: { pastEntries: true, wellness: false, activity: false } });
+    expect(r).toMatchObject({ entriesRead: 3, entriesTotal: 3, used: { pastEntries: true, wellness: false, activity: false, memory: true } });
     const sent = sentTo(modelCalls[0]);
     expect(sent).toContain("SECRETJOURNALWORD");
     expect(sent).toContain("energy 4/5 · stress 2/5 · felt: calm");
@@ -205,7 +215,7 @@ describe("Journal: the reflection coach", () => {
     db.tasks = [{ id: "k1", title: "File taxes", status: "done", updatedAt: `${daysAgo(2)}T15:00:00Z` }];
     setAccess((a) => withAccess(withAccess(a, "journal", "wellness", true), "journal", "activity", true));
     const r = ok(await intel.journalCoach({ messages: ask("What situations seem to cause me the most stress?") }));
-    expect(r.used).toEqual({ pastEntries: true, wellness: true, activity: true });
+    expect(r.used).toEqual({ pastEntries: true, wellness: true, activity: true, memory: true });
     const sent = sentTo(modelCalls[0]);
     expect(sent).toContain(`${daysAgo(2)}: Sleep: hours 5.5 h`);
     expect(sent).not.toContain("restless"); // numbers only, never a tracker note
@@ -225,9 +235,15 @@ describe("Journal: the reflection coach", () => {
     expect(await intel.journalPrompts()).toMatchObject({ ok: false, status: 403 });
   });
 
-  it("the whole conversation is sent on, in order", async () => {
-    ok(await intel.journalCoach({ messages: [{ role: "user", content: "I keep arguing with Sam." }, { role: "assistant", content: "What usually comes before it?" }, { role: "user", content: "Being tired." }] }));
+  it("with remembering off, the conversation is the one the screen holds, and nothing is saved", async () => {
+    setAccess((a) => withAccess(a, "journal", "memory", false));
+    const r = ok(await intel.journalCoach({ messages: [{ role: "user", content: "I keep arguing with Sam." }, { role: "assistant", content: "What usually comes before it?" }, { role: "user", content: "Being tired." }] }));
     expect(modelCalls[0].messages.map((m: Row) => m.role)).toEqual(["user", "assistant", "user"]);
+    expect(r.used.memory).toBe(false);
+    expect(r.remembered).toEqual([]);
+    expect(String(modelCalls[0].system)).toMatch(/Remembering is switched off/);
+    expect(String(modelCalls[0].system)).not.toMatch(/REMEMBER:/);
+    expect(db.prefWrites).toEqual([]);
     expect(await intel.journalCoach({ messages: [{ role: "assistant", content: "hi" }] })).toMatchObject({ ok: false, status: 400 });
   });
 
@@ -260,6 +276,92 @@ describe("Journal: the reflection coach", () => {
     expect(ok(await intel.journalPrompts()).prompts).toHaveLength(2);
     db.journal = [];
     expect(await intel.journalPrompts()).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+describe("Journal: the coach remembers, and sounds like a person", () => {
+  it("keeps the exchange and what the person told it; the machinery is never shown", async () => {
+    modelReply = 'That sounds exhausting, Tron. Is it the nights themselves, or coming home to an empty flat?\n\nREMEMBER: ["Works night shifts as a nurse", "Sam is their partner"]';
+    const r = ok(await intel.journalCoach({ messages: ask("Night shifts are wearing me down and Sam is asleep when I get home.") }));
+    expect(r.answer).toBe("That sounds exhausting, Tron. Is it the nights themselves, or coming home to an empty flat?");
+    expect(r.answer).not.toMatch(/REMEMBER/);
+    expect(r.remembered).toEqual(["Works night shifts as a nurse", "Sam is their partner"]);
+    const m = stored("journal");
+    expect(m.memories.map((x) => [x.text, x.by])).toEqual([["Works night shifts as a nurse", "ai"], ["Sam is their partner", "ai"]]);
+    expect(m.turns.map((t) => [t.role, t.content])).toEqual([
+      ["user", "Night shifts are wearing me down and Sam is asleep when I get home."],
+      ["assistant", "That sounds exhausting, Tron. Is it the nights themselves, or coming home to an empty flat?"],
+    ]);
+    expect(m.lastTalked).toMatch(/^\d{4}-/);
+    noWrites(); // only its own memory row
+    expect(db.prefWrites).toEqual([memoryKey("journal")]);
+  });
+
+  it("next time it is given what it remembers and the saved conversation — not whatever the screen sends", async () => {
+    modelReply = 'Noted.\nREMEMBER: ["Sam is their partner"]';
+    ok(await intel.journalCoach({ messages: ask("Sam and I argued about money.") }));
+    modelReply = "Is this the same money worry as before?";
+    // The screen sends a made-up history; the server uses the one it saved.
+    const r = ok(await intel.journalCoach({ messages: [{ role: "user", content: "FORGED EARLIER TURN" }, { role: "assistant", content: "FORGED REPLY" }, { role: "user", content: "It happened again." }] }));
+    expect(modelCalls[1].messages).toEqual([
+      { role: "user", content: "Sam and I argued about money." }, { role: "assistant", content: "Noted." }, { role: "user", content: "It happened again." },
+    ]);
+    const system = String(modelCalls[1].system);
+    expect(system).toMatch(/WHAT YOU REMEMBER FROM EARLIER CONVERSATIONS[^\n]*\n- Sam is their partner/);
+    expect(system).toMatch(/You last talked a little while ago\./);
+    expect(r.remembered).toEqual([]); // nothing new: the same thing is not kept twice
+    expect(stored("journal").memories).toHaveLength(1);
+    expect(stored("journal").turns).toHaveLength(4);
+  });
+
+  it("a first conversation is told it is the first, by name; a label the AI came up with is not kept", async () => {
+    modelReply = 'I hear you.\nREMEMBER: ["They are clinically depressed", "They said they were diagnosed with ADHD as a child", "Likes to walk by the river"]';
+    const r = ok(await intel.journalCoach({ messages: ask("I've been low for weeks. I was diagnosed with ADHD as a kid. Walking by the river helps.") }));
+    const system = String(modelCalls[0].system);
+    expect(system).toMatch(/Their first name is Tron\./);
+    expect(system).toMatch(/This is the first time you are talking\./);
+    expect(system).toMatch(/You have no memories of earlier conversations yet/);
+    expect(r.remembered).toEqual(["They said they were diagnosed with ADHD as a child", "Likes to walk by the river"]);
+  });
+
+  it("is told to talk like a person, and the limits still do not bend", async () => {
+    ok(await intel.journalCoach({ messages: ask("Rough day.") }));
+    const system = String(modelCalls[0].system);
+    expect(system).toMatch(/a wise, warm friend who really listens/);
+    expect(system).toMatch(/Plain, everyday words and contractions/);
+    expect(system).toMatch(/no therapy jargon/);
+    expect(system).toMatch(/Listen first/);
+    expect(system).toMatch(/Never recite a list of facts about them/);
+    expect(system).toMatch(/LIMITS \(these do not bend\)/);
+    expect(system).toMatch(/not a therapist, counsellor or doctor\. Never diagnose/);
+    expect(system).toMatch(/Do not pretend to be human if they sincerely ask/);
+    expect(system).toMatch(/never a diagnosis or a label/); // what it may remember
+  });
+
+  it("a failed answer saves nothing: the conversation is not left with a question and no reply", async () => {
+    modelReply = new Error("boom");
+    expect(await intel.journalCoach({ messages: ask("Are you there?") })).toMatchObject({ ok: false, status: 502 });
+    expect(db.prefWrites).toEqual([]);
+    expect(stored("journal").turns).toEqual([]);
+  });
+
+  it("the coach's memory is the coach's: the notes assistant is not given it, and keeps its own", async () => {
+    modelReply = 'Okay.\nREMEMBER: ["COACHONLY: Sam is their partner"]';
+    ok(await intel.journalCoach({ messages: ask("Sam is my partner.") }));
+    modelReply = 'Sure.\nREMEMBER: ["Prefers notes grouped by project"]';
+    const r = ok(await intel.notesChat({ messages: ask("Group my notes by project from now on.") }));
+    expect(sentTo(modelCalls[1])).not.toContain("COACHONLY");
+    expect(r).toMatchObject({ answer: "Sure.", remembered: ["Prefers notes grouped by project"], memoryOn: true });
+    expect(stored("notes").memories.map((m) => m.text)).toEqual(["Prefers notes grouped by project"]);
+    expect(stored("journal").memories.map((m) => m.text)).toEqual(["COACHONLY: Sam is their partner"]);
+    // And insights, growth and the Document AI are never given either memory.
+    modelReply = JSON.stringify({ patterns: [], concerns: [], changes: [], progress: [] });
+    ok(await intel.journalInsights({ focus: "insights" }));
+    modelReply = "TITLE: A Letter\n<p>Dear Sir, a letter about Sam and projects.</p>";
+    ok(await ai.assistDocument({ instruction: "Write a letter about Sam and my projects" }));
+    expect(sentTo(modelCalls[2])).not.toContain("COACHONLY");
+    expect(sentTo(modelCalls[3])).not.toContain("COACHONLY");
+    expect(sentTo(modelCalls[3])).not.toContain("grouped by project");
   });
 });
 

@@ -19,6 +19,8 @@ export interface WorkspaceAiAccess {
     allNotes: boolean;
     /** Profile facts, open tasks and asset names from the rest of Portol. */
     portol: boolean;
+    /** The assistant keeps the conversation and what it learned (shared/ai-memory.ts). */
+    memory: boolean;
   };
   journal: {
     /** The coach and insights read saved entries, not only the page on screen. */
@@ -27,6 +29,8 @@ export interface WorkspaceAiAccess {
     wellness: boolean;
     /** Tasks finished and events held on the days written about. */
     activity: boolean;
+    /** The coach keeps the conversation and what it learned about the writer (shared/ai-memory.ts). */
+    memory: boolean;
   };
   word: {
     profile: boolean;
@@ -41,8 +45,11 @@ export interface WorkspaceAiAccess {
 export type WorkspaceAiApp = keyof WorkspaceAiAccess;
 
 export const DEFAULT_WORKSPACE_AI_ACCESS: WorkspaceAiAccess = {
-  notes: { allNotes: true, portol: false },
-  journal: { pastEntries: true, wellness: false, activity: false },
+  // `memory` is the AI's own record of its conversations with the writer —
+  // nothing crosses from another kind of record — so it is on, and one switch
+  // turns it off (then nothing is saved and nothing is recalled).
+  notes: { allNotes: true, portol: false, memory: true },
+  journal: { pastEntries: true, wellness: false, activity: false, memory: true },
   word: { profile: true, documents: true, notes: false, assets: false, journal: false },
 };
 
@@ -51,11 +58,13 @@ export const WORKSPACE_AI_ACCESS_LABELS: { [A in WorkspaceAiApp]: Array<{ key: k
   notes: [
     { key: "allNotes", label: "All my notes", detail: "Answers and insights draw on the whole notebook. Off: only the note that is open." },
     { key: "portol", label: "The rest of Portol", detail: "My profile, open tasks and what I own, so an answer can connect a note to them." },
+    { key: "memory", label: "Remember our conversations", detail: "Keeps the conversation and what the assistant learned, so it can pick up where we left off. Off: nothing is saved or recalled." },
   ],
   journal: [
     { key: "pastEntries", label: "My past entries", detail: "The coach, insights and growth read saved entries. Off: only what is on the page." },
     { key: "wellness", label: "Sleep, exercise and wellness", detail: "Tracker readings from the same days, to connect how I felt with what I did." },
     { key: "activity", label: "Tasks and calendar", detail: "What I finished and what was on my calendar on the days I wrote about." },
+    { key: "memory", label: "Remember our conversations", detail: "The coach keeps our conversation and what it learned about me, so it can pick up where we left off. Off: nothing is saved or recalled." },
   ],
   word: [
     { key: "profile", label: "My profile", detail: "Name, contact details and saved facts, so a document is filled in correctly." },
@@ -98,7 +107,7 @@ export function withAccess<A extends WorkspaceAiApp>(access: WorkspaceAiAccess, 
   return next;
 }
 
-/** "your notes and your profile": what an answer may say it read. */
+/** "your notes and your profile": what an answer may say it read. (Remembering is not a source: it is said on its own line.) */
 export function accessSummary<A extends WorkspaceAiApp>(access: WorkspaceAiAccess, app: A): string[] {
-  return WORKSPACE_AI_ACCESS_LABELS[app].filter((row) => (access[app] as Record<string, boolean>)[row.key]).map((row) => row.label);
+  return WORKSPACE_AI_ACCESS_LABELS[app].filter((row) => row.key !== "memory" && (access[app] as Record<string, boolean>)[row.key]).map((row) => row.label);
 }

@@ -2,6 +2,7 @@
 // read: it returns a proposal and writes nothing (server/workspace-ai.ts).
 import type { Express, Request, Response } from "express";
 import { isVersionKind, type VersionKind } from "@shared/content-versions";
+import { isMemoryApp, type AiMemory, type MemoryApp } from "@shared/ai-memory";
 
 // Loaded on first use, like the rest of the AI stack, so the model SDK stays
 // out of the everyday function's cold start (script/build-vercel.ts).
@@ -15,14 +16,15 @@ export const WORKSPACE_AI_PATHS = [
   "/api/workspace/notes/assist",
   "/api/workspace/journal/reflect",
   // The apps' own tabs (server/workspace-intel.ts): answers and proposals.
-  "/api/workspace/notes/chat",
   "/api/workspace/notes/insights",
   "/api/workspace/notes/categorize",
-  "/api/workspace/journal/coach",
   "/api/workspace/journal/insights",
   "/api/workspace/journal/prompts",
   "/api/workspace/document/review",
 ] as const;
+// The two CONVERSATIONS are not in that list: with remembering on they save
+// the exchange and what was learned to the AI's own memory row
+// (server/ai-memory.ts). They still change no record the person owns.
 
 type Limiter = (key: string, max: number) => boolean;
 
@@ -51,16 +53,44 @@ export function registerWorkspaceRoutes(app: Express, rateLimit: Limiter): void 
     instruction: str(req.body?.instruction, 2000), draft: str(req.body?.draft, 10_000),
   })));
 
-  app.post(WORKSPACE_AI_PATHS[3], guard(async (req) => (await intel()).notesChat({
+  app.post("/api/workspace/notes/chat", guard(async (req) => (await intel()).notesChat({
     messages: req.body?.messages,
     openNote: { id: str(req.body?.openNote?.id, 80) || null, title: str(req.body?.openNote?.title, 200), content: str(req.body?.openNote?.content, 60_000) },
   })));
-  app.post(WORKSPACE_AI_PATHS[4], guard(async () => (await intel()).notesInsights()));
-  app.post(WORKSPACE_AI_PATHS[5], guard(async () => (await intel()).notesCategorize()));
-  app.post(WORKSPACE_AI_PATHS[6], guard(async (req) => (await intel()).journalCoach({ messages: req.body?.messages, draft: str(req.body?.draft, 10_000) })));
-  app.post(WORKSPACE_AI_PATHS[7], guard(async (req) => (await intel()).journalInsights({ focus: req.body?.focus })));
-  app.post(WORKSPACE_AI_PATHS[8], guard(async () => (await intel()).journalPrompts()));
-  app.post(WORKSPACE_AI_PATHS[9], guard(async (req) => (await intel()).reviewDocument({ html: str(req.body?.html, 200_000), title: str(req.body?.title, 200) })));
+  app.post("/api/workspace/journal/coach", guard(async (req) => (await intel()).journalCoach({ messages: req.body?.messages, draft: str(req.body?.draft, 10_000) })));
+  app.post("/api/workspace/notes/insights", guard(async () => (await intel()).notesInsights()));
+  app.post("/api/workspace/notes/categorize", guard(async () => (await intel()).notesCategorize()));
+  app.post("/api/workspace/journal/insights", guard(async (req) => (await intel()).journalInsights({ focus: req.body?.focus })));
+  app.post("/api/workspace/journal/prompts", guard(async () => (await intel()).journalPrompts()));
+  app.post("/api/workspace/document/review", guard(async (req) => (await intel()).reviewDocument({ html: str(req.body?.html, 200_000), title: str(req.body?.title, 200) })));
+
+  // ── What an AI remembers (server/ai-memory.ts) ────────────────────────────
+  // The person sees all of it and is in charge of it: add, remove one, clear
+  // the conversation, forget everything.
+  const memory = () => import("./ai-memory");
+  const memSafe = (fn: (req: Request, res: Response, app: MemoryApp) => Promise<any>) => async (req: Request, res: Response) => {
+    if (!isMemoryApp(req.params.app)) return res.status(400).json({ error: "Unknown assistant." });
+    try { await fn(req, res, req.params.app); } catch (err: any) {
+      console.error("[ai-memory]", err?.message || err);
+      res.status(500).json({ error: "Couldn't reach what the AI remembers. Nothing was changed." });
+    }
+  };
+  const view = async (m: AiMemory, app: MemoryApp) => {
+    const access = (await (await intel()).readAiAccess())[app];
+    const self = (((await (await import("./storage")).storage.getProfiles()) || []) as any[]).find((p) => p.type === "self");
+    return { ...m, remember: access.memory, name: String(self?.name || "").trim().split(/\s+/)[0] || "" };
+  };
+  app.get("/api/workspace/memory/:app", memSafe(async (_req, res, app) => res.json(await view(await (await memory()).readAiMemory(app), app))));
+  app.post("/api/workspace/memory/:app/remember", memSafe(async (req, res, app) => {
+    const text = str(req.body?.text, 400).trim();
+    if (text.length < 4) return res.status(400).json({ error: "Say what to remember." });
+    const out = await (await memory()).addOwnMemory(app, text);
+    if (out.added.length === 0) return res.status(409).json({ error: "That is already remembered." });
+    res.status(201).json(await view(out.memory, app));
+  }));
+  app.delete("/api/workspace/memory/:app/items/:id", memSafe(async (req, res, app) => res.json(await view(await (await memory()).forgetMemoryItem(app, String(req.params.id)), app))));
+  app.delete("/api/workspace/memory/:app/conversation", memSafe(async (_req, res, app) => res.json(await view(await (await memory()).clearConversation(app), app))));
+  app.delete("/api/workspace/memory/:app", memSafe(async (_req, res, app) => res.json(await view(await (await memory()).forgetEverything(app), app))));
 
   // ── Version history (server/content-versions.ts) ──────────────────────────
   // Reads list what was kept; restore is the one write, and it keeps what it

@@ -760,8 +760,10 @@ documents). **Journal text reaches no other app's AI by default**: the Notes
 AI has no journal switch at all, and Word's is off until turned on. A new
 source is a new switch in `WORKSPACE_AI_ACCESS_LABELS`, default off. The panel
 (`AiAccessPanel`) never writes over a row it has not read (`ready`).
-**WA3. Every AI tab answers or proposes; none writes (W5).** The routes are in
-`WORKSPACE_AI_PATHS` (read-only POSTs). Insights, growth, prompts, categories
+**WA3. Every AI tab answers or proposes; none writes a record the person owns
+(W5).** The routes are in `WORKSPACE_AI_PATHS` (read-only POSTs) — except the
+two conversations (`/notes/chat`, `/journal/coach`), which with remembering on
+save to the AI's OWN memory row and nothing else (WA13). Insights, growth, prompts, categories
 and the review are asked for on a TAP, never on opening a tab. A category the
 AI suggests is filed only by "File under…" / "Apply all"; an AI draft or
 revision becomes a document only when the user opens it in the editor.
@@ -780,6 +782,32 @@ only from the writer's OWN entries (`journalEntriesFor`; never another
 profile's), never rewrites one, and tracker readings reach it as numbers by
 day, never a tracker's notes. Do not soften that boundary or add advice about
 treatment or medication.
+The coach TALKS like a person (owner, 2026-11-25: "make it human"): plain
+words, short replies, listens before it suggests, one question at a time, no
+therapy jargon, uses what it remembers the way a friend would. That voice is
+the `COACH` prompt; the limits in it "do not bend" and it never pretends to be
+human when sincerely asked. Warmth is not a reason to loosen a limit.
+**WA13. The coach and the Notes assistant remember; the person is in charge of
+what they keep** (owner, 2026-11-25: "the memory for the AI therapist … have
+to talk about it"). Per assistant, one preferences row (`ai_memory:<app>`,
+`shared/ai-memory.ts`, `server/ai-memory.ts`; the generic preferences route
+refuses the prefix): the CONVERSATION (so it is there again next time; the
+server sends the history IT saved, never the one the screen sends) and
+MEMORIES — short things the person said. The model proposes memories in a
+`REMEMBER: [...]` tail that is always stripped from what is shown
+(`splitReplyAndMemories`); a duplicate is not kept twice, and a label the AI
+came up with is never kept (`looksClinical` — what the person says about
+themselves is theirs to keep). A failed answer saves nothing. Every memory is
+on screen (`MemoryPanel`): the person can add their own, forget one or
+everything (two taps, Rule 8), and start a new conversation (two taps; the
+memories stay). One switch (`memory` in AI access, on by default — it is the
+AI's own record, nothing crosses from another kind of record) turns it off:
+then nothing is saved and nothing recalled, and the screen says so. A memory
+belongs to ITS assistant: the coach's never reaches the Notes assistant,
+insights, growth or the Document AI. A memory that could not be loaded is an
+error with a retry, never "nothing remembered" (Rule 7).
+*Guards:* `tests/ai-memory.test.ts`, `tests/workspace-intel.test.ts`,
+`tests/workspace-apps.dom.test.tsx`.
 **WA6. How an entry felt.** Energy is the entry's own `energy` column (1–5;
 `PATCH {energy: null}` takes it off). Stress and the named emotions ride in
 its tags (`stress:<1-5>`, `emotion:<name>` from the fixed `EMOTIONS` list,
@@ -831,8 +859,9 @@ already has that text.
 **WA12. Dictation is the browser's.** `DictateButton` is shown only where the
 browser can dictate (never a dead button, O4); what is spoken is typed into
 the editor like any other text.
-*Not built (2026-11-25):* AI conversations are not saved (they end with the
-sitting, and say so); semantic search (search is text matching); pictures and
+*Not built (2026-11-25):* Word's AI Writer has no memory (it is not a
+conversation); a memory cannot be edited in place (forget it and add the
+corrected one); semantic search (search is text matching); pictures and
 tables inside the rich note editor (a note holding them still opens as
 Markdown, W8); folders nested inside folders; the coach reading notes; a
 separate "stress" tracker (stress is what the writer sets on an entry); real-

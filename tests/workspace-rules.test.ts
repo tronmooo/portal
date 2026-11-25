@@ -26,8 +26,8 @@ describe("AI access", () => {
   it("journal entries are private by default: no other app's AI reads them", () => {
     expect(DEFAULT_WORKSPACE_AI_ACCESS.word.journal).toBe(false);
     // The Notes AI has no journal switch at all: there is no way to hand it journal text.
-    expect(Object.keys(DEFAULT_WORKSPACE_AI_ACCESS.notes)).toEqual(["allNotes", "portol"]);
-    expect(WORKSPACE_AI_ACCESS_LABELS.notes.map((r) => r.key)).toEqual(["allNotes", "portol"]);
+    expect(Object.keys(DEFAULT_WORKSPACE_AI_ACCESS.notes)).toEqual(["allNotes", "portol", "memory"]);
+    expect(WORKSPACE_AI_ACCESS_LABELS.notes.map((r) => r.key)).toEqual(["allNotes", "portol", "memory"]);
   });
 
   it("anything that crosses from one kind of record to another is off until turned on", () => {
@@ -49,11 +49,14 @@ describe("AI access", () => {
 
   it("one switch changes one thing, and the row round-trips", () => {
     const next = withAccess(DEFAULT_WORKSPACE_AI_ACCESS, "journal", "wellness", true);
-    expect(next.journal).toEqual({ pastEntries: true, wellness: true, activity: false });
+    expect(next.journal).toEqual({ pastEntries: true, wellness: true, activity: false, memory: true });
     expect(next.notes).toEqual(DEFAULT_WORKSPACE_AI_ACCESS.notes);
     expect(DEFAULT_WORKSPACE_AI_ACCESS.journal.wellness).toBe(false); // the input is not changed
     expect(parseWorkspaceAiAccess(serializeWorkspaceAiAccess(next))).toEqual(next);
+    // Remembering is the AI's own record, not a source it reads: it is on by default, and not listed as one.
     expect(accessSummary(next, "journal")).toEqual(["My past entries", "Sleep, exercise and wellness"]);
+    expect(DEFAULT_WORKSPACE_AI_ACCESS.journal.memory).toBe(true);
+    expect(withAccess(next, "journal", "memory", false).journal.memory).toBe(false);
   });
 });
 

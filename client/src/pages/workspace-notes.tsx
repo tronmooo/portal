@@ -439,7 +439,7 @@ export default function NotesWorkspacePage() {
     const j = await r.json();
     if (typeof j?.answer !== "string" || !j.answer.trim()) throw new Error("The AI returned nothing.");
     const read = Number(j.notesRead) || 0;
-    return { answer: j.answer, note: `Read ${read} of ${Math.max(read, Number(j.notesTotal) || 0)} notes${j.usedPortol ? ", and your Portol records" : ""}.` };
+    return { answer: j.answer, remembered: Array.isArray(j.remembered) ? j.remembered.map(String) : [], note: `Read ${read} of ${Math.max(read, Number(j.notesTotal) || 0)} notes${j.usedPortol ? ", and your Portol records" : ""}.` };
   };
 
   const detach = (documentId: string) => replaceContent(removeAttachmentLink(latestContent.current, documentId));
@@ -594,7 +594,7 @@ export default function NotesWorkspacePage() {
       )}
       {tab === "assistant" && (
         <AiConversation
-          app="notes" testId="notes-assistant" ask={askAssistant}
+          app="notes" testId="notes-assistant" ask={askAssistant} memoryApp="notes"
           intro="Ask about anything you have written. The assistant reads your notes, names the note an answer comes from, and can summarise, connect ideas or brainstorm with you."
           suggestions={["What have I been writing about most?", "Summarize my notes from this month", "Which notes mention a plan I haven't finished?", "Brainstorm next steps from the note I have open"]}
           placeholder="Ask about your notes…"

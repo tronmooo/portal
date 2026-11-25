@@ -141,8 +141,14 @@ async function walk(name: string, viewport: { width: number; height: number }, t
       await page.locator(t("notes-assistant-input")).fill(`Which of my notes mentions "${tag}"? Answer in one sentence.`);
       await tap(t("notes-assistant-send"));
       const answered = await page.locator(`${t("notes-assistant-assistant")}, ${t("notes-assistant-error")}`).first().waitFor({ timeout: 120000 }).then(() => true).catch(() => false);
-      check(answered && (await page.locator(t("notes-assistant-assistant")).count()) === 1, `[${name}] the AI Assistant answers a question about the notes`);
-      if (answered && (await page.locator(t("notes-assistant-assistant")).count()) === 1) check(/Read \d+ of \d+ notes/.test(await page.locator(t("notes-assistant-assistant")).innerText()), `[${name}] …and says how many notes it read`);
+      const said = answered && (await page.locator(t("notes-assistant-assistant")).count()) >= 1;
+      check(said, `[${name}] the AI Assistant answers a question about the notes`);
+      if (said) {
+        const reply = await page.locator(t("notes-assistant-assistant")).last().innerText();
+        console.log(`      assistant said: ${reply.replace(/\s+/g, " ").slice(0, 260)}`);
+        check(/Read \d+ of \d+ notes/.test(reply), `[${name}] …and says how many notes it read`);
+        check(reply.includes(tag) || /apps check/i.test(reply), `[${name}] …and the answer is about the note that mentions the tag`);
+      }
       await fits("workspace-notes", "AI Assistant"); await shot("4-notes-assistant");
     } else console.log(`SKIP  [${name}] AI Assistant (no model on this server)`);
 
@@ -203,8 +209,37 @@ async function walk(name: string, viewport: { width: number; height: number }, t
       await page.locator(t("journal-coach-input")).fill("In one sentence: what did I write about today?");
       await tap(t("journal-coach-send"));
       const answered = await page.locator(`${t("journal-coach-assistant")}, ${t("journal-coach-error")}`).first().waitFor({ timeout: 120000 }).then(() => true).catch(() => false);
-      check(answered && (await page.locator(t("journal-coach-assistant")).count()) === 1, `[${name}] the coach answers from the journal`);
-      await fits("workspace-journal", "Reflection Coach"); await shot("8-journal-coach");
+      const got = answered && (await page.locator(t("journal-coach-assistant")).count()) >= 1;
+      check(got, `[${name}] the coach answers from the journal`);
+      if (got) {
+        const reply = await page.locator(t("journal-coach-assistant")).last().innerText();
+        console.log(`      coach said: ${reply.replace(/\s+/g, " ").slice(0, 260)}`);
+        check(!/REMEMBER:/.test(reply), `[${name}] …and none of the remembering machinery shows in the reply`);
+        // Tell it something worth keeping, then leave and come back: the conversation and the memory are still there.
+        await page.locator(t("journal-coach-input")).fill(`Please remember this: my sister ${tag} lives in Porto and I miss her.`);
+        await tap(t("journal-coach-send"));
+        await page.waitForFunction((n: number) => document.querySelectorAll('[data-testid="journal-coach-assistant"]').length > n, await page.locator(t("journal-coach-assistant")).count(), { timeout: 120000 }).catch(() => undefined);
+        const kept = await until(async () => { const m = await get("/workspace/memory/journal"); return (m.memories as any[]).some((x) => String(x.text).includes(tag)) ? m : null; }, 60000);
+        check(!!kept, `[${name}] the coach keeps what it was told (${kept ? (kept.memories as any[]).filter((x) => String(x.text).includes(tag)).map((x) => x.text).join(" | ") : "nothing kept"})`);
+        check(!!kept && (kept.turns as any[]).length >= 4, `[${name}] …and the conversation is saved on the account`);
+        await tap(t("button-workspace-close"));
+        await page.waitForSelector(t("button-workspace-journal"), { timeout: 20000 });
+        await tap(t("button-workspace-journal"));
+        await page.waitForSelector(t("workspace-journal"), { timeout: 20000 });
+        await pick("coach");
+        check(await page.locator(t("journal-coach-user")).first().waitFor({ timeout: 20000 }).then(() => true).catch(() => false), `[${name}] reopening the Journal shows the earlier conversation`);
+        await tap(t("button-memory-journal"));
+        check((await page.locator(t("memory-panel-journal")).innerText()).includes(tag), `[${name}] "What I remember" lists it`);
+        await page.locator(t("journal-coach-input")).fill("What do you remember about my family? One sentence.");
+        await tap(t("journal-coach-send"));
+        const recalled = await until(async () => { const txt = await page.locator(t("journal-coach-assistant")).last().innerText(); return /Porto/i.test(txt) ? txt : null; }, 120000);
+        check(!!recalled, `[${name}] asked later, it recalls what it was told`);
+        if (recalled) console.log(`      coach recalled: ${recalled.replace(/\s+/g, " ").slice(0, 260)}`);
+        await fits("workspace-journal", "Reflection Coach with memory"); await shot("8-journal-coach");
+        // Forget everything (two taps) leaves nothing behind.
+        await tap(t("button-forget-all-journal")); await tap(t("button-forget-all-journal"));
+        check(!!(await until(async () => { const m = await get("/workspace/memory/journal"); return m.memories.length === 0 && m.turns.length === 0; })), `[${name}] Forget everything clears the memories and the conversation`);
+      }
     } else console.log(`SKIP  [${name}] Reflection Coach (no model on this server)`);
     const stillSame = ((await get("/journal")) as any[]).find((j) => j.id === entry?.id);
     check(!!stillSame && stillSame.content === entry?.content, `[${name}] …and the entry is unchanged`);
@@ -289,6 +324,9 @@ async function main() {
     for (const j of ((await get("/journal").catch(() => [])) as any[])) {
       if (String(j.content).includes(tag)) await api("DELETE", `/journal/${j.id}`).catch(() => undefined);
     }
+    // What the two assistants kept during the run (the smoke account has no memory of its own to keep).
+    await api("DELETE", "/workspace/memory/journal").catch(() => undefined);
+    await api("DELETE", "/workspace/memory/notes").catch(() => undefined);
     const accessAfter = (await get(`/preferences/${WORKSPACE_AI_ACCESS_PREF}`).catch(() => null))?.value ?? null;
     if (accessAfter !== accessBefore && accessBefore !== null) await api("PUT", `/preferences/${WORKSPACE_AI_ACCESS_PREF}`, { value: accessBefore }).catch(() => undefined);
     const left = [

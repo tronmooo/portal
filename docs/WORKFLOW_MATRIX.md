@@ -9,14 +9,14 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 | | Total | No test at all | Not exercised on the deployed app |
 |---|---:|---:|---:|
-| API write routes | 192 | 38 | 74 |
-| API read routes | 113 | 32 | 55 |
+| API write routes | 196 | 37 | 77 |
+| API read routes | 114 | 32 | 55 |
 | Chat tools that write | 111 | 0 | 0 |
 | Chat tools that read | 42 | 0 | 0 |
 
 Screens: 30 pages (49 routes). 4 are opened by no live browser check, 4 by none in a touch (phone) context.
-Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 648. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Write routes no screen calls: 43 (chat-only, script-only or dead).
+Test files read: 650. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -38,7 +38,7 @@ Test files read: 648. Test files no config runs: 2 (`tests/critical-flows.test.t
 | Wellness dashboard | 1 | 0 | 1 | 1 | 0 | 0 |
 | Executive dashboard & alerts | 3 | 0 | 1 | 10 | 9 | 0 |
 | Documents & artifacts | 20 | 5 | 7 | 7 | 12 | 0 |
-| Workspaces | 13 | 8 | 12 | 2 | 0 | 0 |
+| Workspaces | 17 | 7 | 15 | 3 | 0 | 0 |
 | Journal & notes | 9 | 0 | 3 | 4 | 9 | 0 |
 | Record details | 6 | 0 | 6 | 4 | 3 | 0 |
 | AI chat | 9 | 2 | 4 | 5 | 22 | 0 |
@@ -53,7 +53,7 @@ reached only by clicking through is not detected).
 |---|---|---:|---:|---:|
 | ArtifactsPage | `/artifacts` `/dashboard/documents` `/dashboard/artifacts` | 3 | 2 | 4 |
 | CalendarPage | `/calendar` | 6 | 1 | 1 |
-| ChatPage | `/chat` | 5 | 2 | **0** |
+| ChatPage | `/chat` | 6 | 2 | **0** |
 | DashboardPage | `/dashboard` `/dashboard/executive` `/dashboard/daily` | 4 | 1 | **0** |
 | DetailsPage | `/details` | 1 | 1 | **0** |
 | DocumentDetailPage | `/documents/:id` | 1 | 1 | 2 |
@@ -109,8 +109,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/import/bank-csv` | yes | **0** | **0** |
 | `GET /api/onboarding-status` | yes | **0** | 1 |
 | `POST /api/onboarding/complete` | yes | **0** | **0** |
-| `GET /api/preferences/:key` | yes | 11 | 4 |
-| `PUT /api/preferences/:key` | yes | 3 | 3 |
+| `GET /api/preferences/:key` | yes | 11 | 5 |
+| `PUT /api/preferences/:key` | yes | 4 | 4 |
 | `GET /api/public/artifacts/:token` | yes | 1 | 1 |
 
 ### Profiles
@@ -535,9 +535,9 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `GET /api/artifacts` | yes | 6 | 7 |
+| `GET /api/artifacts` | yes | 6 | 8 |
 | `POST /api/artifacts` | yes | 2 | 5 |
-| `DELETE /api/artifacts/:id` | yes | 3 | 7 |
+| `DELETE /api/artifacts/:id` | yes | 3 | 8 |
 | `GET /api/artifacts/:id` | yes | 1 | 1 |
 | `PATCH /api/artifacts/:id` | yes | 2 | 1 |
 | `POST /api/artifacts/:id/duplicate` | yes | **0** | 1 |
@@ -590,11 +590,16 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/workspace/journal/insights` | yes | **0** | **0** |
 | `POST /api/workspace/journal/prompts` | yes | **0** | **0** |
 | `POST /api/workspace/journal/reflect` | yes | 1 | **0** |
+| `DELETE /api/workspace/memory/:app` | **no** | 1 | **0** |
+| `GET /api/workspace/memory/:app` | yes | 1 | **0** |
+| `DELETE /api/workspace/memory/:app/conversation` | yes | 2 | **0** |
+| `DELETE /api/workspace/memory/:app/items/:id` | **no** | 2 | **0** |
+| `POST /api/workspace/memory/:app/remember` | **no** | 1 | **0** |
 | `POST /api/workspace/notes/assist` | yes | **0** | 1 |
 | `POST /api/workspace/notes/categorize` | yes | **0** | **0** |
-| `POST /api/workspace/notes/chat` | yes | **0** | **0** |
+| `POST /api/workspace/notes/chat` | yes | **0** | 1 |
 | `POST /api/workspace/notes/insights` | yes | **0** | **0** |
-| `GET /api/workspace/versions/:kind/:id` | yes | 1 | **0** |
+| `GET /api/workspace/versions/:kind/:id` | yes | 1 | 1 |
 | `GET /api/workspace/versions/:kind/:id/:versionId` | yes | 1 | **0** |
 | `POST /api/workspace/versions/:kind/:id/restore` | yes | 3 | **0** |
 
@@ -607,13 +612,13 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `DELETE /api/captures/:id` | **no** | 1 | **0** |
 | `GET /api/captures/:id` | **no** | 1 | **0** |
 | `PATCH /api/captures/:id` | **no** | 2 | **0** |
-| `GET /api/journal` | yes | 8 | 6 |
+| `GET /api/journal` | yes | 8 | 7 |
 | `POST /api/journal` | yes | 8 | 6 |
-| `DELETE /api/journal/:id` | yes | 2 | 8 |
+| `DELETE /api/journal/:id` | yes | 2 | 9 |
 | `PATCH /api/journal/:id` | yes | 6 | 2 |
-| `GET /api/notes` | yes | 5 | 2 |
+| `GET /api/notes` | yes | 5 | 3 |
 | `POST /api/notes` | yes | 6 | 4 |
-| `DELETE /api/notes/:id` | yes | 3 | 5 |
+| `DELETE /api/notes/:id` | yes | 3 | 6 |
 | `PATCH /api/notes/:id` | yes | 4 | 1 |
 
 | Chat tool | Kind | Local tests | Deployed tests |
@@ -712,5 +717,5 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/diagnostics/ownership-consistency` | **no** | **0** | 1 |
 | `GET /api/diagnostics/schema` | **no** | 1 | 1 |
 | `POST /api/finance/webhook` | **no** | 1 | **0** |
-| `GET /api/version` | **no** | 1 | 23 |
+| `GET /api/version` | **no** | 1 | 24 |
 | `GET /api/warmup` | yes | 2 | **0** |

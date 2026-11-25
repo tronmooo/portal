@@ -15,7 +15,7 @@
 //    browser while it is not yet on the server.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { History, Loader2, Mic, MicOff, RotateCcw, Send, ShieldCheck, Sparkles } from "lucide-react";
+import { Brain, History, Loader2, Mic, MicOff, RotateCcw, Send, ShieldCheck, Sparkles } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
@@ -25,6 +25,7 @@ import {
 } from "@shared/workspace-access";
 import type { ContentVersion, VersionKind, VersionSummary } from "@shared/content-versions";
 import type { ChatTurn } from "@shared/workspace-intel";
+import { sinceLastTalked, type AiMemory, type MemoryApp } from "@shared/ai-memory";
 import { aiErrorText, useWorkspaceKeyboard } from "./WorkspaceShell";
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
@@ -314,15 +315,86 @@ export function AiAccessLine({ app, onChange }: { app: WorkspaceAiApp; onChange:
 
 // ── AI conversation ──────────────────────────────────────────────────────────
 
-export interface ConversationReply { answer: string; note?: string }
+export interface ConversationReply { answer: string; note?: string; /** What the AI kept from this exchange. */ remembered?: string[] }
+interface MemoryView extends AiMemory { remember: boolean; name: string }
+const memoryQueryKey = (app: MemoryApp) => [`/api/workspace/memory/${app}`];
 
 /**
- * A conversation with one app's AI. `ask` sends the whole conversation and
- * answers with the reply and a line saying what was read. Nothing is saved:
- * leaving the workspace ends the conversation (said on screen).
+ * What the AI remembers, for the person to read and change: every memory is
+ * listed, any one can be removed (two taps), their own can be added, and
+ * "Forget everything" clears the memories and the conversation.
+ */
+export function MemoryPanel({ app, view, onChanged, onClose }: { app: MemoryApp; view: MemoryView; onChanged: (next: MemoryView) => void; onClose: () => void }) {
+  const { toast } = useToast();
+  const { confirm, isArmed } = useConfirmArm();
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const run = async (method: string, path: string, body?: any) => {
+    setBusy(true);
+    try {
+      const r = await apiRequest(method, `/api/workspace/memory/${app}${path}`, body);
+      const j = await r.json();
+      if (!j || !Array.isArray(j.memories)) throw new Error("The memory was not changed.");
+      onChanged(j);
+      return true;
+    } catch (err) {
+      toast({ title: "Couldn't change what is remembered", description: aiErrorText(err), variant: "destructive" });
+      return false;
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="bubble p-3" data-testid={`memory-panel-${app}`}>
+      <div className="flex items-center gap-2">
+        <Brain className="h-4 w-4 text-primary shrink-0" />
+        <p className="text-sm font-semibold flex-1">What I remember about you · {view.memories.length}</p>
+        <button type="button" onClick={onClose} className="text-xs underline text-muted-foreground">Done</button>
+      </div>
+      <p className="text-[11px] text-muted-foreground mt-1">
+        Things you told me, kept on your account so I don't make you repeat yourself. Only this assistant reads them. Remove anything that is wrong or that you'd rather I didn't keep.
+        {!view.remember && " Remembering is switched off in AI access: nothing here is used or added to until you turn it back on."}
+      </p>
+      {view.memories.length === 0 ? (
+        <p className="text-sm text-muted-foreground mt-2" data-testid="memory-empty">Nothing yet. As we talk I'll keep the things that matter — the people in your life, what you're working on — and they will show up here.</p>
+      ) : (
+        <ul className="mt-2 space-y-1" data-testid="memory-list">
+          {[...view.memories].reverse().map((m) => (
+            <li key={m.id} className="flex items-start gap-2 text-sm" data-testid={`memory-${m.id}`}>
+              <span className="flex-1 min-w-0">{m.text}<span className="block text-[11px] text-muted-foreground">{m.by === "you" ? "You added this" : "From our conversation"} · {new Date(m.at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span></span>
+              <button type="button" disabled={busy} onClick={() => confirm(`forget:${m.id}`, () => void run("DELETE", `/items/${m.id}`))}
+                aria-label={isArmed(`forget:${m.id}`) ? "Tap again to forget this" : "Forget this"}
+                className={`h-7 px-2 rounded-full text-[11px] shrink-0 ${isArmed(`forget:${m.id}`) ? "bg-destructive text-destructive-foreground" : "border border-border text-muted-foreground"}`}
+                data-testid={`button-forget-${m.id}`}>{isArmed(`forget:${m.id}`) ? "Tap again" : "Forget"}</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form className="flex gap-1.5 mt-2" onSubmit={(e) => { e.preventDefault(); const v = text.trim(); if (v.length >= 4) void run("POST", "/remember", { text: v }).then((ok) => { if (ok) setText(""); }); }}>
+        <input value={text} onChange={(e) => setText(e.target.value)} maxLength={220} placeholder="Something you want me to remember…" aria-label="Something to remember"
+          className="ws-title flex-1 min-w-0 h-8 rounded-full border border-border bg-background px-3 text-sm outline-none" data-testid={`input-memory-${app}`} />
+        <button type="submit" disabled={busy || text.trim().length < 4} className="h-8 px-3 rounded-full border border-border text-xs font-semibold disabled:opacity-40" data-testid={`button-memory-add-${app}`}>Remember</button>
+      </form>
+      {(view.memories.length > 0 || view.turns.length > 0) && (
+        <button type="button" disabled={busy} onClick={() => confirm("forget-all", () => void run("DELETE", ""))}
+          className={`mt-2 h-7 px-2.5 rounded-full text-[11px] ${isArmed("forget-all") ? "bg-destructive text-destructive-foreground" : "text-muted-foreground underline"}`} data-testid={`button-forget-all-${app}`}>
+          {isArmed("forget-all") ? "Tap again: forget every memory and our conversation" : "Forget everything"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A conversation with one app's AI. `ask` sends the conversation and answers
+ * with the reply and a line saying what was read.
+ *
+ * With `memoryApp`, and remembering on (the writer's switch), the
+ * conversation is the one saved on the account: it is there again next time,
+ * and what the AI learned is listed for the person to read and remove
+ * (`MemoryPanel`). With remembering off — or no `memoryApp` — it lives in
+ * this sitting only, and the screen says which.
  */
 export function AiConversation({
-  app, ask, intro, suggestions, placeholder, boundary, testId, footer,
+  app, ask, intro, suggestions, placeholder, boundary, testId, footer, memoryApp, greet,
 }: {
   app: WorkspaceAiApp;
   ask: (turns: ChatTurn[]) => Promise<ConversationReply>;
@@ -333,14 +405,35 @@ export function AiConversation({
   boundary?: string;
   testId: string;
   footer?: ReactNode;
+  /** This AI remembers (shared/ai-memory.ts). */
+  memoryApp?: MemoryApp;
+  /** The opening line, once it is known who is here and when they last talked. */
+  greet?: (who: { name: string; since: string | null; memories: number }) => string;
 }) {
-  const [turns, setTurns] = useState<Array<ChatTurn & { note?: string }>>([]);
+  type Shown = ChatTurn & { note?: string; remembered?: string[] };
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { confirm, isArmed } = useConfirmArm();
+  const mem = useQuery<MemoryView>({ queryKey: memoryApp ? memoryQueryKey(memoryApp) : ["no-ai-memory"], enabled: !!memoryApp });
+  // An unexpected answer (an older server) is "no memory", never a crash.
+  const view: MemoryView | null = memoryApp && mem.data && Array.isArray((mem.data as any).memories) && Array.isArray((mem.data as any).turns) ? mem.data : null;
+  const remembering = !!view?.remember;
+  const [turns, setTurns] = useState<Shown[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [accessOpen, setAccessOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => { end.current?.scrollIntoView?.({ block: "end" }); }, [turns, busy]);
+  // The saved conversation is put on screen once, when it arrives.
+  const hydrated = useRef(false);
+  useEffect(() => {
+    if (hydrated.current || !view) return;
+    hydrated.current = true;
+    if (view.remember && view.turns.length) setTurns((now) => (now.length ? now : view.turns.map(({ role, content }) => ({ role, content }))));
+  }, [view]);
+  const setView = (next: MemoryView) => { if (memoryApp) qc.setQueryData(memoryQueryKey(memoryApp), next); };
 
   const send = async (value: string) => {
     const q = value.trim();
@@ -352,7 +445,9 @@ export function AiConversation({
     setBusy(true);
     try {
       const reply = await ask(next.map(({ role, content }) => ({ role, content })));
-      setTurns((t) => [...t, { role: "assistant", content: reply.answer, note: reply.note }]);
+      setTurns((t) => [...t, { role: "assistant", content: reply.answer, note: reply.note, remembered: reply.remembered }]);
+      // The server saved the exchange and anything it kept: read it back.
+      if (memoryApp) void qc.invalidateQueries({ queryKey: memoryQueryKey(memoryApp) });
     } catch (err) {
       // The question stays on screen with the reason and a retry: nothing is made up.
       setError(aiErrorText(err));
@@ -364,17 +459,47 @@ export function AiConversation({
     setTurns(turns.slice(0, -1));
     void send(last.content);
   };
+  /** A fresh start. A saved conversation is cleared on the account (two taps); what was learned stays. */
+  const startOver = async () => {
+    if (memoryApp && remembering) {
+      try {
+        const r = await apiRequest("DELETE", `/api/workspace/memory/${memoryApp}/conversation`);
+        const j = await r.json();
+        if (j && Array.isArray(j.memories)) setView(j);
+      } catch (err) {
+        toast({ title: "Couldn't clear the conversation", description: aiErrorText(err), variant: "destructive" });
+        return;
+      }
+    }
+    setTurns([]); setError(null);
+  };
+  const opening = greet && view ? greet({ name: view.name, since: remembering ? sinceLastTalked(view.lastTalked, new Date()) : null, memories: remembering ? view.memories.length : 0 }) : intro;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col" data-testid={testId}>
       <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
         <div className="max-w-3xl mx-auto px-3 sm:px-6 py-3 space-y-3">
           {boundary && <p className="text-[11px] rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-muted-foreground" data-testid={`${testId}-boundary`}>{boundary}</p>}
-          <AiAccessLine app={app} onChange={() => setAccessOpen((v) => !v)} />
+          <div className="flex items-center gap-x-3 gap-y-1 flex-wrap">
+            <AiAccessLine app={app} onChange={() => setAccessOpen((v) => !v)} />
+            {memoryApp && (
+              mem.isError ? <span className="text-[11px] text-destructive" role="alert" data-testid={`${testId}-memory-error`}>Couldn't load what I remember. <button type="button" className="underline" onClick={() => mem.refetch()}>Retry</button></span>
+                : view ? (
+                  <button type="button" onClick={() => setMemoryOpen((v) => !v)} aria-expanded={memoryOpen}
+                    className="text-[11px] text-muted-foreground flex items-center gap-1 underline" data-testid={`button-memory-${memoryApp}`}>
+                    <Brain className="h-3.5 w-3.5" /> {remembering ? `What I remember · ${view.memories.length}` : "Remembering is off"}
+                  </button>
+                ) : null
+            )}
+          </div>
           {accessOpen && <AiAccessPanel app={app} onClose={() => setAccessOpen(false)} />}
+          {memoryOpen && memoryApp && view && (
+            <MemoryPanel app={memoryApp} view={view} onClose={() => setMemoryOpen(false)}
+              onChanged={(next) => { setView(next); if (next.turns.length === 0 && next.memories.length === 0) { setTurns([]); setError(null); } }} />
+          )}
           {turns.length === 0 && (
             <div className="pt-2">
-              <p className="text-sm text-muted-foreground">{intro}</p>
+              <p className="text-sm text-muted-foreground" data-testid={`${testId}-opening`}>{opening}</p>
               <div className="flex flex-wrap gap-1.5 mt-3">
                 {suggestions.map((s) => (
                   <button key={s} type="button" disabled={busy} onClick={() => void send(s)}
@@ -389,22 +514,35 @@ export function AiConversation({
             <div key={i} className={`flex ${t.role === "user" ? "justify-end" : "justify-start"}`}>
               <div className={`max-w-[88%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words ${t.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`} data-testid={`${testId}-${t.role}`}>
                 {t.content}
+                {t.remembered && t.remembered.length > 0 && (
+                  <span className="block mt-1.5 text-[11px] opacity-80" data-testid={`${testId}-remembered`}>
+                    <Brain className="inline h-3 w-3 mr-1 -mt-0.5" />I'll remember: {t.remembered.join(" · ")}
+                  </span>
+                )}
                 {t.note && <span className="block mt-1.5 text-[11px] opacity-70">{t.note}</span>}
               </div>
             </div>
           ))}
-          {busy && <p className="text-xs text-muted-foreground flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Reading and thinking…</p>}
+          {busy && <p className="text-xs text-muted-foreground flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {memoryApp === "journal" ? "Thinking about what you said…" : "Reading and thinking…"}</p>}
           {error && (
             <div role="alert" className="text-xs rounded-lg border border-destructive/40 bg-destructive/10 px-2.5 py-2" data-testid={`${testId}-error`}>
               {error} <button type="button" className="underline ml-1" onClick={retry}>Try again</button>
             </div>
           )}
           {turns.length > 0 && !busy && (
-            <button type="button" className="text-[11px] text-muted-foreground underline flex items-center gap-1" onClick={() => { setTurns([]); setError(null); }} data-testid={`${testId}-new`}>
-              <RotateCcw className="h-3 w-3" /> Start a new conversation
+            <button type="button" className={`text-[11px] flex items-center gap-1 ${isArmed("new") ? "rounded-full bg-destructive text-destructive-foreground px-2.5 h-7" : "text-muted-foreground underline"}`}
+              onClick={() => (remembering ? confirm("new", () => void startOver()) : void startOver())} data-testid={`${testId}-new`}>
+              <RotateCcw className="h-3 w-3" /> {isArmed("new") ? "Tap again to clear this conversation (what I remember stays)" : "Start a new conversation"}
             </button>
           )}
-          <p className="text-[11px] text-muted-foreground">This conversation is not saved: it ends when you close the workspace. The AI changes nothing.</p>
+          <p className="text-[11px] text-muted-foreground" data-testid={`${testId}-saved-note`}>
+            {remembering
+              ? "This conversation is saved privately on your account, so we can pick up where we left off. You can read and remove what I remember, or turn remembering off in AI access."
+              : memoryApp && view
+                ? "Remembering is off: this conversation is not saved and ends when you close the workspace."
+                : "This conversation is not saved: it ends when you close the workspace. The AI changes nothing."}
+            {remembering ? " Nothing in your notes or journal is changed." : ""}
+          </p>
           {footer}
           <div ref={end} />
         </div>
