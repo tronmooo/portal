@@ -1371,6 +1371,61 @@ for the whole tab, journal / expenses / goals for the cards that read them.
 Customize); per-widget colors; widgets over documents or the calendar; a
 custom score replacing the header's Wellness chip.
 
+## Chat home rules (what the chat page shows before the first message)
+
+Owner's design, 2026-11-25 (a picture: greeting, daily summary, headline tiles,
+insights, today at a glance, suggestions, AI Modes, the chat box). Read these
+before touching `shared/chat-home.ts`, `client/src/components/chat/ChatHome.tsx`
+or the modes row in `ChatComposer.tsx`.
+*Guards:* `tests/chat-home.test.ts`, `tests/chat-home.dom.test.tsx`,
+`tests/chat-empty-state.dom.test.tsx`, `tests/chat-workspace-buttons.dom.test.tsx`.
+
+**CH1. The home owns no figure (Rule 1).** `buildChatHome` reads the Wellness
+tab's own tiles and summaries over 7 days (`overviewTiles`, `summarize`,
+`periodInsights`, `moodSummary`, one subject — H10), the dashboard's finance
+snapshot (spending, net worth, categories, assets, `upcomingBills`) and
+`countTasksByDay`. The hook uses those screens' query keys. Add a line or a
+tile by reading a store that exists; never compute a second version of a
+number another screen shows, and never let a model write the summary lines.
+**CH1a. The headline tiles are what this person has** (owner, 2026-11-25:
+"the six cards should show whatever the user has, not just those
+predetermined ones"). `pickHeadlineTiles` offers a tile only for something
+with records behind it: the Wellness overview tiles that are tracked, resting
+heart rate, the person's other measurements and OWN trackers (the cards
+`suggestWellnessWidgets` would offer, read by `buildWellnessWidgetView` over
+the 7 days: an amount totalled, a level averaged, a plain log counted),
+spending once anything was spent, net worth once anything is owned or owed.
+At most `MAX_HOME_TILES`; figures inside the week lead, money keeps its place,
+an older reading is shown dated. A workout or food tracker is not listed
+beside Activity / Nutrition. Never bring back a fixed list, and never a tile
+that reads "Not tracked"; an account with nothing gets one invitation.
+**CH2. Loading, failed and zero are three things (Rule 7, H4).** An input is
+`undefined` while loading and named in `failed` when its request failed; the
+source then has ONE placeholder tile ("…" / "Couldn't load", with a retry) —
+what the person tracks is not known yet, so six guesses are not drawn. An
+insight with nothing behind it says so and its tap starts the entry in the
+chat box. Only a loaded list may read as a zero.
+**CH3. Every row goes somewhere.** A route (`href`) or text put in the chat
+box (`prompt`); a whole request ("AI Suggestions", AI Briefing) is sent as
+typed. Opening the page writes nothing (Rule 3). Rows that scroll sideways
+carry `data-swipe-ignore` (T1).
+**CH4. The modes are on screen once.** Before the first message they are the
+home's tiles; the chat box then leaves its own row out (`hideModes`) and shows
+it, as one compact line, during a conversation. Chat is the box itself; Notes,
+Journal, Document and Fill In open their workspaces (W1–W11); Documents,
+Analyze, Plan and More are pages (`CHAT_APPS`). The box keeps a label for
+assistive tech (`sr-only`).
+**CH5. The home reads from its top;** only a conversation is pinned to its
+end. A bill chip reads the bill's NEXT date (`rollBillsForward`, A7).
+**CH6. The look is one layer.** The glowing glass surfaces are the `aurora-*`
+classes at the end of `client/src/index.css`; the same block carries the look
+to every `.bubble` card, primary button, dialog and the bottom bar by colour,
+border and shadow only — no layout or size, so no screen's arrangement moves.
+*Not built (2026-11-25):* photographs on the suggestion cards and the summary
+(they are drawn); a net-worth change on the tile; a water goal (the bar is
+today against the week's average day); the summary is rule-written, not
+model-written.
+
 ## Touch rules (the app is used on a phone; a mouse click proves nothing about a finger)
 
 **T1. A drag on a control never navigates.** The shell turns a quick sideways

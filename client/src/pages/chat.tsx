@@ -1298,7 +1298,9 @@ function BatchAttachmentPanel({
 // the whole chat chunk into the entry bundle. Re-exported for compatibility.
 export { clearChatCache } from "@/lib/chat-cache";
 import { WELCOME_MSG, getChatCache, setChatCache, saveChatHistory, clearChatCache } from "@/lib/chat-cache";
-import { ChatSuggestions, ChatFollowUps } from "@/components/chat/ChatSuggestions";
+import { ChatFollowUps } from "@/components/chat/ChatSuggestions";
+import { ChatHome } from "@/components/chat/ChatHome";
+import { rollBillsForward } from "@shared/bills-timeline";
 import { buildChatSuggestions, buildFollowUps } from "@shared/chat-suggestions";
 import { isFieldReceipt, receiptCardSummary } from "@shared/field-receipt";
 import { ProfileSuggestionCard } from "@/components/chat/ProfileSuggestionCard";
@@ -2690,7 +2692,9 @@ export default function ChatPage() {
       now: new Date(),
       trackers: read("/api/trackers"),
       habits: read("/api/habits"),
-      obligations: read("/api/obligations"),
+      // A recurring bill's elapsed due date is assumed paid (A7): the chip
+      // reads the same next date every list shows, never "163d overdue".
+      obligations: rollBillsForward(read<any>("/api/obligations"), getUserToday(BROWSER_TIMEZONE)),
       documents: read("/api/documents"),
       expenses: read("/api/expenses"),
     }, 6);
@@ -3322,7 +3326,9 @@ export default function ChatPage() {
     if (!el) return;
     const appended = prevMsgCountRef.current === -1 || messages.length > prevMsgCountRef.current;
     prevMsgCountRef.current = messages.length;
-    if (!appended) return;
+    // Before the first message the page is the home (ChatHome), which reads
+    // from its top: only a conversation is pinned to its end.
+    if (!appended || messages.length <= 1) return;
     const lastIsUser = messages[messages.length - 1]?.role === "user";
     if (atBottomRef.current) {
       el.scrollTo({ top: el.scrollHeight, behavior: "instant" as ScrollBehavior });
@@ -3803,9 +3809,12 @@ export default function ChatPage() {
               used to render outside it, which is what sliced the welcome
               bubble mid-sentence. */}
           {messages.length <= 1 && !searchOpen && (
-            <ChatSuggestions
+            <ChatHome
               suggestions={chatSuggestions}
               onPick={handleSuggestion}
+              onSend={(text) => { handleSend(text); }}
+              onOpenWorkspace={(kind) => hashNavigate(WORKSPACES[kind].route)}
+              onFocusChat={() => composerRef.current?.focus()}
             />
           )}
 
@@ -4038,6 +4047,8 @@ export default function ChatPage() {
           onEmptyChange={setComposerEmpty}
           newDocButton={<NewDocSheetButton disabled={isPending} />}
           onOpenWorkspace={(kind) => hashNavigate(WORKSPACES[kind].route)}
+          onOpenApp={hashNavigate}
+          hideModes={messages.length <= 1 && !searchOpen}
           onDropFiles={(files) => { void handleFileSelect({ target: { files } } as any); }}
         />
       )}
