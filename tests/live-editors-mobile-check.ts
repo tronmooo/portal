@@ -70,7 +70,7 @@ async function layoutOk(page: any, surface: string) {
     const x = visible('[data-testid="button-workspace-close"]');
     const save = visible('[data-testid="button-workspace-save"]');
     return {
-      ok: !wide && !overflowing && !!x && !!save && x.left < save.left && save.right <= w && x.top >= 0 && save.top >= 0 && save.bottom < 120,
+      ok: !wide && !overflowing && !!x && !!save && save.left < x.left && x.right <= w && x.top >= 0 && save.top >= 0 && save.bottom < 120,
       why: wide ? `scrolls sideways: ${wide.tagName}.${wide.className}`.slice(0, 160)
         : overflowing ? `past the edge: <${overflowing.tagName.toLowerCase()} ${overflowing.getAttribute("data-testid") || overflowing.className}>`.slice(0, 160)
         : !x || !save ? "X or Save missing" : `X ${JSON.stringify(x)} Save ${JSON.stringify(save)}`,

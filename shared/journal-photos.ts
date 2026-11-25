@@ -7,6 +7,7 @@
 // `file:<id>` (owner request 2026-11-23: "photos, pictures and documents").
 //
 // Pure. Pinned by tests/journal-workspace.dom.test.tsx.
+import { isFeelingTag } from "./journal-feelings";
 
 export const PHOTO_TAG_PREFIX = "photo:";
 export const FILE_TAG_PREFIX = "file:";
@@ -27,12 +28,14 @@ export function journalFileIds(tags: string[] | undefined | null): string[] {
 }
 /** The entry's own tags, without the photo and file pointers. */
 export function journalLabels(tags: string[] | undefined | null): string[] {
-  return (tags || []).filter((t) => typeof t === "string" && !isPointer(t));
+  return (tags || []).filter((t) => typeof t === "string" && !isPointer(t) && !isFeelingTag(t));
 }
-export function journalTagsFor(labels: string[], photoIds: string[], fileIds: string[] = []): string[] {
-  const clean = [...new Set(labels.map((l) => l.trim()).filter((l) => l && !isPointer(l)))];
+/** `feelings`: the stress and emotion pointers (shared/journal-feelings.ts). */
+export function journalTagsFor(labels: string[], photoIds: string[], fileIds: string[] = [], feelings: string[] = []): string[] {
+  const clean = [...new Set(labels.map((l) => l.trim()).filter((l) => l && !isPointer(l) && !isFeelingTag(l)))];
   return [
     ...clean,
+    ...feelings.filter(isFeelingTag),
     ...[...new Set(photoIds)].slice(0, JOURNAL_MAX_PHOTOS).map((id) => `${PHOTO_TAG_PREFIX}${id}`),
     ...[...new Set(fileIds)].slice(0, JOURNAL_MAX_FILES).map((id) => `${FILE_TAG_PREFIX}${id}`),
   ];

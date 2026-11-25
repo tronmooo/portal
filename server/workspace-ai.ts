@@ -16,18 +16,19 @@ import { storage } from "./storage";
 import { getAnthropicClient } from "./anthropic-client";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { journalEntriesFor } from "./journal-read";
+import { parseWorkspaceAiAccess, WORKSPACE_AI_ACCESS_PREF } from "@shared/workspace-access";
 import { documentBlanks, documentPlainText, parseDraftReply, sanitizeDocumentHtml } from "@shared/workspace-document";
 
 const DRAFT_BUDGET_MS = 80_000;
 // Never sent to a model, whatever the document is (same pattern the chat uses).
 const SECRET_KEY_RE = /(password|pwd|secret|api[_-]?key|token|ssn|social[_-]?security|passport|credit[_-]?card|card[_-]?number|cvv|pin)/i;
 
-function compact(value: any, max: number): string {
+export function compact(value: any, max: number): string {
   const s = typeof value === "string" ? value : JSON.stringify(value);
   return String(s ?? "").replace(/\s+/g, " ").slice(0, max);
 }
 
-function factLines(fields: Record<string, any> | null | undefined, maxEach = 400): string[] {
+export function factLines(fields: Record<string, any> | null | undefined, maxEach = 400): string[] {
   return Object.entries(fields || {})
     .filter(([k, v]) => v != null && v !== "" && !k.startsWith("_") && !SECRET_KEY_RE.test(k))
     .slice(0, 60)
@@ -40,8 +41,11 @@ const words = (s: string) => String(s || "").toLowerCase().split(/[^a-z0-9]+/).f
  *  saved documents that fit the request. Returns the prompt block and the
  *  names of what went into it. */
 async function gatherFacts(request: string): Promise<{ block: string; sources: string[] }> {
+  // What the writer lets the Document AI read (shared/workspace-access.ts).
+  // A switch that is off means that data is not loaded for this call.
+  const access = parseWorkspaceAiAccess(await storage.getPreference(WORKSPACE_AI_ACCESS_PREF).catch(() => null)).word;
   const profiles = ((await storage.getProfiles()) || []) as any[];
-  const documents = ((await storage.getDocuments()) || []) as any[];
+  const documents = access.documents ? ((await storage.getDocuments()) || []) as any[] : [];
   const want = new Set(words(request));
   const self = profiles.find((p) => p.type === "self") || null;
   const named = profiles.filter((p) => p !== self && ["person", "pet"].includes(String(p.type))
@@ -49,7 +53,7 @@ async function gatherFacts(request: string): Promise<{ block: string; sources: s
 
   const parts: string[] = [];
   const sources: string[] = [];
-  for (const p of [self, ...named].filter(Boolean)) {
+  for (const p of access.profile ? [self, ...named].filter(Boolean) : []) {
     const lines = factLines(deepStripKeys(p.fields ?? {}, computeAiSensitiveStripKeys(p.fields)));
     if (p !== self && lines.length === 0) continue;
     parts.push(`## ${p === self ? "The writer" : "Person on file"}: ${p.name}\n${lines.join("\n") || "- (no details saved)"}`
@@ -79,6 +83,42 @@ async function gatherFacts(request: string): Promise<{ block: string; sources: s
     parts.push(`## Saved document: ${d.name}\n${lines.join("\n")}`);
     sources.push(`"${d.name}"`);
   }
+
+  // What is owned and owed, by name: only those the request's words point at,
+  // or all of them (names and types only) when it asks about assets at large.
+  if (access.assets) {
+    const things = profiles.filter((p) => !["self", "person", "pet"].includes(String(p.type)));
+    const hits = things.filter((p) => words(`${p.name} ${String(p.type || "").replace(/_/g, " ")}`).some((w) => want.has(w))).slice(0, 8);
+    for (const p of hits) {
+      const lines = factLines(deepStripKeys(p.fields ?? {}, computeAiSensitiveStripKeys(p.fields)));
+      parts.push(`## On file (${String(p.type).replace(/_/g, " ")}): ${p.name}\n${lines.join("\n") || "- (no details saved)"}`);
+      sources.push(p.name);
+    }
+    if (hits.length === 0 && things.length > 0 && /\b(assets?|own|net worth|inventory|belongings|liabilit|debts?|loans?)\b/i.test(request)) {
+      parts.push(`## Assets and liabilities on file (names only)\n${things.slice(0, 80).map((p) => `- ${p.name} (${String(p.type).replace(/_/g, " ")})`).join("\n")}`);
+      sources.push("your assets and liabilities");
+    }
+  }
+
+  // Notes and journal entries whose words match the request. The journal is
+  // private by default: it is read here only when the writer switched it on.
+  const matching = <T extends { text: string }>(rows: T[], max: number) => rows
+    .map((r) => { const hay = new Set(words(r.text)); let score = 0; for (const w of want) if (hay.has(w)) score++; return { r, score }; })
+    .filter((x) => x.score >= 2).sort((a, b) => b.score - a.score).slice(0, max).map((x) => x.r);
+  if (access.notes) {
+    const notes = (((await storage.getArtifacts()) || []) as any[]).filter((a) => a?.type === "note" && String(a.content || "").trim());
+    for (const n of matching(notes.map((n) => ({ n, text: `${n.title} ${n.content}` })), 4)) {
+      parts.push(`## Note: ${n.n.title || "Untitled"}\n${compact(n.n.content, 3000)}`);
+      sources.push(`note "${n.n.title || "Untitled"}"`);
+    }
+  }
+  if (access.journal) {
+    const entries = await journalEntriesFor(storage as any, { limit: 200 });
+    for (const e of matching(entries.map((e) => ({ e, text: `${e.title} ${e.content}` })), 4)) {
+      parts.push(`## Journal entry of ${e.e.date}${e.e.title ? `: ${e.e.title}` : ""}\n${compact(e.e.content, 2500)}`);
+      sources.push(`journal entry of ${e.e.date}`);
+    }
+  }
   return { block: parts.join("\n\n"), sources };
 }
 
@@ -94,16 +134,16 @@ const DOC_INSTRUCTIONS =
   `OUTPUT: first line "TITLE: <3 to 7 word title>". Then the document as HTML using only <h1> <h2> <h3> <p> <ul> <ol> <li> <strong> <em> <u> <a> <br> <hr> <blockquote> <table> <thead> <tbody> <tr> <th> <td>. No markdown, no code fences, no comments before or after.`;
 
 export type AssistFailure = { ok: false; status: number; error: string };
-const fail = (status: number, error: string): AssistFailure => ({ ok: false, status, error });
-const NO_MODEL = "The AI model isn't available right now. Nothing was changed.";
-const MODEL_FAILED = "The request to the AI model failed. Nothing was changed — please try again.";
+export const fail = (status: number, error: string): AssistFailure => ({ ok: false, status, error });
+export const NO_MODEL = "The AI model isn't available right now. Nothing was changed.";
+export const MODEL_FAILED = "The request to the AI model failed. Nothing was changed — please try again.";
 
-async function askModel(system: string, user: string, maxTokens: number): Promise<string> {
+export async function askModel(system: string, user: string | Array<{ role: "user" | "assistant"; content: string }>, maxTokens: number): Promise<string> {
   const call = getAnthropicClient("extended").messages.create({
     model: process.env.ANTHROPIC_DOCUMENT_MODEL || "claude-sonnet-4-6",
     max_tokens: maxTokens,
     system,
-    messages: [{ role: "user", content: user }],
+    messages: typeof user === "string" ? [{ role: "user", content: user }] : user,
   });
   const response: any = await Promise.race([
     call,

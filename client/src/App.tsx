@@ -82,6 +82,7 @@ const _editImport  = () => import("@/pages/editor");
 const _wsNotesImport = () => import("@/pages/workspace-notes");
 const _wsJournalImport = () => import("@/pages/workspace-journal");
 const _wsFillImport = () => import("@/pages/workspace-fill");
+const _wsWordImport = () => import("@/pages/workspace-word");
 const _insightsImport = () => import("@/pages/insights");
 const _shareViewImport = () => import("@/pages/share-view");
 const _detailsImport = () => import("@/pages/details");
@@ -112,6 +113,7 @@ const EditorPage       = lazyWithRetry(_editImport);
 const NotesWorkspacePage = lazyWithRetry(_wsNotesImport);
 const JournalWorkspacePage = lazyWithRetry(_wsJournalImport);
 const FillWorkspacePage = lazyWithRetry(_wsFillImport);
+const WordWorkspacePage = lazyWithRetry(_wsWordImport);
 const InsightsPage     = lazyWithRetry(_insightsImport);
 const ShareViewPage    = lazyWithRetry(_shareViewImport);
 const DetailsPage      = lazyWithRetry(_detailsImport);
@@ -677,6 +679,7 @@ function AppRouter() {
         <Route path="/workspace/notes" component={NotesWorkspacePage} />
         <Route path="/workspace/journal" component={JournalWorkspacePage} />
         <Route path="/workspace/fill" component={FillWorkspacePage} />
+        <Route path="/workspace/word" component={WordWorkspacePage} />
         <Route path="/editor/new/:type" component={EditorPage} />
         <Route path="/editor/:id" component={EditorPage} />
         <Route path="/insights" component={InsightsPage} />

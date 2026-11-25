@@ -54,11 +54,18 @@ describe("workspace buttons in the chat box", () => {
     expect(sent).toHaveBeenCalledWith("what's on my calendar?");
   });
 
-  it("every workspace has a route of its own; Document is the editor", () => {
+  it("every workspace has a route of its own; Word is its own app (owner, 2026-11-25)", () => {
     expect(WORKSPACES.notes.route).toBe("/workspace/notes");
     expect(WORKSPACES.journal.route).toBe("/workspace/journal");
     expect(WORKSPACES.fill.route).toBe("/workspace/fill");
-    expect(WORKSPACES.document.route).toBe("/editor/new/doc?source=chat");
+    // Was the bare document editor; now the Word workspace, whose Editor tab is that editor.
+    expect(WORKSPACES.document.route).toBe("/workspace/word");
+  });
+
+  it("the buttons stay small and say Notes, Journal, Word", () => {
+    render(<Composer onOpenWorkspace={() => {}} />);
+    expect(["notes", "journal", "document"].map((k) => screen.getByTestId(`button-workspace-${k}`).textContent?.trim())).toEqual(["Notes", "Journal", "Word"]);
+    for (const k of ["notes", "journal", "document"]) expect(screen.getByTestId(`button-workspace-${k}`).className).toMatch(/\bh-7\b.*\btext-xs\b/);
   });
 
   it("files dropped on the box are handed over; dragging text is left alone", () => {

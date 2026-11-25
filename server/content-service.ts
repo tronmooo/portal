@@ -29,6 +29,7 @@ import { detectMoodFromText } from "@shared/mood-detect";
 import { fallbackTitle } from "@shared/capture-target";
 import { deriveDateRulesForRecord, ownsDateRules, type DateRule, type RuleSourceSystem } from "@shared/temporal-rules";
 import { findActionableTime } from "@shared/temporal-rules";
+import { noteTagsFor } from "@shared/note-markdown";
 
 // ─── Notes ───────────────────────────────────────────────────────────────────
 
@@ -49,7 +50,7 @@ export interface NoteResult {
   actionableTime?: { dateText: string | null; cue: string | null };
 }
 
-const NOTE_TYPE = "note";
+export const NOTE_TYPE = "note";
 
 /** Title from the first sentence/clause of the body, capped for the card UI. */
 export function deriveNoteTitle(content: string): string {
@@ -130,7 +131,7 @@ function actionableHint(content: string): { actionableTime?: { dateText: string 
 export async function updateNote(
   storage: IStorage,
   id: string,
-  changes: { title?: string; content?: string; append?: string; tags?: string[] },
+  changes: { title?: string; content?: string; append?: string; tags?: string[]; /** Set (or, with "", clear) the note's ONE category, on the stored tags. */ category?: string },
 ): Promise<any | undefined> {
   const current = await storage.getArtifact(id);
   if (!current || current.type !== NOTE_TYPE) return undefined;
@@ -142,6 +143,12 @@ export async function updateNote(
     patch.content = base ? `${base}\n${String(changes.append).trim()}` : String(changes.append).trim();
   }
   if (changes.tags !== undefined) patch.tags = changes.tags;
+  // A category alone is applied to the STORED tags (Rule 6): a list that
+  // files a note under a category must not send back a rebuilt tag array.
+  if (changes.category !== undefined) {
+    const base: string[] = Array.isArray(patch.tags) ? patch.tags : Array.isArray(current.tags) ? current.tags : [];
+    patch.tags = noteTagsFor(base.filter((t) => !/^category:/i.test(String(t))), changes.category);
+  }
   if (Object.keys(patch).length === 0) return current;
   return storage.updateArtifact(id, patch);
 }

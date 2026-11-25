@@ -61,6 +61,7 @@ const writes = () => calls.filter((c) => c.method !== "GET" && !c.url.includes("
 const settle = (ms = NOTE_AUTOSAVE_MS + 300) => new Promise((r) => setTimeout(r, ms));
 
 beforeEach(() => {
+  window.localStorage.clear();
   calls.length = 0; navigated.length = 0; notes = []; listFails = false;
   postAnswer = (body) => ({ id: "n-new", ...body });
   aiAnswer = { content: "- [ ] milk\n- [ ] eggs" };

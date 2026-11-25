@@ -93,7 +93,7 @@ async function main() {
     await toChat();
     const kinds = ["notes", "journal", "document", "fill"];
     const visible = await Promise.all(kinds.map((k) => tid(`button-workspace-${k}`).isVisible()));
-    check(visible.every(Boolean), "the chat box shows Notes, Journal, Document and Fill In");
+    check(visible.every(Boolean), "the chat box shows Notes, Journal, Word and Fill In");
     await shot("0-chat");
 
     // ── Notes ────────────────────────────────────────────────────────────
@@ -165,8 +165,13 @@ async function main() {
     check(await until(async () => String((await mineJ()).find((j) => j.content === entryText)?.title || "").trim().length >= 3, 15000), "…and a title written for it");
 
     // ── Document ─────────────────────────────────────────────────────────
+    // The Word button opens the Word workspace (2026-11-25); its New button
+    // (the Editor tab) is the document editor checked below.
     await tid("button-workspace-document").click();
-    await tid("workspace-document").waitFor({ timeout: 30000 });
+    await tid("word-documents").waitFor({ timeout: 30000 });
+    check(await coversScreen("workspace-document"), "Word fills the whole screen");
+    await tid("button-word-new").click();
+    await page.locator('[data-testid="workspace-document"] .ProseMirror').first().waitFor({ timeout: 30000 });
     check(await coversScreen("workspace-document"), "Document fills the whole screen");
     check(await tid("doc-empty-hint").isVisible(), "Document: an empty page says how to start");
     check(await tid("doc-ai-input").isVisible(), "Document: it has its own Ask AI box");

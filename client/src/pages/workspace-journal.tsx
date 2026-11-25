@@ -19,7 +19,14 @@
 // thumbnails and file rows.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileText, Loader2, Plus, Trash2, X } from "lucide-react";
+import { BookOpen, Compass, FileText, Feather, HeartHandshake, History, Loader2, PenLine, Plus, Sprout, Trash2, TrendingUp, X } from "lucide-react";
+import { EMOTIONS, LEVEL_LABELS, feelingTags, journalEmotions, journalStress, type Emotion } from "@shared/journal-feelings";
+import { REFLECTION_BOUNDARY } from "@shared/workspace-intel";
+import {
+  AiConversation, DictateButton, DraftRecoveryBar, VersionHistory, WorkspaceTabs,
+  readLastOpened, rememberLastOpened, useDraftRecovery, type WorkspaceTab,
+} from "@/components/workspace/WorkspaceApp";
+import { GuidedJournaling, JournalInsightsTab, JournalTrends, PastEntries } from "@/components/workspace/JournalTabs";
 import type { JournalEntry, MoodLevel } from "@shared/schema";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { getUserToday } from "@shared/timezone";
@@ -50,6 +57,19 @@ export const JOURNAL_AUTOSAVE_MS = 1500;
 const ACCENT = "262 70% 62%"; // the Journal's colour everywhere in the app
 export const JOURNAL_ATTACH_MAX_BYTES = 10 * 1024 * 1024;
 const MOODS = Object.keys(MOOD_CONFIG) as MoodLevel[];
+
+/** The Journal app's own navigation (owner request 2026-11-25). */
+export type JournalTab = "new" | "past" | "coach" | "insights" | "trends" | "guided" | "growth";
+const JOURNAL_TABS: WorkspaceTab<JournalTab>[] = [
+  { id: "new", label: "New Entry", icon: PenLine },
+  { id: "past", label: "Past Entries", icon: BookOpen },
+  { id: "coach", label: "Reflection Coach", icon: HeartHandshake },
+  { id: "insights", label: "AI Insights", icon: Compass },
+  { id: "trends", label: "Trends", icon: TrendingUp },
+  { id: "guided", label: "Guided Journaling", icon: Feather },
+  { id: "growth", label: "Personal Growth", icon: Sprout },
+];
+const isJournalTab = (v: unknown): v is JournalTab => JOURNAL_TABS.some((t) => t.id === v);
 
 interface ProfileRow { id: string; name: string; type: string }
 type SaveState = "empty" | "dirty" | "saving" | "saved" | "error";
@@ -127,6 +147,21 @@ export default function JournalWorkspacePage() {
   const [photos, setPhotos] = useState<string[]>([]);
   const [files, setFiles] = useState<string[]>([]);
   const [forProfileId, setForProfileId] = useState("");
+  // How it felt, beyond the mood: energy is the entry's own column; stress and
+  // the named emotions ride in its tags (shared/journal-feelings.ts).
+  const [energy, setEnergy] = useState<number | null>(null);
+  const [stress, setStress] = useState<number | null>(null);
+  const [emotions, setEmotions] = useState<Emotion[]>([]);
+  const [feelingsOpen, setFeelingsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const remembered = useMemo(() => readLastOpened("journal"), []);
+  const [tab, setTabState] = useState<JournalTab>(() => {
+    const asked = new URLSearchParams(typeof window !== "undefined" ? (window.location.hash.split("?")[1] || "") : "").get("tab");
+    return isJournalTab(asked) ? asked : isJournalTab(remembered.tab) ? remembered.tab : "new";
+  });
+  const setTab = useCallback((next: JournalTab) => { setTabState(next); rememberLastOpened("journal", { tab: next }); }, []);
+  const draft = useDraftRecovery("journal");
+  const { keep: keepDraft, clear: clearDraft, dismiss: dismissDraft } = draft;
   const [state, setState] = useState<SaveState>("empty");
   const [railOpen, setRailOpen] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -135,8 +170,8 @@ export default function JournalWorkspacePage() {
   const textRef = useRef<HTMLTextAreaElement>(null);
   useAutoGrow(textRef, text);
 
-  const latest = useRef({ entryId, entryDate, title, text, mood, labels, photos, files, forProfileId });
-  latest.current = { entryId, entryDate, title, text, mood, labels, photos, files, forProfileId };
+  const latest = useRef({ entryId, entryDate, title, text, mood, labels, photos, files, forProfileId, energy, stress, emotions });
+  latest.current = { entryId, entryDate, title, text, mood, labels, photos, files, forProfileId, energy, stress, emotions };
   const dirty = useRef(false);
   const titled = useRef(false); // the open entry already has a title on the server
   const touched = useRef(false); // something was written to the open entry in this sitting
@@ -155,7 +190,7 @@ export default function JournalWorkspacePage() {
       if (!dirty.current && !owesTitle) return;
       dirty.current = false;
       setState("saving");
-      const tags = journalTagsFor(v.labels.split(","), v.photos, v.files);
+      const tags = journalTagsFor(v.labels.split(","), v.photos, v.files, feelingTags(v.stress, v.emotions));
       const titlePatch = v.title.trim() ? { title: v.title.trim() } : owesTitle ? { autoTitle: true } : {};
       try {
         let id = v.entryId;
@@ -163,6 +198,7 @@ export default function JournalWorkspacePage() {
           const r = await apiRequest("POST", "/api/journal", {
             content: v.text, ...(v.mood ? { mood: v.mood } : {}), tags, entryDate: v.entryDate, draft: true,
             ...(v.title.trim() ? { title: v.title.trim() } : {}),
+            ...(v.energy ? { energy: v.energy } : {}),
             ...(v.forProfileId ? { linkedProfiles: [v.forProfileId] } : {}),
           });
           const row = await r.json();
@@ -172,18 +208,21 @@ export default function JournalWorkspacePage() {
           latest.current = { ...latest.current, entryId: id };
           if (owesTitle) await apiRequest("PATCH", `/api/journal/${id}`, { autoTitle: true });
         } else {
-          await apiRequest("PATCH", `/api/journal/${id}`, { content: v.text, tags, mood: v.mood || detectMoodFromText(v.text), ...titlePatch });
+          await apiRequest("PATCH", `/api/journal/${id}`, { content: v.text, tags, mood: v.mood || detectMoodFromText(v.text), energy: v.energy ?? null, ...titlePatch });
         }
         if (v.title.trim() || owesTitle) titled.current = true;
         void invalidateDomain("journal");
         setState(dirty.current ? "dirty" : "saved");
+        // On the server now: the copy kept on this device is no longer needed.
+        if (!dirty.current) clearDraft();
+        rememberLastOpened("journal", { id });
       } catch {
         dirty.current = true;
         setState("error");
       }
     });
     return chain.current;
-  }, []);
+  }, [clearDraft]);
 
   /** Something written is still not on the server (a failed save, or not written yet). */
   const pending = () => dirty.current && !!latest.current.text.trim();
@@ -192,9 +231,11 @@ export default function JournalWorkspacePage() {
     dirty.current = true;
     touched.current = true;
     setState("dirty");
+    // Kept on this device until the save lands (draft recovery).
+    setTimeout(() => { const v = latest.current; keepDraft({ id: v.entryId, title: v.title, text: v.text }); }, 0);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { void saveNow(); }, JOURNAL_AUTOSAVE_MS);
-  }, [saveNow]);
+  }, [saveNow, keepDraft]);
 
   useEffect(() => () => { if (dirty.current) void saveNow(true); }, [saveNow]);
 
@@ -209,13 +250,57 @@ export default function JournalWorkspacePage() {
     setPhotos(journalPhotoIds(e?.tags));
     setFiles(journalFileIds(e?.tags));
     setForProfileId("");
+    setEnergy(e?.energy && e.energy >= 1 && e.energy <= 5 ? Math.round(e.energy) : null);
+    setStress(journalStress(e?.tags));
+    setEmotions(journalEmotions(e?.tags));
+    setHistoryOpen(false);
     titled.current = !!e?.title;
     touched.current = false;
     dirty.current = false;
     setState(e ? "saved" : "empty");
     setReflection(null);
     setRailOpen(false);
+    rememberLastOpened("journal", { id: e?.id ?? null });
     if (!e) textRef.current?.focus();
+  };
+  /** Open an entry on the writing tab (from a list, the calendar, an insight). */
+  const openInEditor = (e: JournalEntry | null) => { setTab("new"); void open(e); };
+  /** A guided prompt: a new page with the question on it. Nothing is saved until the writer writes. */
+  const startFromPrompt = async (prompt: string) => {
+    setTab("new");
+    await open(null);
+    setText(`${prompt}\n`);
+    textRef.current?.focus();
+  };
+  /** Put back writing that was kept on this device and never reached the server. */
+  const restoreDraft = async () => {
+    const d = draft.leftover;
+    if (!d) return;
+    draft.taken();
+    setTab("new");
+    await open(d.id ? entries.find((e) => e.id === d.id) ?? null : null);
+    if (d.title) setTitle(d.title);
+    setText(d.text);
+    touch();
+  };
+  /** The server restored an older version of the open entry: show it, already saved. */
+  const showRestored = (row: any) => {
+    dirty.current = false;
+    setText(String(row?.content ?? ""));
+    setState("saved");
+    setHistoryOpen(false);
+    void invalidateDomain("journal");
+  };
+  const askCoach = async (turns: Array<{ role: "user" | "assistant"; content: string }>) => {
+    const r = await apiRequest("POST", "/api/workspace/journal/coach", { messages: turns, draft: latest.current.text });
+    const j = await r.json();
+    if (typeof j?.answer !== "string" || !j.answer.trim()) throw new Error("The AI returned nothing.");
+    const read = Number(j.entriesRead) || 0;
+    const extra = [j.used?.wellness ? "your tracker readings" : "", j.used?.activity ? "your tasks and calendar" : ""].filter(Boolean);
+    return {
+      answer: j.answer,
+      note: `${j.used?.pastEntries ? `Read ${read} of ${Math.max(read, Number(j.entriesTotal) || 0)} entries` : read ? "Read only the page you are writing" : "Past entries are switched off: read only this conversation"}${extra.length ? `, and ${extra.join(" and ")}` : ""}. Your entries are not changed.`,
+    };
   };
 
   const remove = async () => {
@@ -227,6 +312,8 @@ export default function JournalWorkspacePage() {
       toast({ title: "Entry deleted" });
       setEntryId(null); latest.current = { ...latest.current, entryId: null, text: "" };
       setText(""); setTitle(""); setMood(null); setLabels(""); setPhotos([]); setFiles([]); setEntryDate(today); titled.current = false; setState("empty");
+      setEnergy(null); setStress(null); setEmotions([]); setHistoryOpen(false);
+      rememberLastOpened("journal", { id: null });
     } catch (err) {
       toast({ title: "Couldn't delete the entry", description: aiErrorText(err), variant: "destructive" });
     }
@@ -307,6 +394,43 @@ export default function JournalWorkspacePage() {
     if (linked.length === 0 || (selfId && linked.includes(selfId))) return null;
     return profiles.find((p) => linked.includes(p.id))?.name ?? null;
   };
+
+  // Today's entry comes back when the journal is reopened (owner, 2026-11-25:
+  // "automatic restoration of the last opened entry"). Only TODAY's: reopening
+  // on an older day's page would put today's words into that day. A read —
+  // opening writes nothing.
+  const restoredLast = useRef(false);
+  useEffect(() => {
+    if (restoredLast.current || !entriesQuery.isSuccess) return;
+    restoredLast.current = true;
+    const e = remembered.id ? entries.find((x) => x.id === remembered.id) : null;
+    if (e && String(e.date).slice(0, 10) === today && !latest.current.text.trim()) void open(e);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entriesQuery.isSuccess, entries]);
+  // A kept draft the server already has is not an unsaved draft.
+  useEffect(() => {
+    const d = draft.leftover;
+    if (d && entriesQuery.isSuccess && entries.some((e) => String(e.content || "").trim() === d.text.trim())) dismissDraft();
+  }, [draft.leftover, entries, entriesQuery.isSuccess, dismissDraft]);
+
+  const listState = { loading: entriesQuery.isLoading, failed: entriesQuery.isError, retry: () => void entriesQuery.refetch() };
+  const scopeNotice = scope.isFiltered ? (
+    <p className="text-[11px] text-muted-foreground" data-testid="journal-tab-scope-notice">
+      Showing {scopeLabel(scope.selectedNames, scope.mode, scope.selectedIds.length)} only — other people's entries are hidden.{" "}
+      <button type="button" className="underline" title="Changes the profile filter for the whole app" onClick={() => setFilterEveryone()}>Show everyone</button>
+    </p>
+  ) : undefined;
+  const feelingSummary = [energy ? `Energy: ${LEVEL_LABELS[energy - 1]}` : "", stress ? `Stress: ${LEVEL_LABELS[stress - 1]}` : "", emotions.length ? emotions.join(", ") : ""].filter(Boolean).join(" · ");
+  const levelRow = (label: string, value: number | null, set: (n: number | null) => void, testId: string) => (
+    <div className="flex items-center gap-1.5 flex-wrap" role="group" aria-label={label}>
+      <span className="text-[11px] text-muted-foreground w-12 shrink-0">{label}</span>
+      {LEVEL_LABELS.map((name, i) => (
+        <button key={name} type="button" aria-pressed={value === i + 1} onClick={() => { set(value === i + 1 ? null : i + 1); touch(); }}
+          className="h-6 px-2 rounded-full border border-border text-[11px] whitespace-nowrap aria-pressed:bg-foreground aria-pressed:text-background aria-pressed:border-transparent text-muted-foreground"
+          data-testid={`${testId}-${i + 1}`}>{name}</button>
+      ))}
+    </div>
+  );
 
   const detected = text.trim() ? detectMoodFromText(text) : null;
   const shownMood = mood || detected;
@@ -396,11 +520,13 @@ export default function JournalWorkspacePage() {
       status={STATUS[state]}
       unsaved={state === "dirty" || state === "error" || state === "saving"}
       title={<span className="text-sm font-semibold truncate block" title={longDay(entryDate)}>{shortDay(entryDate)}</span>}
-      actions={
+      actions={tab === "new" ? (
         <button type="button" onClick={() => setRailOpen((v) => !v)} className="md:hidden h-8 px-2.5 rounded-full border border-border text-xs shrink-0" data-testid="button-journal-rail">
           {railOpen ? "Write" : `Entries (${entries.length})`}
         </button>
-      }
+      ) : undefined}
+      tabs={<WorkspaceTabs label="Journal sections" tabs={JOURNAL_TABS.map((t) => (t.id === "past" ? { ...t, badge: entries.length || null } : t))} active={tab} onPick={setTab} />}
+      banner={draft.leftover ? <DraftRecoveryBar draft={draft.leftover} onRestore={() => void restoreDraft()} onDiscard={draft.dismiss} /> : undefined}
       save={{
         state: state === "empty" ? "empty" : state,
         disabled: !text.trim(),
@@ -408,7 +534,23 @@ export default function JournalWorkspacePage() {
       }}
       onClose={async () => { await saveNow(true); if (pending()) return false; leaveWorkspace(); }}
     >
-      <div className="flex-1 min-h-0 min-w-0 flex" style={accent}>
+      {tab === "past" && <PastEntries entries={entries} list={listState} today={today} onOpen={openInEditor} ownerOf={ownerOf} scopeNotice={scopeNotice} />}
+      {tab === "coach" && (
+        <AiConversation
+          app="journal" testId="journal-coach" ask={askCoach} boundary={REFLECTION_BOUNDARY}
+          intro="Talk through what is on your mind. The coach listens, reflects back what it hears, and can point to patterns across your own entries. It is private to your journal."
+          suggestions={["How has my mindset changed over the past six months?", "What situations seem to cause me the most stress?", "What patterns do you notice in my journal entries?", "Help me think through something that happened today"]}
+          placeholder="What is on your mind?"
+        />
+      )}
+      {(tab === "insights" || tab === "growth") && (
+        <JournalInsightsTab key={tab} focus={tab} entries={entries} list={listState} boundary={REFLECTION_BOUNDARY}
+          onOpenDay={(day) => { const e = sorted.find((x) => String(x.date).slice(0, 10) === day); if (e) openInEditor(e); }} />
+      )}
+      {tab === "trends" && <JournalTrends entries={entries} list={listState} today={today} />}
+      {tab === "guided" && <GuidedJournaling hasEntries={entries.length > 0} onUsePrompt={(p) => void startFromPrompt(p)} />}
+      {/* The page stays mounted behind the other tabs: what is being written is never dropped by looking elsewhere. */}
+      <div className={tab === "new" ? "flex-1 min-h-0 min-w-0 flex" : "hidden"} style={accent} data-testid="journal-editor-tab">
         <aside className={`${railOpen ? "flex" : "hidden"} md:flex flex-col w-full md:w-72 border-r border-border bg-muted/30 min-h-0`}>{rail}</aside>
         <div className={`${railOpen ? "hidden" : "flex"} md:flex flex-1 min-w-0 flex-col`}>
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain" data-workspace-scroll>
@@ -426,6 +568,13 @@ export default function JournalWorkspacePage() {
                   title={entryId ? "The day cannot move once the entry is saved" : "The day this entry is about"}
                   aria-label="Entry date" className={`${chip} disabled:opacity-60`} data-testid="input-journal-date" />
                 <AttachMenu onFiles={(f) => void addFiles(f)} busy={adding} disabled={!text.trim()} disabledTitle="Write something first — an attachment belongs to an entry" testId="journal-attach" />
+                <DictateButton testId="button-journal-dictate" onText={(spoken) => { setText((t) => (t.trim() ? `${t.replace(/\s+$/, "")} ${spoken}` : spoken)); touch(); }} />
+                {entryId && (
+                  <button type="button" onClick={async () => { await saveNow(); setHistoryOpen((v) => !v); }} aria-pressed={historyOpen} title="Earlier versions of this entry"
+                    className="h-7 px-2 rounded-full border border-border text-xs flex items-center gap-1 text-muted-foreground hover:text-foreground aria-pressed:bg-muted shrink-0" data-testid="button-journal-history">
+                    <History className="h-3.5 w-3.5" /> History
+                  </button>
+                )}
                 <div className="flex-1" />
                 {(entryId || text.trim()) && (
                   <button type="button" onClick={() => void open(null)} className="h-7 px-2 rounded-full text-xs flex items-center gap-1 text-muted-foreground hover:text-foreground" data-testid="button-journal-done" title="Save this entry and start a new one">
@@ -466,6 +615,38 @@ export default function JournalWorkspacePage() {
                     : <>Mood is optional — detected from what you write if you don't pick.</>}
                 </p>
               </div>
+
+              {/* Energy, stress and named emotions: one line until opened. */}
+              <div className="mt-1.5" data-testid="journal-feelings">
+                <button type="button" onClick={() => setFeelingsOpen((v) => !v)} aria-expanded={feelingsOpen}
+                  className="text-[11px] text-left w-full truncate text-muted-foreground hover:text-foreground" data-testid="button-journal-feelings">
+                  <span className="underline">{feelingsOpen ? "Hide" : feelingSummary ? "Change" : "Add"} energy, stress and emotions</span>
+                  {feelingSummary ? <span className="ml-1.5 text-foreground">{feelingSummary}</span> : <span className="ml-1.5">(optional)</span>}
+                </button>
+                {feelingsOpen && (
+                  <div className="mt-1.5 space-y-1.5 bubble p-2.5">
+                    {levelRow("Energy", energy, setEnergy, "button-energy")}
+                    {levelRow("Stress", stress, setStress, "button-stress")}
+                    <div className="flex items-start gap-1.5" role="group" aria-label="Emotions">
+                      <span className="text-[11px] text-muted-foreground w-12 shrink-0 pt-1">Felt</span>
+                      <div className="flex gap-1 flex-wrap">
+                        {EMOTIONS.map((emo) => (
+                          <button key={emo} type="button" aria-pressed={emotions.includes(emo)}
+                            onClick={() => { setEmotions((list) => (list.includes(emo) ? list.filter((x) => x !== emo) : [...list, emo].slice(0, 6))); touch(); }}
+                            className="h-6 px-2 rounded-full border border-border text-[11px] capitalize aria-pressed:bg-[hsl(var(--accent-hsl))] aria-pressed:text-white aria-pressed:border-transparent text-muted-foreground"
+                            data-testid={`button-emotion-${emo}`}>{emo}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">Tap a choice again to take it off. Up to six emotions. These feed the Trends tab.</p>
+                  </div>
+                )}
+              </div>
+              {historyOpen && entryId && (
+                <div className="mt-2 bubble p-3" data-testid="journal-history">
+                  <VersionHistory kind="journal" id={entryId} onRestored={showRestored} />
+                </div>
+              )}
 
               {/* The page: a title, then the writing — one continuous sheet. */}
               <input value={title} onChange={(e) => { setTitle(e.target.value); touch(); }} placeholder="Title (optional)"

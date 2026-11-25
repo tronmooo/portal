@@ -22,7 +22,7 @@
 // area — the compact options (category, tags, profile), the note growing with
 // what is written, and its attachments as small thumbnails and file rows.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
@@ -30,7 +30,15 @@ import DOMPurify from "dompurify";
 import {
   Bold, CheckSquare, Code, Heading1, Heading2, Italic, Link as LinkIcon, List, ListOrdered, ListTodo, Loader2,
   Plus, Quote, Search, Sparkles, Strikethrough, Trash2, FileText, X,
+  FolderOpen, History, Lightbulb, MessagesSquare, PenLine, Redo2, Star, StickyNote, Undo2,
 } from "lucide-react";
+import {
+  AiConversation, DictateButton, DraftRecoveryBar, VersionHistory, WorkspaceTabs,
+  readLastOpened, rememberLastOpened, useDraftRecovery, type WorkspaceTab,
+} from "@/components/workspace/WorkspaceApp";
+import {
+  FavoriteButton, NotesBrowser, NotesCategories, NotesInsightsTab, categoryDot, noteAgo, noteSnippet, useRefreshNotes, type NoteRow,
+} from "@/components/workspace/NotesTabs";
 import { useDocumentBlobUrl } from "@/lib/document-preview";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -45,7 +53,7 @@ import {
   noteNeedsPlainEditor, noteTagsFor, type NoteNode,
 } from "@shared/note-markdown";
 
-interface NoteRow { id: string; title: string; content: string; tags?: string[]; updatedAt?: string; createdAt?: string; linkedProfiles?: string[] }
+export { categoryHue } from "@/components/workspace/NotesTabs";
 interface ProfileRow { id: string; name: string; type: string }
 
 export const NOTE_AUTOSAVE_MS = 900;
@@ -86,23 +94,21 @@ export function noteTitleFromText(content: string): string {
   return first.length > 60 ? `${first.slice(0, 57).trimEnd()}…` : first;
 }
 
-/** One steady colour per category name. */
-export function categoryHue(name: string): number {
-  let h = 0;
-  for (const ch of name.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) % 360;
-  return h;
-}
-const dot = (name: string) => ({ background: `hsl(${categoryHue(name)} 70% 50%)` });
-const snippet = (md: string) => String(md || "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[#>*_`~\-[\]\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 90);
-function ago(iso?: string): string {
-  const t = iso ? Date.parse(iso) : NaN;
-  if (!Number.isFinite(t)) return "";
-  const m = Math.max(0, Math.round((Date.now() - t) / 60000));
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  if (m < 60 * 24) return `${Math.round(m / 60)}h ago`;
-  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
+const dot = categoryDot;
+const snippet = (md: string) => noteSnippet(md);
+const ago = noteAgo;
+
+/** The Notes app's own navigation (owner request 2026-11-25). */
+export type NotesTab = "all" | "editor" | "categories" | "assistant" | "insights" | "favorites";
+const NOTES_TABS: WorkspaceTab<NotesTab>[] = [
+  { id: "all", label: "All Notes", icon: StickyNote },
+  { id: "editor", label: "Editor", icon: PenLine },
+  { id: "categories", label: "Categories", icon: FolderOpen },
+  { id: "assistant", label: "AI Assistant", icon: MessagesSquare },
+  { id: "insights", label: "AI Insights", icon: Lightbulb },
+  { id: "favorites", label: "Favorites", icon: Star },
+];
+const isNotesTab = (v: unknown): v is NotesTab => NOTES_TABS.some((t) => t.id === v);
 
 type SaveState = "new" | "dirty" | "saving" | "saved" | "error";
 const STATUS: Record<SaveState, string> = {
@@ -113,13 +119,9 @@ export default function NotesWorkspacePage() {
   useEffect(() => { document.title = "Notes — Portol"; }, []);
   const { toast } = useToast();
   const { confirm, isArmed } = useConfirmArm();
-  const qc = useQueryClient();
   // The list beside the editor is its own query; the artifacts domain covers
   // every other screen that shows notes.
-  const refreshNotes = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ["/api/notes"] });
-    void invalidateDomain("artifacts");
-  }, [qc]);
+  const refreshNotes = useRefreshNotes();
 
   const notesQuery = useQuery<NoteRow[]>({ queryKey: ["/api/notes"] });
   const profilesQuery = useQuery<ProfileRow[]>({ queryKey: ["/api/profiles"] });
@@ -143,6 +145,19 @@ export default function NotesWorkspacePage() {
   const [attaching, setAttaching] = useState(false);
   // "rich" unless the note needs plain markdown, or the writer asked for it.
   const [mode, setMode] = useState<"rich" | "plain">("rich");
+  // Which of the app's tabs is showing. A deep link to one note opens the
+  // Editor; otherwise the tab last used, else the Editor.
+  const remembered = useMemo(() => readLastOpened("notes"), []);
+  const [tab, setTabState] = useState<NotesTab>(() => {
+    const q = new URLSearchParams(typeof window !== "undefined" ? (window.location.hash.split("?")[1] || "") : "");
+    if (q.get("note")) return "editor";
+    const asked = q.get("tab");
+    return isNotesTab(asked) ? asked : isNotesTab(remembered.tab) ? remembered.tab : "editor";
+  });
+  const setTab = useCallback((next: NotesTab) => { setTabState(next); rememberLastOpened("notes", { tab: next }); }, []);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const draft = useDraftRecovery("notes");
+  const { keep: keepDraft, clear: clearDraft, dismiss: dismissDraft } = draft;
   const preferPlain = useRef(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
   useAutoGrow(textRef, mode === "plain" ? content : "");
@@ -183,20 +198,26 @@ export default function NotesWorkspacePage() {
         }
         refreshNotes();
         setState(dirty.current ? "dirty" : "saved");
+        // On the server now: the copy kept on this device is no longer needed.
+        if (!dirty.current) clearDraft();
+        if (latest.current.noteId) rememberLastOpened("notes", { id: latest.current.noteId });
       } catch {
         dirty.current = true;
         setState("error");
       }
     });
     return chain.current;
-  }, [refreshNotes]);
+  }, [refreshNotes, clearDraft]);
 
   const touch = useCallback(() => {
     dirty.current = true;
     setState("dirty");
+    // Kept on this device until the save lands (draft recovery). Read on the
+    // next tick: the state the caller just set is in `latest` by then.
+    setTimeout(() => { const v = latest.current; keepDraft({ id: v.noteId, title: v.titleTyped ? v.title : "", text: v.content }); }, 0);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { void saveNow(); }, NOTE_AUTOSAVE_MS);
-  }, [saveNow]);
+  }, [saveNow, keepDraft]);
 
   // Leaving by any road saves what is pending.
   useEffect(() => () => { if (dirty.current) void saveNow(); }, [saveNow]);
@@ -249,7 +270,12 @@ export default function NotesWorkspacePage() {
     setMode(plain ? "plain" : "rich");
     if (!plain) loadIntoEditor(md);
     setListOpen(false);
+    setHistoryOpen(false);
+    rememberLastOpened("notes", { id: n?.id ?? null });
   };
+  /** Open a note in the Editor tab (from a list, an insight, a category). */
+  const openInEditor = (n: NoteRow | null) => { setTab("editor"); void openNote(n); };
+  const openById = (id: string) => { const n = notes.find((x) => x.id === id); if (n) openInEditor(n); };
 
   // Opened for ONE note (Artifacts → a note → Edit): #/workspace/notes?note=<id>
   // opens that note for editing, and the X goes back to Artifacts. QA
@@ -259,15 +285,19 @@ export default function NotesWorkspacePage() {
     const q = new URLSearchParams(typeof window !== "undefined" ? (window.location.hash.split("?")[1] || "") : "");
     return { noteId: q.get("note"), from: q.get("from") };
   }, []);
+  // With no deep link, the note last open comes back (owner, 2026-11-25:
+  // "automatic restoration of the last opened entry"). A note that is gone is
+  // simply not found. Still a read: nothing is written by opening.
+  const wantedId = deepLink.noteId || remembered.id || null;
   const openedDeepLink = useRef(false);
   useEffect(() => {
-    if (!deepLink.noteId || openedDeepLink.current || !editor) return;
-    const n = notes.find((x) => x.id === deepLink.noteId);
-    if (!n) return;
+    if (!wantedId || openedDeepLink.current || !editor) return;
+    if (!notesQuery.isSuccess) return;
     openedDeepLink.current = true;
-    void openNote(n);
+    const n = notes.find((x) => x.id === wantedId);
+    if (n) void openNote(n);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deepLink.noteId, notes, editor]);
+  }, [wantedId, notes, editor, notesQuery.isSuccess]);
   const leave = () => { if (deepLink.from === "artifacts") hashNavigate("/artifacts"); else leaveWorkspace(); };
 
   const switchMode = () => {
@@ -371,6 +401,47 @@ export default function NotesWorkspacePage() {
       setAttaching(false);
     }
   };
+  // A kept draft that the server already has (the save landed as the tab
+  // closed) is not an unsaved draft: it is dropped without asking.
+  useEffect(() => {
+    const d = draft.leftover;
+    if (d && notesQuery.isSuccess && notes.some((n) => String(n.content || "").trim() === d.text.trim())) dismissDraft();
+  }, [draft.leftover, notes, notesQuery.isSuccess, dismissDraft]);
+  /** Put back writing that was kept on this device and never reached the server. */
+  const restoreDraft = async () => {
+    const d = draft.leftover;
+    if (!d) return;
+    draft.taken();
+    setTab("editor");
+    await openNote(d.id ? notes.find((n) => n.id === d.id) ?? null : null);
+    if (d.title) { setTitle(d.title); setTitleTyped(true); }
+    replaceContent(d.text);
+  };
+  /** The server restored an older version of the open note: show it, already saved. */
+  const showRestored = (row: any) => {
+    const md = String(row?.content ?? "");
+    const plain = preferPlain.current || noteNeedsPlainEditor(md);
+    dirty.current = false;
+    latestContent.current = md;
+    setContent(md);
+    setMode(plain ? "plain" : "rich");
+    if (!plain) loadIntoEditor(md);
+    setState("saved");
+    setHistoryOpen(false);
+    refreshNotes();
+  };
+  const openRow = noteId ? notes.find((n) => n.id === noteId) : undefined;
+  const listState = { loading: notesQuery.isLoading, failed: notesQuery.isError, retry: () => void notesQuery.refetch() };
+  const askAssistant = async (turns: Array<{ role: "user" | "assistant"; content: string }>) => {
+    const r = await apiRequest("POST", "/api/workspace/notes/chat", {
+      messages: turns, openNote: { id: noteId, title: titleTyped ? title : "", content: latestContent.current },
+    });
+    const j = await r.json();
+    if (typeof j?.answer !== "string" || !j.answer.trim()) throw new Error("The AI returned nothing.");
+    const read = Number(j.notesRead) || 0;
+    return { answer: j.answer, note: `Read ${read} of ${Math.max(read, Number(j.notesTotal) || 0)} notes${j.usedPortol ? ", and your Portol records" : ""}.` };
+  };
+
   const detach = (documentId: string) => replaceContent(removeAttachmentLink(latestContent.current, documentId));
 
   const onDropFile = async (e: React.DragEvent) => {
@@ -398,7 +469,7 @@ export default function NotesWorkspacePage() {
   const attachments = useMemo(() => noteAttachments(content), [content]);
   const proposalHtml = useMemo(() => (proposal === null ? "" : DOMPurify.sanitize(markdownToNoteHtml(proposal))), [proposal]);
 
-  const tool = "h-8 w-8 shrink-0 rounded-md flex items-center justify-center hover:bg-muted text-muted-foreground hover:text-foreground aria-pressed:bg-primary/15 aria-pressed:text-primary";
+  const tool = "h-8 w-8 shrink-0 rounded-md flex items-center justify-center hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 aria-pressed:bg-primary/15 aria-pressed:text-primary";
   const on = (name: string, attrs?: Record<string, any>) => (mode === "rich" && editor?.isActive(name, attrs)) || undefined;
 
   const list = (
@@ -501,19 +572,46 @@ export default function NotesWorkspacePage() {
           data-testid="input-note-title"
         />
       }
-      actions={
+      actions={tab === "editor" ? (
         <button type="button" onClick={() => setListOpen((v) => !v)} className="md:hidden h-8 px-2.5 rounded-full border border-border text-xs shrink-0" data-testid="button-notes-list">
           {listOpen ? "Editor" : `Notes (${notes.length})`}
         </button>
-      }
+      ) : undefined}
+      tabs={<WorkspaceTabs label="Notes sections" tabs={NOTES_TABS.map((t) => (t.id === "all" ? { ...t, badge: notes.length || null } : t.id === "favorites" ? { ...t, badge: notes.filter((n) => n.pinned).length || null } : t))} active={tab} onPick={setTab} />}
+      banner={draft.leftover ? <DraftRecoveryBar draft={draft.leftover} onRestore={() => void restoreDraft()} onDiscard={draft.dismiss} /> : undefined}
     >
-      <div className="flex-1 min-h-0 min-w-0 flex">
+      {(tab === "all" || tab === "favorites") && (
+        <NotesBrowser
+          notes={notes} list={listState} favoritesOnly={tab === "favorites"} openId={noteId}
+          categoryFilter={categoryFilter} onCategoryFilter={setCategoryFilter}
+          onOpen={openInEditor}
+          onDeleted={(id) => { if (id === noteId) { dirty.current = false; void openNote(null); } }}
+        />
+      )}
+      {tab === "categories" && (
+        <NotesCategories notes={notes} list={listState} onOpen={openInEditor}
+          onBrowse={(name) => { setCategoryFilter(name); setTab("all"); }} />
+      )}
+      {tab === "assistant" && (
+        <AiConversation
+          app="notes" testId="notes-assistant" ask={askAssistant}
+          intro="Ask about anything you have written. The assistant reads your notes, names the note an answer comes from, and can summarise, connect ideas or brainstorm with you."
+          suggestions={["What have I been writing about most?", "Summarize my notes from this month", "Which notes mention a plan I haven't finished?", "Brainstorm next steps from the note I have open"]}
+          placeholder="Ask about your notes…"
+        />
+      )}
+      {tab === "insights" && <NotesInsightsTab notes={notes} list={listState} onOpen={openById} />}
+      {/* The Editor stays mounted behind the other tabs: what is being written is never dropped by looking elsewhere. */}
+      <div className={tab === "editor" ? "flex-1 min-h-0 min-w-0 flex" : "hidden"} data-testid="notes-editor-tab">
         <aside className={`${listOpen ? "flex" : "hidden"} md:flex flex-col w-full md:w-72 border-r border-border bg-muted/30 min-h-0`}>{list}</aside>
         <div className={`${listOpen ? "hidden" : "flex"} md:flex flex-1 min-w-0 flex-col`}>
           {/* Formatting: one row that scrolls sideways on a phone, so nothing falls off screen. */}
           <div className="flex items-center gap-0.5 px-1.5 py-0.5 border-b border-border bg-muted/30 overflow-x-auto overflow-y-hidden shrink-0 [scrollbar-width:none]" data-swipe-ignore data-testid="note-toolbar">
             {mode === "rich" ? (
               <>
+                <button type="button" className={tool} aria-label="Undo" title="Undo" disabled={!editor?.can().undo()} onClick={() => editor?.chain().focus().undo().run()} data-testid="button-note-undo"><Undo2 className="h-4 w-4" /></button>
+                <button type="button" className={tool} aria-label="Redo" disabled={!editor?.can().redo()} onClick={() => editor?.chain().focus().redo().run()} data-testid="button-note-redo"><Redo2 className="h-4 w-4" /></button>
+                <span className="w-px h-5 bg-border mx-0.5 shrink-0" />
                 <button type="button" className={tool} aria-label="Bold" aria-pressed={on("bold")} onClick={() => editor?.chain().focus().toggleBold().run()} data-testid="button-note-bold"><Bold className="h-4 w-4" /></button>
                 <button type="button" className={tool} aria-label="Italic" aria-pressed={on("italic")} onClick={() => editor?.chain().focus().toggleItalic().run()}><Italic className="h-4 w-4" /></button>
                 <button type="button" className={tool} aria-label="Strikethrough" aria-pressed={on("strike")} onClick={() => editor?.chain().focus().toggleStrike().run()}><Strikethrough className="h-4 w-4" /></button>
@@ -589,6 +687,17 @@ export default function NotesWorkspacePage() {
                   </select>
                 )}
                 <AttachMenu onFiles={(f) => void attach(f)} busy={attaching} testId="note-attach" />
+                <DictateButton testId="button-note-dictate" onText={(spoken) => {
+                  if (mode === "rich" && editor) editor.chain().focus().insertContent(`${spoken} `).run();
+                  else replaceContent(latestContent.current.trim() ? `${latestContent.current.replace(/\s+$/, "")} ${spoken}` : spoken);
+                }} />
+                {noteId && openRow && <FavoriteButton note={openRow} className="h-7 w-7" />}
+                {noteId && (
+                  <button type="button" onClick={async () => { await saveNow(); setHistoryOpen((v) => !v); }} aria-pressed={historyOpen} title="Earlier versions of this note"
+                    className="h-7 px-2 rounded-full border border-border text-xs flex items-center gap-1 text-muted-foreground hover:text-foreground aria-pressed:bg-muted shrink-0" data-testid="button-note-history">
+                    <History className="h-3.5 w-3.5" /> History
+                  </button>
+                )}
                 {noteId && (
                   <button
                     type="button"
@@ -601,6 +710,12 @@ export default function NotesWorkspacePage() {
                   </button>
                 )}
               </div>
+              {historyOpen && noteId && (
+                <div className="mt-2 bubble p-3" data-testid="note-history">
+                  <VersionHistory kind="note" id={noteId} onRestored={showRestored}
+                    renderPreview={(v) => <div className="prose prose-sm max-w-none note-rich" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(markdownToNoteHtml(v.content)) }} />} />
+                </div>
+              )}
               <div className="mt-2 flex-1 flex flex-col min-h-[50vh]">
                 {mode === "rich" ? (
                   <div className="relative flex-1 flex flex-col">

@@ -63,11 +63,12 @@ const writes = () => calls.filter((c) => c.method !== "GET" && !c.url.includes("
 const settle = (ms = JOURNAL_AUTOSAVE_MS + 300) => new Promise((r) => setTimeout(r, ms));
 const save = () => screen.getByTestId("button-workspace-save") as HTMLButtonElement;
 
-beforeEach(() => { calls.length = 0; navigated.length = 0; failWrites = false; });
+beforeEach(() => { window.localStorage.clear(); calls.length = 0; navigated.length = 0; failWrites = false; });
 afterEach(cleanup);
 
 describe("the editors' header", () => {
-  it("is X at the left, the title, then Save at the right", () => {
+  // The X was at the left until 2026-11-25, when the owner asked for it "in the upper-right corner".
+  it("is the title, then Save and the X at the upper right", () => {
     mount(
       <WorkspaceShell kind="notes" title={<span>Groceries</span>} status="Saved" onClose={() => {}} save={{ state: "saved", onSave: () => true }}>
         <p>body</p>
@@ -75,8 +76,8 @@ describe("the editors' header", () => {
     );
     const header = screen.getByTestId("workspace-header");
     const buttons = Array.from(header.querySelectorAll("button"));
-    expect(buttons[0].getAttribute("data-testid")).toBe("button-workspace-close");
-    expect(buttons[buttons.length - 1].getAttribute("data-testid")).toBe("button-workspace-save");
+    expect(buttons[buttons.length - 1].getAttribute("data-testid")).toBe("button-workspace-close");
+    expect(buttons[buttons.length - 2].getAttribute("data-testid")).toBe("button-workspace-save");
     expect(header.textContent).toContain("Groceries");
   });
 

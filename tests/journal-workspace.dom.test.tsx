@@ -70,6 +70,7 @@ const reads = () => calls.filter((c) => c.method === "GET");
 const settle = (ms = JOURNAL_AUTOSAVE_MS + 300) => new Promise((r) => setTimeout(r, ms));
 
 beforeEach(() => {
+  window.localStorage.clear();
   calls.length = 0; navigated.length = 0; entries = []; listFails = false; showEveryone.mockClear();
   scopeState = { mode: "everyone", selectedIds: [], selectedNames: [], isFiltered: false };
 });

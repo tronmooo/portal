@@ -9,14 +9,14 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 | | Total | No test at all | Not exercised on the deployed app |
 |---|---:|---:|---:|
-| API write routes | 184 | 31 | 66 |
-| API read routes | 111 | 32 | 53 |
+| API write routes | 192 | 38 | 74 |
+| API read routes | 113 | 32 | 55 |
 | Chat tools that write | 111 | 0 | 0 |
 | Chat tools that read | 42 | 0 | 0 |
 
-Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
+Screens: 30 pages (49 routes). 4 are opened by no live browser check, 4 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 643. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 648. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -38,7 +38,7 @@ Test files read: 643. Test files no config runs: 2 (`tests/critical-flows.test.t
 | Wellness dashboard | 1 | 0 | 1 | 1 | 0 | 0 |
 | Executive dashboard & alerts | 3 | 0 | 1 | 10 | 9 | 0 |
 | Documents & artifacts | 20 | 5 | 7 | 7 | 12 | 0 |
-| Workspaces | 5 | 1 | 4 | 0 | 0 | 0 |
+| Workspaces | 13 | 8 | 12 | 2 | 0 | 0 |
 | Journal & notes | 9 | 0 | 3 | 4 | 9 | 0 |
 | Record details | 6 | 0 | 6 | 4 | 3 | 0 |
 | AI chat | 9 | 2 | 4 | 5 | 22 | 0 |
@@ -65,8 +65,8 @@ reached only by clicking through is not detected).
 | HabitsPage | `/dashboard/habits` `/habits` | 1 | 1 | 1 |
 | InsightsPage | `/insights` | 1 | 1 | **0** |
 | JournalPage | `/dashboard/journal` `/journal` | 1 | 1 | 1 |
-| JournalWorkspacePage | `/workspace/journal` | 1 | 2 | 2 |
-| NotesWorkspacePage | `/workspace/notes` | 2 | 2 | 3 |
+| JournalWorkspacePage | `/workspace/journal` | 1 | 2 | 3 |
+| NotesWorkspacePage | `/workspace/notes` | 2 | 2 | 4 |
 | ObligationsPage | `/dashboard/obligations` `/obligations` `/bills` | 1 | 1 | **0** |
 | PrivacyPage | `/privacy` | 1 | 1 | **0** |
 | ProfileInfoPage | `/profiles` `/profiles/:id/info` | 2 | 1 | 3 |
@@ -80,6 +80,7 @@ reached only by clicking through is not detected).
 | TermsPage | `/terms` | 1 | 1 | **0** |
 | TrackersPage | `/trackers` `/linked` `/liabilities` | 5 | 2 | 2 |
 | WellnessPage | `/wellness` `/dashboard/health` `/health` | 1 | 2 | 1 |
+| WordWorkspacePage | `/workspace/word` | **0** | **0** | 1 |
 
 ## Every workflow door, by domain
 
@@ -108,8 +109,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/import/bank-csv` | yes | **0** | **0** |
 | `GET /api/onboarding-status` | yes | **0** | 1 |
 | `POST /api/onboarding/complete` | yes | **0** | **0** |
-| `GET /api/preferences/:key` | yes | 9 | 4 |
-| `PUT /api/preferences/:key` | yes | 2 | 3 |
+| `GET /api/preferences/:key` | yes | 11 | 4 |
+| `PUT /api/preferences/:key` | yes | 3 | 3 |
 | `GET /api/public/artifacts/:token` | yes | 1 | 1 |
 
 ### Profiles
@@ -123,7 +124,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/profile-bootstrap/:id` | yes | 5 | **0** |
 | `GET /api/profile-types` | yes | **0** | **0** |
 | `GET /api/profile-types/:typeKey` | **no** | **0** | **0** |
-| `GET /api/profiles` | yes | 43 | 17 |
+| `GET /api/profiles` | yes | 44 | 17 |
 | `POST /api/profiles` | yes | 4 | 29 |
 | `DELETE /api/profiles/:id` | yes | 3 | 30 |
 | `GET /api/profiles/:id` | yes | 5 | 8 |
@@ -534,11 +535,11 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `GET /api/artifacts` | yes | 5 | 7 |
+| `GET /api/artifacts` | yes | 6 | 7 |
 | `POST /api/artifacts` | yes | 2 | 5 |
-| `DELETE /api/artifacts/:id` | yes | 1 | 7 |
+| `DELETE /api/artifacts/:id` | yes | 3 | 7 |
 | `GET /api/artifacts/:id` | yes | 1 | 1 |
-| `PATCH /api/artifacts/:id` | yes | **0** | 1 |
+| `PATCH /api/artifacts/:id` | yes | 2 | 1 |
 | `POST /api/artifacts/:id/duplicate` | yes | **0** | 1 |
 | `DELETE /api/artifacts/:id/share` | yes | **0** | 1 |
 | `POST /api/artifacts/:id/share` | yes | **0** | 1 |
@@ -584,8 +585,18 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/smart-fill/analyze` | yes | 2 | **0** |
 | `POST /api/smart-fill/render` | yes | 2 | **0** |
 | `POST /api/workspace/document/assist` | yes | **0** | **0** |
+| `POST /api/workspace/document/review` | yes | **0** | **0** |
+| `POST /api/workspace/journal/coach` | yes | **0** | **0** |
+| `POST /api/workspace/journal/insights` | yes | **0** | **0** |
+| `POST /api/workspace/journal/prompts` | yes | **0** | **0** |
 | `POST /api/workspace/journal/reflect` | yes | 1 | **0** |
 | `POST /api/workspace/notes/assist` | yes | **0** | 1 |
+| `POST /api/workspace/notes/categorize` | yes | **0** | **0** |
+| `POST /api/workspace/notes/chat` | yes | **0** | **0** |
+| `POST /api/workspace/notes/insights` | yes | **0** | **0** |
+| `GET /api/workspace/versions/:kind/:id` | yes | 1 | **0** |
+| `GET /api/workspace/versions/:kind/:id/:versionId` | yes | 1 | **0** |
+| `POST /api/workspace/versions/:kind/:id/restore` | yes | 3 | **0** |
 
 ### Journal & notes
 
@@ -596,14 +607,14 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `DELETE /api/captures/:id` | **no** | 1 | **0** |
 | `GET /api/captures/:id` | **no** | 1 | **0** |
 | `PATCH /api/captures/:id` | **no** | 2 | **0** |
-| `GET /api/journal` | yes | 7 | 6 |
-| `POST /api/journal` | yes | 7 | 6 |
-| `DELETE /api/journal/:id` | yes | 1 | 8 |
-| `PATCH /api/journal/:id` | yes | 4 | 2 |
-| `GET /api/notes` | yes | 4 | 2 |
-| `POST /api/notes` | yes | 5 | 4 |
-| `DELETE /api/notes/:id` | yes | 1 | 5 |
-| `PATCH /api/notes/:id` | yes | 2 | 1 |
+| `GET /api/journal` | yes | 8 | 6 |
+| `POST /api/journal` | yes | 8 | 6 |
+| `DELETE /api/journal/:id` | yes | 2 | 8 |
+| `PATCH /api/journal/:id` | yes | 6 | 2 |
+| `GET /api/notes` | yes | 5 | 2 |
+| `POST /api/notes` | yes | 6 | 4 |
+| `DELETE /api/notes/:id` | yes | 3 | 5 |
+| `PATCH /api/notes/:id` | yes | 4 | 1 |
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
@@ -659,7 +670,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `search` | read | 10 | 8 |
+| `search` | read | 11 | 8 |
 | `get_summary` | read | 2 | 1 |
 | `recall_memory` | read | 2 | 1 |
 | `save_memory` | write | 2 | 1 |

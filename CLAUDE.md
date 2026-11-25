@@ -581,11 +581,11 @@ not mid-sentence.
 
 *Live check for J1–J8 (deployed app, smoke account):* `npx tsx tests/live-journal-check.ts` (server).
 
-## Workspace rules (four full-screen tools opened from AI Chat)
+## Workspace rules (full-screen tools opened from AI Chat)
 
 Owner request 2026-11-22: "each opens its own dedicated, full-screen workspace
 … not four versions of the same chat box". The chat box's **Notes, Journal,
-Document and Fill In** buttons navigate (`WORKSPACES`,
+Word and Fill In** buttons navigate (`WORKSPACES`,
 `client/src/components/workspace/WorkspaceShell.tsx`); they are not modes of
 the chat box. Read these before touching that file, `pages/workspace-*.tsx`,
 `pages/editor.tsx` or `server/workspace-ai.ts`.
@@ -617,8 +617,10 @@ only after that warning. Closing the browser tab with work unsaved warns
 (`useUnsavedWarning`).
 **W11. One phone layout for the three editors** (owner, 2026-11-23: "compact,
 mobile-friendly, unlimited-length"). The header is `WorkspaceHeader` (the
-Document editor draws the same pieces): X at the LEFT, the title and its save
-status, then **Save** at the right (`WorkspaceSaveButton`: never hidden,
+Document editor draws the same pieces): the title and its save status, then
+**Save** and the **X at the upper right** (owner, 2026-11-25: "an X in the
+upper-right corner to return to Chat"; it was at the left before — do not move
+it back) (`WorkspaceSaveButton`: never hidden,
 disabled only while there is nothing to save, "Saved" when it lands; the
 tap and the autosave share one save chain, so they make ONE record). Under it
 ONE scroll area (`data-workspace-scroll`) holds the compact options (date,
@@ -707,6 +709,134 @@ appended if the model dropped it (`picturesToMarkers` / `markersToPictures`).
 and page breaks in the editor; a table button on the phone toolbar;
 pictures inside notes; Word and spreadsheet forms, and online (browser) form
 filling, in Fill In; a Computer mode.
+
+## Workspace app rules (Notes, Journal and Word are full applications behind three small buttons)
+
+Owner request 2026-11-25: "maintain a minimal Chat interface while providing
+three powerful, fully developed applications behind three small buttons". The
+chat box's buttons read **Notes, Journal, Word** (the key of Word stays
+`document`; Fill In is unchanged). Each opens a full-screen app with its own
+tab strip (`WorkspaceTabs`, `client/src/components/workspace/WorkspaceApp.tsx`):
+- **Notes** (`pages/workspace-notes.tsx`, tabs in `components/workspace/NotesTabs.tsx`):
+  All Notes, Editor, Categories, AI Assistant, AI Insights, Favorites.
+- **Journal** (`pages/workspace-journal.tsx`, `components/workspace/JournalTabs.tsx`):
+  New Entry, Past Entries (list or calendar), Reflection Coach, AI Insights,
+  Trends, Guided Journaling, Personal Growth.
+- **Word** (`pages/workspace-word.tsx`): My Documents, Editor, Templates, AI
+  Writer, AI Review, Version History. The Editor tab IS the document editor
+  (`pages/editor.tsx`, opened with `?source=word`), which draws the same tab
+  strip (`WORD_TABS`, `components/workspace/WordTabs.ts`).
+Add no main navigation tab and no dashboard card for them. The Workspace rules
+above (W1–W11) hold inside every tab. Read these before touching those files,
+`server/workspace-intel.ts`, `server/content-versions.ts` or the `shared/`
+modules each rule names.
+*Guards:* `tests/workspace-rules.test.ts` (the pure rules),
+`tests/workspace-intel.test.ts` (the AI functions over a mocked model),
+`tests/content-versions-routes.test.ts` (the real routes),
+`tests/workspace-apps.dom.test.tsx` (Notes and Journal),
+`tests/word-workspace.dom.test.tsx` (Word).
+*Live check (deployed app, smoke account, phone touch and desktop):*
+`npx tsx tests/live-workspace-apps-check.ts`.
+
+**WA1. A tab is a view; the editor stays mounted.** The Editor / New Entry tab
+is hidden, not unmounted, while another tab shows: what is being written is
+never dropped by looking elsewhere, and its autosave keeps running. Walking
+through every tab writes nothing (Rule 3). A tab's list comes from the one
+query the page already has; a failed list is an error with a retry on EVERY
+tab that reads it (Rule 7) — written with `listGate(...) ?? content`, where
+the gate is a function that answers null. Never test a JSX element with `??`:
+an element is never null, and the list is then never drawn (caught by the
+tests the day it was written).
+**WA2. What an AI may read is the writer's switch, enforced where the prompt
+is built.** One preference row (`workspace_ai_access`,
+`shared/workspace-access.ts`). The SERVER reads it before it loads anything
+(`readAiAccess`; `gatherFacts` in `server/workspace-ai.ts`): a switch that is
+off means that data is not loaded for that call, whatever the client sends.
+Defaults: each app reads its own records; everything that crosses from one
+kind of record to another is OFF (the rest of Portol for Notes; sleep /
+exercise / tasks / calendar for Journal; notes, assets and the journal for
+Word) except what the Document AI always had (the writer's profile and saved
+documents). **Journal text reaches no other app's AI by default**: the Notes
+AI has no journal switch at all, and Word's is off until turned on. A new
+source is a new switch in `WORKSPACE_AI_ACCESS_LABELS`, default off. The panel
+(`AiAccessPanel`) never writes over a row it has not read (`ready`).
+**WA3. Every AI tab answers or proposes; none writes (W5).** The routes are in
+`WORKSPACE_AI_PATHS` (read-only POSTs). Insights, growth, prompts, categories
+and the review are asked for on a TAP, never on opening a tab. A category the
+AI suggests is filed only by "File under…" / "Apply all"; an AI draft or
+revision becomes a document only when the user opens it in the editor.
+**WA4. A structured AI answer is grounded before it is shown**
+(`shared/workspace-intel.ts`). The model sees notes as labels (`[N1]`), never
+stored ids. A note an insight names must be one that was sent; a day a journal
+observation cites must be a day that has an entry; a passage a review quotes
+must be in the document — otherwise the reference (and an item left with
+nothing to stand on) is dropped. Open check-list items and a document's blanks
+are COUNTED from the text, never asked of the model. A failed or unusable
+answer is an error with a retry, never an invented result.
+**WA5. The reflection AI is a companion, not a therapist.** Its instructions
+and the line shown with every answer (`REFLECTION_BOUNDARY`) say it does not
+diagnose or treat and point to emergency services / a crisis line. It speaks
+only from the writer's OWN entries (`journalEntriesFor`; never another
+profile's), never rewrites one, and tracker readings reach it as numbers by
+day, never a tracker's notes. Do not soften that boundary or add advice about
+treatment or medication.
+**WA6. How an entry felt.** Energy is the entry's own `energy` column (1–5;
+`PATCH {energy: null}` takes it off). Stress and the named emotions ride in
+its tags (`stress:<1-5>`, `emotion:<name>` from the fixed `EMOTIONS` list,
+`shared/journal-feelings.ts`), like its photos (W9): written by the composer
+that owns the entry, never shown among its labels. Trends are computed from
+the entries on read (Rule 5): a day's figure is the average of that day's
+entries, a day with no reading is a gap in the chart (never a zero), a
+direction is stated only from `MIN_TREND_DAYS` days, and the range names the
+entries it leaves out (Rule 4). A pattern is a description, not a diagnosis.
+**WA7. Version history is kept by the server, one version per sitting.**
+`PATCH /api/notes/:id`, `/api/journal/:id` and `/api/artifacts/:id` keep the
+text a save REPLACES (`keepVersionBeforeWrite`, `server/content-versions.ts`;
+the rule is `keepVersion`, `shared/content-versions.ts`): not on every
+autosave — one per `VERSION_MIN_GAP_MS`, at most `VERSION_MAX_COUNT`, bounded
+in size. Stored as a preferences row per record (`versions:<kind>:<id>`; the
+generic preferences route refuses the prefix). Restoring
+(`POST /api/workspace/versions/:kind/:id/restore`) takes two taps (Rule 8),
+replaces the TEXT only, and keeps what it replaces first, so a restore can be
+undone. Deleting the record deletes its versions. Keeping a version never
+fails the save it rides on.
+**WA8. One write to the stored row (Rule 6).** A favourite is the note's own
+`pinned` flag (`PATCH /api/artifacts/:id {pinned}`). Filing a note from a list
+sends `{category}` alone and the server applies it to the note's STORED tags
+(`updateNote`); never PATCH a rebuilt tag array for a note that is not the one
+open in the editor.
+**WA9. Word hands content to the editor; it does not save it.** "Use
+template", "Open in the editor" and an accepted AI revision pass the HTML to
+the editor once (`setWordSeed` / `takeWordSeed`), and the EDITOR saves it as it
+saves anything typed (a revision of a saved document waits for that document,
+`forId`, and the server keeps the text it replaces). A template
+(`shared/doc-templates.ts`) is structure only: every personal detail is a
+`[Missing: …]` blank (W6), never an example value, and a contract template
+says it is not legal advice.
+**WA10. The address keeps where the editor was opened from.** `source=chat` /
+`source=word` is read from the HASH. Navigate with `hashNavigate`, not the
+router's `setLocation`, whenever the path carries a `?…`: the router moves the
+query out of the hash, and the editor then forgot it had come from Chat or
+Word (2026-11-25: a Word tab picked in the editor opened the workspace with
+no tab and no document; after the first Save the X left for Artifacts).
+**WA11. What was last open comes back; a draft on the device is offered.**
+The last tab and record are per-device conveniences in the browser
+(`rememberLastOpened`): Notes reopens the last note, Word the document last
+open in the Editor, Journal only an entry dated TODAY (reopening an older day
+would put today's words into it). Reopening writes nothing. While writing is
+not on the server it is also kept in the browser (`useDraftRecovery`) and
+dropped when the save lands; one found on opening is OFFERED (Restore /
+two-tap Discard), never applied, and is dropped unasked when the server
+already has that text.
+**WA12. Dictation is the browser's.** `DictateButton` is shown only where the
+browser can dictate (never a dead button, O4); what is spoken is typed into
+the editor like any other text.
+*Not built (2026-11-25):* AI conversations are not saved (they end with the
+sitting, and say so); semantic search (search is text matching); pictures and
+tables inside the rich note editor (a note holding them still opens as
+Markdown, W8); folders nested inside folders; the coach reading notes; a
+separate "stress" tracker (stress is what the writer sets on an entry); real-
+time co-editing; headers, footers and page breaks in Word.
 
 ## Auto Pay rules (routine payments record themselves; the books stay honest)
 

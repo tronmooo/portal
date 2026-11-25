@@ -53,6 +53,7 @@ import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manife
 import { registerFinanceRoutes } from "./finance-routes";
 import { registerRecordDetailRoutes } from "./record-details-routes";
 import { registerWorkspaceRoutes, WORKSPACE_AI_PATHS } from "./workspace-routes";
+import { forgetVersions, keepVersionBeforeWrite, readRecordText } from "./content-versions";
 import { appendDetailSearchHits } from "./record-details";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
@@ -7191,8 +7192,12 @@ Rules:
     if (typeof req.body?.content === "string") changes.content = sanitizeLongText(req.body.content);
     if (typeof req.body?.append === "string") changes.append = sanitizeLongText(req.body.append);
     if (Array.isArray(req.body?.tags)) changes.tags = req.body.tags.map(String);
+    if (typeof req.body?.category === "string") changes.category = sanitize(req.body.category).trim().slice(0, 40);
+    // The text about to be replaced is kept as a version (one per sitting).
+    const noteBefore = changes.content !== undefined || changes.append ? await readRecordText("note", req.params.id) : null;
     const updated = await updateNote(storage, req.params.id, changes);
     if (!updated) return res.status(404).json({ error: "Note not found" });
+    if (noteBefore) await keepVersionBeforeWrite("note", req.params.id, noteBefore, { content: String(updated.content ?? "") });
     const uid_n2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_n2}`); bustCache(`stats:${uid_n2}`);
     res.json(updated);
@@ -7200,6 +7205,7 @@ Rules:
   app.delete("/api/notes/:id", asyncHandler(async (req, res) => {
     const ok = await deleteNote(storage, req.params.id);
     if (!ok) return res.status(404).json({ error: "Note not found" });
+    await forgetVersions("note", req.params.id);
     const uid_n3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_n3}`); bustCache(`stats:${uid_n3}`);
     // Notes own no Date Rule, so nothing leaves the calendar with them.
@@ -9528,8 +9534,11 @@ Rules:
       req.body.title = sanitize(req.body.title);
     }
     if (req.body.description !== undefined && typeof req.body.description === "string") req.body.description = sanitize(req.body.description);
+    // A document's text about to be replaced is kept as a version.
+    const docBefore = typeof req.body.content === "string" ? await readRecordText("document", req.params.id) : null;
     const updated = await storage.updateArtifact(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    if (docBefore) await keepVersionBeforeWrite("document", req.params.id, docBefore, { content: String(updated.content ?? "") });
     const uid_a2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_a2}`); bustCache(`stats:${uid_a2}`);
     res.json(updated);
@@ -9554,6 +9563,7 @@ Rules:
     if (!(await storage.deleteArtifact(req.params.id))) {
       return res.status(500).json({ error: "Artifact could not be deleted. Nothing was removed — please try again." });
     }
+    await forgetVersions(existing.type === "note" ? "note" : "document", req.params.id);
     const uid_a4 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_a4}`); bustCache(`stats:${uid_a4}`);
     res.json({ success: true });
@@ -9790,9 +9800,14 @@ Rules:
   }));
   app.patch("/api/journal/:id", asyncHandler(async (req, res) => {
     {
+      // `energy: null` takes the energy level off the entry (the schema only
+      // knows 1-5, so it is lifted out before validation and put back after).
+      const clearEnergy = req.body && req.body.energy === null;
+      if (clearEnergy) delete req.body.energy;
       const parsed = parsePatch(insertJournalEntrySchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
+      if (clearEnergy) req.body.energy = null;
     }
     if (req.body.content !== undefined) {
       if (typeof req.body.content !== "string") return res.status(400).json({ error: "Journal content must be a string" });
@@ -9837,8 +9852,11 @@ Rules:
       if (text.trim()) req.body.title = await generateTitle(text, "journal");
     }
     delete req.body.autoTitle;
+    // The entry's text about to be replaced is kept as a version.
+    const entryBefore = typeof req.body.content === "string" ? await readRecordText("journal", req.params.id) : null;
     const updated = await storage.updateJournalEntry(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    if (entryBefore) await keepVersionBeforeWrite("journal", req.params.id, entryBefore, { content: String(updated.content ?? "") });
     const uid_j2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_j2}`);
     res.json(updated);
@@ -9849,6 +9867,7 @@ Rules:
     // existed when we used getJournalEntries() to pre-check existence.
     const removed = await storage.deleteJournalEntry(req.params.id);
     if (!removed) return res.status(404).json({ error: "Journal entry not found" });
+    await forgetVersions("journal", req.params.id);
     const uid_j3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_j3}`);
     res.json({ success: true });
@@ -11855,7 +11874,7 @@ No emojis. No prose outside the JSON.`,
       const key = req.params.key;
       // `details:` rows and the detail catalog are written only through
       // /api/details/*, which validates each value against its definition.
-      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_", "details:", "detail_definitions"];
+      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_", "details:", "detail_definitions", "versions:"];
       const PREF_KEY_DENYLIST = new Set([
         "gcal_refresh_token", "gcal_access_token",
         "onboarding_completed", "ai_digest", "admin_override",

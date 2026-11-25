@@ -66,6 +66,9 @@ import {
 import type { Artifact, SheetData, SheetCell, SheetCellFormat } from "@shared/schema";
 import { decodeSheetData, sheetCellDisplayValue } from "@shared/sheet-data";
 import { getTemplatesByType, type EditorTemplate } from "@/lib/editor-templates";
+import { hashNavigate } from "@/lib/hashNavigate";
+import { DictateButton, WorkspaceTabs, rememberLastOpened } from "@/components/workspace/WorkspaceApp";
+import { WORD_TABS, takeWordSeed, wordTabRoute, type WordTab } from "@/components/workspace/WordTabs";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
   DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
@@ -213,6 +216,9 @@ export default function EditorPage() {
   const search = typeof window !== "undefined" ? window.location.hash.split("?")[1] || "" : "";
   const params = new URLSearchParams(search);
   const fromChat = params.get("source") === "chat";
+  // Opened from Word (the chat box's Word button): the editor is Word's
+  // Editor tab — it shows Word's tab strip and the X returns to AI Chat.
+  const fromWord = params.get("source") === "word";
   const initialTemplateId = params.get("template");
 
   // Defensive routing: wouter's useRoute("/editor/new/:type") sometimes doesn't
@@ -443,6 +449,21 @@ export default function EditorPage() {
     }
   }, [editor, existing]);
 
+  // Content the Word workspace handed over (a template, or an AI draft the
+  // user chose to open): put on the page ONCE. It marks the document unsaved,
+  // so the editor saves it the way it saves anything typed — the workspace
+  // itself wrote nothing. A revision of a saved document (`forId`) waits for
+  // that document to load, and replaces its text; the server keeps the text
+  // it replaces as a version.
+  useEffect(() => {
+    if (!editor || type !== "doc") return;
+    const seed = takeWordSeed((sd) => (sd.forId ? existing?.id === sd.forId : isNew));
+    if (!seed) return;
+    if (seed.title && !seed.forId) setTitle(seed.title);
+    editor.commands.setContent(cleanDocHtml(seed.html));
+    setDirty(true);
+  }, [editor, type, isNew, existing?.id]);
+
   // Filtered slash items, recomputed on each query change.
   const slashFiltered: SlashItem[] = useMemo(
     () => slashMenu.open ? filterSlashItems(slashMenu.query) : [],
@@ -655,8 +676,12 @@ export default function EditorPage() {
       qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       // Update URL so refresh re-opens the right artifact.
       if (isNew && !quietSaveRef.current && stillOnNewEditor()) {
-        const qs = fromChat ? "?source=chat" : "";
-        setLocation(`/editor/${saved.id}${qs}`);
+        const qs = fromChat ? "?source=chat" : fromWord ? "?source=word" : "";
+        // Through hashNavigate, not the router's setLocation: the router moves
+        // a "?…" out of the hash, and the editor reads where it was opened
+        // from (`source`) out of the hash — after the first Save the X then
+        // forgot it had come from Chat or Word and left for Artifacts.
+        if (qs) hashNavigate(`/editor/${saved.id}${qs}`); else setLocation(`/editor/${saved.id}`);
       }
       quietSaveRef.current = false;
     },
@@ -672,7 +697,20 @@ export default function EditorPage() {
     : dirty;
 
   // The X (and Back): save what is pending, then leave. Never asks, never discards.
-  const leaveEditor = () => { if (fromChat) setLocation("/chat"); else setLocation("/artifacts"); };
+  const leaveEditor = () => { if (fromChat || fromWord) setLocation("/chat"); else setLocation("/artifacts"); };
+  // Word remembers the document last open, to bring it back next time.
+  useEffect(() => { if (fromWord && type === "doc") rememberLastOpened("word", { tab: "editor", ...(savedId ? { id: savedId } : {}) }); }, [fromWord, type, savedId]);
+  /** Another Word tab: save what is pending (quietly), then go there. A failed save stays. */
+  const goWordTab = async (next: WordTab) => {
+    if (next === "editor") return;
+    let id = savedId;
+    if (dirty && (savedId || hasUnsavedWork())) {
+      quietSaveRef.current = true;
+      try { id = (await saveMut.mutateAsync())?.id ?? id; } catch { setLeaveWarn(true); return; }
+    }
+    rememberLastOpened("word", { tab: next, ...(id ? { id } : {}) });
+    hashNavigate(wordTabRoute(next, id));
+  };
   const closeWorkspace = async (): Promise<boolean | void> => {
     if (dirty && (savedId || hasUnsavedWork())) {
       quietSaveRef.current = true;
@@ -1327,7 +1365,6 @@ export default function EditorPage() {
         style={{ minHeight: 48, paddingTop: "env(safe-area-inset-top, 0px)" }}
         data-testid="mobile-editor-top-bar"
       >
-        <WorkspaceCloseButton onClose={closeWorkspace} onSaveFailed={() => setLeaveWarn(true)} />
         <div className="flex-1 min-w-0 flex flex-col justify-center leading-tight">
           <input
             value={title}
@@ -1409,12 +1446,13 @@ export default function EditorPage() {
           </DropdownMenuContent>
         </DropdownMenu>
         {saveButton}
+        <WorkspaceCloseButton onClose={closeWorkspace} onSaveFailed={() => setLeaveWarn(true)} />
       </div>
       {leaveWarn && <UnsavedLeaveBar onStay={() => setLeaveWarn(false)} onLeave={() => { setLeaveWarn(false); setDirty(false); leaveEditor(); }} />}
+      {fromWord && type === "doc" && <WorkspaceTabs label="Word sections" tabs={WORD_TABS} active="editor" onPick={(t) => void goWordTab(t)} />}
 
       {/* Desktop header */}
       <div className="hidden md:flex border-b bg-card items-center gap-2 px-3 py-2 shrink-0">
-        <WorkspaceCloseButton onClose={closeWorkspace} onSaveFailed={() => setLeaveWarn(true)} />
         {/* BUG-RTE03: make the title obviously editable. The previous default
             Input looked like a static label until hovered; users didn't realise
             they could click into it and rename their doc. Give it a hover/focus
@@ -1510,6 +1548,7 @@ export default function EditorPage() {
           )}
         </div>
         {saveButton}
+        <WorkspaceCloseButton onClose={closeWorkspace} onSaveFailed={() => setLeaveWarn(true)} />
       </div>
 
       {/* Body */}
@@ -1613,6 +1652,7 @@ export default function EditorPage() {
               </DropdownMenuContent>
             </DropdownMenu>
             <Button variant="ghost" size="sm" className="h-8 px-2 gap-1" onClick={() => { const el = imageInputRef.current; if (el) { el.value = ""; el.click(); } }} data-testid="button-doc-image"><ImagePlus className="h-4 w-4" /> Picture</Button>
+            <DictateButton testId="button-doc-dictate" className="h-8" onText={(spoken) => editor?.chain().focus().insertContent(`${spoken} `).run()} />
             <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => void insertImageFile(e.target.files?.[0])} data-testid="input-doc-image" />
             <AttachMenu onFiles={(f) => void attachFiles(f)} busy={attaching} testId="doc-attach" />
             <DropdownMenu>
@@ -1728,6 +1768,7 @@ export default function EditorPage() {
             data-testid="toolbar-doc-mobile"
           >
             <AttachMenu onFiles={(f) => void attachFiles(f)} busy={attaching} testId="doc-attach-mobile" label="" />
+            <DictateButton testId="button-doc-dictate-mobile" className="h-8" onText={(spoken) => editor?.chain().focus().insertContent(`${spoken} `).run()} />
             <div className="w-px h-6 bg-border mx-0.5 shrink-0" />
             <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().toggleBold().run()} aria-pressed={editor?.isActive("bold")} aria-label="Bold"><Bold className="h-4 w-4" /></Button>
             <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => editor?.chain().focus().toggleItalic().run()} aria-pressed={editor?.isActive("italic")} aria-label="Italic"><Italic className="h-4 w-4" /></Button>

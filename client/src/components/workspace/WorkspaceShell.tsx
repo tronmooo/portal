@@ -3,8 +3,9 @@
 // screen, with the app's navigation out of the way.
 //
 // The editors' phone layout (owner request 2026-11-23, "compact, mobile-
-// friendly, unlimited length"): ONE sticky header — X at the left, the title
-// and its save status, then Save at the right — over a single scroll area
+// friendly, unlimited length"): ONE sticky header — the title and its save
+// status, then Save and the X at the upper right (owner, 2026-11-25; the X
+// was at the left before) — over a single scroll area
 // that holds the compact options and a writing area that grows with what is
 // written. The frame is sized to the VISUAL viewport (`useVisualViewportBox`),
 // so the header stays on screen and the bottom bars sit above the phone's
@@ -24,9 +25,10 @@ import { hashNavigate } from "@/lib/hashNavigate";
 export type WorkspaceKind = "notes" | "journal" | "document" | "fill";
 
 export const WORKSPACES: Record<WorkspaceKind, { label: string; route: string; icon: typeof FileText; blurb: string }> = {
-  notes: { label: "Notes", route: "/workspace/notes", icon: StickyNote, blurb: "Open the full-screen notes workspace" },
-  journal: { label: "Journal", route: "/workspace/journal", icon: BookOpen, blurb: "Open the full-screen journal" },
-  document: { label: "Document", route: "/editor/new/doc?source=chat", icon: FileText, blurb: "Open the full-screen document editor" },
+  notes: { label: "Notes", route: "/workspace/notes", icon: StickyNote, blurb: "Open Notes: your notebook, categories and its AI" },
+  journal: { label: "Journal", route: "/workspace/journal", icon: BookOpen, blurb: "Open Journal: entries, trends and the reflection coach" },
+  // "Word" on screen (owner, 2026-11-25); the key stays `document`.
+  document: { label: "Word", route: "/workspace/word", icon: FileText, blurb: "Open Word: your documents, templates and the AI writer" },
   fill: { label: "Fill In", route: "/workspace/fill", icon: FileInput, blurb: "Open the full-screen form filler" },
 };
 
@@ -251,7 +253,7 @@ export function UnsavedLeaveBar({ onStay, onLeave }: { onStay: () => void; onLea
 }
 
 /**
- * The one header every editor shares: X | title + status | actions | Save.
+ * The one header every editor shares: title + status | actions | Save | X.
  * Sticky by construction: it sits outside the scroll area.
  */
 export function WorkspaceHeader({
@@ -272,12 +274,11 @@ export function WorkspaceHeader({
   return (
     <>
       <header
-        className="flex items-center gap-1.5 pl-1.5 pr-2 border-b border-border bg-card shrink-0 min-w-0"
+        className="flex items-center gap-1.5 pl-1.5 pr-1.5 border-b border-border bg-card shrink-0 min-w-0"
         style={{ minHeight: 48, paddingTop: "env(safe-area-inset-top, 0px)" }}
         data-testid="workspace-header"
       >
-        <WorkspaceCloseButton onClose={onClose} onSaveFailed={() => setWarn(true)} />
-        <Icon className="h-4 w-4 text-muted-foreground shrink-0 hidden sm:block" aria-hidden />
+        <Icon className="h-4 w-4 text-muted-foreground shrink-0 ml-1.5" aria-hidden />
         <div className="flex-1 min-w-0 flex flex-col justify-center leading-tight">
           <div className="min-w-0">{title}</div>
           {status && (
@@ -286,6 +287,8 @@ export function WorkspaceHeader({
         </div>
         {actions}
         {save && <WorkspaceSaveButton {...save} />}
+        {/* The X is at the upper right (owner, 2026-11-25): it saves, then goes back to AI Chat. */}
+        <WorkspaceCloseButton onClose={onClose} onSaveFailed={() => setWarn(true)} />
       </header>
       {warn && <UnsavedLeaveBar onStay={() => setWarn(false)} onLeave={() => { setWarn(false); onLeave(); }} />}
     </>
@@ -293,9 +296,13 @@ export function WorkspaceHeader({
 }
 
 export function WorkspaceShell({
-  kind, title, status, actions, onClose, onLeave, save, unsaved = false, children,
+  kind, title, status, actions, onClose, onLeave, save, unsaved = false, tabs, banner, children,
 }: {
   kind: WorkspaceKind;
+  /** The app's own navigation (WorkspaceTabs), under the header. */
+  tabs?: ReactNode;
+  /** A bar between the navigation and the page (a recovered draft). */
+  banner?: ReactNode;
   /** The title area: usually an input. */
   title?: ReactNode;
   /** "Saved", "Saving…", "Not saved yet" … */
@@ -325,6 +332,8 @@ export function WorkspaceShell({
       data-keyboard={box.keyboardOpen ? "1" : undefined}
     >
       <WorkspaceHeader kind={kind} title={title} status={status} actions={actions} onClose={onClose} onLeave={onLeave} save={save} />
+      {tabs}
+      {banner}
       <div className="flex-1 min-h-0 min-w-0 flex flex-col">{children}</div>
     </section>
     </WorkspaceKeyboardProvider>
