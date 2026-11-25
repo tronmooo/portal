@@ -15,6 +15,7 @@ export default defineConfig({
       'tests/finance-expense-date.dom.test.tsx',
       'tests/workflow-matrix.test.ts',
       'tests/not-reported.test.ts',
+      'tests/profile-term-fields.test.ts',
       'tests/qa-2026-11-24b-findings.dom.test.tsx',
       'tests/bills-timeline-debts.test.ts',
       'tests/edit-profile-dialog-save.dom.test.tsx',

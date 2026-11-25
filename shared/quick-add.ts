@@ -341,5 +341,36 @@ export function validateProfileMoneyFields(fields: Record<string, any> | null | 
     if (Math.abs(n) > MAX_TRANSACTION_AMOUNT) return `${key} is too large (maximum ${MAX_TRANSACTION_AMOUNT.toLocaleString("en-US")})`;
     fields[key] = n;
   }
+  return validateProfileTermFields(fields);
+}
+
+/** The highest annual rate a record may hold, as a percent (a payday loan runs to a few hundred). */
+export const MAX_INTEREST_RATE_PCT = 1000;
+const RATE_FIELDS = ["interestRate", "apr", "annualInterestRate"] as const;
+const DAY_OF_MONTH_FIELDS = ["dueDay", "paymentDueDay"] as const;
+
+/**
+ * A loan's rate and its day of the month. The payoff math and the schedule
+ * read these as numbers: a rate of -3 or 5000, or a due day of 0 or 32, used
+ * to save and then drive every figure on the page (input variations,
+ * 2026-11-25). A rate is 0 … 1000 (with or without a trailing "%"); a due day
+ * is a whole day 1 … 31.
+ */
+export function validateProfileTermFields(fields: Record<string, any> | null | undefined): string | null {
+  if (!fields || typeof fields !== "object") return null;
+  for (const key of RATE_FIELDS) {
+    const raw = fields[key];
+    if (raw === undefined || raw === null || raw === "") continue;
+    const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw.replace(/[%\s]/g, "")) : NaN;
+    if (!Number.isFinite(n)) return `${key} must be a number`;
+    if (n < 0) return `${key} cannot be negative`;
+    if (n > MAX_INTEREST_RATE_PCT) return `${key} is too high (maximum ${MAX_INTEREST_RATE_PCT}%)`;
+  }
+  for (const key of DAY_OF_MONTH_FIELDS) {
+    const raw = fields[key];
+    if (raw === undefined || raw === null || raw === "") continue;
+    const n = typeof raw === "number" ? raw : typeof raw === "string" && /^\s*\d+\s*$/.test(raw) ? Number(raw) : NaN;
+    if (!Number.isInteger(n) || n < 1 || n > 31) return `${key} must be a day of the month, 1 to 31`;
+  }
   return null;
 }

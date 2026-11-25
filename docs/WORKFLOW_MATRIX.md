@@ -16,7 +16,7 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 638. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 640. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -124,10 +124,10 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/profile-types` | yes | **0** | **0** |
 | `GET /api/profile-types/:typeKey` | **no** | **0** | **0** |
 | `GET /api/profiles` | yes | 43 | 17 |
-| `POST /api/profiles` | yes | 3 | 28 |
-| `DELETE /api/profiles/:id` | yes | 3 | 29 |
-| `GET /api/profiles/:id` | yes | 4 | 8 |
-| `PATCH /api/profiles/:id` | yes | 12 | 4 |
+| `POST /api/profiles` | yes | 4 | 29 |
+| `DELETE /api/profiles/:id` | yes | 3 | 30 |
+| `GET /api/profiles/:id` | yes | 5 | 8 |
+| `PATCH /api/profiles/:id` | yes | 13 | 5 |
 | `GET /api/profiles/:id/ai-summary` | yes | 1 | **0** |
 | `GET /api/profiles/:id/detail` | yes | **0** | 2 |
 | `GET /api/profiles/:id/documents` | yes | **0** | 1 |
@@ -262,7 +262,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
 | `POST /api/autopay/reconcile` | **no** | **0** | 1 |
-| `POST /api/autopay/run` | **no** | 1 | 6 |
+| `POST /api/autopay/run` | **no** | 1 | 7 |
 
 ### Bills & obligations
 
@@ -332,8 +332,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/finance/transfers` | **no** | **0** | **0** |
 | `POST /api/finance/transfers/:id` | **no** | **0** | **0** |
 | `GET /api/incomes` | yes | 6 | 4 |
-| `POST /api/incomes` | yes | 3 | 3 |
-| `DELETE /api/incomes/:id` | yes | 1 | 3 |
+| `POST /api/incomes` | yes | 3 | 4 |
+| `DELETE /api/incomes/:id` | yes | 1 | 4 |
 | `PATCH /api/incomes/:id` | yes | 2 | 1 |
 | `GET /api/paychecks` | yes | **0** | 1 |
 | `POST /api/paychecks` | yes | **0** | 1 |
@@ -402,8 +402,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/date-rules` | yes | 2 | **0** |
 | `GET /api/date-rules/:system/:id` | **no** | **0** | **0** |
 | `GET /api/events` | yes | 7 | 5 |
-| `POST /api/events` | yes | 3 | 9 |
-| `DELETE /api/events/:id` | yes | 2 | 6 |
+| `POST /api/events` | yes | 3 | 10 |
+| `DELETE /api/events/:id` | yes | 2 | 7 |
 | `GET /api/events/:id` | yes | 1 | 1 |
 | `PATCH /api/events/:id` | yes | 2 | 1 |
 | `POST /api/events/:id/occurrence` | yes | 2 | 1 |
@@ -447,8 +447,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
 | `GET /api/goals` | yes | 2 | 3 |
-| `POST /api/goals` | yes | 2 | 3 |
-| `DELETE /api/goals/:id` | yes | **0** | 3 |
+| `POST /api/goals` | yes | 2 | 4 |
+| `DELETE /api/goals/:id` | yes | **0** | 4 |
 | `GET /api/goals/:id` | **no** | **0** | 1 |
 | `PATCH /api/goals/:id` | yes | 1 | 1 |
 | `POST /api/goals/:id/restore` | **no** | **0** | 1 |
@@ -468,12 +468,12 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `PATCH /api/tracker-entries/:entryId` | yes | 1 | 1 |
 | `POST /api/tracker-entries/:entryId/enrich` | **no** | **0** | **0** |
 | `POST /api/tracker-entries/:entryId/rescale` | yes | **0** | **0** |
-| `GET /api/trackers` | yes | 12 | 19 |
-| `POST /api/trackers` | yes | 2 | 10 |
-| `DELETE /api/trackers/:id` | yes | 1 | 10 |
+| `GET /api/trackers` | yes | 12 | 20 |
+| `POST /api/trackers` | yes | 2 | 11 |
+| `DELETE /api/trackers/:id` | yes | 1 | 11 |
 | `GET /api/trackers/:id` | yes | 1 | 3 |
 | `PATCH /api/trackers/:id` | yes | 1 | 2 |
-| `POST /api/trackers/:id/entries` | yes | 2 | 4 |
+| `POST /api/trackers/:id/entries` | yes | 2 | 5 |
 | `DELETE /api/trackers/:id/entries/:entryId` | yes | **0** | 3 |
 | `PATCH /api/trackers/:id/entries/:entryId` | yes | 2 | 1 |
 | `POST /api/trackers/migrate-to-self` | **no** | 2 | **0** |

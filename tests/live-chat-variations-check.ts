@@ -437,6 +437,81 @@ const CASES: Case[] = [
     if (e.length !== 1) return `expected ONE entry after the correction, got ${e.length}: ${e.map((x) => `${x.tracker} ${JSON.stringify(x.values)}`).join(" | ") || "none"}`;
     return Object.values(e[0].values || {}).some((v) => money(v, 3)) ? "" : `the entry reads ${JSON.stringify(e[0].values)}, expected 3`;
   } },
+
+  // ══ Round 5 (2026-11-25): the way a phone hears it ═════════════════════════
+  // ── Dictated, shouted, run together ───────────────────────────────────────
+  { group: "messy", say: "ok so um I just got back from the store and I spent like thirty two dollars on cleaning supplies", expect: expenses([[32, "clean"]], TODAY) },
+  { group: "messy", say: "REMIND ME TO TAKE OUT THE TRASH TOMORROW", expect: oneTask(["trash"], TOMORROW) },
+  { group: "messy", say: "spent $18 on pizza 🍕 lol", expect: expenses([[18, "pizza"]], TODAY) },
+  { group: "messy", say: "task - schedule dentist; task - order printer ink", expect: (c) => {
+    const t = c.made.tasks;
+    if (t.length !== 2) return `expected two tasks, got ${t.length} (${names(t)})`;
+    return t.some((x) => has(x.title, "dentist")) && t.some((x) => has(x.title, "ink")) ? "" : `the tasks are ${names(t)}`;
+  } },
+  { group: "messy", say: "walked 3 miles this morning, drank 16 oz of water, and spent $7 on a smoothie", expect: (c) => {
+    const e = expenses([[7, "smoothie"]], TODAY)(c);
+    if (e) return e;
+    return logged([["walk|steps|distance", "", 3], ["water|hydration", "", 16]], false)(c);
+  } },
+  { group: "messy", say: "thanks!", expect: nothingMade },
+  { group: "messy", say: "hello", expect: nothingMade },
+  { group: "messy", say: "what can you do?", expect: nothingMade },
+
+  // ── Money coming in ───────────────────────────────────────────────────────
+  { group: "income", say: "I got paid $2,400 today", expect: (c) => {
+    const i = c.made.incomes;
+    if (i.length !== 1) return `expected one income, got ${i.length}; expenses made: ${c.made.expenses.map((e) => `${e.description} $${e.amount}`).join(" | ") || "none"}`;
+    return money(i[0].amount, 2400) ? "" : `the income is ${i[0].amount}, expected 2400`;
+  } },
+  { group: "income", say: "sold my old bike for $150", expect: (c) => {
+    if (c.made.expenses.length) return `a sale was logged as spending: ${c.made.expenses.map((e) => `${e.description} $${e.amount}`).join(" | ")}`;
+    const i = c.made.incomes;
+    return i.length === 1 && money(i[0].amount, 150) ? "" : `expected one $150 income, got ${i.map((x) => `${x.source || x.description} $${x.amount}`).join(" | ") || "none"}`;
+  } },
+  { group: "income", say: "my friend paid me back $20 for lunch", expect: (c) => (c.made.expenses.length ? `money received was logged as spending: ${c.made.expenses.map((e) => `${e.description} $${e.amount}`).join(" | ")}` : "") },
+
+  // ── Health readings, said plainly ─────────────────────────────────────────
+  { group: "readings", say: "my blood pressure was 118 over 76 this morning", expect: (c) => {
+    const e = c.made.entries.filter((x) => /blood|bp|pressure/i.test(x.tracker));
+    if (e.length !== 1) return `expected one blood pressure entry, got ${e.length} (${c.made.entries.map((x) => `${x.tracker} ${JSON.stringify(x.values)}`).join(" | ") || "none"})`;
+    const v = Object.values(e[0].values || {}).map(Number);
+    return v.includes(118) && v.includes(76) ? "" : `the reading is ${JSON.stringify(e[0].values)}, expected 118 / 76`;
+  } },
+  { group: "readings", say: "weighed in at 182.4 this morning", expect: logged([["weight", "", 182.4]]) },
+  { group: "readings", say: "slept 7 and a half hours last night", expect: logged([["sleep", "", 7.5]]) },
+  { group: "readings", say: "ran a 5k in 28 minutes", expect: (c) => {
+    const e = c.made.entries.filter((x) => /run/i.test(x.tracker));
+    if (e.length !== 1) return `expected one run, got ${e.length} (${c.made.entries.map((x) => `${x.tracker} ${JSON.stringify(x.values)}`).join(" | ") || "none"})`;
+    const v = Object.values(e[0].values || {}).map(Number);
+    const dist = v.some((n) => Math.abs(n - 3.1) < 0.06 || Math.abs(n - 5) < 0.01);
+    return dist && v.includes(28) ? "" : `the run reads ${JSON.stringify(e[0].values)}, expected 5 km (3.1 mi) in 28 minutes`;
+  } },
+  { group: "readings", say: "had two eggs and a slice of toast for breakfast", expect: (c) => {
+    const e = c.made.entries.filter((x) => /nutrition|food|meal|calor/i.test(x.tracker));
+    return e.length === 2 ? "" : `expected two food entries (one per food), got ${e.length}: ${c.made.entries.map((x) => `${x.tracker} ${JSON.stringify(x.values).slice(0, 80)}`).join(" | ") || "none"}`;
+  } },
+
+  // ── Writing things down ───────────────────────────────────────────────────
+  { group: "capture", say: "note: the wifi password for the cabin is on the fridge", expect: (c) => (c.made.notes.length === 1 && has(c.made.notes[0].content ?? c.made.notes[0].text ?? c.made.notes[0].title, "cabin") ? (c.made.tasks.length ? `it also made a task: ${names(c.made.tasks)}` : "") : `expected one note about the cabin, got ${c.made.notes.length} note(s), ${c.made.tasks.length} task(s), ${c.made.journal.length} journal`) },
+  { group: "capture", say: "journal: long day, but the presentation went really well and I feel proud", expect: (c) => {
+    const j = c.made.journal;
+    if (j.length !== 1) return `expected one journal entry, got ${j.length}`;
+    if (!has(j[0].content, "presentation")) return `the entry does not hold my words: ${String(j[0].content).slice(0, 100)}`;
+    return /neutral/i.test(String(j[0].mood)) ? `the mood is ${j[0].mood} for an entry that says "proud"` : "";
+  } },
+  { group: "capture", say: "remember that my locker combination is 14-32-8", expect: (c) => (c.made.tasks.length || c.made.events.length ? `it made ${c.made.tasks.length} task(s) / ${c.made.events.length} event(s) for a thing to remember` : (c.made.memories.length + c.made.notes.length === 1 ? "" : `expected it kept once, got ${c.made.memories.length} memor(ies) and ${c.made.notes.length} note(s)`)) },
+
+  // ── Goals and habits, said loosely ────────────────────────────────────────
+  { group: "plans", say: "I want to save $5,000 for a vacation by June", expect: (c) => {
+    const g = c.made.goals;
+    if (g.length !== 1) return `expected one goal, got ${g.length}; expenses: ${c.made.expenses.length}, tasks: ${names(c.made.tasks)}`;
+    return money(g[0].target ?? g[0].targetValue ?? g[0].targetAmount, 5000) ? "" : `the goal's target is ${g[0].target ?? g[0].targetValue ?? g[0].targetAmount}, expected 5000`;
+  } },
+  { group: "plans", say: "start a habit of reading 20 minutes every night", expect: (c) => (c.made.habits.length === 1 && has(c.made.habits[0].name ?? c.made.habits[0].title, "read") ? "" : `expected one reading habit, got ${c.made.habits.length} (${names(c.made.habits, "name")}); tasks: ${names(c.made.tasks)}`) },
+  { group: "plans", say: "I meditated today", then: "I meditated today", expect: (c) => {
+    const e = c.now.entries.filter((x) => /meditat/i.test(x.tracker) && day(x.timestamp) >= YESTERDAY);
+    return e.length <= 1 ? "" : `saying it twice logged it ${e.length} times`;
+  } },
 ];
 
 (async () => {
