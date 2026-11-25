@@ -16,7 +16,7 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 640. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 641. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -262,7 +262,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
 | `POST /api/autopay/reconcile` | **no** | **0** | 1 |
-| `POST /api/autopay/run` | **no** | 1 | 7 |
+| `POST /api/autopay/run` | **no** | 1 | 8 |
 
 ### Bills & obligations
 
@@ -401,9 +401,9 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/calendar/timeline` | yes | 8 | 6 |
 | `GET /api/date-rules` | yes | 2 | **0** |
 | `GET /api/date-rules/:system/:id` | **no** | **0** | **0** |
-| `GET /api/events` | yes | 7 | 5 |
+| `GET /api/events` | yes | 7 | 6 |
 | `POST /api/events` | yes | 3 | 10 |
-| `DELETE /api/events/:id` | yes | 2 | 7 |
+| `DELETE /api/events/:id` | yes | 2 | 8 |
 | `GET /api/events/:id` | yes | 1 | 1 |
 | `PATCH /api/events/:id` | yes | 2 | 1 |
 | `POST /api/events/:id/occurrence` | yes | 2 | 1 |
@@ -468,9 +468,9 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `PATCH /api/tracker-entries/:entryId` | yes | 1 | 1 |
 | `POST /api/tracker-entries/:entryId/enrich` | **no** | **0** | **0** |
 | `POST /api/tracker-entries/:entryId/rescale` | yes | **0** | **0** |
-| `GET /api/trackers` | yes | 12 | 20 |
-| `POST /api/trackers` | yes | 2 | 11 |
-| `DELETE /api/trackers/:id` | yes | 1 | 11 |
+| `GET /api/trackers` | yes | 12 | 21 |
+| `POST /api/trackers` | yes | 2 | 12 |
+| `DELETE /api/trackers/:id` | yes | 1 | 12 |
 | `GET /api/trackers/:id` | yes | 1 | 3 |
 | `PATCH /api/trackers/:id` | yes | 1 | 2 |
 | `POST /api/trackers/:id/entries` | yes | 2 | 5 |
