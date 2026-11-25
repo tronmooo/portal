@@ -198,6 +198,37 @@ async function firstName(): Promise<string> {
   return String(self?.name || "").trim().split(/\s+/)[0] || "";
 }
 
+// ── A structured answer, asked for at most twice ────────────────────────────
+
+/** A first attempt slower than this is not followed by a second (the function has a time budget). */
+const RETRY_WITHIN_MS = 45_000;
+
+/**
+ * Ask for a structured answer and parse it. A model call that fails, or an
+ * answer the parser cannot use (cut off, wrapped in prose), is asked for ONE
+ * more time before the person is shown an error — on production one insights
+ * call in three runs came back unusable and the next was fine (2026-11-25).
+ * Never more than twice, and never an invented result: two bad answers are
+ * an error with a retry (WA4).
+ */
+async function askParsed<T>(label: string, system: string, user: string, maxTokens: number, parse: (raw: string) => T | null): Promise<{ value: T } | { failed: "model" | "unusable" }> {
+  let failed: "model" | "unusable" = "model";
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const started = Date.now();
+    try {
+      const value = parse(await askModel(system, user, maxTokens));
+      if (value !== null) return { value };
+      failed = "unusable";
+      console.warn(`[workspace-intel] ${label}: unusable answer (attempt ${attempt})`);
+    } catch (err) {
+      failed = "model";
+      console.warn(`[workspace-intel] ${label} failed (attempt ${attempt}):`, (err as Error)?.message);
+    }
+    if (Date.now() - started > RETRY_WITHIN_MS) break;
+  }
+  return { failed };
+}
+
 // ── Notes ────────────────────────────────────────────────────────────────────
 
 const NOTES_CHAT =
@@ -261,11 +292,9 @@ export async function notesInsights(): Promise<NoteInsightsAnswer | AssistFailur
   const notes = await notesBlock();
   if (notes.refs.length < 2) return fail(400, "Insights need at least two notes to compare.");
   const portol = access.portol ? await portolBlock() : "";
-  let raw = "";
-  try { raw = await askModel(NOTES_INSIGHTS, `NOTES:\n${notes.block}${portol ? `\n\nOTHER RECORDS (allowed):\n${portol}` : ""}`, 2500); }
-  catch (err) { console.warn("[workspace-intel] notes insights failed:", (err as Error)?.message); return fail(502, MODEL_FAILED); }
-  const insights = parseNoteInsights(raw, notes.refs);
-  if (!insights) return fail(502, "The AI did not return usable insights. Please try again.");
+  const out = await askParsed("notes insights", NOTES_INSIGHTS, `NOTES:\n${notes.block}${portol ? `\n\nOTHER RECORDS (allowed):\n${portol}` : ""}`, 2500, (raw) => parseNoteInsights(raw, notes.refs));
+  if ("failed" in out) return fail(502, out.failed === "model" ? MODEL_FAILED : "The AI did not return usable insights. Please try again.");
+  const insights = out.value;
   return { ok: true, insights, notesRead: notes.refs.length, notesTotal: notes.total };
 }
 
@@ -290,11 +319,9 @@ export async function notesCategorize(): Promise<CategorizeAnswer | AssistFailur
     parts.push(`### [${notes.refs[i].ref}] ${n.title || "Untitled"}\n${String(n.content).slice(0, 700)}`);
   });
   if (open.length === 0) return { ok: true, suggestions: [], uncategorized: 0 };
-  let raw = "";
-  try { raw = await askModel(NOTES_CATEGORIZE, `EXISTING CATEGORIES: ${existing.join(", ") || "(none yet)"}\n\nNOTES WITHOUT A CATEGORY:\n${parts.join("\n\n")}`, 1500); }
-  catch (err) { console.warn("[workspace-intel] categorize failed:", (err as Error)?.message); return fail(502, MODEL_FAILED); }
-  const suggestions = parseCategorySuggestions(raw, open);
-  if (!suggestions) return fail(502, "The AI did not return usable categories. Please try again.");
+  const out = await askParsed("categorize", NOTES_CATEGORIZE, `EXISTING CATEGORIES: ${existing.join(", ") || "(none yet)"}\n\nNOTES WITHOUT A CATEGORY:\n${parts.join("\n\n")}`, 1500, (raw) => parseCategorySuggestions(raw, open));
+  if ("failed" in out) return fail(502, out.failed === "model" ? MODEL_FAILED : "The AI did not return usable categories. Please try again.");
+  const suggestions = out.value;
   // An existing category keeps its own spelling ("work" → "Work").
   const canon = new Map(existing.map((c) => [c.toLowerCase(), c]));
   return { ok: true, suggestions: suggestions.map((s) => ({ ...s, category: canon.get(s.category.toLowerCase()) ?? s.category })), uncategorized: open.length };
@@ -405,13 +432,11 @@ export async function journalInsights(input: { focus?: unknown }): Promise<Journ
   const journal = await journalBlock();
   if (journal.read < MIN_INSIGHT_ENTRIES) return fail(400, `Write at least ${MIN_INSIGHT_ENTRIES} entries first — there is not enough yet to see a pattern.`);
   const wellness = access.wellness ? await wellnessBlock() : "";
-  let raw = "";
-  try {
-    raw = await askModel(journalInsightSystem(focus),
-      `Today is ${today()}.\n\nENTRIES (newest first):\n${journal.block}${wellness ? `\n\nTRACKER READINGS BY DAY (allowed):\n${wellness}` : ""}`, 2500);
-  } catch (err) { console.warn("[workspace-intel] journal insights failed:", (err as Error)?.message); return fail(502, MODEL_FAILED); }
-  const insights = parseJournalInsights(raw, focus, journal.days);
-  if (!insights) return fail(502, "The AI did not return usable insights. Please try again.");
+  const out = await askParsed(`journal ${focus}`, journalInsightSystem(focus),
+    `Today is ${today()}.\n\nENTRIES (newest first):\n${journal.block}${wellness ? `\n\nTRACKER READINGS BY DAY (allowed):\n${wellness}` : ""}`, 2500,
+    (raw) => parseJournalInsights(raw, focus, journal.days));
+  if ("failed" in out) return fail(502, out.failed === "model" ? MODEL_FAILED : "The AI did not return usable insights. Please try again.");
+  const insights = out.value;
   return { ok: true, insights, entriesRead: journal.read, entriesTotal: journal.total, usedWellness: !!wellness };
 }
 
@@ -428,11 +453,10 @@ export async function journalPrompts(): Promise<PromptsAnswer | AssistFailure> {
   if (!(await readAiAccess()).journal.pastEntries) return fail(403, "Personal prompts read your past entries, which is switched off in AI access.");
   const journal = await journalBlock();
   if (journal.read === 0) return fail(400, "Personal prompts come from what you have written. Write a first entry, or use one of the prompts above.");
-  let raw = "";
-  try { raw = await askModel(PROMPTS, `Today is ${today()}.\n\nRECENT ENTRIES (newest first):\n${journal.block.slice(0, 30_000)}`, 700); }
-  catch (err) { console.warn("[workspace-intel] prompts failed:", (err as Error)?.message); return fail(502, MODEL_FAILED); }
-  const prompts = parseJournalPrompts(raw);
-  if (!prompts || prompts.length === 0) return fail(502, "The AI did not return usable prompts. Please try again.");
+  const out = await askParsed("prompts", PROMPTS, `Today is ${today()}.\n\nRECENT ENTRIES (newest first):\n${journal.block.slice(0, 30_000)}`, 700,
+    (raw) => { const p = parseJournalPrompts(raw); return p && p.length > 0 ? p : null; });
+  if ("failed" in out) return fail(502, out.failed === "model" ? MODEL_FAILED : "The AI did not return usable prompts. Please try again.");
+  const prompts = out.value;
   return { ok: true, prompts, entriesRead: journal.read };
 }
 
@@ -456,10 +480,8 @@ export async function reviewDocument(input: { html?: string; title?: string }): 
     category: "missing", quote: `[Missing: ${b}]`, issue: `This blank is still to be filled in: ${b}.`, suggestion: "Type it in, or add it to your profile so the AI Writer can fill it.",
   }));
   if (!hasModel()) return fail(503, NO_MODEL);
-  let raw = "";
-  try { raw = await askModel(REVIEW, `DOCUMENT${input.title ? ` ("${compact(input.title, 120)}")` : ""}:\n${text.slice(0, 60_000)}`, 3500); }
-  catch (err) { console.warn("[workspace-intel] review failed:", (err as Error)?.message); return fail(502, MODEL_FAILED); }
-  const found = parseReviewFindings(raw, text);
-  if (!found) return fail(502, "The AI did not return a usable review. Nothing was changed — please try again.");
+  const out = await askParsed("review", REVIEW, `DOCUMENT${input.title ? ` ("${compact(input.title, 120)}")` : ""}:\n${text.slice(0, 60_000)}`, 3500, (raw) => parseReviewFindings(raw, text));
+  if ("failed" in out) return fail(502, out.failed === "model" ? MODEL_FAILED : "The AI did not return a usable review. Nothing was changed — please try again.");
+  const found = out.value;
   return { ok: true, findings: [...blanks, ...found.filter((f) => !/\[Missing:/i.test(f.quote))], words: text.split(/\s+/).filter(Boolean).length };
 }

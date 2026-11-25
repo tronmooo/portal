@@ -45,6 +45,8 @@ vi.mock("../server/storage", () => {
 
 let modelReply: string | Error = "";
 let modelCalls: Row[] = [];
+/** Replies given in order before `modelReply` takes over (a bad first answer, then a good one). */
+let modelQueue: Array<string | Error> = [];
 /** Something that happens while the model is writing its reply (the person taps a button meanwhile). */
 let whileModelWrites: (() => Promise<void>) | null = null;
 vi.mock("@anthropic-ai/sdk", () => ({
@@ -52,8 +54,9 @@ vi.mock("@anthropic-ai/sdk", () => ({
     messages = { create: async (req: Row) => {
       modelCalls.push(req);
       if (whileModelWrites) { const act = whileModelWrites; whileModelWrites = null; await act(); }
-      if (modelReply instanceof Error) throw modelReply;
-      return { content: [{ type: "text", text: modelReply }], stop_reason: "end_turn" };
+      const reply = modelQueue.length ? modelQueue.shift()! : modelReply;
+      if (reply instanceof Error) throw reply;
+      return { content: [{ type: "text", text: reply }], stop_reason: "end_turn" };
     } };
   },
 }));
@@ -80,7 +83,7 @@ beforeEach(async () => {
     entry("j3", daysAgo(30), "Worried about the Lisbon budget again."),
     entry("j-bob", daysAgo(3), "Bob's own entry BOBSECRET.", { linkedProfiles: ["p-bob"] }),
   ];
-  modelReply = "An answer."; modelCalls = [];
+  modelReply = "An answer."; modelCalls = []; modelQueue = [];
   intel = await import("../server/workspace-intel");
   ai = await import("../server/workspace-ai");
 });
@@ -280,6 +283,34 @@ describe("Journal: the reflection coach", () => {
     expect(ok(await intel.journalPrompts()).prompts).toHaveLength(2);
     db.journal = [];
     expect(await intel.journalPrompts()).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+describe("a structured answer is asked for at most twice", () => {
+  const GOOD = JSON.stringify({ recurring: [{ text: "Lisbon comes up twice.", notes: ["N1", "N3"] }], related: [], unfinished: [], connections: [] });
+
+  it("one unusable answer, or one failed call, is retried once and the person sees the good answer", async () => {
+    modelQueue = ['{"recurring": [{"text": "cut off mid-'];
+    modelReply = GOOD;
+    expect(ok(await intel.notesInsights()).insights.recurring).toHaveLength(1);
+    expect(modelCalls).toHaveLength(2);
+    modelCalls = []; modelQueue = [new Error("overloaded")];
+    expect(ok(await intel.notesInsights()).insights.recurring).toHaveLength(1);
+    expect(modelCalls).toHaveLength(2);
+    // A good first answer is not asked for again.
+    modelCalls = [];
+    ok(await intel.notesInsights());
+    expect(modelCalls).toHaveLength(1);
+  });
+
+  it("two bad answers are an error with a retry — never a third call, never an invented result", async () => {
+    modelReply = "Sorry, I can't produce JSON today.";
+    expect(await intel.notesInsights()).toMatchObject({ ok: false, status: 502, error: expect.stringMatching(/did not return usable insights/) });
+    expect(modelCalls).toHaveLength(2);
+    modelCalls = []; modelReply = new Error("boom");
+    expect(await intel.reviewDocument({ html: "<p>" + "A sentence that is long enough to be reviewed properly. ".repeat(2) + "</p>" })).toMatchObject({ ok: false, status: 502 });
+    expect(modelCalls).toHaveLength(2);
+    noWrites();
   });
 });
 

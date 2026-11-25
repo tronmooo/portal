@@ -774,7 +774,9 @@ observation cites must be a day that has an entry; a passage a review quotes
 must be in the document — otherwise the reference (and an item left with
 nothing to stand on) is dropped. Open check-list items and a document's blanks
 are COUNTED from the text, never asked of the model. A failed or unusable
-answer is an error with a retry, never an invented result.
+answer is asked for ONE more time (`askParsed`; on production one insights
+call in three runs came back unusable and the next was fine), then it is an
+error with a retry — never a third call, never an invented result.
 **WA5. The reflection AI is a companion, not a therapist.** Its instructions
 and the line shown with every answer (`REFLECTION_BOUNDARY`) say it does not
 diagnose or treat and point to emergency services / a crisis line. It speaks
