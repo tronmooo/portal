@@ -1,4 +1,5 @@
 import { changedFieldsOnly } from "@shared/field-patch";
+import { bareDateOf } from "@shared/date-rules";
 import { GridDetailHost } from "@/components/calendar/GridDetailHost";
 import { liveTimelineItem } from "@/lib/calendar-live-item";
 import { formatApiError } from "@/lib/formatError";
@@ -1296,6 +1297,19 @@ interface CalendarViewProps {
   highlightSourceId?: string | null;
 }
 
+/**
+ * The day a `?date=YYYY-MM-DD` link asked the calendar to open on (in the hash
+ * query the app routes with, or the page's own query), else null.
+ */
+export function readCalendarDateParam(): string | null {
+  try {
+    const hash = window.location.hash || "";
+    const fromHash = hash.includes("?") ? new URLSearchParams(hash.slice(hash.indexOf("?") + 1)).get("date") : null;
+    const v = fromHash || new URL(window.location.href).searchParams.get("date");
+    return v && /^\d{4}-\d{2}-\d{2}$/.test(v) && bareDateOf(v) === v ? v : null;
+  } catch { return null; }
+}
+
 export default function CalendarView({ externalFilterIds, externalFilterMode, highlightSourceId }: CalendarViewProps = {}) {
   const [, setLocation] = useLocation();
   const today = new Date();
@@ -1306,10 +1320,14 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
   // dots; the day panel under the grid now carries the readable titles.
   const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">("month");
   const [managerOpen, setManagerOpen] = useState(false);
-  const [viewMonth, setViewMonth] = useState(today.getMonth());
-  const [viewYear, setViewYear] = useState(today.getFullYear());
-  const [viewDate, setViewDate] = useState(today); // for week/day navigation
-  const [selectedDate, setSelectedDate] = useState(todayStr);
+  // `?date=YYYY-MM-DD` opens the calendar on that day (a document's "On your
+  // calendar" link lands on its expiration). Read once; it only sets the view.
+  const [linkedDay] = useState(() => readCalendarDateParam());
+  const linkedDate = linkedDay ? new Date(Number(linkedDay.slice(0, 4)), Number(linkedDay.slice(5, 7)) - 1, Number(linkedDay.slice(8, 10))) : null;
+  const [viewMonth, setViewMonth] = useState((linkedDate ?? today).getMonth());
+  const [viewYear, setViewYear] = useState((linkedDate ?? today).getFullYear());
+  const [viewDate, setViewDate] = useState(linkedDate ?? today); // for week/day navigation
+  const [selectedDate, setSelectedDate] = useState(linkedDay ?? todayStr);
   // The month view's agenda panel, so "+N more" can scroll it into view.
   const agendaRef = useRef<HTMLElement>(null);
   const [addOpen, setAddOpen] = useState(false);

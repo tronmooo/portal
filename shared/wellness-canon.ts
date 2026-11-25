@@ -341,6 +341,32 @@ export interface CanonValidation {
   error?: string;
 }
 
+// ── Vehicle travel is not exercise ──────────────────────────────────────────
+// QA 2026-11-24: a 140-mile DRIVE logged in a "Drive" / "Mileage" tracker
+// carried a `miles` field, so every "is this a workout?" check that accepted a
+// distance-shaped tracker counted it — the Activity Summary added 140 miles
+// to the workout distance and Health Trends read "Distance 140 → 1.5 mi".
+// Miles covered in a car, on a bus or by plane are travel, never movement.
+
+/** Words that name travel by vehicle. */
+const VEHICLE_TRAVEL_RE =
+  /\b(?:driv(?:e|es|en|ing)|drove|commut\w*|cars?|vehicles?|trucks?|suv|automobiles?|motorcycles?|motorbikes?|odometer|road\s*trips?|fuel|gas(?:oline)?|mpg|uber|lyft|taxis?|rideshare|flights?|flew|transport\w*|mileage)\b/i;
+
+/** Modes of moving under your own power: "Bike commute" is still a ride. */
+const HUMAN_POWERED_RE =
+  /\b(?:walk|run|jog|hik|cycl|bik|bicycl|swim|row|ski|skat|treadmill|elliptic|marathon|peloton|stroll|sprint)/i;
+
+/**
+ * Is this tracker a record of travel by vehicle (a drive, a commute by car,
+ * a car's mileage) rather than of the person's own movement? Its distance is
+ * never exercise: not a workout, not the Distance measurement, not a trend.
+ */
+export function isVehicleTravelTracker(t: { name?: string | null; category?: string | null } | null | undefined): boolean {
+  if (!t) return false;
+  const hay = `${t.name || ""} ${t.category || ""}`;
+  return VEHICLE_TRAVEL_RE.test(hay) && !HUMAN_POWERED_RE.test(hay);
+}
+
 /**
  * Is this a value the metric can physically take? Rejects the class of entry
  * that produced "HbA1c 179 %" and "BMI 47 next to 26.4": a number that belongs

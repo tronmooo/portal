@@ -21,6 +21,7 @@ import {
   enrichStrengthEntry, mergeEnrichments, applyEnrichmentToValues,
   type Enrichment, type FitnessEnrichContext,
 } from "./estimation-engine";
+import { resolveCanonicalActivity } from "./canonical-activity";
 
 const sameValue = (a: unknown, b: unknown): boolean => {
   if (a === b) return true;
@@ -58,15 +59,19 @@ function enrichAgain(
  * exact the pace IS their quotient, so a copy the user did not touch follows
  * it rather than contradict it in the same row.
  */
+function paceOrSpeedFor(key: string, e: Enrichment): number | undefined {
+  if (key.startsWith("_") || key === "paceMinutesPerMile" || key === "speedMph") return undefined;
+  const name = key.toLowerCase().replace(/[^a-z]/g, "");
+  return /^(avg|average)?pace(minpermile|minutespermile)?$/.test(name) ? e.calculated.paceMinutesPerMile?.value
+    : /^(avg|average)?speed(mph)?$|^mph$/.test(name) ? e.calculated.speedMph?.value
+    : undefined;
+}
+
 function followPaceAndSpeed(values: Record<string, any>, e: Enrichment, changed: Set<string>): void {
   const pace = e.calculated.paceMinutesPerMile?.value;
-  const speed = e.calculated.speedMph?.value;
   for (const k of Object.keys(values)) {
-    if (k.startsWith("_") || changed.has(k) || k === "paceMinutesPerMile" || k === "speedMph") continue;
-    const name = k.toLowerCase().replace(/[^a-z]/g, "");
-    const target = /^(avg|average)?pace(minpermile|minutespermile)?$/.test(name) ? pace
-      : /^(avg|average)?speed(mph)?$|^mph$/.test(name) ? speed
-      : undefined;
+    if (changed.has(k)) continue;
+    const target = paceOrSpeedFor(k, e);
     if (target == null || !Number.isFinite(target)) continue;
     const v = values[k];
     if (typeof v === "number") values[k] = target;
@@ -138,4 +143,72 @@ export function rederiveEditedEntry(input: RederiveInput): RederiveResult | null
   applyEnrichmentToValues(values, next);
   followPaceAndSpeed(values, next, changed);
   return { values, enrichment: next };
+}
+
+// ── A NEW entry derives the same figures (QA, 2026-11-24) ────────────────────
+//
+// Chat logging runs the estimation engine before it writes; the Trackers
+// page's Add Entry form posted straight to the route, so a 2-mile run in 20
+// minutes was stored as distance and duration only — no pace, no speed, and
+// no provenance, so a later edit had nothing to re-derive either. Both
+// storages' logEntry ask this function when the caller brought no provenance
+// of its own.
+
+export interface NewEntryInput {
+  trackerName?: string | null;
+  /** The tracker's unit (read for the primary field when it names none). */
+  trackerUnit?: string | null;
+  /** The values as they will be stored (already unit-normalized and gated). */
+  values: Record<string, any>;
+  /** The entry OWNER's body and history, and the tracker's fields. */
+  ctx?: FitnessEnrichContext;
+}
+
+const MILES_UNIT = /^(mi|mile|miles)$/i;
+const MINUTES_UNIT = /^(min|mins|minute|minutes)$/i;
+const MEASURED_KEYS = ["distance", "miles", "distanceMiles", "distanceKm", "km", "kilometers", "duration", "minutes", "durationMinutes", "steps"];
+
+/**
+ * The values and provenance a new walk / run / ride is stored with, or null
+ * when the engine has nothing to add (another kind of tracker, nothing
+ * measured, or units the cardio engine does not read). Stated values are never
+ * replaced; the tracker's own pace / speed fields ("pace", "avg_speed") are
+ * filled from the same calculation when they were left blank.
+ */
+export function deriveNewEntry(input: NewEntryInput): RederiveResult | null {
+  const type = resolveCanonicalActivity(String(input.trackerName || ""))?.type;
+  if (type !== "walking" && type !== "running" && type !== "cycling") return null;
+  const values = input.values || {};
+  const fields = (input.ctx?.fields || []) as Array<{ name: string; unit?: string | null; isPrimary?: boolean; type?: string }>;
+  const unitOf = (name: string): string => {
+    const f = fields.find((x) => x?.name === name);
+    return String((f?.unit || (f?.isPrimary ? input.trackerUnit : "")) || "").trim();
+  };
+  const num = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN);
+  // Only a measured outing: an entry with nothing measured (a habit tick) is
+  // never a reason to invent a typical run.
+  if (!MEASURED_KEYS.some((k) => Number.isFinite(num(values[k])) && num(values[k]) > 0)) return null;
+  // The cardio engine reads distance in miles and duration in minutes.
+  const du = unitOf("distance");
+  if (values.distance != null && du && !MILES_UNIT.test(du)) return null;
+  const tu = unitOf("duration");
+  if (values.duration != null && tu && !MINUTES_UNIT.test(tu)) return null;
+
+  const explicit: Record<string, any> = {};
+  for (const [k, v] of Object.entries(values)) if (!k.startsWith("_") && v != null && v !== "") explicit[k] = v;
+  const e = enrichWalkRunEntry(type, explicit, input.ctx || {});
+  if (Object.keys(e.calculated).length === 0 && Object.keys(e.estimated).length === 0) return null;
+  const out: Record<string, any> = { ...values };
+  applyEnrichmentToValues(out, e);
+  // The tracker's own pace / speed fields, left blank on the form.
+  for (const f of fields) {
+    if (!f?.name || (out[f.name] != null && out[f.name] !== "")) continue;
+    const target = paceOrSpeedFor(f.name, e);
+    if (target == null || !Number.isFinite(target)) continue;
+    if (f.type === "duration" && target === e.calculated.paceMinutesPerMile?.value) {
+      const secs = Math.round(target * 60);
+      out[f.name] = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+    } else out[f.name] = target;
+  }
+  return { values: out, enrichment: e };
 }

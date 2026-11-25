@@ -157,10 +157,24 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
   let interest: number;
   let fees = Number(input.fees) || 0;
 
+  // Set when a caller's split named interest for a month whose interest the
+  // ledger already holds; that money is principal (L5).
+  let interestWaived = false;
   if (explicitPrincipal || explicitInterest) {
     // The caller (or the model) split it. Honor that, filling in the other half.
     principal = explicitPrincipal ? Number(input.principal) : Math.max(0, cashTowardLoan - Number(input.interest || 0));
     interest = explicitInterest ? Number(input.interest) : Math.max(0, cashTowardLoan - principal);
+    // …except a month's interest, which is charged ONCE whoever splits the
+    // payment (L5). The chat's add_liability_payment passes the schedule's
+    // interest on every call, so a second payment the same month logged the
+    // month's interest again — two "Honda Civic Loan — interest & fees" $129.09
+    // expenses on Nov 20 (QA 2026-11-24, bug 10). The named interest goes to
+    // principal: the money still left, it just cannot be interest twice.
+    if (input.interestAlreadyCharged && interest > 0) {
+      principal += interest;
+      interest = 0;
+      interestWaived = true;
+    }
   } else if (input.paymentType === "extra_principal") {
     // "An extra $100 toward the principal" is principal by definition. The
     // canonical split below charges a period's interest on every payment, so
@@ -185,7 +199,7 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
 
   const monthlyPayment = Number(fields.monthlyPayment) || 0;
   const paymentType: LiabilityPaymentType =
-    input.paymentType || inferPaymentType(amount, balanceBefore, principal, interest, monthlyPayment, explicitPrincipal);
+    input.paymentType || inferPaymentType(amount, balanceBefore, principal, interest, monthlyPayment, explicitPrincipal && !interestWaived);
 
   let newBalance: number;
   let overpayment = 0;
@@ -335,6 +349,50 @@ export async function applyLiabilityPayment(
   liability: any,
   input: LiabilityPaymentInput,
   timezone: string = DEFAULT_TIMEZONE,
+): Promise<LiabilityPaymentResult> {
+  // Two payments on one debt in flight together (a double submit, Auto Pay
+  // and a manual payment, two chat turns) each read the ledger before the
+  // other's row landed, so each charged the month's interest and each logged
+  // an "interest & fees" expense for it (QA 2026-11-24, bug 10). One payment
+  // at a time per liability: the second reads the first's row, and the
+  // liability as the first left it. A lock that cannot be had in time never
+  // blocks the payment — it proceeds as before.
+  const lockName = `liability-payment:${liability?.id}`;
+  const held = await acquirePaymentLock(storage, lockName);
+  try {
+    let current = liability;
+    if (held) {
+      const fresh = await Promise.resolve(storage.getProfile(liability.id)).catch(() => undefined);
+      if (fresh && typeof fresh === "object" && (fresh as any).id === liability.id) current = fresh;
+    }
+    return await applyLiabilityPaymentNow(storage, current, input, timezone);
+  } finally {
+    if (held) await Promise.resolve((storage as any).releaseUserLock(lockName)).catch(() => { /* the ttl frees it */ });
+  }
+}
+
+const PAYMENT_LOCK_TTL_MS = 15_000;
+const PAYMENT_LOCK_WAIT_MS = 5_000;
+
+/** True when this request now holds the lock; false when the storage has none or it timed out. */
+async function acquirePaymentLock(storage: IStorage, name: string): Promise<boolean> {
+  const acquire = (storage as any).acquireUserLock;
+  if (typeof acquire !== "function" || typeof (storage as any).releaseUserLock !== "function") return false;
+  const deadline = Date.now() + PAYMENT_LOCK_WAIT_MS;
+  for (;;) {
+    let got: unknown = false;
+    try { got = await acquire.call(storage, name, PAYMENT_LOCK_TTL_MS); } catch { return false; }
+    if (got === true) return true;
+    if (got !== false || Date.now() > deadline) return false;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+async function applyLiabilityPaymentNow(
+  storage: IStorage,
+  liability: any,
+  input: LiabilityPaymentInput,
+  timezone: string,
 ): Promise<LiabilityPaymentResult> {
   const fields = liability.fields || {};
   const todayISO = getUserToday(timezone);
@@ -772,6 +830,16 @@ export async function closeBillReminderTasksWhere(
   return closed;
 }
 
+/** The live expense carrying `tag` (a payment's join key), or null. Never throws. */
+async function expenseTagged(storage: IStorage, tag: string): Promise<any | null> {
+  try {
+    const rows: any[] = (await storage.getExpenses()) || [];
+    return rows.find((e: any) => !e?.deletedAt && Array.isArray(e?.tags) && e.tags.includes(tag)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function findPaymentWithRetry(storage: IStorage, liabilityId: string, paymentId: string | null | undefined): Promise<any | null> {
   for (let attempt = 0; attempt < 4; attempt++) {
     const payments = await storage.getLiabilityPayments(liabilityId).catch(() => [] as any[]);
@@ -1109,7 +1177,11 @@ export async function payBillOccurrence(
         .then((rows: any) => (Array.isArray(rows) ? rows.map((l: any) => l?.partyProfileId).filter((x: any) => typeof x === "string" && x) : []))
         .catch(() => [] as string[]);
       const owners = Array.from(new Set([(liability as any).parentProfileId || liabilityId, ...parties]));
-      const expense = await storage.createExpense({
+      // One payment, one interest expense: a retry or a replay of this step
+      // for the same payment answers with the row already logged.
+      const costTag = `${DEBT_COST_TAG_PREFIX}${payment?.id}`;
+      const already = payment?.id ? await expenseTagged(storage, costTag) : null;
+      const expense = already ?? await storage.createExpense({
         amount: debtCost,
         category: "debt",
         description: `${liability.name} — interest & fees — ${occurrenceDate}`,
@@ -1118,7 +1190,7 @@ export async function payBillOccurrence(
         // payment-cost:<id> (not payment:<id>): this expense is PART of the
         // payment, so editing its amount must not re-price the payment. The
         // inverse retracts it by this tag.
-        tags: ["loan-interest", `liability:${liabilityId}`, `${DEBT_COST_TAG_PREFIX}${payment?.id}`, ...assumedTags],
+        tags: ["loan-interest", `liability:${liabilityId}`, costTag, ...assumedTags],
       } as any);
       expenseId = expense?.id ?? null;
       steps.push({ step: "expense", ok: true });
@@ -1137,7 +1209,9 @@ export async function payBillOccurrence(
         .then((rows: any) => (Array.isArray(rows) ? rows.map((l: any) => l?.partyProfileId).filter((x: any) => typeof x === "string" && x) : []))
         .catch(() => [] as string[]);
       const owners = Array.from(new Set([(liability as any).parentProfileId || liabilityId, ...parties]));
-      const expense = await storage.createExpense({
+      const payTag = `payment:${payment?.id}`;
+      const already = payment?.id ? await expenseTagged(storage, payTag) : null;
+      const expense = already ?? await storage.createExpense({
         amount,
         // QA 2026-09-18 BUG-11: one rule for the bucket — a bill that services
         // a debt, or is named / typed as a loan payment, is "debt", never
@@ -1150,7 +1224,7 @@ export async function payBillOccurrence(
         linkedProfiles: owners,
         // The payment:<id> tag is the join key unpayBillOccurrence uses to
         // retract this exact expense. Not display metadata — an inverse's key.
-        tags: ["bill-payment", `liability:${liabilityId}`, `payment:${payment?.id}`, ...assumedTags],
+        tags: ["bill-payment", `liability:${liabilityId}`, payTag, ...assumedTags],
       } as any);
       expenseId = expense?.id ?? null;
       steps.push({ step: "expense", ok: true });

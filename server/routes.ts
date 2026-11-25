@@ -3302,8 +3302,13 @@ ${JSON.stringify(ctx, null, 2)}`;
             filledAt: new Date().toISOString(),
             fieldCount: safeFields.length,
             sources: Array.isArray(sources) ? sources.map((s) => ({ id: s.id, kind: s.kind, name: s.name })) : [],
-            // For image forms, preserve the structured fields directly since we can’t overlay them.
-            fields: isImage ? safeFields : undefined,
+            // The filled values themselves, for an image form (no overlay
+            // possible) and a PDF alike: the document page lists them as
+            // label → value (shared/smart-fill-fields). A PDF used to keep
+            // only the count, so its Extracted Data read "4 fields" with none
+            // of them and its Overview said nothing was extracted (QA
+            // 2026-11-24, #17).
+            fields: safeFields.filter((f) => f.value.trim() !== ""),
           },
         },
         linkedProfiles: Array.isArray(linkedProfileIds) ? linkedProfileIds.filter((id) => typeof id === "string") : [],

@@ -23,6 +23,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Moon, Plus, Settings, Sparkles, Utensils } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { readRangeFromLocation, writeRangeToLocation } from "@/lib/wellness-range-url";
 import { isWidgetCardId, lonelyMediumCards, widgetCardId } from "@shared/dashboard-engine";
 import {
   activeWellnessBoard, hiddenWellnessCards, setActiveWellnessBoard, visibleWellnessCards, wellnessCardSize, wellnessCardTitle,
@@ -97,7 +98,10 @@ function useList(endpoint: string, enabled: boolean, mode: string, ids: string[]
 
 export function WellnessDashboard(p: WellnessDashboardProps) {
   const { boards, loaded: prefsLoaded, setBoards } = useWellnessPrefs();
-  const [picked, setPicked] = useState<WellnessRange | null>(null);
+  // The picked range is the view's, kept in the URL (`#/wellness?range=7d`) so a
+  // reload keeps it — never in storage or on the account (H4, Rule 4).
+  const [picked, setPickedState] = useState<WellnessRange | null>(() => readRangeFromLocation());
+  const setPicked = (r: WellnessRange) => { setPickedState(r); writeRangeToLocation(r); };
   const [customize, setCustomize] = useState(false);
   // Cards opened in place for this visit: a hidden card being peeked at, or a quiet one unfolded.
   const [opened, setOpened] = useState<Set<string>>(new Set());
@@ -231,7 +235,7 @@ export function WellnessDashboard(p: WellnessDashboardProps) {
         </button>
       </div>
 
-      {/* The range is a VIEW: it changes what period the cards describe, and is not saved. The default is set in Customize. */}
+      {/* The range is a VIEW: it changes what period the cards describe, and is not saved (only the URL carries it). The default is set in Customize. */}
       <div role="tablist" aria-label="Time range" className="grid grid-cols-5 gap-1 rounded-full border border-border/70 p-1" data-swipe-ignore data-testid="wellness-range">
         {WELLNESS_RANGES.map((r) => (
           <button key={r} type="button" role="tab" aria-selected={r === range} onClick={() => setPicked(r)}

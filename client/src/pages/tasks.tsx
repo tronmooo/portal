@@ -12,7 +12,7 @@ import { accentScope, accentTriple } from "@/components/tracker-detail/theme";
 const TASKS_ACCENT = "262 70% 62%";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
-import { getUserToday, addDays as tzAddDays, formatClockTime } from "@shared/timezone";
+import { getUserToday, addDays as tzAddDays, formatClockTime, normalizeClockTime } from "@shared/timezone";
 import { taskSummaryTiles, openTaskBucket, countOpenDueWithin, type OpenTaskBucket } from "@shared/task-counts";
 import { taskGroupOf, taskGroupItemKind, type TaskGroupKind } from "@shared/task-groups";
 import { isAssetTabProfile, isLiabilityTabProfile } from "@shared/asset-value";
@@ -147,6 +147,14 @@ function TaskDialog({
   const [description, setDescription] = useState(task?.description ?? "");
   const [priority, setPriority] = useState<string>(task?.priority ?? "medium");
   const [dueDate, setDueDate] = useState(task?.dueDate?.slice(0, 10) ?? "");
+  // The clock time is the task's own `dueTime` ("HH:MM", the wall-clock time
+  // on dueDate in the user's zone) — the field chat's create_task/update_task
+  // and the Calendar use. It is never folded into dueDate as a timestamp, so
+  // no zone conversion can move the day. "" = all day. A time needs a day:
+  // with no due date there is no time either.
+  const seededDueTime = normalizeClockTime(task?.dueTime) ?? "";
+  const [dueTime, setDueTime] = useState(seededDueTime);
+  const effectiveDueTime = dueDate ? dueTime : "";
   const [tagsInput, setTagsInput] = useState((task?.tags ?? []).join(", "));
   const [selectedProfileId, setSelectedProfileId] = useState<string>("");
 
@@ -172,6 +180,7 @@ function TaskDialog({
         description: description.trim() || undefined,
         priority,
         dueDate: dueDate || undefined,
+        dueTime: effectiveDueTime || undefined,
         tags: tagsInput.split(",").map(t => t.trim()).filter(Boolean),
         ...(selectedProfileId && !isEdit ? { linkedProfiles: [selectedProfileId] } : {}),
       };
@@ -187,9 +196,13 @@ function TaskDialog({
           description: task!.description ?? "",
           priority: task!.priority ?? "medium",
           dueDate: task!.dueDate?.slice(0, 10) ?? "",
+          // A recurring task's editor edits the SERIES (O2): its time is the
+          // series' time, and only a changed field is sent.
+          dueTime: seededDueTime,
           tags: task!.tags ?? [],
         };
-        const next = { ...body, description: description.trim(), dueDate: dueDate || "" };
+        // A cleared time goes as "" — the route's "make it all-day" clear.
+        const next = { ...body, description: description.trim(), dueDate: dueDate || "", dueTime: effectiveDueTime };
         const patch = changedFieldsOnly(seeded, next);
         if (Object.keys(patch).length === 0) return task;
         const res = await apiRequest("PATCH", `/api/tasks/${task!.id}`, patch);
@@ -211,6 +224,7 @@ function TaskDialog({
           description: description.trim() || null,
           priority,
           dueDate: dueDate || null,
+          dueTime: effectiveDueTime || undefined,
           tags,
         };
         queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) =>
@@ -223,6 +237,7 @@ function TaskDialog({
           description: description.trim() || null,
           priority,
           dueDate: dueDate || null,
+          dueTime: effectiveDueTime || undefined,
           status: "todo",
           completed: false,
           tags,
@@ -250,7 +265,7 @@ function TaskDialog({
       // or description — surface it instead of silently changing their text.
       toast({
         title: isEdit ? `"${title.trim()}" updated` : `"${title.trim()}" created`,
-        description: (data as any)?.warning || (dueDate ? `Due ${formatStoredDate(dueDate)}` : undefined),
+        description: (data as any)?.warning || (dueDate ? `Due ${formatStoredDate(dueDate)}${formatClockTime(effectiveDueTime) ? ` at ${formatClockTime(effectiveDueTime)}` : ""}` : undefined),
       });
     },
     onError: (err: Error, _v, ctx) => {
@@ -260,6 +275,7 @@ function TaskDialog({
   });
 
   const dueInputRef = useRef<HTMLInputElement>(null);
+  const dueTimeInputRef = useRef<HTMLInputElement>(null);
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
@@ -270,6 +286,12 @@ function TaskDialog({
     if (dateInputState(dueInputRef.current) === "partial") {
       toast({ title: "Due date isn't finished", description: UNFINISHED_DATE_MESSAGE, variant: "destructive" });
       dueInputRef.current?.focus();
+      return;
+    }
+    // Same for a half-typed time ("3:__ PM" reads as ""): it is not "all day".
+    if (dueDate && dueTimeInputRef.current?.value === "" && dueTimeInputRef.current?.validity?.badInput) {
+      toast({ title: "Due time isn't finished", description: "Finish the time or clear it for an all-day task.", variant: "destructive" });
+      dueTimeInputRef.current?.focus();
       return;
     }
     // Close dialog immediately for snappy UX — optimistic insert/patch is in onMutate.
@@ -318,8 +340,9 @@ function TaskDialog({
               </Select>
             </div>
             <div className="space-y-1">
-              <Label>Due Date</Label>
+              <Label htmlFor="task-due-date">Due Date</Label>
               <Input
+                id="task-due-date"
                 ref={dueInputRef}
                 type="date"
                 value={dueDate}
@@ -335,6 +358,32 @@ function TaskDialog({
                 </p>
               )}
             </div>
+          </div>
+          <div className="space-y-1">
+            {/* Optional. Empty = all day. Writes the task's `dueTime`, the
+                same field chat sets "for 3 PM" and the Calendar places by. */}
+            <Label htmlFor="task-due-time">Due Time</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="task-due-time"
+                ref={dueTimeInputRef}
+                type="time"
+                value={effectiveDueTime}
+                onChange={e => setDueTime(e.target.value)}
+                disabled={!dueDate}
+                aria-describedby="task-due-time-hint"
+                className="flex-1"
+                data-testid="input-task-due-time"
+              />
+              {effectiveDueTime && (
+                <Button type="button" variant="ghost" size="sm" onClick={() => setDueTime("")} data-testid="button-task-clear-time">
+                  All day
+                </Button>
+              )}
+            </div>
+            <p id="task-due-time-hint" className="text-xs text-muted-foreground">
+              {!dueDate ? "Set a due date to add a time." : effectiveDueTime ? `At ${formatClockTime(effectiveDueTime)}` : "All day"}
+            </p>
           </div>
           <div className="space-y-1">
             <Label>Tags</Label>

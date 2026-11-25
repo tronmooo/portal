@@ -187,7 +187,7 @@ import {
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
 import { calorieContextForOwner, caloriesForStoredEntry, type CalorieContext } from "@shared/fitness-metrics";
-import { rederiveEditedEntry } from "@shared/entry-rederive";
+import { rederiveEditedEntry, deriveNewEntry } from "@shared/entry-rederive";
 import { derivePersonalMetrics, parseHeightToCm } from "@shared/estimation-engine";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
@@ -3656,6 +3656,41 @@ export class SupabaseStorage implements IStorage {
       values = guard.values;
     }
 
+    // A door that brought no provenance (the Trackers page's Add Entry form,
+    // the quick-log chips) derives pace / speed / steps the way the chat does,
+    // from the OWNER's body and history (shared/entry-rederive). The habit
+    // mirror's tick is left as it is.
+    const ownerCalCtx = await this.ownerCalorieContext(tracker, (data as any).profileId);
+    let derivedEnrichment: any = enrichmentMeta;
+    if (!enrichmentMeta && (data as any).__skipDedupe !== true) {
+      const ownerId = (data as any).profileId || (tracker.linkedProfiles || [])[0];
+      let heightCm: number | null = null;
+      try {
+        const owner: any = ownerId ? await this.getProfile(ownerId) : undefined;
+        const pf = owner?.fields || {};
+        heightCm = parseHeightToCm(pf.height ?? pf.heightCm ?? pf.height_cm ?? pf.heightInches);
+      } catch { /* a population-average stride is used instead */ }
+      const history = (tracker.entries || [])
+        .filter((e: any) => !e.profileId || !ownerId || e.profileId === ownerId)
+        .slice(0, 60);
+      const derived = deriveNewEntry({
+        trackerName: tracker.name,
+        trackerUnit: (tracker as any).unit,
+        values,
+        ctx: {
+          heightCm,
+          weightKg: ownerCalCtx.bodyWeightKg ?? null,
+          ageYears: ownerCalCtx.ageYears ?? null,
+          sex: ownerCalCtx.sex ?? null,
+          ownerLabel: ownerCalCtx.ownerLabel ?? null,
+          personal: derivePersonalMetrics(history),
+          category: tracker.category,
+          fields: tracker.fields as any,
+        },
+      });
+      if (derived) { values = derived.values; derivedEnrichment = derived.enrichment; }
+    }
+
     // W4-4: honor an explicit entry timestamp when the caller supplies one
     // (already parsed to ISO upstream); otherwise stamp NOW().
     const ts = data.timestamp || new Date().toISOString();
@@ -3720,12 +3755,12 @@ export class SupabaseStorage implements IStorage {
     const computed = {
       ...computeSecondaryData(
         tracker.name, tracker.category, values,
-        await this.ownerCalorieContext(tracker, (data as any).profileId),
+        ownerCalCtx,
         tracker.fields,
-        enrichmentMeta as any,
+        derivedEnrichment as any,
       ),
       validated,
-      ...(enrichmentMeta ? { enrichment: enrichmentMeta } : {}),
+      ...(derivedEnrichment ? { enrichment: derivedEnrichment } : {}),
     };
     const id = randomUUID();
     // AUTHORITATIVE WRITE + READ-BACK (production audit 2026-07-29, blocker #2).

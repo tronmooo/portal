@@ -1403,7 +1403,21 @@ function ExpandedDetailView({
 
 // ── AddEntryDialog ─────────────────────────────────────────────────────────────
 
-function AddEntryDialog({
+/** The field an empty entry is asked for by name: the tracker's primary field
+ *  (distance on a run), else its first field. */
+function requiredEntryField(tracker: Tracker): Tracker["fields"][number] | undefined {
+  const fields = tracker.fields || [];
+  const primaryName = (fields.find((f: any) => f?.isPrimary) as any)?.name
+    ?? classifyTrackerPresentation(tracker as any).primaryField;
+  return fields.find((f) => f.name === primaryName) ?? fields[0];
+}
+
+/** The id the field's <label htmlFor> names, so each input has its label
+ *  (and unit) as its accessible name. */
+const entryInputId = (trackerId: string, fieldName: string) =>
+  `entry-${trackerId}-${fieldName}`.replace(/[^A-Za-z0-9_-]/g, "_");
+
+export function AddEntryDialog({
   tracker,
   open,
   onOpenChange,
@@ -1415,6 +1429,12 @@ function AddEntryDialog({
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [values, setValues] = useState<Record<string, any>>({});
+  // An empty submit names the field it needs, beside that field, instead of
+  // a toast that only says "Failed to log entry" (QA, 2026-11-24).
+  const [missingMessage, setMissingMessage] = useState<string | null>(null);
+  const requiredField = requiredEntryField(tracker);
+  const fieldLabelWithUnit = (f: Tracker["fields"][number]) =>
+    `${trackerFieldLabel(f)}${(f.unit || tracker.unit) ? ` (${f.unit || tracker.unit})` : ""}`;
   const [notes, setNotes] = useState("");
   // Ad-hoc fields the user adds that aren't part of the tracker's schema — same
   // "add any field" power the per-entry editor has.
@@ -1518,6 +1538,7 @@ function AddEntryDialog({
       setCustomFields({});
       setNewFieldName("");
       setNewFieldValue("");
+      setMissingMessage(null);
       onOpenChange(false);
       toast({ title: "Entry logged", description: `Added entry to ${tracker.name}` });
     },
@@ -1538,6 +1559,7 @@ function AddEntryDialog({
 
   const handleClose = () => {
     setValues({});
+    setMissingMessage(null);
     setNotes("");
     setCustomFields({});
     setNewFieldName("");
@@ -1636,19 +1658,29 @@ function AddEntryDialog({
               <p className="text-[11px] text-muted-foreground mt-1">One tap to log · or fill the form below for details.</p>
             </div>
           )}
-          {tracker.fields.map((f) => (
+          {tracker.fields.map((f) => {
+            const inputId = entryInputId(tracker.id, f.name);
+            const flagged = !!missingMessage && requiredField?.name === f.name;
+            const errorId = `${inputId}-error`;
+            const a11y = {
+              id: inputId,
+              "aria-invalid": flagged || undefined,
+              "aria-describedby": flagged ? errorId : undefined,
+            };
+            const setValue = (v: any) => { setMissingMessage(null); setValues((p) => ({ ...p, [f.name]: v })); };
+            return (
             <div key={f.name}>
-              <Label className="text-xs font-medium text-muted-foreground">
-                {trackerFieldLabel(f)}
-                {(f.unit || tracker.unit) ? ` (${f.unit || tracker.unit})` : ""}
+              <Label htmlFor={f.type === "boolean" ? undefined : inputId} className="text-xs font-medium text-muted-foreground">
+                {fieldLabelWithUnit(f)}
               </Label>
               {f.type === "number" && (
                 <Input
+                  {...a11y}
                   type="number"
                   min="0"
                   step="any"
                   value={values[f.name] ?? ""}
-                  onChange={(e) => setValues((p) => ({ ...p, [f.name]: e.target.value }))}
+                  onChange={(e) => setValue(e.target.value)}
                   onKeyDown={(e) => { if (['e','E','+','-'].includes(e.key)) e.preventDefault(); }}
                   placeholder={`Enter ${trackerFieldLabel(f).toLowerCase()}`}
                   className="mt-1"
@@ -1657,9 +1689,10 @@ function AddEntryDialog({
               )}
               {f.type === "text" && (
                 <Input
+                  {...a11y}
                   type="text"
                   value={values[f.name] ?? ""}
-                  onChange={(e) => setValues((p) => ({ ...p, [f.name]: e.target.value }))}
+                  onChange={(e) => setValue(e.target.value)}
                   placeholder={`Enter ${trackerFieldLabel(f).toLowerCase()}`}
                   className="mt-1"
                   data-testid={`input-entry-${f.name}`}
@@ -1670,7 +1703,7 @@ function AddEntryDialog({
                   <Checkbox
                     id={`check-${f.name}`}
                     checked={!!values[f.name]}
-                    onCheckedChange={(v) => setValues((p) => ({ ...p, [f.name]: v }))}
+                    onCheckedChange={(v) => setValue(v)}
                     data-testid={`checkbox-entry-${f.name}`}
                   />
                   <label htmlFor={`check-${f.name}`} className="text-sm">
@@ -1681,9 +1714,9 @@ function AddEntryDialog({
               {f.type === "select" && f.options && (
                 <Select
                   value={values[f.name] ?? ""}
-                  onValueChange={(v) => setValues((p) => ({ ...p, [f.name]: v }))}
+                  onValueChange={(v) => setValue(v)}
                 >
-                  <SelectTrigger className="mt-1" data-testid={`select-entry-${f.name}`}>
+                  <SelectTrigger {...a11y} className="mt-1" data-testid={`select-entry-${f.name}`}>
                     <SelectValue placeholder={`Select ${trackerFieldLabel(f).toLowerCase()}`} />
                   </SelectTrigger>
                   <SelectContent>
@@ -1697,16 +1730,26 @@ function AddEntryDialog({
               )}
               {f.type === "duration" && (
                 <Input
+                  {...a11y}
                   type="text"
                   value={values[f.name] ?? ""}
-                  onChange={(e) => setValues((p) => ({ ...p, [f.name]: e.target.value }))}
+                  onChange={(e) => setValue(e.target.value)}
                   placeholder="e.g. 1:30:00"
                   className="mt-1"
                   data-testid={`input-entry-${f.name}`}
                 />
               )}
+              {flagged && (
+                <p id={errorId} role="alert" className="text-xs text-destructive mt-1" data-testid="entry-required-error">
+                  {missingMessage}
+                </p>
+              )}
             </div>
-          ))}
+            );
+          })}
+          {missingMessage && !requiredField && (
+            <p role="alert" className="text-xs text-destructive" data-testid="entry-required-error">{missingMessage}</p>
+          )}
           {/* Ad-hoc custom fields — add anything not in the tracker's schema */}
           {Object.keys(customFields).length > 0 && (
             <div className="space-y-1.5">
@@ -1733,6 +1776,7 @@ function AddEntryDialog({
               <Input
                 className="w-28 text-sm"
                 placeholder="field"
+                aria-label="New field name"
                 value={newFieldName}
                 onChange={(e) => setNewFieldName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomField(); } }}
@@ -1741,6 +1785,7 @@ function AddEntryDialog({
               <Input
                 className="flex-1 text-sm"
                 placeholder="value"
+                aria-label="New field value"
                 value={newFieldValue}
                 onChange={(e) => setNewFieldValue(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomField(); } }}
@@ -1752,8 +1797,9 @@ function AddEntryDialog({
             </div>
           </div>
           <div>
-            <Label className="text-xs font-medium text-muted-foreground">Notes (optional)</Label>
+            <Label htmlFor={entryInputId(tracker.id, "_notes")} className="text-xs font-medium text-muted-foreground">Notes (optional)</Label>
             <Textarea
+              id={entryInputId(tracker.id, "_notes")}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Any additional notes..."
@@ -1774,12 +1820,22 @@ function AddEntryDialog({
             onClick={() => {
               // Snapshot the payload BEFORE any state reset (race fix).
               const payload = buildEntryPayload();
-              // Validate before close so we don't dismiss the dialog on an invalid entry
-              const hasValue = Object.values(payload.values).some(v => v !== undefined && v !== "" && v !== null);
+              // Validate before anything is sent, and say WHICH field is
+              // needed, beside it — never a bare "Failed to log entry".
+              // (An unticked box is the form's default, not something entered.)
+              const hasValue = Object.values(payload.values).some(v => v !== undefined && v !== "" && v !== null && v !== false);
               if (!hasValue) {
-                mutation.mutate(payload); // will throw "Please fill in at least one field"
+                const msg = requiredField
+                  ? `${fieldLabelWithUnit(requiredField)} is required — enter it (or another field) to log this entry.`
+                  : "Enter at least one value to log this entry.";
+                setMissingMessage(msg);
+                if (requiredField) {
+                  const el = typeof document !== "undefined" ? document.getElementById(entryInputId(tracker.id, requiredField.name)) : null;
+                  (el as HTMLElement | null)?.focus?.();
+                }
                 return;
               }
+              setMissingMessage(null);
               mutation.mutate(payload);
               // Close immediately — optimistic update has already added the entry to the chart
               setValues({});

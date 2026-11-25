@@ -170,12 +170,19 @@ green. After a push to `main`:
    (`isRecordScopedPersistKey`: `["/api/profiles", id, …]`) is restored with
    its real age and marked invalidated, and its page refetches on mount. Any
    new persisted key that the bootstrap does not re-seed needs the same.
+   The snapshot also keeps a write's INVALIDATION (`inv`): a write only marks
+   the bootstrap stale off the dashboard, so a bootstrap saved invalidated is
+   refetched at launch and the lists seeded from it are first paint only; the
+   list the write patched is saved beside it and restored in its place
+   (`overlayKeysForStaleBootstrap`). (2026-11-24: a logged run and a one-cent
+   expense vanished on the first reload and came back minutes later.)
    (2026-11-24: an expense and a nested asset added from chat showed in
    Finance and Assets, while the asset's own Financials and Contained tabs
    said "No expenses logged" / "No child assets yet" — and still did after a
    manual refresh, because the refresh restored the old page as fresh.)
    *Guards:* `tests/sync-rules-failed-request.dom.test.tsx`,
-   `tests/persisted-record-cache.test.ts`, `tests/qa-2026-11-24-findings.test.ts`,
+   `tests/persisted-record-cache.test.ts`, `tests/persisted-write-reload.test.ts`,
+   `tests/qa-2026-11-24-findings.test.ts`,
    `tests/qa-2026-11-24-findings.dom.test.tsx`.
    *Live check (real browser, smoke account):* `npx tsx tests/live-qa-2026-11-24-check.ts`.
 8. **Destructive buttons take two taps** (`useConfirmArm`). A "snooze" hides
@@ -1120,12 +1127,20 @@ reads a series through `summarize` (`shared/wellness-period.ts`): an additive
 measure (water, steps, sessions, dollars) is a day's total, a reading (weight,
 blood pressure, sleep) the day's last. Never average or count in a component.
 A move is judged against the metric's healthy range (`moveIsGood`); weight is
-never judged.
+never judged. A trend row compares readings of ONE tracker and opens that
+tracker (`trendRows` splits a merged series by source, naming each when there
+are several). Miles driven are travel, not exercise: a drive / car commute /
+car mileage tracker (`isVehicleTravelTracker`, `shared/wellness-canon.ts`) is
+never a workout, an activity tracker or the Distance measurement. (QA
+2026-11-24: a 140-mile drive in the workout distance; "Distance 140 → 1.5 mi"
+opening the Running tracker.)
 **H4. A range is a filter (Rule 4).** A range with no reading names the last
 one ("Last: Oct 21"), never "no data"; a latest-reading tile (weight, blood
 pressure) still shows that reading, dated. Something never recorded is "not
 tracked", never a zero. The on-screen range tabs change the VIEW and are not
-saved; the stored default is a display option set in Customize.
+saved; the stored default is a display option set in Customize. The picked
+range rides in the URL (`#/wellness?range=7d`, `client/src/lib/wellness-range-url.ts`)
+so a reload keeps it — never browser storage, never the account.
 **H5. Nothing hidden reads as missing.** A card the layout switches off is
 named under the grid and opens in place; a card with nothing ever recorded
 folds into a named quiet row (only once the data has loaded, and the row says

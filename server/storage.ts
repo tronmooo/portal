@@ -9,7 +9,8 @@ import { searchCorpus } from "@shared/search-match";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
-import { rederiveEditedEntry } from "@shared/entry-rederive";
+import { rederiveEditedEntry, deriveNewEntry } from "@shared/entry-rederive";
+import { derivePersonalMetrics, parseHeightToCm } from "@shared/estimation-engine";
 import { analyzeFitnessEntry, calorieContextForOwner, caloriesForStoredEntry, type CalorieContext } from "@shared/fitness-metrics";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { formatMoneyMajor } from "@shared/money";
@@ -1435,12 +1436,35 @@ export class MemStorage implements IStorage {
     const rawValues = normalizeTrackerEntry(tracker as any, rawInput).values;
     const guard = sanitizeTrackerEntryValues(tracker.fields, rawValues, { name: tracker.name, category: tracker.category, unit: (tracker as any).unit });
     if (guard.error) throw new Error(guard.error);
-    const values = guard.values;
+    let values = guard.values;
     // Owner context (body weight / age / sex) for the calorie estimate — the
     // entry's own profile, else the tracker's owner. Never the current user.
     const ownerId = (data as any).profileId || (tracker.linkedProfiles || [])[0];
-    const ownerCtx = calorieContextForOwner(ownerId ? this.profiles.get(ownerId) : undefined);
-    const computed = { ...computeSecondaryData(tracker.name, tracker.category, values, ownerCtx, tracker.fields, enrichmentMeta as any), ...(enrichmentMeta ? { enrichment: enrichmentMeta } : {}) } as any;
+    const owner: any = ownerId ? this.profiles.get(ownerId) : undefined;
+    const ownerCtx = calorieContextForOwner(owner);
+    // Parity with SupabaseStorage: a door with no provenance of its own (the
+    // Add Entry form) derives pace / speed / steps like the chat does.
+    let derivedEnrichment: any = enrichmentMeta;
+    if (!enrichmentMeta && (data as any).__skipDedupe !== true) {
+      const pf = owner?.fields || {};
+      const derived = deriveNewEntry({
+        trackerName: tracker.name,
+        trackerUnit: (tracker as any).unit,
+        values,
+        ctx: {
+          heightCm: parseHeightToCm(pf.height ?? pf.heightCm ?? pf.height_cm ?? pf.heightInches),
+          weightKg: ownerCtx.bodyWeightKg ?? null,
+          ageYears: ownerCtx.ageYears ?? null,
+          sex: ownerCtx.sex ?? null,
+          ownerLabel: ownerCtx.ownerLabel ?? null,
+          personal: derivePersonalMetrics((tracker.entries || []).filter((e: any) => !e.profileId || !ownerId || e.profileId === ownerId).slice(-60)),
+          category: tracker.category,
+          fields: tracker.fields as any,
+        },
+      });
+      if (derived) { values = derived.values; derivedEnrichment = derived.enrichment; }
+    }
+    const computed = { ...computeSecondaryData(tracker.name, tracker.category, values, ownerCtx, tracker.fields, derivedEnrichment as any), ...(derivedEnrichment ? { enrichment: derivedEnrichment } : {}) } as any;
     const entry: TrackerEntry = { id: randomUUID(), values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: data.timestamp || new Date().toISOString() };
     tracker.entries.push(entry);
     let desc = `Logged ${tracker.name}: ${JSON.stringify(data.values)}`;

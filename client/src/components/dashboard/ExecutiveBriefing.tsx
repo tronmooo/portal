@@ -28,6 +28,7 @@ import { relativeTimeShort, elapsedDays } from "@shared/relative-time";
 import { netWorthChange } from "@shared/net-worth-change";
 import { useState, useEffect, useMemo, useRef, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { useLocation } from "wouter";
+import { routeForEntity } from "@shared/entity-routes";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, recoverWedgedQueries, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -2229,11 +2230,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 <CardEmpty icon={FileText} tone="good">No documents yet.</CardEmpty>
               ) : (
                 <div className={LIST} data-testid="exec-docs-recent">
+                  {/* A row IS a document: it opens that document's own page,
+                      the same /documents/:id view Artifacts opens (Overview,
+                      Extracted Data and the file). It used to open the
+                      expirations popup, which lists only dates, so a licence
+                      opened from here never reached its details (QA
+                      2026-11-24, #15). */}
                   {recentDocsRes.rows.slice(0, 2).map((d: any) => (
                     <div key={d.id}
                       role="button" tabIndex={0}
-                      onClick={() => setPopup("docs")}
-                      onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setPopup("docs"); } }}
+                      onClick={() => navigate(routeForEntity("document", d.id))}
+                      onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); navigate(routeForEntity("document", d.id)); } }}
                       className={`bubble-row flex items-center ${ROW} cursor-pointer`}
                       style={{ ["--accent-hsl" as any]: CARD_ACCENTS.documents }}
                       data-testid={`exec-docs-recent-${d.id}`}
