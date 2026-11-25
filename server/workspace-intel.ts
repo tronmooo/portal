@@ -343,10 +343,10 @@ export async function journalCoach(input: { messages: unknown; draft?: string })
   const activity = access.activity ? await activityBlock() : "";
   const system = `${COACH}\n\n` +
     `NOW: ${now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}.` +
-    (name ? ` Their first name is ${name}.` : "") +
+    (name ? ` Their first name is ${name} (from their profile, not something they told you).` : "") +
     (convo.memory ? (since ? ` You last talked ${since}.` : " This is the first time you are talking.") : "") + `\n\n` +
     (convo.memory ? `${memoryBlock(convo.memory) || "(You have no memories of earlier conversations yet.)"}\n\n${REMEMBER_RULE}\n\n`
-      : `(Remembering is switched off: you keep nothing from this conversation, and you have no memory of earlier ones. If they ask, say so.)\n\n`) +
+      : `(Remembering is switched off: you keep nothing from this conversation, and you have no memory of earlier ones. If they ask what you remember, or refer to something from another conversation, say plainly that remembering is off so you don't have it — never guess at it, and never pass off their name or a journal entry as a memory. They can turn it back on in AI access.)\n\n`) +
     (draft ? `THE ENTRY THEY ARE WRITING NOW:\n${draft.slice(0, 8000)}\n\n` : "") +
     (access.pastEntries
       ? `THEIR SAVED ENTRIES (${journal.read} of ${journal.total}, newest first):\n${journal.block || "(none yet)"}`
