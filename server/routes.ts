@@ -53,6 +53,7 @@ import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manife
 import { registerFinanceRoutes } from "./finance-routes";
 import { registerRecordDetailRoutes } from "./record-details-routes";
 import { registerWorkspaceRoutes, WORKSPACE_AI_PATHS } from "./workspace-routes";
+import { registerNutritionScanRoutes, NUTRITION_SCAN_READ_PATHS } from "./nutrition-scan-routes";
 import { appendDetailSearchHits } from "./record-details";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
@@ -992,6 +993,8 @@ const READONLY_POST_PATHS = new Set<string>([
   "/api/finance-import/preview",
   // The workspaces' AI boxes return proposals; the workspace saves.
   ...WORKSPACE_AI_PATHS,
+  // Reading a nutrition label returns what it says; logging it is a separate call.
+  ...NUTRITION_SCAN_READ_PATHS,
 ]);
 function isReadOnlyPost(req: any): boolean {
   return req.method === "POST" && READONLY_POST_PATHS.has(req.path);
@@ -13104,6 +13107,7 @@ No emojis. No prose outside the JSON.`,
   registerFinanceRoutes(app);
   registerRecordDetailRoutes(app);
   registerWorkspaceRoutes(app, rateLimit);
+  registerNutritionScanRoutes(app, rateLimit);
 
   // Unknown API paths are 404 JSON, never the SPA shell. Without this the
   // static fallback answered `POST /api/profiles/:id/restore` (no such

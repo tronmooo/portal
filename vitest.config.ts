@@ -596,6 +596,11 @@ export default defineConfig({
       // product/label data AFTER the base entry is saved; user values win.
       'tests/nutrition-enrichment.test.ts',
       'tests/nutrition-enrichment-flow.test.ts',
+      'tests/nutrition-accuracy.test.ts',
+      'tests/nutrition-corrections.test.ts',
+      'tests/nutrition-sources.test.ts',
+      'tests/nutrition-scan.test.ts',
+      'tests/nutrition-scan-dialog.dom.test.tsx',
       // 2026-10-17 Item Identity Layer: the same for medications, supplements,
       // pet food, vehicles, devices, subscriptions and accounts.
       'tests/item-identity.test.ts',

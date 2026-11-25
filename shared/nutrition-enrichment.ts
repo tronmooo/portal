@@ -24,27 +24,56 @@
 // ─── Nutrient vocabulary ─────────────────────────────────────────────────────
 
 export const NUTRIENT_KEYS = [
-  "calories", "protein", "carbs", "fat", "saturatedFat", "fiber", "sugar", "addedSugar",
-  "sodium", "cholesterol", "potassium", "calcium", "iron", "caffeine", "fluidMl",
-  "vitaminA", "vitaminC", "vitaminD", "omega3", "epa", "dha",
+  "calories", "protein", "carbs", "fat", "saturatedFat", "transFat", "monoFat", "polyFat",
+  "fiber", "sugar", "addedSugar", "sugarAlcohol", "allulose",
+  "sodium", "cholesterol", "potassium", "calcium", "iron", "magnesium", "zinc", "phosphorus", "selenium",
+  "copper", "manganese", "iodine", "chromium", "molybdenum", "chloride",
+  "caffeine", "alcohol", "fluidMl",
+  "vitaminA", "vitaminB1", "vitaminB2", "vitaminB3", "vitaminB5", "vitaminB6", "biotin", "vitaminB12",
+  "vitaminC", "vitaminD", "vitaminE", "vitaminK", "folate", "choline",
+  "omega3", "omega6", "epa", "dha",
 ] as const;
 export type NutrientKey = (typeof NUTRIENT_KEYS)[number];
 export type NutrientVector = Partial<Record<NutrientKey, number>>;
 
 /** Display unit per nutrient — one table, not a ladder. */
 export const NUTRIENT_UNITS: Record<NutrientKey, string> = {
-  calories: "kcal", protein: "g", carbs: "g", fat: "g", saturatedFat: "g", fiber: "g",
-  sugar: "g", addedSugar: "g", sodium: "mg", cholesterol: "mg", potassium: "mg",
-  calcium: "mg", iron: "mg", caffeine: "mg", fluidMl: "ml", vitaminA: "mcg",
-  vitaminC: "mg", vitaminD: "mcg", omega3: "mg", epa: "mg", dha: "mg",
+  calories: "kcal", protein: "g", carbs: "g", fat: "g", saturatedFat: "g", transFat: "g", monoFat: "g", polyFat: "g",
+  fiber: "g", sugar: "g", addedSugar: "g", sugarAlcohol: "g", allulose: "g",
+  sodium: "mg", cholesterol: "mg", potassium: "mg", calcium: "mg", iron: "mg",
+  magnesium: "mg", zinc: "mg", phosphorus: "mg", selenium: "mcg",
+  copper: "mg", manganese: "mg", iodine: "mcg", chromium: "mcg", molybdenum: "mcg", chloride: "mg",
+  caffeine: "mg", alcohol: "g", fluidMl: "ml",
+  vitaminA: "mcg", vitaminB1: "mg", vitaminB2: "mg", vitaminB3: "mg", vitaminB5: "mg", vitaminB6: "mg", biotin: "mcg", vitaminB12: "mcg",
+  vitaminC: "mg", vitaminD: "mcg", vitaminE: "mg", vitaminK: "mcg", folate: "mcg", choline: "mg",
+  omega3: "mg", omega6: "mg", epa: "mg", dha: "mg",
 };
 
 export const NUTRIENT_LABELS: Record<NutrientKey, string> = {
   calories: "Calories", protein: "Protein", carbs: "Carbs", fat: "Fat", saturatedFat: "Saturated fat",
-  fiber: "Fiber", sugar: "Sugar", addedSugar: "Added sugar", sodium: "Sodium", cholesterol: "Cholesterol",
-  potassium: "Potassium", calcium: "Calcium", iron: "Iron", caffeine: "Caffeine", fluidMl: "Fluid",
-  vitaminA: "Vitamin A", vitaminC: "Vitamin C", vitaminD: "Vitamin D", omega3: "Omega-3", epa: "EPA", dha: "DHA",
+  transFat: "Trans fat", monoFat: "Monounsaturated fat", polyFat: "Polyunsaturated fat",
+  fiber: "Fiber", sugar: "Sugar", addedSugar: "Added sugar", sugarAlcohol: "Sugar alcohol", allulose: "Allulose",
+  copper: "Copper", manganese: "Manganese", iodine: "Iodine", chromium: "Chromium", molybdenum: "Molybdenum", chloride: "Chloride",
+  alcohol: "Alcohol", vitaminB1: "Thiamin (B1)", vitaminB2: "Riboflavin (B2)", vitaminB3: "Niacin (B3)", vitaminB5: "Pantothenic acid (B5)",
+  biotin: "Biotin", choline: "Choline", omega6: "Omega-6",
+  sodium: "Sodium", cholesterol: "Cholesterol",
+  potassium: "Potassium", calcium: "Calcium", iron: "Iron", magnesium: "Magnesium", zinc: "Zinc",
+  phosphorus: "Phosphorus", selenium: "Selenium", caffeine: "Caffeine", fluidMl: "Fluid",
+  vitaminA: "Vitamin A", vitaminB6: "Vitamin B6", vitaminB12: "Vitamin B12", vitaminC: "Vitamin C", vitaminD: "Vitamin D",
+  vitaminE: "Vitamin E", vitaminK: "Vitamin K", folate: "Folate", omega3: "Omega-3", epa: "EPA", dha: "DHA",
 };
+
+/**
+ * Net carbohydrates: total carbs less fiber and sugar alcohols. DERIVED, never
+ * stored, and only when the carbs are known — an unknown fiber is not zero
+ * fiber, so with neither fiber nor sugar alcohol on record there is no net
+ * figure to show (it would only repeat the total and call it something else).
+ */
+export function netCarbsOf(vec: NutrientVector): number | null {
+  if (typeof vec.carbs !== "number") return null;
+  if (typeof vec.fiber !== "number" && typeof vec.sugarAlcohol !== "number" && typeof vec.allulose !== "number") return null;
+  return Math.max(0, roundNutrient(vec.carbs - (vec.fiber || 0) - (vec.sugarAlcohol || 0) - (vec.allulose || 0), "carbs"));
+}
 
 /**
  * The nutrient keys written onto the tracker entry's `values` (what the card,
@@ -67,16 +96,27 @@ const NUTRIENT_KEY_ALIASES: Record<string, NutrientKey> = {
   protein: "protein", proteins: "protein",
   carbs: "carbs", carb: "carbs", carbohydrate: "carbs", carbohydrates: "carbs",
   fat: "fat", fats: "fat", totalfat: "fat",
+  totalcarbs: "carbs", totalcarbohydrate: "carbs", totalcarbohydrates: "carbs",
   saturatedfat: "saturatedFat", satfat: "saturatedFat",
-  fiber: "fiber", fibre: "fiber",
-  sugar: "sugar", sugars: "sugar",
+  transfat: "transFat", monounsaturatedfat: "monoFat", monofat: "monoFat",
+  polyunsaturatedfat: "polyFat", polyfat: "polyFat",
+  fiber: "fiber", fibre: "fiber", dietaryfiber: "fiber",
+  sugar: "sugar", sugars: "sugar", totalsugar: "sugar", totalsugars: "sugar",
   addedsugar: "addedSugar", addedsugars: "addedSugar",
+  sugaralcohol: "sugarAlcohol", sugaralcohols: "sugarAlcohol",
   sodium: "sodium", salt: "sodium",
   cholesterol: "cholesterol",
   potassium: "potassium", calcium: "calcium", iron: "iron",
+  magnesium: "magnesium", zinc: "zinc", phosphorus: "phosphorus", selenium: "selenium",
   caffeine: "caffeine",
   fluid: "fluidMl", fluidml: "fluidMl", water: "fluidMl",
   vitamina: "vitaminA", vitaminc: "vitaminC", vitamind: "vitaminD",
+  vitaminb6: "vitaminB6", vitaminb12: "vitaminB12", vitamine: "vitaminE", vitamink: "vitaminK",
+  folate: "folate", folicacid: "folate", vitaminb9: "folate",
+  allulose: "allulose", copper: "copper", manganese: "manganese", iodine: "iodine", chromium: "chromium",
+  molybdenum: "molybdenum", chloride: "chloride", alcohol: "alcohol", choline: "choline", biotin: "biotin", vitaminb7: "biotin",
+  thiamin: "vitaminB1", thiamine: "vitaminB1", vitaminb1: "vitaminB1", riboflavin: "vitaminB2", vitaminb2: "vitaminB2",
+  niacin: "vitaminB3", vitaminb3: "vitaminB3", pantothenicacid: "vitaminB5", vitaminb5: "vitaminB5", omega6: "omega6",
   omega3: "omega3", omega: "omega3", epa: "epa", dha: "dha",
 };
 
@@ -235,15 +275,23 @@ const COUNT_WORDS = new Set([
 const SIZE_ADJECTIVES: Record<string, number> = { small: 0.75, medium: 1, large: 1.25, big: 1.25, huge: 1.5, extra: 1.5, xl: 1.5, jumbo: 1.5, mini: 0.5, tiny: 0.5 };
 
 /** Round to a sensible precision for storage. */
+/**
+ * Storage precision. A label scaled by what was eaten is arithmetic, and the
+ * answer is kept: half of 3.5 g fat is 1.75 g, seven Oreos are 373.3 kcal —
+ * not 1.8 g and 373. Calories keep one decimal, grams two; milligram and
+ * microgram quantities (and fluid) are whole numbers. The float noise of the
+ * multiplication (5.6250000001) is trimmed first, so a half rounds up.
+ */
+const WHOLE_NUMBER_NUTRIENTS = new Set<string>(["sodium", "potassium", "calcium", "caffeine", "cholesterol", "fluidMl", "omega3", "omega6", "epa", "dha", "magnesium", "phosphorus", "selenium", "vitaminA", "vitaminK", "folate", "iodine", "chromium", "molybdenum", "chloride", "choline", "biotin"]);
 export function roundNutrient(v: number, key?: NutrientKey): number {
   if (!isFinite(v)) return 0;
-  if (key === "calories" || key === "sodium" || key === "potassium" || key === "calcium" || key === "caffeine" || key === "cholesterol" || key === "fluidMl" || key === "omega3" || key === "epa" || key === "dha") {
-    return Math.round(v);
-  }
-  return Math.round(v * 10) / 10;
+  const clean = Number(v.toPrecision(12));
+  if (key && WHOLE_NUMBER_NUTRIENTS.has(key)) return Math.round(clean);
+  if (key === "calories") return Math.round(clean * 10) / 10;
+  return Math.round(clean * 100) / 100;
 }
 
-const AMOUNT_WORDS = "\\d+\\s+\\d+\\s*/\\s*\\d+|\\d+\\s*/\\s*\\d+|\\d+(?:\\.\\d+)?|[½¼¾⅓]|a|an|one|two|three|four|five|six|seven|eight|nine|ten|twelve|dozen|half|quarter|couple|few|several";
+const AMOUNT_WORDS = "\\d+\\s+\\d+\\s*/\\s*\\d+|\\d+\\s*/\\s*\\d+|\\d+(?:\\.\\d+)?|[½¼¾⅓]|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen|half|quarter|couple|few|several";
 /** One amount token, bounded so "a" never matches inside "about". */
 const AMOUNT_RE = `(?<![a-z0-9])(${AMOUNT_WORDS})(?![a-z])`;
 
@@ -266,18 +314,50 @@ export function detectPackageFraction(text: string): { fraction: number; word: s
   return { fraction: f, word: m[2] };
 }
 
+/**
+ * Spoken amounts → digits, so one set of patterns reads them all: "one and a
+ * half bars" → "1.5 bars", "three quarters of one" → "0.75 of one", "two and
+ * a quarter cups" → "2.25 cups". A bare "half" / "quarter" is left for the
+ * "half a bottle" rule, which also knows the package it is half of.
+ */
+const SMALL_NUMBER: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+const SPOKEN_FRACTION: Record<string, number> = { half: 0.5, quarter: 0.25, third: 1 / 3, "three quarters": 0.75, "two thirds": 2 / 3 };
+/** Six decimals: a third of a cup against a 2/3-cup serving must come out as exactly half. */
+const trimNumber = (n: number): string => String(Math.round(n * 1e6) / 1e6);
+export function spokenAmountsToDigits(text: string): string {
+  let t = String(text || "");
+  // "one and a half", "2 and a quarter", "one and three quarters"
+  t = t.replace(/(?<![a-z0-9.])(\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+and\s+(?:(?:a|an|one)\s+)?(three quarters|two thirds|half|quarter|third)(?![a-z])/gi, (_m, whole: string, frac: string) => {
+    const w = /^\d/.test(whole) ? Number(whole) : SMALL_NUMBER[whole.toLowerCase()];
+    return trimNumber(w + SPOKEN_FRACTION[frac.toLowerCase()]);
+  });
+  // "three quarters", "two thirds", "one third", "a third", "one half", "one quarter"
+  t = t.replace(/(?<![a-z0-9.])(three[- ]quarters?|two[- ]thirds?)(?![a-z])/gi, (m) => trimNumber(/^three/i.test(m) ? 0.75 : 2 / 3));
+  t = t.replace(/(?<![a-z0-9.])(?:one|a)[- ](third|half|quarter)(?=\s+(?:of|a|an|the)\b|\s*$)/gi, (_m, f: string) => trimNumber(SPOKEN_FRACTION[f.toLowerCase()]));
+  return t;
+}
+
+/** What follows a number + unit when the pair describes the PRODUCT, not how much was eaten ("42g protein shake"). */
+const NUTRIENT_AFTER_RE = /^\s*(?:of\s+)?(protein|carbs?|carbohydrates?|fat|sugars?|fiber|fibre|caffeine|sodium|calories?|kcal)\b/;
+/** "made two sandwiches but only ate three quarters of one": the amount that was EATEN is the one after the eating verb. */
+const MADE_THEN_ATE_RE = /\b(made|cooked|prepared|baked|bought|ordered|opened|poured|got)\b.*?\b(?:only\s+)?(?:ate|had|drank|finished|eaten)\s+(.+)$/;
+
 export function normalizeQuantity(text: string): QuantityNormalization {
   const original = String(text || "").trim();
   const base: QuantityNormalization = { original, amount: null, unit: null, grams: null, ml: null, count: null, confidence: "low" };
   if (!original) return base;
-  const lc = original.toLowerCase().replace(/\s+/g, " ");
-  const pkg = detectPackageFraction(lc);
+  const spoken = original.toLowerCase().replace(/\s+/g, " ");
+  const pkg = detectPackageFraction(spoken);
   if (pkg) { base.packageFraction = pkg.fraction; base.packageWord = pkg.word; }
+  // "a third of a cup" → "0.3333 cup": the share is OF the measure that follows it.
+  let lc = spokenAmountsToDigits(spoken).replace(/(\d+(?:\.\d+)?)\s+of\s+(?:a|an|one)\s+(?=[a-z])/g, "$1 ")
+    // "170g", "12oz", "250ml": a unit written against its number is still that amount.
+    .replace(/(\d)(?=(?:kg|g|grams?|mg|oz|ml|l|lbs?|cups?|tbsp|tsp)\b)/g, "$1 ");
+  const ate = lc.match(MADE_THEN_ATE_RE);
+  if (ate && new RegExp(AMOUNT_RE).test(ate[2])) lc = ate[2].trim();
 
   // "half a bottle" / "half of the bottle" / "half the bottle"
   const fracContainer = lc.match(new RegExp(`^(half|quarter|third|a third|two thirds|three quarters|${AMOUNT_WORDS})\\s+(?:of\\s+)?(?:a|an|the)?\\s*([a-z]+)`));
-  // "a 12 oz coke" / "12 oz" / "12oz" / "2 cups" / "1 packet" / "3 bites"
-  const amountUnit = lc.match(new RegExp(`${AMOUNT_RE}\\s*(fl\\.?\\s*oz|[a-z]+)`));
 
   let amountToken = "";
   const resolveUnit = (amount: number, unitRaw: string, out: QuantityNormalization): QuantityNormalization => {
@@ -318,6 +398,10 @@ export function normalizeQuantity(text: string): QuantityNormalization {
     out.confidence = "high";
     return out;
   };
+  const isMeasure = (unitRaw: string): boolean => {
+    const unit = unitRaw.replace(/\./g, "").replace(/\s+/g, " ").trim();
+    return VOLUME_ML[unit.replace(/\s/g, "") === "floz" ? "fl oz" : unit] != null || MASS_G[unit] != null;
+  };
 
   const fracWord: Record<string, number> = { half: 0.5, quarter: 0.25, third: 1 / 3, "a third": 1 / 3, "two thirds": 2 / 3, "three quarters": 0.75 };
   if (fracContainer && (fracWord[fracContainer[1]] != null || parseAmountToken(fracContainer[1]) != null) && /^(of|a|an|the)\b/.test(lc.slice(fracContainer[1].length).trim())) {
@@ -325,19 +409,37 @@ export function normalizeQuantity(text: string): QuantityNormalization {
     amountToken = fracContainer[1].toLowerCase();
     return resolveUnit(amount, fracContainer[2], { ...base });
   }
-  if (amountUnit) {
-    const amount = parseAmountToken(amountUnit[1]);
-    if (amount != null) {
-      amountToken = amountUnit[1].toLowerCase();
-      const unitTok = amountUnit[2];
-      // "2 large eggs" → the adjective is not the unit.
-      if (SIZE_ADJECTIVES[unitTok] != null) {
-        const out = { ...base, amount, unit: null, count: amount, confidence: "medium" as EnrichmentConfidence };
-        out.assumption = `${unitTok} size ≈ ${SIZE_ADJECTIVES[unitTok]}× a medium one`;
-        return out;
-      }
-      return resolveUnit(amount, unitTok, { ...base });
+
+  // "a 12 oz coke" / "12 oz" / "12oz" / "250-gram" / "2 cups" / "1 packet" / "3 bites"
+  // Every number-and-word pair in the phrase, in order. A pair that is the
+  // product's own description ("42g protein shake") is not a quantity.
+  const pairs: Array<{ amount: number; token: string; unit: string; index: number; end: number }> = [];
+  for (const m of lc.matchAll(new RegExp(`${AMOUNT_RE}[\\s-]*(fl\\.?\\s*oz|[a-z]+)`, "g"))) {
+    const amount = parseAmountToken(m[1]);
+    if (amount == null) continue;
+    const end = (m.index ?? 0) + m[0].length;
+    if (isMeasure(m[2]) && NUTRIENT_AFTER_RE.test(lc.slice(end))) continue;
+    pairs.push({ amount, token: m[1].toLowerCase(), unit: m[2], index: m.index ?? 0, end });
+  }
+  if (pairs.length > 0) {
+    // A weight or a volume says exactly how much, wherever it stands in the
+    // phrase: "one with 30 ml of whole milk" is 30 ml, not one cup.
+    const measured = pairs.find((p) => isMeasure(p.unit));
+    const pick = measured || pairs[0];
+    amountToken = pick.token;
+    if (measured) {
+      // "two 12 oz Cokes": a count standing directly before the measure multiplies it.
+      const before = lc.slice(0, measured.index).match(new RegExp(`${AMOUNT_RE}\\s+$`));
+      const times = before && !/^(a|an)$/.test(before[1]) ? parseAmountToken(before[1]) : null;
+      return resolveUnit(times != null && times > 0 ? measured.amount * times : measured.amount, measured.unit, { ...base });
     }
+    // "2 large eggs" → the adjective is not the unit.
+    if (SIZE_ADJECTIVES[pick.unit] != null) {
+      const out = { ...base, amount: pick.amount, unit: null, count: pick.amount, confidence: "medium" as EnrichmentConfidence };
+      out.assumption = `${pick.unit} size ≈ ${SIZE_ADJECTIVES[pick.unit]}× a medium one`;
+      return out;
+    }
+    return resolveUnit(pick.amount, pick.unit, { ...base });
   }
   // "large banana", "a big apple" — a size adjective and no number.
   const adj = Object.keys(SIZE_ADJECTIVES).find((a) => new RegExp(`\\b${a}\\b`).test(lc));
@@ -442,41 +544,54 @@ export function detectSpecificity(text: string): Specificity {
 
 // ─── User-stated nutrition ───────────────────────────────────────────────────
 
+/** Nutrient names as people and labels write them; longer names first so "sugar alcohol" is not read as "sugar". */
+const NUTRIENT_WORDS =
+  "calories?|kcal|protein|net carbs?|total carbs?|total carbohydrates?|carbs?|carbohydrates?|total fat|saturated fat|sat fat|trans fat|" +
+  "monounsaturated fat|polyunsaturated fat|fat|dietary fiber|fiber|fibre|sugar alcohols?|added sugars?|total sugars?|sugars?|sodium|salt|" +
+  "cholesterol|potassium|calcium|iron|magnesium|zinc|phosphorus|selenium|copper|manganese|iodine|chromium|molybdenum|chloride|choline|biotin|" +
+  "thiamine?|riboflavin|niacin|pantothenic acid|allulose|alcohol|folate|folic acid|caffeine|omega[- ]?3|omega[- ]?6|epa|dha|vitamin [a-z]\\d{0,2}";
 const USER_STATED_RE = new RegExp(
   "(\\d+(?:\\.\\d+)?)\\s*(kcal|calories?|cals?|g|grams?|mg|milligrams?|mcg|ml|fl\\.?\\s*oz|oz)?\\s*(?:of\\s+)?" +
-  "(calories?|kcal|protein|carbs?|carbohydrates?|total fat|saturated fat|sat fat|fat|fiber|fibre|added sugars?|sugars?|sodium|salt|cholesterol|potassium|calcium|iron|caffeine|omega[- ]?3|epa|dha|vitamin [a-z]\\d?)\\b",
+  `(${NUTRIENT_WORDS})\\b`,
   "gi",
 );
 // "protein 20g", "calories: 210", "210 cal", "20g of protein"
 const USER_STATED_REVERSED_RE = new RegExp(
-  "\\b(calories?|kcal|protein|carbs?|carbohydrates?|total fat|saturated fat|sat fat|fat|fiber|fibre|added sugars?|sugars?|sodium|salt|cholesterol|potassium|calcium|iron|caffeine|omega[- ]?3|epa|dha)\\s*[:=]?\\s*(?:is|was|of|at)?\\s*(\\d+(?:\\.\\d+)?)\\s*(kcal|calories?|cals?|g|grams?|mg|milligrams?|mcg)?",
+  `\\b(${NUTRIENT_WORDS})\\s*[:=]?\\s*(?:is|was|of|at)?\\s*(\\d+(?:\\.\\d+)?)\\s*(kcal|calories?|cals?|g|grams?|mg|milligrams?|mcg)?`,
   "gi",
 );
+/**
+ * A number and a nutrient standing in front of a product noun describe the
+ * PRODUCT ("a 42g protein shake", "the 30 g protein bar"), not what the user
+ * read off a label: scaled as a label value, half a shake kept 42 g protein.
+ */
+const PRODUCT_NOUN_AFTER_RE = /^\s*(shakes?|bars?|powders?|drinks?|yogurts?|yoghurts?|milk|cereals?|cookies?|chips|bread|pasta|waters?|coffees?|pancakes?|waffles?|granola|oatmeal|smoothies?|bites?|puffs?|ice cream|pudding|bagels?|wraps?|tortillas?)\b/i;
 const STATEMENT_CUE_RE = /\b(it says|label says|says|package says|box says|wrapper says|according to|per the label|listed|nutrition facts|it's|it is|it has|has|with|containing|contains)\b/i;
 
 function nutrientFromWord(word: string): NutrientKey | null {
   const w = word.toLowerCase().replace(/\s+/g, "").replace("-", "");
   if (/^(calorie|calories|kcal)$/.test(w)) return "calories";
   if (w === "protein") return "protein";
-  if (/^carb/.test(w)) return "carbs";
+  // Net carbs are DERIVED from the label's total, fiber and sugar alcohols
+  // (netCarbsOf); a stated net figure is never stored as the total.
+  if (/^netcarb/.test(w)) return null;
+  if (/^(total)?carb/.test(w)) return "carbs";
   if (w === "totalfat" || w === "fat") return "fat";
   if (w === "saturatedfat" || w === "satfat") return "saturatedFat";
-  if (w === "fiber" || w === "fibre") return "fiber";
+  if (w === "transfat") return "transFat";
+  if (w === "monounsaturatedfat") return "monoFat";
+  if (w === "polyunsaturatedfat") return "polyFat";
+  if (w === "fiber" || w === "fibre" || w === "dietaryfiber") return "fiber";
+  if (/^sugaralcohol/.test(w)) return "sugarAlcohol";
   if (/^addedsugar/.test(w)) return "addedSugar";
-  if (/^sugar/.test(w)) return "sugar";
+  if (/^(total)?sugar/.test(w)) return "sugar";
   if (w === "sodium" || w === "salt") return "sodium";
-  if (w === "cholesterol") return "cholesterol";
-  if (w === "potassium") return "potassium";
-  if (w === "calcium") return "calcium";
-  if (w === "iron") return "iron";
-  if (w === "caffeine") return "caffeine";
-  if (/^omega3/.test(w)) return "omega3";
-  if (w === "epa") return "epa";
-  if (w === "dha") return "dha";
-  if (w === "vitaminc") return "vitaminC";
-  if (w === "vitamind") return "vitaminD";
-  if (w === "vitamina") return "vitaminA";
-  return null;
+  if (w === "folicacid") return "folate";
+  if (w === "omega3") return "omega3";
+  if (w === "omega6") return "omega6";
+  const vitamin = w.match(/^vitamin([a-z]\d{0,2})$/);
+  if (vitamin) return canonicalNutrientKey(`vitamin${vitamin[1]}`);
+  return canonicalNutrientKey(w);
 }
 
 /**
@@ -498,6 +613,7 @@ export function detectUserStatedNutrition(message: string): NutrientVector {
     const key = nutrientFromWord(m[3]);
     const v = Number(m[1]);
     if (!key || !isFinite(v)) continue;
+    if (PRODUCT_NOUN_AFTER_RE.test(text.slice((m.index ?? 0) + m[0].length))) continue;
     // "2 g carbs" vs "2 cups carbs"? the unit group filters to nutrient units;
     // a unitless number before "protein" ("20 protein") still counts.
     if (out[key] == null) out[key] = v;
@@ -543,6 +659,12 @@ export interface NutritionComponent {
   isBeverage?: boolean;
   /** The user gave no quantity: the serving size is assumed (and said so). */
   servingAssumed?: boolean;
+  /** An estimate whose per-serving figures were multiplied by a weight the user stated (server arithmetic). */
+  amountFromStatedWeight?: boolean;
+  /** The record behind the figures, so it can be opened or re-read: a USDA FoodData Central id, an Open Food Facts barcode, an internal row. */
+  sourceRef?: { provider: "fdc" | "off" | "internal" | "label" | "scan"; id: string; barcode?: string; dataType?: string };
+  /** Percent Daily Values as printed on a scanned label (kept as printed, never computed). */
+  dailyValues?: Partial<Record<NutrientKey, number>>;
 }
 
 export interface LinkedEntryRef {
@@ -586,6 +708,12 @@ export interface NutritionEnrichment {
   /** Why the lookup stopped, when it did ("vague wording", "no source matched"). */
   reason?: string;
   enrichedAt: string;
+  /** The whole entry comes from a label the user read out: nothing it omits is filled in. */
+  fromLabel?: boolean;
+  /** Every estimated component was scaled by the server from a stated weight: its totals replace the base figures. */
+  estimateScaledByServer?: boolean;
+  /** Verified / reference / estimated, as decided when the entry was written (`verificationOf`). */
+  verification?: NutritionVerification;
 }
 
 export type EnrichmentMode = "off" | "auto" | "ask";
@@ -723,7 +851,10 @@ export function buildEntryValuePatch(
     if (key === "caffeine" && total.value <= 0) continue;
     const existing = existingValues[key];
     const existingNum = typeof existing === "number" ? existing : typeof existing === "string" ? parseFloat(existing) : NaN;
-    if (total.sourceType === "model_estimate" && isFinite(existingNum) && existingNum > 0) continue;
+    // …unless that estimate is a per-serving figure the SERVER scaled by a
+    // weight the user stated: the base number is the chat model's own
+    // multiplication, which is the part that goes wrong.
+    if (total.sourceType === "model_estimate" && isFinite(existingNum) && existingNum > 0 && !(enrichment as any).estimateScaledByServer) continue;
     patch[key] = total.value;
   }
   return patch;
@@ -867,9 +998,27 @@ export const CONFIDENCE_LABEL: Record<EnrichmentConfidence, string> = {
   exact: "exact product match", high: "close product match", medium: "generic estimate", low: "rough estimate",
 };
 
+/**
+ * Verified or estimated, in one word pair. Verified: the figures are a
+ * label's (the maker's, a menu's, or one the user read out) for the amount
+ * the user stated. Reference: a standard reference food. Estimated: anything
+ * the app or the model assumed (a serving size, a generic stand-in).
+ */
+export type NutritionVerification = "verified" | "reference" | "estimated";
+export function verificationOf(e: Pick<NutritionEnrichment, "components" | "confidence">): NutritionVerification {
+  if (e.components.length === 0) return "estimated";
+  if (e.components.some((c) => c.sourceType === "model_estimate" || c.sourceType === "default" || c.confidence === "low")) return "estimated";
+  const labelled = e.components.every((c) => c.sourceType === "user" || c.sourceType === "manufacturer" || c.sourceType === "restaurant" || c.sourceType === "product_database");
+  if (labelled) return e.components.some((c) => c.servingAssumed) ? "estimated" : "verified";
+  return e.components.some((c) => c.servingAssumed || c.confidence === "medium") ? "estimated" : "reference";
+}
+export const VERIFICATION_LABEL: Record<NutritionVerification, string> = {
+  verified: "Verified", reference: "Reference values", estimated: "Estimated",
+};
+
 /** Source words for a card or a chat line: "manufacturer label", "restaurant menu", "product database", "standard reference", "AI estimate". */
 export const SOURCE_TYPE_LABEL: Record<EnrichmentSourceType, string> = {
-  user: "stated by you", manufacturer: "manufacturer label", restaurant: "restaurant menu", product_database: "product database",
+  user: "the label you gave", manufacturer: "manufacturer label", restaurant: "restaurant menu", product_database: "product database",
   reference: "standard reference", model_estimate: "AI estimate", calculated: "calculated", default: "generic estimate",
 };
 
@@ -886,23 +1035,43 @@ export function describeSources(e: Pick<NutritionEnrichment, "components">): str
  * this instead of the agent's placeholder numbers.
  */
 export function recapLine(e: Pick<NutritionEnrichment, "components" | "totals">): string {
-  const who = e.components.map((c) => {
-    const n = Math.round(c.servings * 100) / 100;
-    const unit = c.matchedServing?.label || "serving";
-    const qty = n === 1 ? unit : `${n} × ${unit}`;
-    return `${c.sourceItem || c.name} (${qty}${c.servingAssumed ? ", size assumed" : ""})`;
-  }).join(" + ");
+  const who = e.components.map((c) => `${c.sourceItem || c.name} (${componentAmount(c)}${c.servingAssumed ? ", size assumed" : ""})`).join(" + ");
   const parts: string[] = [];
   const t = e.totals;
+  const g = (key: NutrientKey, word: string) => { const v = t[key]; if (v) parts.push(`${roundNutrient(v.value, key)} g ${word}`); };
   if (t.calories) parts.push(`${roundNutrient(t.calories.value, "calories")} kcal`);
-  if (t.protein) parts.push(`${roundNutrient(t.protein.value, "protein")} g protein`);
-  if (t.carbs) parts.push(`${roundNutrient(t.carbs.value, "carbs")} g carbs`);
-  if (t.fat) parts.push(`${roundNutrient(t.fat.value, "fat")} g fat`);
-  // The nutrients a drink is really about: sugar, sodium, caffeine, when present.
-  if (t.sugar && t.sugar.value > 0) parts.push(`${roundNutrient(t.sugar.value, "sugar")} g sugar`);
+  g("protein", "protein");
+  g("carbs", "carbs");
+  g("fat", "fat");
+  // Named when the source states them and they are not nil: fiber and sugar
+  // alcohols are why a label's calories differ from 4/4/9 arithmetic.
+  for (const [key, word] of [["fiber", "fiber"], ["sugarAlcohol", "sugar alcohol"], ["sugar", "sugar"]] as Array<[NutrientKey, string]>) {
+    const v = t[key];
+    if (v && v.value > 0) parts.push(`${roundNutrient(v.value, key)} g ${word}`);
+  }
   if (t.sodium && t.sodium.value > 0) parts.push(`${roundNutrient(t.sodium.value, "sodium")} mg sodium`);
   if (t.caffeine && t.caffeine.value > 0) parts.push(`${roundNutrient(t.caffeine.value, "caffeine")} mg caffeine`);
   return parts.length ? `${who} — ${parts.join(", ")}` : who;
+}
+
+/**
+ * How much of a component was eaten, in the terms the user gave: the weight
+ * or volume when they stated one ("225 g"), otherwise a count of the matched
+ * serving ("1.5 × 1 bar (60 g)"), and for a label they read out, the
+ * arithmetic that was done ("75 grams ÷ 40 grams per label").
+ */
+export function componentAmount(c: Pick<NutritionComponent, "servings" | "matchedServing" | "normalizedQuantity" | "sourceType" | "userQuantity">): string {
+  if (c.sourceType === "user" && c.userQuantity) return c.userQuantity;
+  const q = c.normalizedQuantity;
+  const trim = (n: number) => String(Math.round(n * 100) / 100);
+  const stated = q && q.confidence === "high" && !q.assumption;
+  if (stated && q.grams != null && c.matchedServing?.grams) return `${trim(q.grams)} g`;
+  if (stated && q.ml != null && c.matchedServing?.ml && /^(ml|l|fl oz|oz|floz|milliliters?|liters?)$/.test(String(q.unit || ""))) {
+    return /^(ml|milliliters?)$/.test(String(q.unit)) ? `${trim(q.ml)} ml` : `${trim(q.amount ?? 0)} ${q.unit}`;
+  }
+  const n = Math.round(c.servings * 100) / 100;
+  const unit = c.matchedServing?.label || "serving";
+  return n === 1 ? unit : `${n} × ${unit}`;
 }
 
 export function summarizeEnrichment(e: Pick<NutritionEnrichment, "components" | "totals">): string {
@@ -928,6 +1097,26 @@ export function isNutritionTrackerLike(t: { name?: string | null; category?: str
 /** A dish whose "with …" names an ingredient already inside it, not a second food. */
 const COMPOSED_DISH_RE = /\b(smoothie|shake|milkshake|salad|bowl|sandwich|sub|burger|cheeseburger|burrito|wrap|taco|tacos|pizza|soup|stew|chili|curry|omelet|omelette|parfait|casserole|pasta|noodles|ramen|sushi|quesadilla|nachos|latte|frappuccino)\b/i;
 
+/** A fragment made only of preparation / state words and, at most, an amount. */
+const STATE_WORD = "raw|uncooked|cooked|dry|dried|fresh|frozen|thawed|canned|roasted|grilled|baked|boiled|steamed|fried|sauteed|sautéed|poached|scrambled|plain|black|unsweetened|sweetened|unsalted|salted|skinless|boneless|peeled|unpeeled|drained|rinsed|prepared|weighed|weight|before|after|cooking|cooked|with|without|the|peel|skin|on|including|included|only|whole|flesh|edible|portion|net|gross";
+const STATE_ONLY_RE = new RegExp(`^(?:(?:${STATE_WORD}|\\d+(?:\\.\\d+)?\\s*(?:g|grams?|kg|oz|ounces?|lbs?|ml|l|fl oz|cups?|tbsp|tsp)?)\\s*)+$`, "i");
+/** "dry (100 g)", "raw", "cooked, drained": says how the food before it was prepared or weighed, and names no food. */
+export function isStateOnlyFragment(text: string): boolean {
+  return STATE_ONLY_RE.test(String(text || "").replace(/[()~,]/g, " ").replace(/\s+/g, " ").trim());
+}
+
+/**
+ * The state the user weighed the food in, when it changes the numbers: raw
+ * meat and dry grains are far denser than cooked. "raw" for raw / uncooked /
+ * dry / "weighed before cooking"; null when nothing was said (the cooked
+ * reference then stands, as the form the food is eaten in).
+ */
+export function rawStateOf(text: string): "raw" | null {
+  const t = String(text || "").toLowerCase();
+  if (/\b(dry[- ]roasted|dry rub|dry aged|dry wine|extra dry)\b/.test(t)) return null;
+  return /\b(raw|uncooked|dry|pre-?cooked weight|before (?:cooking|it was cooked|i cooked)|prior to cooking|weighed raw|raw weight|dry weight)\b/.test(t) ? "raw" : null;
+}
+
 /** Split a composed item into component phrases: "eggs, toast with butter, a banana and coffee with creamer". */
 export function splitComponentPhrases(text: string): string[] {
   const t = String(text || "").replace(/\s+/g, " ").trim();
@@ -947,7 +1136,9 @@ export function splitComponentPhrases(text: string): string[] {
       if (depth === 0 && /\s/.test(ch)) {
         const rest = s.slice(i + 1);
         const m = rest.match(/^(and|plus|along with)\b/i);
-        if (m) { out.push(cur); cur = ""; i += m[0].length; continue; }
+        // "one and a half bars" is one amount, not two foods.
+        const amountJoin = /^and\s+(?:(?:a|an|one)\s+)?(half|quarter|third|three quarters|two thirds)\b/i.test(rest);
+        if (m && !amountJoin) { out.push(cur); cur = ""; i += m[0].length; continue; }
       }
       cur += ch;
     }
@@ -985,5 +1176,14 @@ export function splitComponentPhrases(text: string): string[] {
     })
     .map((p) => p.replace(/^(i\s+)?(ate|had|drank|took|got|ordered|grabbed)\s+/i, "").trim())
     .filter((p) => p && !/^(a|an|the|some|also|then|too)$/i.test(p));
-  return parts;
+  // "White rice, dry" / "Chicken breast, raw, 200 g": a fragment that only
+  // says how the food was prepared or weighed is part of the food before it,
+  // never a second food to look up ("dry" matched nothing and the whole entry
+  // was left as an estimate).
+  const merged: string[] = [];
+  for (const p of parts) {
+    if (merged.length > 0 && isStateOnlyFragment(p)) merged[merged.length - 1] = `${merged[merged.length - 1]}, ${p}`;
+    else merged.push(p);
+  }
+  return merged;
 }

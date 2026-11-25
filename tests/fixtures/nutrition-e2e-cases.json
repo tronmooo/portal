@@ -1,0 +1,1997 @@
+[
+ {
+  "id": "A01",
+  "category": "generic-weight",
+  "say": "I ate 150 grams of cooked quinoa.",
+  "expect": {
+   "calories": 180.0,
+   "protein": 6.6,
+   "carbs": 31.95,
+   "fat": 2.88
+  },
+  "source": "USDA FoodData Central SR Legacy #168917 \"Quinoa, cooked\" \u00d7 150 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A02",
+  "category": "generic-weight",
+  "say": "I had 200 g of boiled lentils.",
+  "expect": {
+   "calories": 232.0,
+   "protein": 18.04,
+   "carbs": 40.2,
+   "fat": 0.76
+  },
+  "source": "USDA FoodData Central SR Legacy #172421 \"Lentils, mature seeds, cooked, boiled, without salt\" \u00d7 200 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A03",
+  "category": "generic-weight",
+  "say": "I ate 80 grams of lentils, weighed dry before cooking.",
+  "expect": {
+   "calories": 281.6,
+   "protein": 19.68,
+   "carbs": 50.72,
+   "fat": 0.85
+  },
+  "source": "USDA FoodData Central SR Legacy #172420 \"Lentils, raw\" \u00d7 80 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A04",
+  "category": "generic-weight",
+  "say": "I ate 170 grams of baked farmed Atlantic salmon.",
+  "expect": {
+   "calories": 350.2,
+   "protein": 37.57,
+   "carbs": 0.0,
+   "fat": 21.08
+  },
+  "source": "USDA FoodData Central SR Legacy #175168 \"Fish, salmon, Atlantic, farmed, cooked, dry heat\" \u00d7 170 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A05",
+  "category": "generic-weight",
+  "say": "I ate 120 g of raw farmed Atlantic salmon as sashimi.",
+  "expect": {
+   "calories": 249.6,
+   "protein": 24.48,
+   "carbs": 0.0,
+   "fat": 16.08
+  },
+  "source": "USDA FoodData Central SR Legacy #175167 \"Fish, salmon, Atlantic, farmed, raw\" \u00d7 120 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A06",
+  "category": "generic-weight",
+  "say": "I ate 156 grams of boiled broccoli.",
+  "expect": {
+   "calories": 54.6,
+   "protein": 3.71,
+   "carbs": 11.2,
+   "fat": 0.64
+  },
+  "source": "USDA FoodData Central SR Legacy #169967 \"Broccoli, cooked, boiled, drained, without salt\" \u00d7 156 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A07",
+  "category": "generic-weight",
+  "say": "I ate 130 g of canned chickpeas, drained.",
+  "expect": {
+   "calories": 180.7,
+   "protein": 9.17,
+   "carbs": 29.25,
+   "fat": 3.6
+  },
+  "source": "USDA FoodData Central SR Legacy #173800 \"Chickpeas (garbanzo beans, bengal gram), mature seeds, canned, drained solids\" \u00d7 130 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A08",
+  "category": "generic-weight",
+  "say": "I ate 126 grams of firm tofu.",
+  "expect": {
+   "calories": 181.44,
+   "protein": 21.8,
+   "carbs": 3.5,
+   "fat": 10.99
+  },
+  "source": "USDA FoodData Central SR Legacy #172475 \"Tofu, raw, firm, prepared with calcium sulfate\" \u00d7 126 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A09",
+  "category": "generic-weight",
+  "say": "I had 100 g of tempeh.",
+  "expect": {
+   "calories": 192.0,
+   "protein": 20.3,
+   "carbs": 7.64,
+   "fat": 10.8
+  },
+  "source": "USDA FoodData Central SR Legacy #174272 \"Tempeh\" \u00d7 100 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A10",
+  "category": "generic-weight",
+  "say": "I ate 40 grams of dry rolled oats.",
+  "expect": {
+   "calories": 151.6,
+   "protein": 5.28,
+   "carbs": 27.08,
+   "fat": 2.61
+  },
+  "source": "USDA FoodData Central SR Legacy #173904 \"Cereals, oats, regular and quick, not fortified, dry\" \u00d7 40 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A11",
+  "category": "generic-weight",
+  "say": "I ate 85 g of pasta, weighed dry.",
+  "expect": {
+   "calories": 315.35,
+   "protein": 11.05,
+   "carbs": 63.5,
+   "fat": 1.28
+  },
+  "source": "USDA FoodData Central SR Legacy #169736 \"Pasta, dry, enriched\" \u00d7 85 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A12",
+  "category": "generic-weight",
+  "say": "I ate 220 grams of cooked pasta.",
+  "expect": {
+   "calories": 347.6,
+   "protein": 12.76,
+   "carbs": 67.98,
+   "fat": 2.05
+  },
+  "source": "USDA FoodData Central SR Legacy #169737 \"Pasta, cooked, enriched, without added salt\" \u00d7 220 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A13",
+  "category": "generic-weight",
+  "say": "I ate a 173 gram baked potato with the skin.",
+  "expect": {
+   "calories": 160.89,
+   "protein": 4.33,
+   "carbs": 36.68,
+   "fat": 0.22
+  },
+  "source": "USDA FoodData Central SR Legacy #170093 \"Potatoes, baked, flesh and skin, without salt\" \u00d7 173 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A14",
+  "category": "generic-weight",
+  "say": "I ate 165 g of mango.",
+  "expect": {
+   "calories": 99.0,
+   "protein": 1.35,
+   "carbs": 24.75,
+   "fat": 0.63
+  },
+  "source": "USDA FoodData Central SR Legacy #169910 \"Mangos, raw\" \u00d7 165 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A15",
+  "category": "generic-weight",
+  "say": "I ate 30 grams of walnuts.",
+  "expect": {
+   "calories": 196.2,
+   "protein": 4.56,
+   "carbs": 4.11,
+   "fat": 19.56
+  },
+  "source": "USDA FoodData Central SR Legacy #170187 \"Nuts, walnuts, english\" \u00d7 30 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A16",
+  "category": "generic-weight",
+  "say": "I ate 28 g of raw cashews.",
+  "expect": {
+   "calories": 149.24,
+   "protein": 4.87,
+   "carbs": 10.16,
+   "fat": 10.89
+  },
+  "source": "USDA FoodData Central Foundation #2515374 \"Nuts, cashew nuts, raw\" \u00d7 28 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A17",
+  "category": "generic-weight",
+  "say": "I ate 28 grams of pumpkin seeds.",
+  "expect": {
+   "calories": 156.52,
+   "protein": 8.46,
+   "carbs": 3.0,
+   "fat": 13.72
+  },
+  "source": "USDA FoodData Central SR Legacy #170556 \"Seeds, pumpkin and squash seed kernels, dried\" \u00d7 28 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A18",
+  "category": "generic-weight",
+  "say": "I ate 40 grams of feta cheese.",
+  "expect": {
+   "calories": 106.0,
+   "protein": 5.68,
+   "carbs": 1.55,
+   "fat": 8.6
+  },
+  "source": "USDA FoodData Central SR Legacy #173420 \"Cheese, feta\" \u00d7 40 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A19",
+  "category": "generic-weight",
+  "say": "I ate 220 grams of 2% cottage cheese.",
+  "expect": {
+   "calories": 184.8,
+   "protein": 24.2,
+   "carbs": 9.48,
+   "fat": 5.06
+  },
+  "source": "USDA FoodData Central Foundation #328841 \"Cheese, cottage, lowfat, 2% milkfat\" \u00d7 220 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A20",
+  "category": "generic-weight",
+  "say": "I ate 113 g of cooked 93% lean ground turkey.",
+  "expect": {
+   "calories": 240.69,
+   "protein": 30.62,
+   "carbs": 0.0,
+   "fat": 13.11
+  },
+  "source": "USDA FoodData Central SR Legacy #172851 \"Turkey, ground, 93% lean, 7% fat, pan-broiled crumbles\" \u00d7 113 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A21",
+  "category": "generic-weight",
+  "say": "I ate 107 grams of canned light tuna in water, drained.",
+  "expect": {
+   "calories": 96.3,
+   "protein": 20.33,
+   "carbs": 0.09,
+   "fat": 1.01
+  },
+  "source": "USDA FoodData Central Foundation #334194 \"Fish, tuna, light, canned in water, drained solids\" \u00d7 107 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A22",
+  "category": "generic-weight",
+  "say": "I ate 180 g of baked Atlantic cod.",
+  "expect": {
+   "calories": 189.0,
+   "protein": 41.04,
+   "carbs": 0.0,
+   "fat": 1.55
+  },
+  "source": "USDA FoodData Central SR Legacy #171956 \"Fish, cod, Atlantic, cooked, dry heat\" \u00d7 180 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A23",
+  "category": "generic-weight",
+  "say": "I had 21 grams of honey.",
+  "expect": {
+   "calories": 63.84,
+   "protein": 0.06,
+   "carbs": 17.3,
+   "fat": 0.0
+  },
+  "source": "USDA FoodData Central SR Legacy #169640 \"Honey\" \u00d7 21 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A24",
+  "category": "generic-weight",
+  "say": "I ate 28 g of unsalted dry roasted peanuts.",
+  "expect": {
+   "calories": 164.36,
+   "protein": 6.83,
+   "carbs": 5.96,
+   "fat": 13.92
+  },
+  "source": "USDA FoodData Central SR Legacy #173806 \"Peanuts, all types, dry-roasted, without salt\" \u00d7 28 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A25",
+  "category": "generic-weight",
+  "say": "I ate 157 g of cooked couscous.",
+  "expect": {
+   "calories": 175.84,
+   "protein": 5.95,
+   "carbs": 36.42,
+   "fat": 0.25
+  },
+  "source": "USDA FoodData Central SR Legacy #169700 \"Couscous, cooked\" \u00d7 157 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A26",
+  "category": "generic-weight",
+  "say": "I ate 157 grams of cooked pearl barley.",
+  "expect": {
+   "calories": 193.11,
+   "protein": 3.55,
+   "carbs": 44.27,
+   "fat": 0.69
+  },
+  "source": "USDA FoodData Central SR Legacy #170285 \"Barley, pearled, cooked\" \u00d7 157 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A27",
+  "category": "generic-weight",
+  "say": "I ate 182 g of cooked bulgur.",
+  "expect": {
+   "calories": 151.06,
+   "protein": 5.61,
+   "carbs": 33.85,
+   "fat": 0.44
+  },
+  "source": "USDA FoodData Central SR Legacy #170287 \"Bulgur, cooked\" \u00d7 182 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A28",
+  "category": "generic-weight",
+  "say": "I ate 172 grams of cooked black beans.",
+  "expect": {
+   "calories": 227.04,
+   "protein": 15.24,
+   "carbs": 40.76,
+   "fat": 0.93
+  },
+  "source": "USDA FoodData Central SR Legacy #173735 \"Beans, black, mature seeds, cooked, boiled, without salt\" \u00d7 172 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A29",
+  "category": "generic-weight",
+  "say": "I ate 133 g of canned red kidney beans, drained.",
+  "expect": {
+   "calories": 164.92,
+   "protein": 10.61,
+   "carbs": 28.6,
+   "fat": 1.4
+  },
+  "source": "USDA FoodData Central SR Legacy #174285 \"Beans, kidney, red, mature seeds, canned, drained solids\" \u00d7 133 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A30",
+  "category": "generic-weight",
+  "say": "I had 14 grams of coconut oil.",
+  "expect": {
+   "calories": 124.88,
+   "protein": 0.0,
+   "carbs": 0.0,
+   "fat": 13.87
+  },
+  "source": "USDA FoodData Central SR Legacy #171412 \"Oil, coconut\" \u00d7 14 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A31",
+  "category": "generic-weight",
+  "say": "I ate 85 g of broiled ground lamb.",
+  "expect": {
+   "calories": 240.55,
+   "protein": 21.08,
+   "carbs": 0.0,
+   "fat": 16.66
+  },
+  "source": "USDA FoodData Central SR Legacy #172544 \"Lamb, ground, cooked, broiled\" \u00d7 85 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A32",
+  "category": "generic-weight",
+  "say": "I ate 140 grams of roasted duck meat without the skin.",
+  "expect": {
+   "calories": 281.4,
+   "protein": 32.9,
+   "carbs": 0.0,
+   "fat": 15.68
+  },
+  "source": "USDA FoodData Central SR Legacy #172411 \"Duck, domesticated, meat only, cooked, roasted\" \u00d7 140 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A33",
+  "category": "generic-weight",
+  "say": "I ate 150 g of kimchi.",
+  "expect": {
+   "calories": 22.5,
+   "protein": 1.65,
+   "carbs": 3.6,
+   "fat": 0.75
+  },
+  "source": "USDA FoodData Central SR Legacy #170392 \"Cabbage, kimchi\" \u00d7 150 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A34",
+  "category": "generic-weight",
+  "say": "I ate 145 grams of papaya.",
+  "expect": {
+   "calories": 62.35,
+   "protein": 0.68,
+   "carbs": 15.66,
+   "fat": 0.38
+  },
+  "source": "USDA FoodData Central SR Legacy #169926 \"Papayas, raw\" \u00d7 145 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A35",
+  "category": "generic-weight",
+  "say": "I ate 165 g of guava.",
+  "expect": {
+   "calories": 112.2,
+   "protein": 4.21,
+   "carbs": 23.6,
+   "fat": 1.57
+  },
+  "source": "USDA FoodData Central SR Legacy #173044 \"Guavas, common, raw\" \u00d7 165 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A36",
+  "category": "generic-weight",
+  "say": "I ate a 90 gram piece of plain naan.",
+  "expect": {
+   "calories": 261.9,
+   "protein": 8.66,
+   "carbs": 45.36,
+   "fat": 5.09
+  },
+  "source": "USDA FoodData Central SR Legacy #171845 \"Bread, naan, plain, commercially prepared, refrigerated\" \u00d7 90 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A37",
+  "category": "generic-weight",
+  "say": "I ate 85 grams of homemade falafel.",
+  "expect": {
+   "calories": 283.05,
+   "protein": 11.31,
+   "carbs": 27.03,
+   "fat": 15.13
+  },
+  "source": "USDA FoodData Central SR Legacy #172455 \"Falafel, home-prepared\" \u00d7 85 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A38",
+  "category": "generic-weight",
+  "say": "I ate 50 g of natto.",
+  "expect": {
+   "calories": 105.5,
+   "protein": 9.7,
+   "carbs": 6.35,
+   "fat": 5.5
+  },
+  "source": "USDA FoodData Central SR Legacy #172443 \"Natto\" \u00d7 50 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A39",
+  "category": "generic-weight",
+  "say": "I ate 155 grams of shelled edamame.",
+  "expect": {
+   "calories": 187.55,
+   "protein": 18.45,
+   "carbs": 13.81,
+   "fat": 8.06
+  },
+  "source": "USDA FoodData Central SR Legacy #168411 \"Edamame, frozen, prepared\" \u00d7 155 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A40",
+  "category": "generic-weight",
+  "say": "I ate 56 g of part-skim mozzarella.",
+  "expect": {
+   "calories": 142.24,
+   "protein": 13.61,
+   "carbs": 1.55,
+   "fat": 8.9
+  },
+  "source": "USDA FoodData Central SR Legacy #170847 \"Cheese, mozzarella, part skim milk\" \u00d7 56 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A41",
+  "category": "generic-weight",
+  "say": "I ate 140 g of green kiwi.",
+  "expect": {
+   "calories": 81.2,
+   "protein": 1.48,
+   "carbs": 19.6,
+   "fat": 0.62
+  },
+  "source": "USDA FoodData Central Foundation #327046 \"Kiwifruit, green, raw\" \u00d7 140 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A42",
+  "category": "generic-weight",
+  "say": "I ate 165 grams of pineapple chunks.",
+  "expect": {
+   "calories": 82.5,
+   "protein": 0.89,
+   "carbs": 21.62,
+   "fat": 0.2
+  },
+  "source": "USDA FoodData Central SR Legacy #169124 \"Pineapple, raw, all varieties\" \u00d7 165 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A43",
+  "category": "generic-weight",
+  "say": "I ate 70 grams of raw white mushrooms.",
+  "expect": {
+   "calories": 15.4,
+   "protein": 2.16,
+   "carbs": 2.28,
+   "fat": 0.24
+  },
+  "source": "USDA FoodData Central SR Legacy #169251 \"Mushrooms, white, raw\" \u00d7 70 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A44",
+  "category": "generic-weight",
+  "say": "I ate 149 g of raw red bell pepper.",
+  "expect": {
+   "calories": 38.74,
+   "protein": 1.48,
+   "carbs": 8.98,
+   "fat": 0.45
+  },
+  "source": "USDA FoodData Central SR Legacy #170108 \"Peppers, sweet, red, raw\" \u00d7 149 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A45",
+  "category": "generic-weight",
+  "say": "I ate 90 grams of boiled asparagus.",
+  "expect": {
+   "calories": 19.8,
+   "protein": 2.16,
+   "carbs": 3.7,
+   "fat": 0.2
+  },
+  "source": "USDA FoodData Central SR Legacy #168390 \"Asparagus, cooked, boiled, drained\" \u00d7 90 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A46",
+  "category": "generic-weight",
+  "say": "I ate a 178 g pear.",
+  "expect": {
+   "calories": 101.46,
+   "protein": 0.64,
+   "carbs": 27.06,
+   "fat": 0.25
+  },
+  "source": "USDA FoodData Central SR Legacy #169118 \"Pears, raw\" \u00d7 178 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A47",
+  "category": "generic-weight",
+  "say": "I ate 48 grams of medjool dates.",
+  "expect": {
+   "calories": 132.96,
+   "protein": 0.87,
+   "carbs": 36.0,
+   "fat": 0.07
+  },
+  "source": "USDA FoodData Central SR Legacy #168191 \"Dates, medjool\" \u00d7 48 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A48",
+  "category": "generic-weight",
+  "say": "I ate 92 g of canned sardines in oil, drained.",
+  "expect": {
+   "calories": 191.36,
+   "protein": 22.63,
+   "carbs": 0.0,
+   "fat": 10.49
+  },
+  "source": "USDA FoodData Central SR Legacy #175139 \"Fish, sardine, Atlantic, canned in oil, drained solids with bone\" \u00d7 92 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A49",
+  "category": "generic-weight",
+  "say": "I ate 116 grams of roasted chicken thigh meat, no skin.",
+  "expect": {
+   "calories": 207.64,
+   "protein": 28.77,
+   "carbs": 0.0,
+   "fat": 9.45
+  },
+  "source": "USDA FoodData Central SR Legacy #172388 \"Chicken, broilers or fryers, thigh, meat only, cooked, roasted\" \u00d7 116 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A50",
+  "category": "generic-weight",
+  "say": "I ate 85 g of roasted turkey breast meat.",
+  "expect": {
+   "calories": 124.95,
+   "protein": 25.59,
+   "carbs": 0.0,
+   "fat": 1.77
+  },
+  "source": "USDA FoodData Central SR Legacy #171496 \"Turkey, whole, breast, meat only, cooked, roasted\" \u00d7 85 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A51",
+  "category": "generic-weight",
+  "say": "I ate 100 grams of hard-boiled egg.",
+  "expect": {
+   "calories": 155.0,
+   "protein": 12.6,
+   "carbs": 1.12,
+   "fat": 10.6
+  },
+  "source": "USDA FoodData Central SR Legacy #173424 \"Egg, whole, cooked, hard-boiled\" \u00d7 100 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "A52",
+  "category": "generic-weight",
+  "say": "I had 17 g of miso paste.",
+  "expect": {
+   "calories": 33.66,
+   "protein": 2.17,
+   "carbs": 4.31,
+   "fat": 1.02
+  },
+  "source": "USDA FoodData Central Survey (FNDDS) #2707439 \"Miso\" \u00d7 17 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "B01",
+  "category": "household-measure",
+  "say": "I ate 1 cup of cooked quinoa.",
+  "expect": {
+   "calories": 222.0,
+   "protein": 8.14,
+   "carbs": 39.41,
+   "fat": 3.55
+  },
+  "source": "USDA FoodData Central SR Legacy #168917 \"Quinoa, cooked\" \u00d7 185 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B02",
+  "category": "household-measure",
+  "say": "I had a cup of boiled lentils.",
+  "expect": {
+   "calories": 229.68,
+   "protein": 17.86,
+   "carbs": 39.8,
+   "fat": 0.75
+  },
+  "source": "USDA FoodData Central SR Legacy #172421 \"Lentils, mature seeds, cooked, boiled, without salt\" \u00d7 198 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B03",
+  "category": "household-measure",
+  "say": "I had 1 tablespoon of honey.",
+  "expect": {
+   "calories": 63.84,
+   "protein": 0.06,
+   "carbs": 17.3,
+   "fat": 0.0
+  },
+  "source": "USDA FoodData Central SR Legacy #169640 \"Honey\" \u00d7 21 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B04",
+  "category": "household-measure",
+  "say": "I had 2 tablespoons of coconut oil.",
+  "expect": {
+   "calories": 242.62,
+   "protein": 0.0,
+   "carbs": 0.0,
+   "fat": 26.96
+  },
+  "source": "USDA FoodData Central SR Legacy #171412 \"Oil, coconut\" \u00d7 27.2 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B05",
+  "category": "household-measure",
+  "say": "I ate 1 cup of cooked black beans.",
+  "expect": {
+   "calories": 227.04,
+   "protein": 15.24,
+   "carbs": 40.76,
+   "fat": 0.93
+  },
+  "source": "USDA FoodData Central SR Legacy #173735 \"Beans, black, mature seeds, cooked, boiled, without salt\" \u00d7 172 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B06",
+  "category": "household-measure",
+  "say": "I ate a cup of tempeh.",
+  "expect": {
+   "calories": 318.72,
+   "protein": 33.7,
+   "carbs": 12.68,
+   "fat": 17.93
+  },
+  "source": "USDA FoodData Central SR Legacy #174272 \"Tempeh\" \u00d7 166 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B07",
+  "category": "household-measure",
+  "say": "I ate one cup of cooked pearl barley.",
+  "expect": {
+   "calories": 193.11,
+   "protein": 3.55,
+   "carbs": 44.27,
+   "fat": 0.69
+  },
+  "source": "USDA FoodData Central SR Legacy #170285 \"Barley, pearled, cooked\" \u00d7 157 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B08",
+  "category": "household-measure",
+  "say": "I ate half a cup of dry rolled oats.",
+  "expect": {
+   "calories": 153.5,
+   "protein": 5.35,
+   "carbs": 27.42,
+   "fat": 2.64
+  },
+  "source": "USDA FoodData Central SR Legacy #173904 \"Cereals, oats, regular and quick, not fortified, dry\" \u00d7 40.5 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B09",
+  "category": "household-measure",
+  "say": "I ate 2 large hard-boiled eggs.",
+  "expect": {
+   "calories": 155.0,
+   "protein": 12.6,
+   "carbs": 1.12,
+   "fat": 10.6
+  },
+  "source": "USDA FoodData Central SR Legacy #173424 \"Egg, whole, cooked, hard-boiled\" \u00d7 100 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B10",
+  "category": "household-measure",
+  "say": "I ate 3 medjool dates.",
+  "expect": {
+   "calories": 199.44,
+   "protein": 1.3,
+   "carbs": 54.0,
+   "fat": 0.11
+  },
+  "source": "USDA FoodData Central SR Legacy #168191 \"Dates, medjool\" \u00d7 72 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B11",
+  "category": "household-measure",
+  "say": "I had a McDonald's Egg McMuffin.",
+  "expect": {
+   "calories": 287.28,
+   "protein": 17.14,
+   "carbs": 27.34,
+   "fat": 12.17
+  },
+  "source": "USDA FoodData Central SR Legacy #173307 \"McDONALD'S, Egg McMUFFIN\" \u00d7 126 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B12",
+  "category": "household-measure",
+  "say": "I had a McDonald's Filet-O-Fish.",
+  "expect": {
+   "calories": 377.88,
+   "protein": 15.14,
+   "carbs": 35.38,
+   "fat": 19.56
+  },
+  "source": "USDA FoodData Central SR Legacy #170319 \"McDONALD'S, FILET-O-FISH\" \u00d7 134 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B13",
+  "category": "household-measure",
+  "say": "I ate 2 hard shell beef tacos with cheese and lettuce.",
+  "expect": {
+   "calories": 311.88,
+   "protein": 12.23,
+   "carbs": 27.32,
+   "fat": 17.53
+  },
+  "source": "USDA FoodData Central SR Legacy #170689 \"Fast foods, taco with beef, cheese and lettuce, hard shell\" \u00d7 138 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B14",
+  "category": "household-measure",
+  "say": "I ate 1 medium baked potato with the skin.",
+  "expect": {
+   "calories": 160.89,
+   "protein": 4.33,
+   "carbs": 36.68,
+   "fat": 0.22
+  },
+  "source": "USDA FoodData Central SR Legacy #170093 \"Potatoes, baked, flesh and skin, without salt\" \u00d7 173 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B15",
+  "category": "household-measure",
+  "say": "I ate 1 cup of kimchi.",
+  "expect": {
+   "calories": 22.5,
+   "protein": 1.65,
+   "carbs": 3.6,
+   "fat": 0.75
+  },
+  "source": "USDA FoodData Central SR Legacy #170392 \"Cabbage, kimchi\" \u00d7 150 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B16",
+  "category": "household-measure",
+  "say": "I ate 1 oz of pumpkin seeds.",
+  "expect": {
+   "calories": 158.48,
+   "protein": 8.56,
+   "carbs": 3.03,
+   "fat": 13.89
+  },
+  "source": "USDA FoodData Central SR Legacy #170556 \"Seeds, pumpkin and squash seed kernels, dried\" \u00d7 28.35 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B17",
+  "category": "household-measure",
+  "say": "I ate 1 cup of mango pieces.",
+  "expect": {
+   "calories": 99.0,
+   "protein": 1.35,
+   "carbs": 24.75,
+   "fat": 0.63
+  },
+  "source": "USDA FoodData Central SR Legacy #169910 \"Mangos, raw\" \u00d7 165 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "B18",
+  "category": "household-measure",
+  "say": "I ate a cup of shelled edamame.",
+  "expect": {
+   "calories": 187.55,
+   "protein": 18.45,
+   "carbs": 13.81,
+   "fat": 8.06
+  },
+  "source": "USDA FoodData Central SR Legacy #168411 \"Edamame, frozen, prepared\" \u00d7 155 g (the record's own measure)",
+  "tol": {
+   "pct": 10,
+   "abs": 1.5
+  }
+ },
+ {
+  "id": "D01",
+  "category": "branded",
+  "say": "I ate 2 slices of Dave's Killer Bread 21 Whole Grains and Seeds.",
+  "expect": {
+   "calories": 240.0,
+   "protein": 10.0,
+   "carbs": 44.0,
+   "fat": 4.0
+  },
+  "source": "USDA FoodData Central Branded #2674263 label (DAVE'S KILLER BREAD, 21 WHOLE GRAINS AND SEEDS ORGANIC BREAD; 1 SLICE = 45.0 g) \u00d7 2",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D02",
+  "category": "branded",
+  "say": "I ate a KIND Dark Chocolate Nuts & Sea Salt bar.",
+  "expect": {
+   "calories": 180.0,
+   "protein": 6.0,
+   "carbs": 16.0,
+   "fat": 15.0
+  },
+  "source": "USDA FoodData Central Branded #2550612 label (DARK CHOCOLATE NUTS & SEA SALT BARS, DARK CHOCOLATE NUTS & SEA SALT; 1 bar = 40.0 g) \u00d7 1",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D03",
+  "category": "branded",
+  "say": "I ate 12 Triscuit Original crackers.",
+  "expect": {
+   "calories": 240.0,
+   "protein": 6.0,
+   "carbs": 40.0,
+   "fat": 7.0
+  },
+  "source": "USDA FoodData Central Branded #2744038 label (TRISCUIT ORIGINAL CRACKERS 8.5 OZ; 6 crackers (28g) = 28.0 g) \u00d7 2",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D04",
+  "category": "branded",
+  "say": "I ate 27 Cheez-It Original crackers.",
+  "expect": {
+   "calories": 150.0,
+   "protein": 3.0,
+   "carbs": 18.0,
+   "fat": 8.0
+  },
+  "source": "USDA FoodData Central Branded #2770622 label (Kellogg's Cheez It Crackers Original 12.4oz; 27 Crackers = 30.0 g) \u00d7 1",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D05",
+  "category": "branded",
+  "say": "I ate 71 grams, dry, of Annie's Shells & White Cheddar macaroni and cheese.",
+  "expect": {
+   "calories": 260.0,
+   "protein": 9.0,
+   "carbs": 48.0,
+   "fat": 3.5
+  },
+  "source": "USDA FoodData Central Branded #2746557 label (Annie's Shells & White Cheddar Macaroni & Cheese With Organic Pasta; 2.5 oz dry mix = 71.0 g) \u00d7 1",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D06",
+  "category": "branded",
+  "say": "I ate a Larabar Peanut Butter Chocolate Chip bar.",
+  "expect": {
+   "calories": 220.0,
+   "protein": 6.0,
+   "carbs": 24.0,
+   "fat": 12.0
+  },
+  "source": "USDA FoodData Central Branded #2746429 label (Larabar Peanut Butter Chocolate Chip Fruit & Nut Bar; 1 bar = 45.0 g) \u00d7 1",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D07",
+  "category": "branded",
+  "say": "I ate one 57 g package of Nature's Bakery Raspberry Fig Bars.",
+  "expect": {
+   "calories": 200.0,
+   "protein": 3.0,
+   "carbs": 38.0,
+   "fat": 5.0
+  },
+  "source": "USDA FoodData Central Branded #2679367 label (RASPBERRY FIG BAR, RASPBERRY; 1 PACKAGE = 57.0 g) \u00d7 1",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D08",
+  "category": "branded",
+  "say": "I ate an Amy's Bean & Rice Burrito.",
+  "expect": {
+   "calories": 309.0,
+   "protein": 10.0,
+   "carbs": 48.0,
+   "fat": 8.99
+  },
+  "source": "USDA FoodData Central Branded #2630144 label (BEAN & RICE BURRITO, BEAN & RICE; 1 package = 170.0 g) \u00d7 1",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D09",
+  "category": "branded",
+  "say": "I ate 20 Stacy's Simply Naked pita chips.",
+  "expect": {
+   "calories": 260.0,
+   "protein": 6.0,
+   "carbs": 38.0,
+   "fat": 10.0
+  },
+  "source": "USDA FoodData Central Branded #2672089 label (SIMPLY NAKED PITA CHIPS, SIMPLY NAKED; 10 chips = 28.0 g) \u00d7 2",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D10",
+  "category": "branded",
+  "say": "I ate half a cup of Bob's Red Mill rolled oats, dry.",
+  "expect": {
+   "calories": 160.0,
+   "protein": 7.0,
+   "carbs": 27.0,
+   "fat": 2.5
+  },
+  "source": "USDA FoodData Central Branded #2456388 label (BOB'S RED MILL, ROLLED OATS; 0.5 cup = 41.0 g) \u00d7 1",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D11",
+  "category": "branded",
+  "say": "I ate one and a half KIND Dark Chocolate Nuts & Sea Salt bars.",
+  "expect": {
+   "calories": 270.0,
+   "protein": 9.0,
+   "carbs": 24.0,
+   "fat": 22.5
+  },
+  "source": "USDA FoodData Central Branded #2550612 label (DARK CHOCOLATE NUTS & SEA SALT BARS, DARK CHOCOLATE NUTS & SEA SALT; 1 bar = 40.0 g) \u00d7 1.5",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D12",
+  "category": "branded",
+  "say": "I ate half of an Amy's Bean & Rice Burrito.",
+  "expect": {
+   "calories": 154.5,
+   "protein": 5.0,
+   "carbs": 24.0,
+   "fat": 4.5
+  },
+  "source": "USDA FoodData Central Branded #2630144 label (BEAN & RICE BURRITO, BEAN & RICE; 1 package = 170.0 g) \u00d7 0.5",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "D13",
+  "category": "branded",
+  "say": "I ate 42 g of Triscuit Original crackers.",
+  "expect": {
+   "calories": 180.0,
+   "protein": 4.5,
+   "carbs": 30.0,
+   "fat": 5.25
+  },
+  "source": "USDA FoodData Central Branded #2744038 label (TRISCUIT ORIGINAL CRACKERS 8.5 OZ; 6 crackers (28g) = 28.0 g) \u00d7 1.5",
+  "tol": {
+   "pct": 5,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E01",
+  "category": "international-barcode",
+  "say": "I ate 30 g of the product with barcode 3017620422003.",
+  "expect": {
+   "calories": 161.7,
+   "protein": 1.89,
+   "carbs": 17.25,
+   "fat": 9.27
+  },
+  "source": "Open Food Facts product 3017620422003 (Ferrero, Nutella Nutella) \u00d7 30 g",
+  "tol": {
+   "pct": 4,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E02",
+  "category": "international-barcode",
+  "say": "I had 15 grams of Lotus Biscoff spread, barcode 5410126006957.",
+  "expect": {
+   "calories": 87.6,
+   "protein": 0.44,
+   "carbs": 8.55,
+   "fat": 5.72
+  },
+  "source": "Open Food Facts product 5410126006957 (Lotus, LOTUS BISCOFF LOTUS BISCOFF pasta speculoos) \u00d7 15 g",
+  "tol": {
+   "pct": 4,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E03",
+  "category": "international-barcode",
+  "say": "I ate 37.5 g of Weetabix, barcode 5010029000023.",
+  "expect": {
+   "calories": 135.75,
+   "protein": 4.5,
+   "carbs": 25.88,
+   "fat": 0.75
+  },
+  "source": "Open Food Facts product 5010029000023 (Weetabix Original) \u00d7 37.5 g",
+  "tol": {
+   "pct": 4,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E04",
+  "category": "international-barcode",
+  "say": "I ate a 43 g Kinder Bueno, barcode 8000500066027.",
+  "expect": {
+   "calories": 244.0,
+   "protein": 4.0,
+   "carbs": 22.0,
+   "fat": 16.0
+  },
+  "source": "Open Food Facts product 8000500066027 (Kinder kinder bueno) \u00d7 43 g",
+  "tol": {
+   "pct": 4,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E05",
+  "category": "international-barcode",
+  "say": "I ate 30 grams of McVitie's Digestives, barcode 5000168001142.",
+  "expect": {
+   "calories": 142.2,
+   "protein": 2.1,
+   "carbs": 19.08,
+   "fat": 6.39
+  },
+  "source": "Open Food Facts product 5000168001142 (McVitie's McVitie's Digestives The Original) \u00d7 30 g",
+  "tol": {
+   "pct": 4,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E06",
+  "category": "international-barcode",
+  "say": "I ate 207 g of Heinz Beanz, barcode 5000157024671.",
+  "expect": {
+   "calories": 167.67,
+   "protein": 9.94,
+   "carbs": 32.09,
+   "fat": 0.83
+  },
+  "source": "Open Food Facts product 5000157024671 (H J Heinz Foods UK Ltd Beanz in a rich tomato sauce) \u00d7 207 g",
+  "tol": {
+   "pct": 4,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E07",
+  "category": "international-barcode",
+  "say": "I ate 34 g of Arnott's Scotch Finger biscuits, barcode 9310072001777.",
+  "expect": {
+   "calories": 165.7,
+   "protein": 2.0,
+   "carbs": 24.0,
+   "fat": 7.6
+  },
+  "source": "Open Food Facts product 9310072001777 (Arnott's Scotch Finger) \u00d7 34 g",
+  "tol": {
+   "pct": 4,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E08",
+  "category": "international-barcode",
+  "say": "I ate 100 g of Barilla Spaghetti No. 5, weighed dry, barcode 8076800195057.",
+  "expect": {
+   "calories": 359.0,
+   "protein": 13.0,
+   "carbs": 71.0,
+   "fat": 2.0
+  },
+  "source": "Open Food Facts product 8076800195057 (Barilla, BARILLA NORGE ASbarilla Spaghetti N\u00ba5) \u00d7 100 g",
+  "tol": {
+   "pct": 4,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E09",
+  "category": "international-barcode",
+  "say": "I ate 30 g of Pringles Original, barcode 5053990101573.",
+  "expect": {
+   "calories": 158.4,
+   "protein": 1.86,
+   "carbs": 16.2,
+   "fat": 9.3
+  },
+  "source": "Open Food Facts product 5053990101573 (Pringles Pringles originale) \u00d7 30 g",
+  "tol": {
+   "pct": 4,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E10",
+  "category": "international-barcode",
+  "say": "I ate a 51 g Mars bar, barcode 5000159407236.",
+  "expect": {
+   "calories": 229.5,
+   "protein": 2.06,
+   "carbs": 35.7,
+   "fat": 8.57
+  },
+  "source": "Open Food Facts product 5000159407236 (Mars, Mars Wrigley Mars) \u00d7 51 g",
+  "tol": {
+   "pct": 4,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E11",
+  "category": "international-barcode",
+  "say": "I ate 160 g of Dr. Oetker Ristorante Pizza Salame, barcode 4001724819004.",
+  "expect": {
+   "calories": 417.6,
+   "protein": 16.0,
+   "carbs": 40.0,
+   "fat": 20.8
+  },
+  "source": "Open Food Facts product 4001724819004 (Dr. Oetker Dr. Oetker Ristorante Pizza Salame) \u00d7 160 g",
+  "tol": {
+   "pct": 4,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E12",
+  "category": "international-name",
+  "say": "I ate 30 g of Nutella.",
+  "expect": {
+   "calories": 161.7,
+   "protein": 1.89,
+   "carbs": 17.25,
+   "fat": 9.27
+  },
+  "source": "Open Food Facts product 3017620422003 (Ferrero, Nutella Nutella) \u00d7 30 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E13",
+  "category": "international-name",
+  "say": "I ate 2 Weetabix biscuits, 37.5 g in total.",
+  "expect": {
+   "calories": 135.75,
+   "protein": 4.5,
+   "carbs": 25.88,
+   "fat": 0.75
+  },
+  "source": "Open Food Facts product 5010029000023 (Weetabix Original) \u00d7 37.5 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E14",
+  "category": "international-name",
+  "say": "I ate 30 g of Pringles Original.",
+  "expect": {
+   "calories": 158.4,
+   "protein": 1.86,
+   "carbs": 16.2,
+   "fat": 9.3
+  },
+  "source": "Open Food Facts product 5053990101573 (Pringles Pringles originale) \u00d7 30 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "E15",
+  "category": "international-name",
+  "say": "I ate 30 grams of McVitie's Original Digestives.",
+  "expect": {
+   "calories": 142.2,
+   "protein": 2.1,
+   "carbs": 19.08,
+   "fat": 6.39
+  },
+  "source": "Open Food Facts product 5000168001142 (McVitie's McVitie's Digestives The Original) \u00d7 30 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.0
+  }
+ },
+ {
+  "id": "G01",
+  "category": "stated-label",
+  "say": "I ate 60 grams of granola. The label says per 45 g serving: 210 calories, 9g fat, 28g carbs, 5g protein, 3g fiber and 8g sugar.",
+  "expect": {
+   "calories": 280,
+   "fat": 12,
+   "carbs": 37.33,
+   "protein": 6.67,
+   "fiber": 4,
+   "sugar": 10.67
+  },
+  "source": "Arithmetic on the label in the message: 60/45 = 1.3333 \u00d7 label",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G02",
+  "category": "stated-label",
+  "say": "I drank 350 ml of a smoothie. The bottle says 62 calories, 0.4g fat, 13.5g carbs and 1.1g protein per 100 ml.",
+  "expect": {
+   "calories": 217,
+   "fat": 1.4,
+   "carbs": 47.25,
+   "protein": 3.85
+  },
+  "source": "Arithmetic on the label in the message: 350/100 = 3.5 \u00d7 label",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G03",
+  "category": "stated-label",
+  "say": "I ate 3 servings of crackers. Each serving has 130 calories, 4.5g fat, 21g carbs, 2g protein and 190mg sodium.",
+  "expect": {
+   "calories": 390,
+   "fat": 13.5,
+   "carbs": 63,
+   "protein": 6,
+   "sodium": 570
+  },
+  "source": "Arithmetic on the label in the message: 3 \u00d7 label",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G04",
+  "category": "stated-label",
+  "say": "I ate two thirds of a frozen pizza containing 960 calories, 42g fat, 102g carbs and 44g protein.",
+  "expect": {
+   "calories": 640,
+   "fat": 28,
+   "carbs": 68,
+   "protein": 29.33
+  },
+  "source": "Arithmetic on the label in the message: 2/3 \u00d7 label",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G05",
+  "category": "stated-label",
+  "say": "I ate a quarter of a bag of trail mix. There are 8 servings per bag and each serving contains 170 calories, 11g fat, 14g carbs and 5g protein.",
+  "expect": {
+   "calories": 340,
+   "fat": 22,
+   "carbs": 28,
+   "protein": 10
+  },
+  "source": "Arithmetic on the label in the message: 0.25 \u00d7 8 = 2 servings",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G06",
+  "category": "stated-label",
+  "say": "I had one and a half keto bars. Each bar has 190 calories, 15g fat, 17g total carbs, 9g fiber, 5g allulose, 2g sugar alcohol and 10g protein.",
+  "expect": {
+   "calories": 285,
+   "fat": 22.5,
+   "carbs": 25.5,
+   "fiber": 13.5,
+   "protein": 15
+  },
+  "source": "Arithmetic on the label in the message: 1.5 \u00d7 label",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  },
+  "expectTotals": {
+   "allulose": 7.5,
+   "sugarAlcohol": 3
+  }
+ },
+ {
+  "id": "G07",
+  "category": "stated-label",
+  "say": "I made six equal servings of chili containing 2400 calories, 150g protein, 210g carbs and 96g fat in total. I ate two servings.",
+  "expect": {
+   "calories": 800,
+   "protein": 50,
+   "carbs": 70,
+   "fat": 32
+  },
+  "source": "Arithmetic on the label in the message: 2/6 of the recipe",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G08",
+  "category": "stated-label",
+  "say": "I ate 25 grams of dark chocolate. Per 100 g it has 598 calories, 42.6g fat, 45.9g carbs and 7.8g protein.",
+  "expect": {
+   "calories": 149.5,
+   "fat": 10.65,
+   "carbs": 11.48,
+   "protein": 1.95
+  },
+  "source": "Arithmetic on the label in the message: 25/100 \u00d7 label",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G09",
+  "category": "stated-label",
+  "say": "I ate half a serving of ice cream. A serving has 270 calories, 17g fat, 26g carbs, 4g protein and 22g sugar.",
+  "expect": {
+   "calories": 135,
+   "fat": 8.5,
+   "carbs": 13,
+   "protein": 2,
+   "sugar": 11
+  },
+  "source": "Arithmetic on the label in the message: 0.5 \u00d7 label",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G10",
+  "category": "stated-label",
+  "say": "I drank the whole can of an energy drink. The can has 2 servings and each serving has 110 calories, 28g carbs, 27g sugar and 80mg caffeine.",
+  "expect": {
+   "calories": 220,
+   "carbs": 56,
+   "sugar": 54,
+   "caffeine": 160
+  },
+  "source": "Arithmetic on the label in the message: whole can \u00d7 2 servings",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G11",
+  "category": "stated-label",
+  "say": "I ate 5 dumplings. The label says one serving is 4 dumplings with 220 calories, 9g fat, 26g carbs and 9g protein.",
+  "expect": {
+   "calories": 275,
+   "fat": 11.25,
+   "carbs": 32.5,
+   "protein": 11.25
+  },
+  "source": "Arithmetic on the label in the message: 5/4 \u00d7 label",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G12",
+  "category": "stated-label",
+  "say": "I ate 1 cup of cereal. The label says a serving is 2/3 cup with 200 calories, 3g fat, 41g carbs and 6g protein.",
+  "expect": {
+   "calories": 300,
+   "fat": 4.5,
+   "carbs": 61.5,
+   "protein": 9
+  },
+  "source": "Arithmetic on the label in the message: 1 \u00f7 (2/3) = 1.5 \u00d7 label",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G13",
+  "category": "stated-label",
+  "say": "I ate 90 g of yogurt. The tub says 150 g has 120 calories, 15g protein, 8g carbs and 3g fat.",
+  "expect": {
+   "calories": 72,
+   "protein": 9,
+   "carbs": 4.8,
+   "fat": 1.8
+  },
+  "source": "Arithmetic on the label in the message: 90/150 = 0.6 \u00d7 label",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "G14",
+  "category": "stated-label",
+  "say": "I ate the whole bag of popcorn. The bag has 2.5 servings and one serving is 140 calories, 8g fat, 16g carbs and 2g protein.",
+  "expect": {
+   "calories": 350,
+   "fat": 20,
+   "carbs": 40,
+   "protein": 5
+  },
+  "source": "Arithmetic on the label in the message: 2.5 \u00d7 label",
+  "tol": {
+   "pct": 0,
+   "abs": 0.11
+  }
+ },
+ {
+  "id": "I01",
+  "category": "multi-food",
+  "say": "For lunch I had 150 g of cooked quinoa, 120 g of baked farmed Atlantic salmon and 90 g of boiled asparagus.",
+  "expect": {
+   "calories": 447.0,
+   "protein": 35.28,
+   "carbs": 35.65,
+   "fat": 17.96
+  },
+  "source": "USDA FoodData Central SR Legacy #168917 \"Quinoa, cooked\" \u00d7 150 g + USDA FoodData Central SR Legacy #175168 \"Fish, salmon, Atlantic, farmed, cooked, dry heat\" \u00d7 120 g + USDA FoodData Central SR Legacy #168390 \"Asparagus, cooked, boiled, drained\" \u00d7 90 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.5
+  },
+  "entries": 3
+ },
+ {
+  "id": "I02",
+  "category": "multi-food",
+  "say": "Breakfast was 40 g of dry rolled oats, 165 g of mango and 30 g of walnuts.",
+  "expect": {
+   "calories": 446.8,
+   "protein": 11.19,
+   "carbs": 55.94,
+   "fat": 22.8
+  },
+  "source": "USDA FoodData Central SR Legacy #173904 \"Cereals, oats, regular and quick, not fortified, dry\" \u00d7 40 g + USDA FoodData Central SR Legacy #169910 \"Mangos, raw\" \u00d7 165 g + USDA FoodData Central SR Legacy #170187 \"Nuts, walnuts, english\" \u00d7 30 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.5
+  },
+  "entries": 3
+ },
+ {
+  "id": "I03",
+  "category": "multi-food",
+  "say": "I had 172 g of cooked black beans, 157 g of cooked couscous and 40 g of feta.",
+  "expect": {
+   "calories": 508.88,
+   "protein": 26.87,
+   "carbs": 78.73,
+   "fat": 9.78
+  },
+  "source": "USDA FoodData Central SR Legacy #173735 \"Beans, black, mature seeds, cooked, boiled, without salt\" \u00d7 172 g + USDA FoodData Central SR Legacy #169700 \"Couscous, cooked\" \u00d7 157 g + USDA FoodData Central SR Legacy #173420 \"Cheese, feta\" \u00d7 40 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.5
+  },
+  "entries": 3
+ },
+ {
+  "id": "I04",
+  "category": "multi-food",
+  "say": "Dinner was 180 g of baked Atlantic cod, a 173 g baked potato with the skin and 156 g of boiled broccoli.",
+  "expect": {
+   "calories": 404.49,
+   "protein": 49.08,
+   "carbs": 47.88,
+   "fat": 2.41
+  },
+  "source": "USDA FoodData Central SR Legacy #171956 \"Fish, cod, Atlantic, cooked, dry heat\" \u00d7 180 g + USDA FoodData Central SR Legacy #170093 \"Potatoes, baked, flesh and skin, without salt\" \u00d7 173 g + USDA FoodData Central SR Legacy #169967 \"Broccoli, cooked, boiled, drained, without salt\" \u00d7 156 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.5
+  },
+  "entries": 3
+ },
+ {
+  "id": "I05",
+  "category": "multi-food",
+  "say": "Snack: 140 g of green kiwi, 28 g of raw cashews and 48 g of medjool dates.",
+  "expect": {
+   "calories": 363.4,
+   "protein": 7.22,
+   "carbs": 65.76,
+   "fat": 11.58
+  },
+  "source": "USDA FoodData Central Foundation #327046 \"Kiwifruit, green, raw\" \u00d7 140 g + USDA FoodData Central Foundation #2515374 \"Nuts, cashew nuts, raw\" \u00d7 28 g + USDA FoodData Central SR Legacy #168191 \"Dates, medjool\" \u00d7 48 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.5
+  },
+  "entries": 3
+ },
+ {
+  "id": "I06",
+  "category": "multi-food",
+  "say": "I ate 126 g of firm tofu, 155 g of shelled edamame and 150 g of kimchi.",
+  "expect": {
+   "calories": 391.49,
+   "protein": 41.9,
+   "carbs": 20.91,
+   "fat": 19.8
+  },
+  "source": "USDA FoodData Central SR Legacy #172475 \"Tofu, raw, firm, prepared with calcium sulfate\" \u00d7 126 g + USDA FoodData Central SR Legacy #168411 \"Edamame, frozen, prepared\" \u00d7 155 g + USDA FoodData Central SR Legacy #170392 \"Cabbage, kimchi\" \u00d7 150 g",
+  "tol": {
+   "pct": 8,
+   "abs": 1.5
+  },
+  "entries": 3
+ },
+ {
+  "id": "J01",
+  "category": "restaurant-modification",
+  "say": "I had a Chipotle burrito bowl with chicken, white rice, black beans and fresh tomato salsa, no cheese and no sour cream.",
+  "expect": {
+   "calories": 545,
+   "protein": 44,
+   "carbs": 66,
+   "fat": 12.5
+  },
+  "source": "Chipotle published nutrition, per ingredient: chicken 180/32/0/7 + white rice 210/4/40/4 + black beans 130/8/22/1.5 + tomato salsa 25/0/4/0",
+  "tol": {
+   "pct": 6,
+   "abs": 2
+  }
+ },
+ {
+  "id": "J02",
+  "category": "restaurant-modification",
+  "say": "I had a Chipotle bowl with chicken, double white rice, fajita veggies and guacamole.",
+  "expect": {
+   "calories": 850,
+   "protein": 43,
+   "carbs": 93,
+   "fat": 37
+  },
+  "source": "Chipotle published nutrition, per ingredient: chicken + 2 \u00d7 white rice + fajita veggies 20/1/5/0 + guacamole 230/2/8/22",
+  "tol": {
+   "pct": 6,
+   "abs": 2
+  }
+ },
+ {
+  "id": "J03",
+  "category": "restaurant-modification",
+  "say": "I had a Chipotle chicken burrito with white rice, black beans, cheese and lettuce, but no salsa.",
+  "expect": {
+   "calories": 955,
+   "protein": 58,
+   "carbs": 114,
+   "fat": 29.5
+  },
+  "source": "Chipotle published nutrition, per ingredient: tortilla 320/8/50/9 + chicken + white rice + black beans + cheese 110/6/1/8 + lettuce 5/0/1/0",
+  "tol": {
+   "pct": 6,
+   "abs": 2
+  }
+ },
+ {
+  "id": "K01",
+  "category": "supplement",
+  "say": "I took 5 grams of creatine monohydrate.",
+  "expect": {},
+  "source": "A supplement with no energy value: no calories or macros may be invented",
+  "limits": {
+   "maxCalories": 5,
+   "maxProtein": 1
+  }
+ },
+ {
+  "id": "K02",
+  "category": "supplement",
+  "say": "I took one Nature Made Vitamin D3 2000 IU softgel.",
+  "expect": {},
+  "source": "A supplement with no energy value: no calories or macros may be invented",
+  "limits": {
+   "maxCalories": 15,
+   "maxProtein": 1
+  }
+ },
+ {
+  "id": "K03",
+  "category": "supplement",
+  "say": "I took a 200 mg magnesium glycinate capsule.",
+  "expect": {},
+  "source": "A supplement with no energy value: no calories or macros may be invented",
+  "limits": {
+   "maxCalories": 10,
+   "maxProtein": 1
+  }
+ },
+ {
+  "id": "K04",
+  "category": "supplement",
+  "say": "I took a Centrum multivitamin tablet.",
+  "expect": {},
+  "source": "A supplement with no energy value: no calories or macros may be invented",
+  "limits": {
+   "maxCalories": 10,
+   "maxProtein": 1
+  }
+ }
+]

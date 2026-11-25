@@ -55,6 +55,13 @@ export interface NutritionDbItem {
   unitWords?: string[];
   /** Shorthand people type for this product ("hnc", "special k berries"); matched as whole phrases/words. */
   aliases?: string[];
+  /**
+   * The share of the food's weight that is eaten, when it is weighed WITH its
+   * peel, skin or pit: "a 250-gram banana including the peel" is about 160 g
+   * of banana. Applied only when the user says the weight includes the part
+   * that is thrown away (`weighedWithInedible`).
+   */
+  edibleFraction?: number;
   /** The package the product is sold in, for "half the bottle" / "the whole pizza". */
   package?: { grams?: number; ml?: number; servings?: number; label: string };
 }
@@ -63,6 +70,21 @@ const FL = ML_PER_FL_OZ;
 
 const beverage = (ml: number) => ({ fluidMl: Math.round(ml) });
 
+/** Words that make "chicken" a dish or another cut, not plain chicken breast. */
+const CHICKEN_DISH_WORDS = [
+  "sandwich", "chipotle", "nuggets", "nugget", "mcnuggets", "wings", "wing", "fried", "burrito", "bowl", "salad", "soup", "shawarma",
+  "tenders", "tender", "thigh", "thighs", "drumstick", "drumsticks", "leg", "legs", "parm", "parmesan", "curry", "tikka", "teriyaki",
+  "noodle", "noodles", "pot pie", "pie", "wrap", "taco", "tacos", "quesadilla", "pizza", "alfredo", "stir", "orange", "general",
+  "kung", "sausage", "burger", "patty", "broth", "stock", "liver", "skin", "rotisserie", "mcchicken", "popcorn", "strips", "fingers",
+  "katsu", "biryani", "fajita", "fajitas", "pasta", "rice", "casserole", "enchilada", "enchiladas", "kebab", "skewer", "jerky", "stew",
+];
+/** Words that make a fruit name a product made with it. */
+const FRUIT_PRODUCT_WORDS = [
+  "jam", "jelly", "juice", "yogurt", "yoghurt", "smoothie", "shake", "milk", "ice cream", "cake", "shortcake", "pie", "tart", "cheesecake",
+  "soda", "syrup", "flavored", "flavor", "bar", "cereal", "pop-tart", "pop tart", "poptart", "wine", "jello", "candy", "gummies", "lemonade",
+  "banana", "daiquiri", "margarita", "protein", "oatmeal", "muffin", "donut", "doughnut", "dried", "freeze", "preserves", "special k", "newton",
+];
+
 export const NUTRITION_DB: readonly NutritionDbItem[] = [
   // ── Generic reference foods ────────────────────────────────────────────────
   {
@@ -70,21 +92,28 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     serving: { amount: 1, unit: "egg", grams: 50, label: "1 large egg (50 g)" },
     perServing: { calories: 72, protein: 6.3, carbs: 0.4, fat: 4.8, saturatedFat: 1.6, fiber: 0, sugar: 0.2, sodium: 71, cholesterol: 186, potassium: 69, calcium: 28, iron: 0.9 },
     sourceType: "reference", source: "standard nutrition reference: large egg", confidence: "high",
-    match: [["egg"], ["eggs"]], exclude: ["eggo", "eggplant", "egg white", "egg whites", "eggnog", "mcmuffin"], unitWords: ["egg", "eggs"],
+    match: [["egg"], ["eggs"]], exclude: ["eggo", "eggplant", "egg white", "egg whites", "egg yolk", "egg yolks", "yolk", "yolks", "eggnog", "mcmuffin"], unitWords: ["egg", "eggs"],
+  },
+  {
+    id: "egg-yolk", name: "Egg yolk", kind: "generic",
+    serving: { amount: 1, unit: "egg yolk", grams: 17, label: "1 large egg yolk (17 g)" },
+    perServing: { calories: 54.7, protein: 2.7, carbs: 0.61, fat: 4.51, saturatedFat: 1.62, fiber: 0, sugar: 0.1, sodium: 8, cholesterol: 184, potassium: 19, calcium: 22, iron: 0.46 },
+    sourceType: "reference", source: "standard nutrition reference: egg yolk", confidence: "high",
+    match: [["egg", "yolk"], ["egg", "yolks"], ["yolk"], ["yolks"]], unitWords: ["egg yolk", "egg yolks", "yolk", "yolks", "egg", "eggs"],
   },
   {
     id: "egg-whites", name: "Egg whites", kind: "generic",
     serving: { amount: 1, unit: "egg white", grams: 33, label: "1 large egg white (33 g)" },
-    perServing: { calories: 17, protein: 3.6, carbs: 0.2, fat: 0.1, sodium: 55, potassium: 54 },
+    perServing: { calories: 17.2, protein: 3.6, carbs: 0.24, fat: 0.06, fiber: 0, sugar: 0.2, sodium: 55, cholesterol: 0, potassium: 54 },
     sourceType: "reference", source: "standard nutrition reference: egg white", confidence: "high",
-    match: [["egg", "white"], ["egg", "whites"]], unitWords: ["egg white", "egg whites", "white", "whites"],
+    match: [["egg", "white"], ["egg", "whites"]], unitWords: ["egg white", "egg whites", "white", "whites", "egg", "eggs"],
   },
   {
     id: "banana-medium", name: "Banana, medium", kind: "generic",
     serving: { amount: 1, unit: "banana", grams: 118, label: "1 medium banana (118 g)" },
     perServing: { calories: 105, protein: 1.3, carbs: 27, fat: 0.4, fiber: 3.1, sugar: 14.4, sodium: 1, potassium: 422, calcium: 6, iron: 0.3, vitaminC: 10 },
     sourceType: "reference", source: "standard nutrition reference: medium banana", confidence: "high",
-    match: [["banana"], ["bananas"]], exclude: ["bread", "smoothie", "split", "chips"], unitWords: ["banana", "bananas"],
+    match: [["banana"], ["bananas"]], exclude: ["bread", "smoothie", "split", "chips"], unitWords: ["banana", "bananas"], edibleFraction: 0.64,
   },
   {
     id: "apple-medium", name: "Apple, medium", kind: "generic",
@@ -98,14 +127,14 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     serving: { amount: 1, unit: "orange", grams: 131, label: "1 medium orange (131 g)" },
     perServing: { calories: 62, protein: 1.2, carbs: 15.4, fat: 0.2, fiber: 3.1, sugar: 12.2, sodium: 0, potassium: 237, calcium: 52, iron: 0.1, vitaminC: 70 },
     sourceType: "reference", source: "standard nutrition reference: medium orange", confidence: "high",
-    match: [["orange"], ["oranges"]], exclude: ["juice", "chicken", "soda", "crush"], unitWords: ["orange", "oranges"],
+    match: [["orange"], ["oranges"]], exclude: ["juice", "chicken", "soda", "crush"], unitWords: ["orange", "oranges"], edibleFraction: 0.73,
   },
   {
     id: "avocado-half", name: "Avocado", kind: "generic",
     serving: { amount: 0.5, unit: "avocado", grams: 68, label: "½ avocado (68 g)" },
-    perServing: { calories: 114, protein: 1.3, carbs: 6, fat: 10.5, saturatedFat: 1.5, fiber: 4.6, sugar: 0.5, sodium: 5, potassium: 345 },
-    sourceType: "reference", source: "standard nutrition reference: avocado", confidence: "medium",
-    match: [["avocado"]], exclude: ["toast", "oil"], unitWords: ["avocado", "avocados"],
+    perServing: { calories: 108.8, protein: 1.36, carbs: 5.78, fat: 10, saturatedFat: 1.45, monoFat: 6.66, polyFat: 1.24, fiber: 4.56, sugar: 0.45, sodium: 5, cholesterol: 0, potassium: 330 },
+    sourceType: "reference", source: "standard nutrition reference: avocado flesh", confidence: "high",
+    match: [["avocado"]], exclude: ["toast", "oil"], unitWords: ["avocado", "avocados"], edibleFraction: 0.67,
   },
   {
     id: "almonds", name: "Almonds", kind: "generic",
@@ -215,9 +244,17 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
   {
     id: "rice-white-cooked", name: "White rice, cooked", kind: "generic",
     serving: { amount: 1, unit: "cup", grams: 158, label: "1 cup cooked (158 g)" },
-    perServing: { calories: 205, protein: 4.3, carbs: 44.5, fat: 0.4, saturatedFat: 0.1, fiber: 0.6, sugar: 0.1, sodium: 2, potassium: 55, calcium: 16, iron: 1.9 },
+    perServing: { calories: 205.4, protein: 4.25, carbs: 44.5, fat: 0.44, saturatedFat: 0.1, fiber: 0.6, sugar: 0.1, sodium: 2, potassium: 55, calcium: 16, iron: 1.9 },
     sourceType: "reference", source: "standard nutrition reference: cooked white rice", confidence: "medium",
-    match: [["rice"], ["white", "rice"]], exclude: ["brown", "fried", "chipotle", "krispies", "cake", "cakes", "pudding", "wild", "cauliflower", "jasmine", "basmati", "sushi"], unitWords: ["cup", "cups", "bowl", "bowls", "scoop", "scoops"],
+    match: [["rice"], ["white", "rice"]], exclude: ["brown", "fried", "chipotle", "krispies", "cake", "cakes", "pudding", "wild", "cauliflower", "jasmine", "basmati", "sushi", "dry", "uncooked", "raw", "before cooking"], unitWords: ["cup", "cups", "bowl", "bowls", "scoop", "scoops"],
+  },
+  {
+    // Rice triples its weight in the pot: 100 g dry is 365 kcal, 100 g cooked 130.
+    id: "rice-white-dry", name: "White rice, dry (uncooked)", kind: "generic",
+    serving: { amount: 100, unit: "g", grams: 100, label: "100 g dry" },
+    perServing: { calories: 365, protein: 7.1, carbs: 80, fat: 0.7, saturatedFat: 0.2, fiber: 1.3, sugar: 0.1, sodium: 5, cholesterol: 0, potassium: 115, calcium: 28, iron: 0.8 },
+    sourceType: "reference", source: "standard nutrition reference: white rice, raw", confidence: "high",
+    match: [["rice", "dry"], ["rice", "uncooked"], ["rice", "raw"], ["rice", "before", "cooking"]], exclude: ["brown", "fried", "chipotle", "krispies", "cake", "cakes", "pudding", "wild", "cauliflower"],
   },
   {
     id: "rice-brown-cooked", name: "Brown rice, cooked", kind: "generic",
@@ -228,10 +265,54 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
   },
   {
     id: "chicken-breast", name: "Chicken breast, cooked", kind: "generic",
-    serving: { amount: 3, unit: "oz", grams: 85, label: "3 oz cooked (85 g)" },
-    perServing: { calories: 140, protein: 26, carbs: 0, fat: 3, saturatedFat: 0.9, fiber: 0, sugar: 0, sodium: 63, cholesterol: 73, potassium: 220, iron: 0.4 },
+    serving: { amount: 100, unit: "g", grams: 100, label: "100 g cooked" },
+    perServing: { calories: 165, protein: 31, carbs: 0, fat: 3.6, saturatedFat: 1, fiber: 0, sugar: 0, sodium: 74, cholesterol: 85, potassium: 256, iron: 1 },
     sourceType: "reference", source: "standard nutrition reference: cooked chicken breast", confidence: "medium",
-    match: [["chicken", "breast"], ["grilled", "chicken"]], exclude: ["sandwich", "chipotle", "nuggets", "mcnuggets", "wings", "fried", "burrito", "bowl", "salad", "soup", "shawarma", "tenders"],
+    match: [["chicken", "breast"], ["grilled", "chicken"], ["roasted", "chicken"], ["baked", "chicken"], ["chicken"]], exclude: [...CHICKEN_DISH_WORDS, "raw", "uncooked", "before cooking"],
+  },
+  {
+    // Chicken loses about a quarter of its weight cooking: weighed raw, 100 g is 120 kcal, not 165.
+    id: "chicken-breast-raw", name: "Chicken breast, raw", kind: "generic",
+    serving: { amount: 100, unit: "g", grams: 100, label: "100 g raw" },
+    perServing: { calories: 120, protein: 22.5, carbs: 0, fat: 2.6, saturatedFat: 0.6, fiber: 0, sugar: 0, sodium: 45, cholesterol: 73, potassium: 334, iron: 0.4 },
+    sourceType: "reference", source: "standard nutrition reference: raw chicken breast", confidence: "high",
+    match: [["chicken", "raw"], ["chicken", "uncooked"], ["chicken", "before", "cooking"]], exclude: CHICKEN_DISH_WORDS,
+  },
+  {
+    id: "olive-oil", name: "Olive oil", kind: "generic",
+    serving: { amount: 1, unit: "tbsp", grams: 13.5, ml: 14.8, label: "1 tbsp (13.5 g)" },
+    perServing: { calories: 119, protein: 0, carbs: 0, fat: 13.5, saturatedFat: 1.86, monoFat: 9.85, polyFat: 1.42, fiber: 0, sugar: 0, sodium: 0, cholesterol: 0, vitaminE: 1.94, vitaminK: 8 },
+    sourceType: "reference", source: "standard nutrition reference: olive oil", confidence: "high",
+    match: [["olive", "oil"]], unitWords: ["tbsp", "tablespoon", "tablespoons"],
+  },
+  {
+    id: "chia-seeds", name: "Chia seeds", kind: "generic",
+    serving: { amount: 28, unit: "g", grams: 28, label: "28 g (1 oz)" },
+    perServing: { calories: 136, protein: 4.6, carbs: 11.8, fat: 8.6, saturatedFat: 0.9, fiber: 9.6, sugar: 0, sodium: 4, cholesterol: 0, potassium: 114, calcium: 177, iron: 2.2, magnesium: 94, phosphorus: 241, zinc: 1.3 },
+    sourceType: "reference", source: "standard nutrition reference: chia seeds", confidence: "high",
+    match: [["chia"]], exclude: ["pudding", "bar"],
+  },
+  {
+    id: "strawberries", name: "Strawberries", kind: "generic",
+    serving: { amount: 100, unit: "g", grams: 100, label: "100 g" },
+    perServing: { calories: 32, protein: 0.7, carbs: 7.7, fat: 0.3, fiber: 2, sugar: 4.9, sodium: 1, cholesterol: 0, potassium: 153, calcium: 16, iron: 0.4, vitaminC: 58.8, folate: 24 },
+    sourceType: "reference", source: "standard nutrition reference: strawberries", confidence: "high",
+    match: [["strawberries"], ["strawberry"]], exclude: [...FRUIT_PRODUCT_WORDS],
+  },
+  {
+    id: "raisins", name: "Raisins", kind: "generic",
+    serving: { amount: 100, unit: "g", grams: 100, label: "100 g" },
+    perServing: { calories: 299, protein: 3.1, carbs: 79.2, fat: 0.5, fiber: 3.7, sugar: 59.2, sodium: 11, cholesterol: 0, potassium: 749, calcium: 50, iron: 1.9 },
+    sourceType: "reference", source: "standard nutrition reference: raisins", confidence: "high",
+    match: [["raisins"], ["raisin"]], exclude: ["bran", "bread", "cookie", "cookies", "bagel", "oatmeal", "cereal", "toast"],
+  },
+  {
+    // Raisins are grapes with the water gone: the same 100 g is 69 kcal fresh, 299 dried.
+    id: "grapes", name: "Grapes", kind: "generic",
+    serving: { amount: 100, unit: "g", grams: 100, label: "100 g" },
+    perServing: { calories: 69, protein: 0.7, carbs: 18.1, fat: 0.2, fiber: 0.9, sugar: 15.5, sodium: 2, cholesterol: 0, potassium: 191, calcium: 10, iron: 0.4, vitaminC: 3.2, vitaminK: 14.6 },
+    sourceType: "reference", source: "standard nutrition reference: grapes", confidence: "high",
+    match: [["grapes"]], exclude: [...FRUIT_PRODUCT_WORDS, "nuts", "grapefruit"],
   },
   {
     id: "peanut-butter", name: "Peanut butter", kind: "generic",
@@ -413,14 +494,23 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     serving: { amount: 1, unit: "cup", ml: 240, grams: 240, label: "1 cup (240 ml)" },
     perServing: { calories: 120, protein: 13, carbs: 6, fat: 4.5, saturatedFat: 3, fiber: 0, sugar: 6, addedSugar: 0, sodium: 120, cholesterol: 20, potassium: 400, calcium: 380, vitaminD: 5, ...beverage(240) },
     sourceType: "manufacturer", source: "Fairlife 2% Ultra-Filtered Milk label", confidence: "exact",
-    match: [["fairlife", "2%"], ["fairlife", "2", "percent"], ["fairlife", "reduced", "fat"], ["fairlife", "milk"], ["fairlife"]], exclude: ["whole", "skim", "fat free", "chocolate", "core power", "nutrition plan"], unitWords: ["cup", "cups", "glass", "glasses"],
+    match: [["fairlife", "2%"], ["fairlife", "2", "percent"], ["fairlife", "reduced", "fat"], ["fairlife", "milk"], ["fairlife"]], exclude: ["whole", "skim", "fat free", "chocolate", "core power", "nutrition plan", "elite", "42g", "shake"], unitWords: ["cup", "cups", "glass", "glasses"],
   },
   {
     id: "core-power-26", name: "Fairlife Core Power 26g Protein Shake", brand: "Fairlife", kind: "branded", isBeverage: true,
     serving: { amount: 1, unit: "bottle", ml: 414, label: "14 fl oz bottle (414 ml)" },
     perServing: { calories: 170, protein: 26, carbs: 7, fat: 4.5, saturatedFat: 3, sugar: 5, addedSugar: 0, sodium: 220, calcium: 650, ...beverage(414) },
     sourceType: "manufacturer", source: "Core Power 26g label", confidence: "high",
-    match: [["core", "power"]], exclude: ["elite", "42"], unitWords: ["bottle", "bottles"],
+    match: [["core", "power"]], exclude: ["elite", "42", "42g"], unitWords: ["bottle", "bottles", "shake", "shakes"],
+    package: { ml: 414, servings: 1, label: "14 fl oz bottle" },
+  },
+  {
+    id: "core-power-elite-42", name: "Fairlife Core Power Elite 42g Protein Shake (Chocolate)", brand: "Fairlife", kind: "branded", isBeverage: true,
+    serving: { amount: 1, unit: "bottle", ml: 414, label: "14 fl oz bottle (414 ml)" },
+    perServing: { calories: 230, protein: 42, carbs: 9, fat: 3.5, saturatedFat: 2, fiber: 2, sugar: 7, addedSugar: 0, sodium: 260, cholesterol: 35, ...beverage(414) },
+    sourceType: "manufacturer", source: "Core Power Elite 42g Chocolate label", confidence: "exact",
+    match: [["core", "power", "elite"], ["core", "power", "42g"], ["core", "power", "42"], ["fairlife", "elite"], ["fairlife", "42g"]], unitWords: ["bottle", "bottles", "shake", "shakes"],
+    package: { ml: 414, servings: 1, label: "14 fl oz bottle" },
   },
   {
     id: "premier-protein-shake", name: "Premier Protein Shake", brand: "Premier Protein", kind: "branded", isBeverage: true,
@@ -451,6 +541,14 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     match: [["quaker", "original"], ["quaker", "plain"], ["quaker", "instant", "oatmeal"], ["quaker", "oatmeal"]], exclude: ["maple", "brown sugar", "apple", "cinnamon", "honey", "almond", "almonds", "peach", "strawberr", "raisin", "protein", "chocolate", "blueberr", "banana"], unitWords: ["packet", "packets", "pack", "packs"],
   },
   {
+    id: "chobani-zero-sugar", name: "Chobani Zero Sugar Greek Yogurt (Vanilla)", brand: "Chobani", kind: "branded",
+    serving: { amount: 1, unit: "container", grams: 150, label: "5.3 oz cup (150 g)" },
+    perServing: { calories: 60, protein: 12, carbs: 5, fat: 0, saturatedFat: 0, fiber: 0, sugar: 0, addedSugar: 0, sodium: 65, cholesterol: 10 },
+    sourceType: "manufacturer", source: "Chobani Zero Sugar Vanilla label", confidence: "exact",
+    match: [["chobani", "zero", "sugar"], ["chobani", "zero"]], unitWords: ["container", "containers", "cup", "cups", "yogurt", "yogurts"],
+    package: { grams: 150, servings: 1, label: "5.3 oz cup" },
+  },
+  {
     id: "oikos-triple-zero", name: "Oikos Triple Zero Greek Yogurt", brand: "Oikos", kind: "branded",
     serving: { amount: 1, unit: "container", grams: 150, label: "5.3 oz container (150 g)" },
     perServing: { calories: 90, protein: 15, carbs: 7, fat: 0, saturatedFat: 0, fiber: 0, sugar: 6, addedSugar: 0, sodium: 65, calcium: 180, potassium: 190 },
@@ -467,9 +565,9 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
   {
     id: "quest-bar", name: "Quest Protein Bar", brand: "Quest", kind: "branded",
     serving: { amount: 1, unit: "bar", grams: 60, label: "1 bar (60 g)" },
-    perServing: { calories: 190, protein: 21, carbs: 21, fat: 9, saturatedFat: 3, fiber: 14, sugar: 1, addedSugar: 0, sodium: 240, potassium: 130 },
+    perServing: { calories: 190, protein: 21, carbs: 22, fat: 9, saturatedFat: 3, fiber: 12, sugar: 1, addedSugar: 0, sodium: 220, cholesterol: 5 },
     sourceType: "manufacturer", source: "Quest Bar label (Chocolate Chip Cookie Dough)", confidence: "high",
-    match: [["quest", "bar"], ["quest", "protein"]], exclude: ["chips", "pizza", "hero", "mini"], unitWords: ["bar", "bars"], aliases: ["quest cookies bar", "quest cookies and cream bar", "quest cookies & cream"],
+    match: [["quest", "bar"], ["quest", "protein"]], exclude: ["chips", "pizza", "hero", "mini"], unitWords: ["bar", "bars"], package: { grams: 60, servings: 1, label: "60 g bar" }, aliases: ["quest cookies bar", "quest cookies and cream bar", "quest cookies & cream"],
   },
   {
     id: "rxbar", name: "RXBAR", brand: "RXBAR", kind: "branded",
@@ -495,9 +593,9 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
   {
     id: "oreo", name: "Oreo", brand: "Nabisco", kind: "branded",
     serving: { amount: 3, unit: "cookie", grams: 34, label: "3 cookies (34 g)" },
-    perServing: { calories: 160, protein: 1, carbs: 25, fat: 7, saturatedFat: 2, fiber: 1, sugar: 14, addedSugar: 14, sodium: 135 },
+    perServing: { calories: 160, protein: 1, carbs: 25, fat: 7, saturatedFat: 2, sugar: 14, addedSugar: 14, sodium: 130, cholesterol: 0 },
     sourceType: "manufacturer", source: "Oreo label (3 cookies)", confidence: "high",
-    match: [["oreo"], ["oreos"]], exclude: ["double", "thins", "golden", "mega", "mcflurry", "blizzard", "shake"], unitWords: ["cookie", "cookies", "oreo", "oreos"],
+    match: [["oreo"], ["oreos"]], exclude: ["double", "thins", "golden", "mega", "mcflurry", "blizzard", "shake", "ice cream", "cake", "cheesecake", "cereal"], unitWords: ["cookie", "cookies", "oreo", "oreos"],
     package: { grams: 405, servings: 12, label: "family size package (14.3 oz, ~36 cookies)" },
   },
   {
@@ -642,6 +740,16 @@ function hasWord(hay: string, word: string): boolean {
   }
   return new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`).test(hay);
 }
+/**
+ * Every word of the alternative is in the phrase. An alternative that repeats
+ * a word ("half and half") must appear as that phrase: "one and a half bars"
+ * has a "half" and an "and" and is not coffee creamer.
+ */
+function altMatches(hay: string, alt: string[]): boolean {
+  if (!alt.every((w) => hasWord(hay, w))) return false;
+  if (new Set(alt).size === alt.length) return true;
+  return hay.includes(` ${alt.join(" ").toLowerCase()} `) || hay.includes(` ${alt.join(" ").toLowerCase()}`);
+}
 /** Words that must match whole even though they are long (a stem match would over-reach). */
 const NUTRITION_WORD_WHOLE = new Set(["chicken", "oatmeal", "cheerios", "gatorade", "monster", "celsius", "snickers", "doritos", "premier", "protein", "creamer", "espresso", "chipotle", "tortilla", "lettuce", "cheese", "guacamole", "sofritas", "barbacoa", "carnitas", "mcnuggets", "mcnugget", "mcchicken", "pounder", "fairlife", "mcdonald's", "mcdonalds", "bananas", "oranges", "almonds", "butter", "coffee", "pepper", "mountain", "sandwich", "original", "instant", "reduced", "quarter", "percent", "nonfat", "whites", "yogurt", "yoghurt", "triple", "nature", "valley", "cookies", "porridge"]);
 
@@ -662,7 +770,7 @@ export function lookupNutritionDb(phrase: string): NutritionDbMatch | null {
     if (item.exclude?.some((x) => hasWord(hay, x))) continue;
     let bestAlt = 0;
     for (const alt of item.match) {
-      if (alt.every((w) => hasWord(hay, w))) bestAlt = Math.max(bestAlt, alt.length);
+      if (altMatches(hay, alt)) bestAlt = Math.max(bestAlt, alt.length);
     }
     if (bestAlt === 0) continue;
     const kindBonus = item.kind === "generic" ? 0 : 0.5;
@@ -708,7 +816,7 @@ export function nutritionCandidates(phrase: string, limit = 5): NutritionDbMatch
   for (const item of NUTRITION_DB) {
     if (item.exclude?.some((x) => hasWord(hay, x))) continue;
     let bestAlt = 0;
-    for (const alt of item.match) if (alt.every((w) => hasWord(hay, w))) bestAlt = Math.max(bestAlt, alt.length);
+    for (const alt of item.match) if (altMatches(hay, alt)) bestAlt = Math.max(bestAlt, alt.length);
     if (bestAlt > 0) out.push({ item, score: bestAlt + (item.kind === "generic" ? 0 : 0.5) });
   }
   return out.sort((a, b) => b.score - a.score).slice(0, limit);
@@ -778,11 +886,20 @@ const MEASURE_UNITS = new Set([
 ]);
 export const isMeasureUnit = (unit: string): boolean => MEASURE_UNITS.has(String(unit || "").toLowerCase().trim());
 
+/** "including the peel", "with the skin on", "unpeeled", "with the pit": the stated weight includes what is thrown away. */
+export function weighedWithInedible(text: string): boolean {
+  return /\b(?:includ\w*|with|counting|plus)\s+(?:the\s+|its\s+)?(peel|skin|rind|pit|stone|shell|core|bone|bones)\b|\b(unpeeled|whole weight|gross weight|skin[- ]on|peel[- ]on|bone[- ]in)\b/i.test(String(text || ""));
+}
+
+const SIZE_WORDS = ["small", "medium", "large", "big", "huge", "jumbo", "mini", "tiny", "xl"];
+
 export function resolveServings(item: NutritionDbItem, qty: QuantityNormalization, phrase?: string): ServingResolution {
   const r = resolveServingsRaw(item, qty, phrase);
   // Unit rounding (12 fl oz vs a 355 ml can, 8 fl oz vs a 240 ml cup) must not
   // turn one serving into 0.99.
-  const servings = Math.abs(r.servings - 1) < 0.025 ? 1 : Math.round(r.servings * 1000) / 1000;
+  // Six decimals: the factor multiplies a label, so three (0.242 for 100 ml of
+  // a 414 ml bottle) is already a visible error in the result (55.7 for 55.6).
+  const servings = Math.abs(r.servings - 1) < 0.025 ? 1 : Math.round(r.servings * 1e6) / 1e6;
   return { ...r, servings };
 }
 
@@ -790,7 +907,11 @@ function resolveServingsRaw(item: NutritionDbItem, qty: QuantityNormalization, p
   const s = item.serving;
   // "large banana" scales a generic reference; "Big Mac" / "Grande latte" are
   // product names whose size IS the row.
-  const size = item.kind === "generic" ? sizeFactor(phrase || qty.original) : 1;
+  // …and so is a size the reference row is already stated for: "2 large eggs"
+  // of the "large egg (50 g)" row are two of them, not two and a half.
+  const sizeWord = SIZE_WORDS.find((w) => new RegExp(`\\b${w}\\b`, "i").test(phrase || qty.original));
+  const rowIsThatSize = !!sizeWord && new RegExp(`\\b${sizeWord}\\b`, "i").test(`${item.name} ${item.serving.label}`);
+  const size = item.kind === "generic" && !rowIsThatSize ? sizeFactor(phrase || qty.original) : 1;
   const unit = (qty.unit || "").toLowerCase();
   const isOunceWord = /^(oz|ounce|ounces)$/.test(unit);
   // An explicit number + unit ("12 oz", "2 tablespoons", "182 g") matched to
@@ -849,6 +970,12 @@ function resolveServingsRaw(item: NutritionDbItem, qty: QuantityNormalization, p
     return { servings: qty.ml / s.ml, confidence: explicit, method: `${Math.round(qty.ml)} ml ÷ ${s.ml} ml serving${qty.assumption ? ` (${qty.assumption})` : ""}`, assumed: !!qty.assumption };
   }
   if (qty.grams != null && s.grams) {
+    // Weighed with the peel on: only the edible share is food. The share is a
+    // typical one, so the answer is an estimate and is labelled as one.
+    if (item.edibleFraction && weighedWithInedible(phrase || qty.original)) {
+      const edible = qty.grams * item.edibleFraction;
+      return { servings: edible / s.grams, confidence: "medium", method: `${Math.round(qty.grams)} g with peel ≈ ${Math.round(edible)} g edible (${Math.round(item.edibleFraction * 100)}%) ÷ ${s.grams} g serving`, assumed: true };
+    }
     return { servings: qty.grams / s.grams, confidence: explicit, method: `${Math.round(qty.grams)} g ÷ ${s.grams} g serving${qty.assumption ? ` (${qty.assumption})` : ""}`, assumed: !!qty.assumption };
   }
   if (qty.count != null) {

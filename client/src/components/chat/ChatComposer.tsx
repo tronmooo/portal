@@ -21,7 +21,7 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Camera, Loader2, Mic, Paperclip, RotateCcw, Search, Send } from "lucide-react";
+import { Camera, Loader2, Mic, Paperclip, RotateCcw, ScanLine, Search, Send } from "lucide-react";
 import { WORKSPACES, type WorkspaceKind } from "@/components/workspace/WorkspaceShell";
 import { useToast } from "@/hooks/use-toast";
 
@@ -123,6 +123,8 @@ interface ChatComposerProps {
    * full-screen workspace. They do not change what the chat box does.
    */
   onOpenWorkspace?: (kind: WorkspaceKind) => void;
+  /** Open the nutrition label / barcode scanner. */
+  onScanLabel?: () => void;
   /** Files dropped onto the box (same as picking them with the paperclip). */
   onDropFiles?: (files: File[]) => void;
 }
@@ -140,6 +142,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     onEmptyChange,
     newDocButton,
     onOpenWorkspace,
+    onScanLabel,
     onDropFiles,
   },
   ref,
@@ -252,6 +255,17 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               </button>
             );
           })}
+          {onScanLabel && (
+            <button
+              type="button"
+              onClick={onScanLabel}
+              title="Log food from a photo of its nutrition label or its barcode"
+              className="h-7 px-2.5 rounded-full border border-border text-xs font-medium flex items-center gap-1 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+              data-testid="button-scan-label"
+            >
+              <ScanLine className="h-3.5 w-3.5" /> Scan label
+            </button>
+          )}
         </div>
         {/* Large prominent input box */}
         <div

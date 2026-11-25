@@ -10,6 +10,7 @@ import { splitSeparateFoods, foodLabel, shareMealValues } from "@shared/food-spl
 import { isNutritionTrackerName } from "@shared/nutrition-shaped";
 import { canonicalNutrientKey, sumComponentTotals, detectUserStatedNutrition } from "@shared/nutrition-enrichment";
 import { lookupComponents } from "./nutrition-enrichment";
+import { repeatedMealInputs } from "./nutrition-edits";
 
 const ITEM_KEYS = ["item", "food", "meal", "name", "description"] as const;
 
@@ -35,7 +36,14 @@ async function referenceValues(food: string, message: string): Promise<Record<st
 export async function splitCombinedFoodLog(
   input: Record<string, any> | null | undefined,
   userMessage: string,
+  /** For "the same breakfast as yesterday": the person's own food entries, loaded only when a call asks to repeat. */
+  repeat?: { entries: (forProfile?: string) => Promise<Array<{ values?: Record<string, any> | null; timestamp?: string | null }>>; timezone: string; today: string },
 ): Promise<Array<Record<string, any>> | null> {
+  if (input?.repeatFrom && repeat && isNutritionTrackerName(String(input.trackerName || ""))) {
+    const out = repeatedMealInputs(input, await repeat.entries(input.forProfile), { timezone: repeat.timezone, today: repeat.today });
+    // Nothing to copy: the call runs as it is and the executor says why.
+    return "inputs" in out ? out.inputs : [{ ...input, __repeatError: out.error }];
+  }
   const values = input?.values;
   if (!input || !values || typeof values !== "object") return null;
   if (!isNutritionTrackerName(String(input.trackerName || ""))) return null;
@@ -43,6 +51,14 @@ export async function splitCombinedFoodLog(
   if (!itemKey) return null;
   const foods = splitSeparateFoods(String(values[itemKey]));
   if (foods.length < 2) return null;
+  // The user's own words decide how many foods there are. A single food the
+  // agent named database-style ("Salmon, Atlantic, farmed, raw (120 g)",
+  // "Barilla Spaghetti No. 5, weighed dry") has commas and is still one food:
+  // split, it became three entries with the same figures (746 kcal for 120 g).
+  const said = String(userMessage || "").trim().replace(/[.!?]+$/, "")
+    // A barcode or UPC the user appends identifies the food; it is not another one.
+    .replace(/[,;]?\s*\(?\b(?:barcode|upc|ean)\b[\s:#]*[\d -]{8,}\)?/gi, " ");
+  if (said && splitSeparateFoods(said).length < 2) return null;
   // Numbers the user read off a label belong to what they named as a whole;
   // they cannot be divided between foods by guesswork.
   if (Object.keys(detectUserStatedNutrition(userMessage || "")).length > 0) return null;
@@ -65,8 +81,10 @@ export async function splitCombinedFoodLog(
 
   const rest: Record<string, any> = {};
   for (const [k, v] of Object.entries(values)) if (!totalKeys.includes(k) && k !== itemKey) rest[k] = v;
+  // A basis described the combined item; it is not any one food's.
+  const { basis: _basis, ...shared } = input;
   return foods.map((food, i) => ({
-    ...input,
+    ...shared,
     values: { ...rest, [itemKey]: foodLabel(food), ...shares[i] },
   }));
 }
