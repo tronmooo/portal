@@ -186,6 +186,7 @@ async function main() {
     check(t9.status === 200 && t9.data?.used?.memory === false && (t9.data?.remembered || []).length === 0, "with remembering off, the coach keeps nothing");
     check(before === after, "…the saved memory is not touched");
     check(!new RegExp(tag, "i").test(String(t9.data?.answer || "")), "…and it recalls nothing from before");
+    check(/remember(ing)? (is |are )?(switched |turned )?off|don't (have|keep)|do not (have|keep)|can't recall|no memory/i.test(String(t9.data?.answer || "")), "…and says remembering is off rather than guessing");
     // Past entries off: the insights are refused rather than made up.
     await setAccess((a) => withAccess(a, "journal", "pastEntries", false));
     const refused = await ai("/workspace/journal/insights", { focus: "insights" });

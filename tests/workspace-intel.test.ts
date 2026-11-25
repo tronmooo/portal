@@ -242,6 +242,7 @@ describe("Journal: the reflection coach", () => {
     expect(r.used.memory).toBe(false);
     expect(r.remembered).toEqual([]);
     expect(String(modelCalls[0].system)).toMatch(/Remembering is switched off/);
+    expect(String(modelCalls[0].system)).toMatch(/say plainly that remembering is off so you don't have it — never guess/);
     expect(String(modelCalls[0].system)).not.toMatch(/REMEMBER:/);
     expect(db.prefWrites).toEqual([]);
     expect(await intel.journalCoach({ messages: [{ role: "assistant", content: "hi" }] })).toMatchObject({ ok: false, status: 400 });
@@ -318,7 +319,7 @@ describe("Journal: the coach remembers, and sounds like a person", () => {
     modelReply = 'I hear you.\nREMEMBER: ["They are clinically depressed", "They said they were diagnosed with ADHD as a child", "Likes to walk by the river"]';
     const r = ok(await intel.journalCoach({ messages: ask("I've been low for weeks. I was diagnosed with ADHD as a kid. Walking by the river helps.") }));
     const system = String(modelCalls[0].system);
-    expect(system).toMatch(/Their first name is Tron\./);
+    expect(system).toMatch(/Their first name is Tron \(from their profile/);
     expect(system).toMatch(/This is the first time you are talking\./);
     expect(system).toMatch(/You have no memories of earlier conversations yet/);
     expect(r.remembered).toEqual(["They said they were diagnosed with ADHD as a child", "Likes to walk by the river"]);
