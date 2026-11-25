@@ -336,6 +336,15 @@ describe("Journal: the coach remembers, and sounds like a person", () => {
     expect(system).toMatch(/no therapy jargon/);
     expect(system).toMatch(/Listen first/);
     expect(system).toMatch(/Never recite a list of facts about them/);
+    // The craft of a therapist, used and not announced.
+    expect(system).toMatch(/HOW YOU WORK \(the craft a good therapist brings into the room/);
+    expect(system).toMatch(/Pick up the thread\..*ask how it went before anything new/);
+    expect(system).toMatch(/Reflect before you ask/);
+    expect(system).toMatch(/do not argue with it: help them look at it/);
+    expect(system).toMatch(/slow right down\. Offer one short grounding or breathing exercise, a step at a time/);
+    expect(system).toMatch(/one small step that is doable this week and is theirs\. Then remember it/);
+    expect(system).toMatch(/When they ask to wrap up/);
+    expect(system).toMatch(/a step they said they would try/); // …so it can follow up next time
     expect(system).toMatch(/LIMITS \(these do not bend\)/);
     expect(system).toMatch(/not a therapist, counsellor or doctor\. Never diagnose/);
     expect(system).toMatch(/Do not pretend to be human if they sincerely ask/);

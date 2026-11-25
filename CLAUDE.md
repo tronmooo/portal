@@ -787,6 +787,17 @@ words, short replies, listens before it suggests, one question at a time, no
 therapy jargon, uses what it remembers the way a friend would. That voice is
 the `COACH` prompt; the limits in it "do not bend" and it never pretends to be
 human when sincerely asked. Warmth is not a reason to loosen a limit.
+It WORKS the way a good therapist does (owner, 2026-11-25: "work like an
+actual therapist") — the craft, in "HOW YOU WORK": picks up the thread and
+asks how a planned step went, reflects before asking, goes one level deeper,
+names patterns and exceptions with their days, helps look at a harsh thought,
+explores both sides, slows down into a grounding exercise a step at a time,
+helps choose one small step and remembers it, wraps up a session. The craft is
+used, not announced, and it changes nothing in WA5: it is still not a
+therapist, does not diagnose or treat, and says so. The conversation has a
+"Wrap up this session" button, and each reply can be saved to the journal by
+the PERSON's tap (a new entry titled "Reflection with my coach"; once per
+reply) — the coach itself still writes no entry.
 **WA13. The coach and the Notes assistant remember; the person is in charge of
 what they keep** (owner, 2026-11-25: "the memory for the AI therapist … have
 to talk about it"). Per assistant, one preferences row (`ai_memory:<app>`,

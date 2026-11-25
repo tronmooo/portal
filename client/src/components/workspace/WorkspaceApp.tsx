@@ -394,8 +394,12 @@ export function MemoryPanel({ app, view, onChanged, onClose }: { app: MemoryApp;
  * this sitting only, and the screen says which.
  */
 export function AiConversation({
-  app, ask, intro, suggestions, placeholder, boundary, testId, footer, memoryApp, greet,
+  app, ask, intro, suggestions, placeholder, boundary, testId, footer, memoryApp, greet, wrapUp, onSaveReply,
 }: {
+  /** Shown once the conversation has some length: sends this message ("wrap up our session"). */
+  wrapUp?: { label: string; message: string };
+  /** Offers "Save to my journal" under each reply. The person taps it; the AI saves nothing on its own (W5). */
+  onSaveReply?: (text: string) => Promise<void>;
   app: WorkspaceAiApp;
   ask: (turns: ChatTurn[]) => Promise<ConversationReply>;
   intro: string;
@@ -424,6 +428,17 @@ export function AiConversation({
   const [error, setError] = useState<string | null>(null);
   const [accessOpen, setAccessOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  // Replies the person saved to their journal in this sitting (by position), so each is saved once.
+  const [savedReplies, setSavedReplies] = useState<Record<number, "saving" | "saved">>({});
+  const saveReply = async (i: number, content: string) => {
+    if (!onSaveReply || savedReplies[i]) return;
+    setSavedReplies((m) => ({ ...m, [i]: "saving" }));
+    try { await onSaveReply(content); setSavedReplies((m) => ({ ...m, [i]: "saved" })); }
+    catch (err) {
+      setSavedReplies((m) => { const { [i]: _gone, ...rest } = m; return rest; });
+      toast({ title: "Couldn't save that to your journal", description: aiErrorText(err), variant: "destructive" });
+    }
+  };
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => { end.current?.scrollIntoView?.({ block: "end" }); }, [turns, busy]);
   // The saved conversation is put on screen once, when it arrives.
@@ -471,7 +486,7 @@ export function AiConversation({
         return;
       }
     }
-    setTurns([]); setError(null);
+    setTurns([]); setError(null); setSavedReplies({});
   };
   const opening = greet && view ? greet({ name: view.name, since: remembering ? sinceLastTalked(view.lastTalked, new Date()) : null, memories: remembering ? view.memories.length : 0 }) : intro;
 
@@ -520,6 +535,12 @@ export function AiConversation({
                   </span>
                 )}
                 {t.note && <span className="block mt-1.5 text-[11px] opacity-70">{t.note}</span>}
+                {t.role === "assistant" && onSaveReply && (
+                  <button type="button" disabled={!!savedReplies[i]} onClick={() => void saveReply(i, t.content)}
+                    className="block mt-1.5 text-[11px] underline opacity-80 disabled:no-underline disabled:opacity-60" data-testid={`${testId}-save-reply`}>
+                    {savedReplies[i] === "saved" ? "Saved to your journal" : savedReplies[i] === "saving" ? "Saving…" : "Save this to my journal"}
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -528,6 +549,10 @@ export function AiConversation({
             <div role="alert" className="text-xs rounded-lg border border-destructive/40 bg-destructive/10 px-2.5 py-2" data-testid={`${testId}-error`}>
               {error} <button type="button" className="underline ml-1" onClick={retry}>Try again</button>
             </div>
+          )}
+          {wrapUp && turns.length >= 4 && !busy && turns[turns.length - 1]?.role === "assistant" && (
+            <button type="button" onClick={() => void send(wrapUp.message)}
+              className="h-8 px-3 rounded-full border border-border text-xs hover:bg-muted/60" data-testid={`${testId}-wrap-up`}>{wrapUp.label}</button>
           )}
           {turns.length > 0 && !busy && (
             <button type="button" className={`text-[11px] flex items-center gap-1 ${isArmed("new") ? "rounded-full bg-destructive text-destructive-foreground px-2.5 h-7" : "text-muted-foreground underline"}`}

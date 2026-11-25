@@ -543,7 +543,13 @@ export default function JournalWorkspacePage() {
             ? `${name ? `Hi ${name}. ` : "Hi. "}Good to see you again — we last talked ${since}.${memories ? " I remember what you've told me, so you don't have to start over." : ""} What's on your mind?`
             : `${name ? `Hi ${name}. ` : "Hi. "}I'm here to listen. Tell me what's on your mind — big or small — and we'll think it through together. I can look back through your journal with you, too.`)}
           intro="Talk through what is on your mind. I listen, reflect back what I hear, and can point to patterns across your own entries. This is private to your journal."
-          suggestions={["How has my mindset changed over the past six months?", "What situations seem to cause me the most stress?", "What patterns do you notice in my journal entries?", "Help me think through something that happened today"]}
+          suggestions={["How has my mindset changed over the past six months?", "What situations seem to cause me the most stress?", "What patterns do you notice in my journal entries?", "Help me untangle a worry", "Walk me through a calming exercise", "I have a hard conversation coming up"]}
+          wrapUp={{ label: "Wrap up this session", message: "Let's wrap up for now. Can you sum up what we talked about, what stood out to you, and the one small thing I said I'd try?" }}
+          onSaveReply={async (reply) => {
+            // The person's own tap: the coach's words become a new entry of theirs, marked as a reflection.
+            await apiRequest("POST", "/api/journal", { content: reply, entryDate: today, title: "Reflection with my coach", tags: ["reflection"] });
+            void invalidateDomain("journal");
+          }}
           placeholder="What is on your mind?"
         />
       )}

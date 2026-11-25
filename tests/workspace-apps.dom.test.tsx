@@ -664,7 +664,7 @@ describe("the coach remembers, and the person is in charge of what it keeps", ()
     mount(<JournalWorkspacePage />);
     tab("coach");
     await waitFor(() => expect(screen.getByTestId("journal-coach-user").textContent).toBe("Sam and I argued about money."));
-    expect(screen.getByTestId("journal-coach-assistant").textContent).toBe("That sounds draining. What set it off?");
+    expect(screen.getByTestId("journal-coach-assistant").textContent).toMatch(/^That sounds draining\. What set it off\?/);
     expect(screen.getByTestId("button-memory-journal").textContent).toMatch(/What I remember · 2/);
     expect(screen.getByTestId("journal-coach-saved-note").textContent).toMatch(/saved privately on your account.*turn remembering off in AI access.*Nothing in your notes or journal is changed/);
     expect(calls.filter((c) => c.method !== "GET")).toEqual([]); // opening it wrote nothing
@@ -732,6 +732,31 @@ describe("the coach remembers, and the person is in charge of what it keeps", ()
     fireEvent.click(screen.getByTestId("button-forget-all-journal"));
     await waitFor(() => expect(screen.getByTestId("memory-empty")).toBeTruthy());
     expect(memory.journal.memories).toEqual([]);
+  });
+
+  it("a session can be wrapped up, and a reply is saved to the journal only when the person taps it — once", async () => {
+    memory.journal = COACH_MEMORY();
+    answers["/api/workspace/journal/coach"] = { answer: "We talked about money and Sam. You said you'd raise it on Sunday.", entriesRead: 0, entriesTotal: 0, used: { pastEntries: true, memory: true }, remembered: [] };
+    mount(<JournalWorkspacePage />);
+    tab("coach");
+    await waitFor(() => screen.getByTestId("journal-coach-user"));
+    expect(screen.queryByTestId("journal-coach-wrap-up")).toBeNull(); // one exchange is not yet a session
+    fireEvent.change(screen.getByTestId("journal-coach-input"), { target: { value: "I'll raise it on Sunday." } });
+    fireEvent.click(screen.getByTestId("journal-coach-send"));
+    await waitFor(() => expect(screen.getAllByTestId("journal-coach-assistant")).toHaveLength(2));
+    expect(calls.filter((c) => c.method === "POST" && c.url === "/api/journal")).toEqual([]); // talking saved no entry
+    fireEvent.click(screen.getByTestId("journal-coach-wrap-up"));
+    await waitFor(() => expect(aiCalls("/api/workspace/journal/coach")).toHaveLength(2));
+    const sentWrap = aiCalls("/api/workspace/journal/coach")[1].body.messages;
+    expect(sentWrap[sentWrap.length - 1].content).toMatch(/wrap up.*what stood out.*one small thing/i);
+    await waitFor(() => expect(screen.getAllByTestId("journal-coach-assistant")).toHaveLength(3));
+    const save = screen.getAllByTestId("journal-coach-save-reply");
+    fireEvent.click(save[save.length - 1]);
+    await waitFor(() => expect(save[save.length - 1].textContent).toBe("Saved to your journal"));
+    fireEvent.click(save[save.length - 1]); // a second tap does not save it again
+    const posts = calls.filter((c) => c.method === "POST" && c.url === "/api/journal");
+    expect(posts).toHaveLength(1);
+    expect(posts[0].body).toMatchObject({ content: "We talked about money and Sam. You said you'd raise it on Sunday.", title: "Reflection with my coach", tags: ["reflection"] });
   });
 
   it("with remembering off it says so, shows no earlier conversation, and a new conversation is one tap", async () => {
