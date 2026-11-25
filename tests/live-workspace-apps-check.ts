@@ -230,9 +230,12 @@ async function walk(name: string, viewport: { width: number; height: number }, t
         check(await page.locator(t("journal-coach-user")).first().waitFor({ timeout: 20000 }).then(() => true).catch(() => false), `[${name}] reopening the Journal shows the earlier conversation`);
         await tap(t("button-memory-journal"));
         check((await page.locator(t("memory-panel-journal")).innerText()).includes(tag), `[${name}] "What I remember" lists it`);
+        const repliesBefore = await page.locator(t("journal-coach-assistant")).count();
         await page.locator(t("journal-coach-input")).fill("What do you remember about my family? One sentence.");
         await tap(t("journal-coach-send"));
-        const recalled = await until(async () => { const txt = await page.locator(t("journal-coach-assistant")).last().innerText(); return /Porto/i.test(txt) ? txt : null; }, 120000);
+        // Wait for THIS reply (an earlier one also says Porto), so nothing is still on its way when Forget is tapped.
+        await page.waitForFunction((n: number) => document.querySelectorAll('[data-testid="journal-coach-assistant"]').length > n, repliesBefore, { timeout: 120000 }).catch(() => undefined);
+        const recalled = await until(async () => { if ((await page.locator(t("journal-coach-assistant")).count()) <= repliesBefore) return null; const txt = await page.locator(t("journal-coach-assistant")).last().innerText(); return /Porto/i.test(txt) ? txt : null; }, 30000);
         check(!!recalled, `[${name}] asked later, it recalls what it was told`);
         if (recalled) console.log(`      coach recalled: ${recalled.replace(/\s+/g, " ").slice(0, 260)}`);
         await fits("workspace-journal", "Reflection Coach with memory"); await shot("8-journal-coach");

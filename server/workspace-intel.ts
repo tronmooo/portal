@@ -189,7 +189,7 @@ const REMEMBER_RULE =
 /** Keep the exchange and what was proposed. Never fails the answer it rides on. */
 async function keep(app: MemoryApp, convo: Conversation, answer: string, proposed: string[]): Promise<string[]> {
   if (!convo.memory) return [];
-  try { return (await rememberExchange(app, convo.question, answer, proposed)).added.map((m) => m.text); }
+  try { return (await rememberExchange(app, convo.question, answer, proposed, convo.memory.clearedAt ?? null)).added.map((m) => m.text); }
   catch (err) { console.warn(`[workspace-intel] could not save the ${app} conversation:`, (err as Error)?.message); return []; }
 }
 

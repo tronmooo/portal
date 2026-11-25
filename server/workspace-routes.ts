@@ -78,7 +78,8 @@ export function registerWorkspaceRoutes(app: Express, rateLimit: Limiter): void 
   const view = async (m: AiMemory, app: MemoryApp) => {
     const access = (await (await intel()).readAiAccess())[app];
     const self = (((await (await import("./storage")).storage.getProfiles()) || []) as any[]).find((p) => p.type === "self");
-    return { ...m, remember: access.memory, name: String(self?.name || "").trim().split(/\s+/)[0] || "" };
+    const { clearedAt: _internal, ...shown } = m;
+    return { ...shown, remember: access.memory, name: String(self?.name || "").trim().split(/\s+/)[0] || "" };
   };
   app.get("/api/workspace/memory/:app", memSafe(async (_req, res, app) => res.json(await view(await (await memory()).readAiMemory(app), app))));
   app.post("/api/workspace/memory/:app/remember", memSafe(async (req, res, app) => {

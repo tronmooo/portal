@@ -801,7 +801,9 @@ themselves is theirs to keep). Being remembered when you ASK does not depend
 on the model: "please remember that …" with no proposal from the model is kept
 in the person's own words (`explicitMemoryRequest`; a question about its
 memory is not a request) — on the preview the model twice volunteered nothing
-for exactly that message. A failed answer saves nothing. Every memory is
+for exactly that message. A failed answer saves nothing, and a forget always
+wins: a reply already on its way when the person clears the conversation or
+forgets everything is not saved afterwards (`clearedAt` / `clearedSince`). Every memory is
 on screen (`MemoryPanel`): the person can add their own, forget one or
 everything (two taps, Rule 8), and start a new conversation (two taps; the
 memories stay). One switch (`memory` in AI access, on by default — it is the

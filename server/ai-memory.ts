@@ -8,7 +8,7 @@
 import { randomUUID } from "crypto";
 import { storage } from "./storage";
 import {
-  EMPTY_MEMORY, addMemories, appendExchange, explicitMemoryRequest, memoryKey, parseAiMemory, removeMemory, MEMORY_PER_REPLY,
+  EMPTY_MEMORY, addMemories, appendExchange, clearedSince, explicitMemoryRequest, memoryKey, parseAiMemory, removeMemory, MEMORY_PER_REPLY,
   type AiMemory, type MemoryApp, type MemoryItem,
 } from "@shared/ai-memory";
 
@@ -39,7 +39,7 @@ async function change(app: MemoryApp, fn: (m: AiMemory) => AiMemory): Promise<Ai
 }
 
 /** After an answer: the exchange joins the conversation, and what the AI proposed to remember is kept. */
-export async function rememberExchange(app: MemoryApp, user: string, assistant: string, proposed: string[]): Promise<{ memory: AiMemory; added: MemoryItem[] }> {
+export async function rememberExchange(app: MemoryApp, user: string, assistant: string, proposed: string[], seenClearedAt?: string | null): Promise<{ memory: AiMemory; added: MemoryItem[] }> {
   let added: MemoryItem[] = [];
   const now = new Date();
   // Asked outright to remember something, and the model proposed nothing:
@@ -47,6 +47,9 @@ export async function rememberExchange(app: MemoryApp, user: string, assistant: 
   // ask to be does not depend on the model choosing to.
   const asked = proposed.length === 0 ? explicitMemoryRequest(user) : null;
   const memory = await change(app, (m) => {
+    // They cleared the conversation or forgot everything while this reply was
+    // on its way: it is not put back. A forget always wins.
+    if (seenClearedAt !== undefined && clearedSince(m, seenClearedAt)) return m;
     const r = asked
       ? addMemories(appendExchange(m, user, assistant, now), [asked], { by: "you", now, ids: [randomUUID()] })
       : addMemories(appendExchange(m, user, assistant, now), proposed, { by: "ai", now, ids: proposed.map(() => randomUUID()), max: MEMORY_PER_REPLY });
@@ -66,6 +69,6 @@ export async function addOwnMemory(app: MemoryApp, text: string): Promise<{ memo
 
 export const forgetMemoryItem = (app: MemoryApp, id: string) => change(app, (m) => removeMemory(m, id));
 /** Clear the conversation; what was learned stays. */
-export const clearConversation = (app: MemoryApp) => change(app, (m) => ({ ...m, turns: [] }));
+export const clearConversation = (app: MemoryApp) => change(app, (m) => ({ ...m, turns: [], clearedAt: new Date().toISOString() }));
 /** Forget everything: the conversation and every memory. */
-export const forgetEverything = (app: MemoryApp) => change(app, () => ({ ...EMPTY_MEMORY }));
+export const forgetEverything = (app: MemoryApp) => change(app, () => ({ ...EMPTY_MEMORY, clearedAt: new Date().toISOString() }));

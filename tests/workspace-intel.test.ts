@@ -45,10 +45,13 @@ vi.mock("../server/storage", () => {
 
 let modelReply: string | Error = "";
 let modelCalls: Row[] = [];
+/** Something that happens while the model is writing its reply (the person taps a button meanwhile). */
+let whileModelWrites: (() => Promise<void>) | null = null;
 vi.mock("@anthropic-ai/sdk", () => ({
   default: class {
     messages = { create: async (req: Row) => {
       modelCalls.push(req);
+      if (whileModelWrites) { const act = whileModelWrites; whileModelWrites = null; await act(); }
       if (modelReply instanceof Error) throw modelReply;
       return { content: [{ type: "text", text: modelReply }], stop_reason: "end_turn" };
     } };
@@ -353,6 +356,24 @@ describe("Journal: the coach remembers, and sounds like a person", () => {
     ok(await intel.journalCoach({ messages: ask("Do you remember where my sister lives?") }));
     expect(stored("journal").memories).toHaveLength(2);
     expect(String(modelCalls[0].system)).toMatch(/you MUST end your reply with one last line: REMEMBER:/);
+  });
+
+  it("Forget everything wins over a reply that was already on its way", async () => {
+    const memory = await import("../server/ai-memory");
+    modelReply = 'Noted.\nREMEMBER: ["Sam is their partner"]';
+    ok(await intel.journalCoach({ messages: ask("Sam is my partner.") }));
+    // The person forgets everything while the next reply is being written.
+    modelReply = 'Sure.\nREMEMBER: ["They work nights"]';
+    whileModelWrites = async () => { await memory.forgetEverything("journal"); };
+    const r = ok(await intel.journalCoach({ messages: ask("I work nights. Remember that I work nights.") }));
+    expect(r.answer).toBe("Sure."); // they still get the reply they were waiting for
+    expect(r.remembered).toEqual([]); // but nothing is put back
+    expect(stored("journal").memories).toEqual([]);
+    expect(stored("journal").turns).toEqual([]);
+    // And the next exchange is saved normally again.
+    modelReply = "Hello again.";
+    ok(await intel.journalCoach({ messages: ask("Starting over.") }));
+    expect(stored("journal").turns).toHaveLength(2);
   });
 
   it("a failed answer saves nothing: the conversation is not left with a question and no reply", async () => {

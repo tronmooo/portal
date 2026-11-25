@@ -155,6 +155,7 @@ describe("the person is in charge of what is remembered", () => {
     expect(cleared.data.memories).toHaveLength(1);
     const gone = await api("DELETE", "/api/workspace/memory/journal");
     expect(gone.data).toMatchObject({ memories: [], turns: [], lastTalked: null });
+    expect("clearedAt" in gone.data).toBe(false); // bookkeeping, not shown
   });
 
   it("the memory row cannot be written through the preferences route, and the view says when remembering is off", async () => {

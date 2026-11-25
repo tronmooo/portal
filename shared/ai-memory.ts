@@ -46,8 +46,19 @@ export interface AiMemory {
   turns: SavedTurn[];
   /** The last time the person wrote to this AI (ISO), or null. */
   lastTalked: string | null;
+  /**
+   * When the person last cleared the conversation or forgot everything. A
+   * reply that was already on its way when they did is not saved afterwards:
+   * a forget always wins (`clearedSince`).
+   */
+  clearedAt?: string | null;
 }
 export const EMPTY_MEMORY: AiMemory = { memories: [], turns: [], lastTalked: null };
+
+/** Was the memory cleared after `stamp` was read (the `clearedAt` seen when the reply was asked for)? */
+export function clearedSince(memory: AiMemory, stamp: string | null | undefined): boolean {
+  return (memory.clearedAt ?? null) !== (stamp ?? null);
+}
 
 const isIso = (v: unknown): v is string => typeof v === "string" && Number.isFinite(Date.parse(v));
 const clean = (s: unknown, max: number) => (typeof s === "string" ? s.replace(/\s+/g, " ").trim().slice(0, max) : "");
@@ -71,7 +82,7 @@ export function parseAiMemory(raw: unknown): AiMemory {
     if ((row.role !== "user" && row.role !== "assistant") || !content || !isIso(row.at)) continue;
     turns.push({ role: row.role, content, at: row.at });
   }
-  return { memories: memories.slice(-MEMORY_MAX_ITEMS), turns: turns.slice(-CHAT_SAVED_TURNS), lastTalked: isIso(src.lastTalked) ? src.lastTalked : null };
+  return { memories: memories.slice(-MEMORY_MAX_ITEMS), turns: turns.slice(-CHAT_SAVED_TURNS), lastTalked: isIso(src.lastTalked) ? src.lastTalked : null, ...(isIso(src.clearedAt) ? { clearedAt: src.clearedAt } : {}) };
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
