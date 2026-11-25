@@ -187,6 +187,7 @@ import {
   type RoutingViolation,
   type TurnCreate,
 } from "@shared/ai-tool-routing";
+import { pleasantryReply } from "@shared/chat-pleasantry";
 import { recordsAnOccurrence, whyNotReported } from "@shared/not-reported";
 import { toUserFacingError, stripInternalText } from "@shared/ai-message-kinds";
 import { checkClaims, shouldRetryUnbackedWriteClaim, UNBACKED_WRITE_RETRY_INSTRUCTION, honestFailureReply, groundedSummary, describeMismatch, stripStaleCapabilityClaims, type ExecutedOperation } from "@shared/ai-claim-check";
@@ -1446,6 +1447,11 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
   const lower = message.toLowerCase().trim();
   const actions: ParsedAction[] = [];
   const results: any[] = [];
+
+  // A line that is only a greeting or only thanks needs no model
+  // (shared/chat-pleasantry.ts): 2.3 s of waiting for "Hi!" on production.
+  const pleasantry = pleasantryReply(message);
+  if (pleasantry) return { matched: true, reply: pleasantry, actions: [], results: [] };
 
   // /help / "what can you do" fast-path. The AI was taking 15-25s to generate
   // suggestions that just enumerate visible UI surfaces. Serve a static reply

@@ -16,7 +16,7 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 Screens: 29 pages (48 routes). 3 are opened by no live browser check, 3 by none in a touch (phone) context.
 Write routes no screen calls: 40 (chat-only, script-only or dead).
-Test files read: 641. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 643. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -468,13 +468,13 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `PATCH /api/tracker-entries/:entryId` | yes | 1 | 1 |
 | `POST /api/tracker-entries/:entryId/enrich` | **no** | **0** | **0** |
 | `POST /api/tracker-entries/:entryId/rescale` | yes | **0** | **0** |
-| `GET /api/trackers` | yes | 12 | 21 |
+| `GET /api/trackers` | yes | 12 | 22 |
 | `POST /api/trackers` | yes | 2 | 12 |
-| `DELETE /api/trackers/:id` | yes | 1 | 12 |
+| `DELETE /api/trackers/:id` | yes | 1 | 13 |
 | `GET /api/trackers/:id` | yes | 1 | 3 |
 | `PATCH /api/trackers/:id` | yes | 1 | 2 |
 | `POST /api/trackers/:id/entries` | yes | 2 | 5 |
-| `DELETE /api/trackers/:id/entries/:entryId` | yes | **0** | 3 |
+| `DELETE /api/trackers/:id/entries/:entryId` | yes | **0** | 4 |
 | `PATCH /api/trackers/:id/entries/:entryId` | yes | 2 | 1 |
 | `POST /api/trackers/migrate-to-self` | **no** | 2 | **0** |
 | `POST /api/trackers/smart-entry` | **no** | **0** | **0** |
@@ -644,7 +644,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 |---|---|---:|---:|
 | `POST /api/ai-transform` | yes | 1 | **0** |
 | `POST /api/ai/summary` | yes | 2 | 1 |
-| `POST /api/chat` | yes | 3 | 22 |
+| `POST /api/chat` | yes | 3 | 23 |
 | `POST /api/chat/confirm-extraction` | yes | 9 | **0** |
 | `GET /api/chat/runs/:requestId` | yes | **0** | **0** |
 | `GET /api/chat/warmup` | yes | **0** | **0** |
