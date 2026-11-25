@@ -42,7 +42,7 @@ const nextWeekday = (dow: number): string => {
 
 const LISTS = {
   tasks: "/tasks", expenses: "/expenses", incomes: "/incomes", events: "/events", habits: "/habits",
-  notes: "/notes", journal: "/journal", profiles: "/profiles", goals: "/goals", memories: "/memories",
+  notes: "/notes", journal: "/journal", profiles: "/profiles", goals: "/goals", memories: "/memories", artifacts: "/artifacts",
 } as const;
 type ListName = keyof typeof LISTS;
 type Rows = Record<ListName, any[]> & { entries: any[] };
@@ -597,7 +597,7 @@ const CASES: Case[] = [
     const yoga = e.some((x) => Object.values(x.values || {}).some((v) => money(v, 30)));
     return water && yoga ? "" : `water ${water ? "ok" : "missing"}, yoga ${yoga ? "ok" : "missing"}: ${e.map((x) => `${x.tracker} ${JSON.stringify(x.values)}`).join(" | ").slice(0, 240) || "no entries"}`;
   } },
-  { group: "lists", say: "add milk, eggs and bread to my shopping list", expect: (c) => (c.made.expenses.length ? `a shopping list was logged as spending: ${c.made.expenses.map((e) => `${e.description} $${e.amount}`).join(" | ")}` : (c.made.tasks.length + c.made.notes.length >= 1 ? "" : "nothing was kept for the shopping list")) },
+  { group: "lists", say: "add milk, eggs and bread to my shopping list", expect: (c) => (c.made.expenses.length ? `a shopping list was logged as spending: ${c.made.expenses.map((e) => `${e.description} $${e.amount}`).join(" | ")}` : (c.made.tasks.length + c.made.notes.length + c.made.artifacts.length >= 1 ? "" : "nothing was kept for the shopping list")) },
 
   // ── Things owned and people mentioned ─────────────────────────────────────
   { group: "owned", say: "I bought a 2019 Honda Civic for $14,000", expect: (c) => {
