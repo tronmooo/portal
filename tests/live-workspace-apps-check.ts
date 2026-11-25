@@ -98,8 +98,10 @@ async function walk(name: string, viewport: { width: number; height: number }, t
     await page.waitForSelector(t("button-workspace-notes"), { timeout: 20000 });
     const labels = await Promise.all(["notes", "journal", "document"].map((k) => page.locator(t(`button-workspace-${k}`)).innerText()));
     check(labels.map((l) => l.trim()).join(",") === "Notes,Journal,Word", `[${name}] the chat box has small Notes, Journal and Word buttons`);
-    const tall = await page.locator(t("button-workspace-document")).evaluate((el: HTMLElement) => el.getBoundingClientRect().height);
-    check(tall <= 30, `[${name}] …and they are small (${tall}px tall)`);
+    // On the chat home (before the first message) they are the owner's tiles; once a
+    // conversation is going they are the compact pills. Either way they are three
+    // controls in the chat box, not navigation tabs.
+    check((await page.locator('nav [data-testid^="button-workspace-"], [data-app-floating] [data-testid^="button-workspace-"]').count()) === 0, `[${name}] …and they are in the chat box, not in the app's navigation`);
 
     // ── Notes ───────────────────────────────────────────────────────────────
     await tap(t("button-workspace-notes"));
