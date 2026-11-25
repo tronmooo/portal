@@ -16,7 +16,7 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 Screens: 30 pages (49 routes). 4 are opened by no live browser check, 4 by none in a touch (phone) context.
 Write routes no screen calls: 43 (chat-only, script-only or dead).
-Test files read: 651. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 653. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
