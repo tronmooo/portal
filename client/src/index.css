@@ -1554,3 +1554,213 @@ html[data-workspace], body[data-workspace] { scrollbar-gutter: auto; overflow: h
 .note-rich ul[data-type="taskList"] li[data-checked="true"] > div { text-decoration: line-through; color: hsl(var(--muted-foreground)); }
 .note-rich ul[data-type="taskList"] input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: hsl(var(--primary)); }
 .note-rich p { margin: 0.4em 0; }
+
+/* ============================================================
+   AURORA — the glowing glass language (owner's design, 2026-11-25)
+   ------------------------------------------------------------
+   The chat home introduced it; the rules at the end of this block
+   carry it to every card, primary button and the nav, so the whole
+   app reads as one product.
+
+   A surface sets --accent-hsl ("190 92% 52%") to pick its hue. Depth
+   is a gradient hairline + a soft outer glow, never backdrop-filter
+   on scrolling content (see BUBBLE SURFACES above for why). Motion is
+   transform/opacity only; the reduced-motion rule at the top of this
+   file already collapses it.
+   ============================================================ */
+:root { --aurora-a: 190 95% 42%; --aurora-b: 262 75% 58%; --aurora-c: 222 85% 56%; }
+.dark { --aurora-a: 190 95% 55%; --aurora-b: 262 90% 68%; --aurora-c: 222 95% 62%; }
+
+/* A card: gradient hairline, glass fill, glow. */
+.aurora-card {
+  position: relative;
+  border-radius: 1.25rem;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(180deg, hsl(var(--card)) 0%, hsl(var(--card)) 100%) padding-box,
+    linear-gradient(135deg, hsl(var(--accent-hsl, var(--aurora-a)) / 0.75), hsl(var(--aurora-b) / 0.45) 50%, hsl(var(--aurora-c) / 0.30)) border-box;
+  box-shadow: 0 10px 30px -18px hsl(var(--accent-hsl, var(--aurora-a)) / 0.55);
+}
+.dark .aurora-card {
+  background:
+    radial-gradient(120% 90% at 0% 0%, hsl(var(--accent-hsl, var(--aurora-c)) / 0.16), transparent 60%) padding-box,
+    linear-gradient(180deg, hsl(230 48% 11%) 0%, hsl(231 52% 8%) 100%) padding-box,
+    linear-gradient(135deg, hsl(var(--accent-hsl, var(--aurora-a)) / 0.85), hsl(var(--aurora-b) / 0.50) 50%, hsl(var(--aurora-c) / 0.35)) border-box;
+  box-shadow:
+    0 0 34px -16px hsl(var(--accent-hsl, var(--aurora-a)) / 0.70),
+    inset 0 1px 0 hsl(200 100% 90% / 0.07);
+}
+
+/* A tile: the same idea, smaller and quieter; tinted by its accent. */
+.aurora-tile {
+  position: relative;
+  border-radius: 1rem;
+  border: 1px solid hsl(var(--accent-hsl, var(--aurora-a)) / 0.30);
+  background:
+    radial-gradient(130% 100% at 50% 0%, hsl(var(--accent-hsl, var(--aurora-a)) / 0.10), transparent 62%),
+    hsl(var(--card));
+  box-shadow: 0 6px 18px -14px hsl(var(--accent-hsl, var(--aurora-a)) / 0.55);
+  color: hsl(var(--card-foreground));
+}
+.dark .aurora-tile {
+  border-color: hsl(var(--accent-hsl, var(--aurora-a)) / 0.42);
+  background:
+    radial-gradient(130% 100% at 50% 0%, hsl(var(--accent-hsl, var(--aurora-a)) / 0.17), transparent 62%),
+    linear-gradient(180deg, hsl(230 46% 12% / 0.95), hsl(231 50% 9% / 0.95));
+  box-shadow:
+    0 0 22px -14px hsl(var(--accent-hsl, var(--aurora-a)) / 0.85),
+    inset 0 1px 0 hsl(200 100% 90% / 0.06);
+}
+@media (hover: hover) and (pointer: fine) {
+  .aurora-tile.pressable:hover, .aurora-ask.pressable:hover {
+    transform: translateY(-2px);
+    border-color: hsl(var(--accent-hsl, var(--aurora-a)) / 0.75);
+  }
+  .aurora-line:hover { background: hsl(var(--foreground) / 0.04); }
+}
+.aurora-line { border-radius: 0.5rem; }
+
+/* The small round icon holder on a chip. */
+.aurora-chip-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2rem; height: 2rem; border-radius: 0.7rem; flex-shrink: 0;
+  color: hsl(var(--accent-hsl, var(--aurora-a)));
+  background: hsl(var(--accent-hsl, var(--aurora-a)) / 0.16);
+  box-shadow: inset 0 0 0 1px hsl(var(--accent-hsl, var(--aurora-a)) / 0.45);
+}
+
+/* The glowing ring behind the logo. */
+.aurora-orb {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 3.5rem; height: 3.5rem; border-radius: 9999px;
+  background: radial-gradient(circle at 50% 50%, hsl(var(--aurora-c) / 0.30), hsl(var(--aurora-a) / 0.10) 60%, transparent 72%);
+  box-shadow:
+    0 0 0 2px hsl(var(--aurora-a) / 0.75),
+    0 0 22px 1px hsl(var(--aurora-a) / 0.60),
+    inset 0 0 16px hsl(var(--aurora-c) / 0.55);
+  animation: aurora-breathe 4.5s ease-in-out infinite;
+}
+@keyframes aurora-breathe {
+  0%, 100% { box-shadow: 0 0 0 2px hsl(var(--aurora-a) / 0.75), 0 0 22px 1px hsl(var(--aurora-a) / 0.55), inset 0 0 16px hsl(var(--aurora-c) / 0.55); }
+  50%      { box-shadow: 0 0 0 2px hsl(var(--aurora-a) / 0.95), 0 0 32px 4px hsl(var(--aurora-b) / 0.55), inset 0 0 20px hsl(var(--aurora-a) / 0.55); }
+}
+
+.aurora-pill {
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--aurora-a) / 0.65);
+  background: hsl(var(--aurora-a) / 0.10);
+  box-shadow: 0 0 16px -6px hsl(var(--aurora-a) / 0.70);
+}
+.aurora-link { color: hsl(var(--primary)); border-radius: 0.375rem; }
+@media (hover: hover) and (pointer: fine) { .aurora-link:hover { text-decoration: underline; } }
+
+/* The sunrise beside the daily summary (an inline SVG): fades into the card. */
+.aurora-sunrise {
+  min-height: 9rem;
+  -webkit-mask-image: linear-gradient(90deg, #000 60%, transparent);
+  mask-image: linear-gradient(90deg, #000 60%, transparent);
+  border-bottom-left-radius: 1.2rem;
+}
+
+/* A thing to ask: a tile with a large faded mark of what it is. */
+.aurora-ask {
+  position: relative; overflow: hidden;
+  border-radius: 1rem;
+  border: 1px solid hsl(var(--accent-hsl) / 0.38);
+  background:
+    radial-gradient(90% 70% at 70% 0%, hsl(var(--accent-hsl) / 0.22), transparent 70%),
+    linear-gradient(200deg, hsl(var(--aurora-b) / 0.10), transparent 55%),
+    hsl(var(--card));
+  box-shadow: 0 0 22px -14px hsl(var(--accent-hsl) / 0.85);
+}
+.dark .aurora-ask {
+  background:
+    radial-gradient(90% 70% at 70% 0%, hsl(var(--accent-hsl) / 0.30), transparent 70%),
+    linear-gradient(200deg, hsl(var(--aurora-b) / 0.18), transparent 55%),
+    linear-gradient(180deg, hsl(230 46% 12%), hsl(231 50% 8%));
+}
+.aurora-ask-art {
+  position: absolute; top: -0.4rem; right: -0.6rem;
+  width: 5.25rem; height: 5.25rem;
+  color: hsl(var(--accent-hsl) / 0.30);
+  filter: drop-shadow(0 0 14px hsl(var(--accent-hsl) / 0.55));
+  transform: rotate(-8deg);
+  pointer-events: none;
+}
+
+/* The modes row above the chat box. */
+.aurora-mode {
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card) / 0.7);
+  color: hsl(var(--foreground) / 0.86);
+  white-space: nowrap;
+}
+@media (hover: hover) and (pointer: fine) {
+  .aurora-mode:hover { border-color: hsl(var(--aurora-a) / 0.6); color: hsl(var(--foreground)); }
+}
+.aurora-mode.aurora-mode-active {
+  color: hsl(var(--aurora-a));
+  border-color: hsl(var(--aurora-a) / 0.85);
+  background-image: linear-gradient(160deg, hsl(var(--aurora-a) / 0.26), hsl(var(--aurora-a) / 0.08));
+  box-shadow: 0 0 18px -5px hsl(var(--aurora-a) / 0.75);
+}
+
+/* The chat box. */
+.aurora-composer {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(180deg, hsl(var(--card)), hsl(var(--card))) padding-box,
+    linear-gradient(135deg, hsl(var(--aurora-b) / 0.65), hsl(var(--aurora-c) / 0.45) 50%, hsl(var(--aurora-a) / 0.75)) border-box;
+}
+.dark .aurora-composer {
+  background:
+    radial-gradient(90% 120% at 0% 0%, hsl(var(--aurora-b) / 0.16), transparent 60%) padding-box,
+    linear-gradient(180deg, hsl(232 48% 12%), hsl(231 52% 8%)) padding-box,
+    linear-gradient(135deg, hsl(var(--aurora-b) / 0.75), hsl(var(--aurora-c) / 0.45) 50%, hsl(var(--aurora-a) / 0.85)) border-box;
+  box-shadow: 0 0 30px -16px hsl(var(--aurora-b) / 0.85), inset 0 1px 0 hsl(220 100% 90% / 0.06);
+}
+.aurora-composer:focus-within {
+  box-shadow: 0 0 0 1px hsl(var(--aurora-a) / 0.55), 0 0 30px -10px hsl(var(--aurora-a) / 0.75);
+}
+
+/* ── App-wide: every card, primary button and the nav speak it ──────────────
+   Only colour, border and shadow change here: no layout, no size, so no
+   screen's arrangement moves. */
+.dark .bubble {
+  border-color: hsl(var(--accent-hsl, 218 85% 64%) / 0.46);
+  box-shadow:
+    0 1px 2px hsl(230 60% 2% / 0.5),
+    0 12px 32px -14px hsl(230 70% 2% / 0.8),
+    0 0 30px -18px hsl(var(--accent-hsl, var(--aurora-a)) / 0.80),
+    inset 0 1px 0 hsl(200 100% 90% / 0.08);
+}
+.dark .bubble-row { box-shadow: inset 0 0 0 1px hsl(210 100% 85% / 0.05); }
+
+/* The primary action: a lit gradient instead of a flat fill. */
+.aurora-send,
+.dark .bg-primary.text-primary-foreground:not([role="switch"]):not([role="checkbox"]):not([role="progressbar"]) {
+  background-image: linear-gradient(135deg, hsl(192 95% 46%), hsl(205 92% 50%));
+  border-color: hsl(190 100% 70% / 0.55);
+  box-shadow: 0 0 18px -6px hsl(var(--aurora-a) / 0.85), inset 0 1px 0 hsl(0 0% 100% / 0.22);
+}
+.aurora-send:disabled { box-shadow: none; }
+
+/* Dialogs and menus: the same hairline and glow as a card. */
+.dark [role="dialog"], .dark [role="menu"], .dark [role="listbox"] {
+  box-shadow: 0 24px 60px -20px hsl(230 70% 2% / 0.9), 0 0 40px -22px hsl(var(--aurora-a) / 0.75);
+}
+
+/* Section headings carry a little light. */
+.dark h1 { text-shadow: 0 0 28px hsl(var(--aurora-c) / 0.35); }
+
+/* The bottom bar: a lit top edge. */
+.dark nav[aria-label="Main navigation"] {
+  border-top-color: transparent;
+  box-shadow: 0 -12px 30px -18px hsl(var(--aurora-c) / 0.55);
+}
+.dark nav[aria-label="Main navigation"]::before {
+  content: "";
+  position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, hsl(var(--aurora-a) / 0.6) 30%, hsl(var(--aurora-b) / 0.6) 70%, transparent);
+  pointer-events: none;
+}

@@ -372,6 +372,8 @@ export default defineConfig({
       // Chat suggestions built from the user's own records (2026-07-31).
       'tests/chat-suggestions.test.ts',
       'tests/chat-empty-state.dom.test.tsx',
+      'tests/chat-home.test.ts',
+      'tests/chat-home.dom.test.tsx',
       'tests/format-full-date.test.ts',
       'tests/detail-hero.test.ts',
       'tests/detail-hero.dom.test.tsx',

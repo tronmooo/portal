@@ -21,7 +21,7 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Camera, Loader2, Mic, Paperclip, RotateCcw, Search, Send } from "lucide-react";
+import { BarChart3, CalendarDays, Camera, FolderOpen, LayoutGrid, Loader2, Mic, Paperclip, RotateCcw, Search, Send, type LucideIcon } from "lucide-react";
 import { WORKSPACES, type WorkspaceKind } from "@/components/workspace/WorkspaceShell";
 import { useToast } from "@/hooks/use-toast";
 
@@ -90,6 +90,16 @@ function useSpeechInput(onResult: (text: string) => void, onError?: (title: stri
   return { listening, start, stop, supported };
 }
 
+/** The pages offered beside the workspaces, here and on the chat home. */
+export const CHAT_APPS: Array<{ id: string; label: string; icon: LucideIcon; href: string; blurb: string }> = [
+  { id: "documents", label: "Documents", icon: FolderOpen, href: "/artifacts", blurb: "Everything you have saved" },
+  { id: "analyze", label: "Analyze", icon: BarChart3, href: "/insights", blurb: "Patterns across your records" },
+  { id: "plan", label: "Plan", icon: CalendarDays, href: "/calendar", blurb: "Your calendar" },
+  { id: "more", label: "More", icon: LayoutGrid, href: "/dashboard", blurb: "The full dashboard" },
+];
+
+const MODE_PILL = "aurora-mode pressable shrink-0 h-7 px-2.5 rounded-full text-xs font-medium flex items-center gap-1";
+
 export interface ChatComposerHandle {
   /** Current draft text (used to seed an attachment note from the draft). */
   getText: () => string;
@@ -123,6 +133,10 @@ interface ChatComposerProps {
    * full-screen workspace. They do not change what the chat box does.
    */
   onOpenWorkspace?: (kind: WorkspaceKind) => void;
+  /** The Documents / Analyze / Plan / More tiles: each goes to its page. */
+  onOpenApp?: (href: string) => void;
+  /** The chat home is showing the modes as tiles: leave the row out. */
+  hideModes?: boolean;
   /** Files dropped onto the box (same as picking them with the paperclip). */
   onDropFiles?: (files: File[]) => void;
 }
@@ -140,6 +154,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     onEmptyChange,
     newDocButton,
     onOpenWorkspace,
+    onOpenApp,
+    hideModes,
     onDropFiles,
   },
   ref,
@@ -224,38 +240,35 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   return (
     <div className="px-3 pt-2 pb-[env(safe-area-inset-bottom,12px)] bg-background/95 backdrop-blur-sm border-t border-border/40">
       <div className="max-w-2xl mx-auto">
-        {/* Persistent visible label. A placeholder alone disappears the moment
-            the user types, leaving the field unlabelled for both sighted users
-            and assistive tech (production audit 2026-07-29). The label stays
-            on screen; the placeholder is now only an example. */}
-        <div className="flex flex-wrap items-center gap-1.5 px-1 pb-1.5">
-          <label
-            htmlFor="chat-message-input"
-            className="micro-label text-muted-foreground mr-1"
-          >
-            Message
-          </label>
-          {/* Each of these is its own tool, not a version of this box: it
-              opens full screen, with its own editor and AI. */}
-          {onOpenWorkspace && (Object.keys(WORKSPACES) as WorkspaceKind[]).map((kind) => {
-            const { label, icon: Icon, blurb } = WORKSPACES[kind];
-            return (
-              <button
-                key={kind}
-                type="button"
-                onClick={() => onOpenWorkspace(kind)}
-                title={blurb}
-                className="h-7 px-2.5 rounded-full border border-border text-xs font-medium flex items-center gap-1 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                data-testid={`button-workspace-${kind}`}
-              >
+        {/* The field's label. The modes row is what is on screen (owner's
+            design, 2026-11-25); the label stays for assistive tech, so the box
+            is never unlabelled once the placeholder is typed over. */}
+        <label htmlFor="chat-message-input" className="sr-only">Message</label>
+        {/* AI Modes, as one compact line. Chat is this box; each of the
+            others is its own tool — a full-screen workspace or a page — not a
+            version of this box. Before the first message the chat home shows
+            them as tiles instead (`hideModes`), so they are on screen once.
+            The row scrolls sideways inside itself (T1: data-swipe-ignore). */}
+        {onOpenWorkspace && !hideModes && (
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar -mx-3 px-3 pb-2" data-swipe-ignore data-testid="chat-modes">
+            {(Object.keys(WORKSPACES) as WorkspaceKind[]).map((kind) => {
+              const { label, icon: Icon, blurb } = WORKSPACES[kind];
+              return (
+                <button key={kind} type="button" onClick={() => onOpenWorkspace(kind)} title={blurb} className={MODE_PILL} data-testid={`button-workspace-${kind}`}>
+                  <Icon className="h-3.5 w-3.5" /> {label}
+                </button>
+              );
+            })}
+            {onOpenApp && CHAT_APPS.map(({ id, label, icon: Icon, href, blurb }) => (
+              <button key={id} type="button" onClick={() => onOpenApp(href)} title={blurb} className={MODE_PILL} data-testid={`button-app-${id}`}>
                 <Icon className="h-3.5 w-3.5" /> {label}
               </button>
-            );
-          })}
-        </div>
+            ))}
+          </div>
+        )}
         {/* Large prominent input box */}
         <div
-          className={`bubble relative focus-within:border-primary/50 focus-within:shadow-md transition-all duration-200 ${dragOver ? "ring-2 ring-primary border-primary" : ""}`}
+          className={`bubble aurora-composer relative transition-all duration-200 ${dragOver ? "ring-2 ring-primary border-primary" : ""}`}
           onDragOver={(e) => {
             if (!onDropFiles || !Array.from(e.dataTransfer?.types || []).includes("Files")) return;
             e.preventDefault();
@@ -394,7 +407,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                 onClick={handleSubmit}
                 disabled={!input.trim() || isPending}
                 size="sm"
-                className="h-8 px-4 rounded-xl text-xs font-semibold gap-1.5 hover:scale-105 active:scale-95 transition-transform"
+                className="aurora-send h-9 px-5 rounded-xl text-[13px] font-semibold gap-1.5 hover:scale-105 active:scale-95 transition-transform"
                 data-testid="button-send"
               >
                 {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Send className="h-3.5 w-3.5" /> Send</>}

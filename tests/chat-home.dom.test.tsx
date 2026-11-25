@@ -1,0 +1,142 @@
+// @vitest-environment jsdom
+//
+// The chat home on screen (owner's design, 2026-11-25). The figures are
+// decided by shared/chat-home (tests/chat-home.test.ts); this renders the real
+// view and checks that everything on it goes somewhere, that a figure which
+// did not load never reads as a number, and that the modes are on screen once.
+import React from "react";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+
+vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
+const navigated: string[] = [];
+vi.mock("@/lib/hashNavigate", () => ({ hashNavigate: (to: string) => { navigated.push(to); } }));
+
+import { ChatHomeView } from "../client/src/components/chat/ChatHome";
+import { ChatComposer } from "../client/src/components/chat/ChatComposer";
+import { buildChatHome, type HomeList } from "../shared/chat-home";
+import { buildChatSuggestions } from "../shared/chat-suggestions";
+import { TODAY, TZ, fixtureMetrics, fixtureTrackers } from "./helpers/wellness-fixture";
+
+afterEach(() => { cleanup(); navigated.length = 0; });
+
+const NOW = new Date("2026-11-23T08:30:00");
+const trackers = fixtureTrackers();
+const HOME = buildChatHome({
+  todayISO: TODAY, timezone: TZ, trackers, metrics: fixtureMetrics(trackers),
+  snapshot: {
+    totalMonthlySpend: 562, lastMonthTotal: 493, totalAssetValue: 60350, totalLiabilities: 18000,
+    spendByCategory: { food: 210, transport: 95 }, assetBreakdown: [{ name: "Honda CR-V", value: 26800 }],
+    upcomingBills: [{ id: "b1", name: "Internet", amount: 92, daysUntil: 2 }],
+  },
+  tasks: [{ id: "t1", title: "Call the dentist", status: "todo", dueDate: TODAY }] as any,
+  eventsToday: [{ title: "Soccer", time: "21:00" }], expiring: [], journal: [{ date: TODAY, mood: "good" }],
+});
+const SUGGESTIONS = buildChatSuggestions({ now: NOW }, 4);
+
+function Home(props: Partial<React.ComponentProps<typeof ChatHomeView>> = {}) {
+  return <ChatHomeView home={HOME} name="Robert" todayISO={TODAY} suggestions={SUGGESTIONS} onPick={() => {}} onSend={() => {}} now={NOW} {...props} />;
+}
+
+describe("chat home", () => {
+  it("greets the account holder and dates the summary", () => {
+    render(<Home />);
+    expect(screen.getByTestId("home-greeting").textContent).toBe("Good morning, Robert.");
+    expect(screen.getByTestId("home-summary").textContent).toContain("Today, Nov 23");
+    expect(screen.getByTestId("home-line-tasks").textContent).toContain("1 task open");
+  });
+
+  it("shows the six figures the builder decided, with their units", () => {
+    render(<Home />);
+    expect(screen.getByTestId("home-kpi-networth").textContent).toContain("$42,350");
+    expect(screen.getByTestId("home-kpi-spending").textContent).toContain("$562");
+    expect(screen.getByTestId("home-kpi-spending").textContent).toContain("+14%");
+    for (const key of ["activity", "sleep", "rhr", "weight"]) expect(screen.getByTestId(`home-kpi-${key}`)).toBeTruthy();
+  });
+
+  it("a row with a route goes there; a row that starts something fills the chat box", () => {
+    const onPick = vi.fn();
+    render(<Home onPick={onPick} />);
+    fireEvent.click(screen.getByTestId("home-kpi-networth"));
+    fireEvent.click(screen.getByTestId("home-glance-events"));
+    fireEvent.click(screen.getByTestId("home-insights-all"));
+    expect(navigated).toEqual(["/dashboard/finance", "/calendar", "/insights"]);
+    // RHR is not in the fixture: tapping it starts the reading in the box.
+    expect(screen.getByTestId("home-kpi-rhr").getAttribute("data-state")).toBe("untracked");
+    expect(screen.getByTestId("home-kpi-rhr").textContent).toContain("Not tracked");
+    fireEvent.click(screen.getByTestId("home-kpi-rhr"));
+    expect(onPick).toHaveBeenCalledWith("My resting heart rate is ");
+    expect(navigated.length).toBe(3);
+  });
+
+  it("a thing to ask is sent whole; Refresh shows four others", () => {
+    const onSend = vi.fn();
+    render(<Home onSend={onSend} />);
+    fireEvent.click(screen.getByTestId("home-ask-analyze"));
+    expect(onSend).toHaveBeenCalledWith("Review my spending and find savings opportunities.");
+    fireEvent.click(screen.getByTestId("home-briefing"));
+    expect(onSend).toHaveBeenLastCalledWith("Give me my briefing for today.");
+    fireEvent.click(screen.getByTestId("home-asks-refresh"));
+    expect(screen.queryByTestId("home-ask-analyze")).toBeNull();
+    expect(screen.getByTestId("home-ask-money")).toBeTruthy();
+  });
+
+  it("a figure that failed to load is not a number, and offers a retry (Rule 7)", () => {
+    const retry = vi.fn();
+    const failed = buildChatHome({ todayISO: TODAY, timezone: TZ, failed: new Set<HomeList>(["snapshot", "tasks", "trackers", "events", "journal"]) });
+    render(<Home home={failed} onRetry={retry} />);
+    const nw = screen.getByTestId("home-kpi-networth");
+    expect(nw.getAttribute("data-state")).toBe("error");
+    expect(nw.textContent).toContain("Couldn't load");
+    expect(nw.textContent).not.toMatch(/\$|\d/);
+    fireEvent.click(screen.getByTestId("home-retry"));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("a figure still loading shows a placeholder, never a zero", () => {
+    render(<Home home={buildChatHome({ todayISO: TODAY, timezone: TZ })} />);
+    for (const key of ["activity", "spending", "networth"]) {
+      const el = screen.getByTestId(`home-kpi-${key}`);
+      expect(el.getAttribute("data-state")).toBe("loading");
+      expect(el.textContent).not.toMatch(/\d/);
+    }
+    expect(screen.getByTestId("home-summary-empty").textContent).toContain("Reading your records");
+    expect(screen.queryByTestId("home-retry")).toBeNull();
+  });
+
+  it("the modes are tiles on the home: Chat focuses the box, the rest open their own tool", () => {
+    const open = vi.fn(); const focus = vi.fn();
+    render(<Home onOpenWorkspace={open} onFocusChat={focus} />);
+    fireEvent.click(screen.getByTestId("button-mode-chat"));
+    expect(focus).toHaveBeenCalledTimes(1);
+    for (const kind of ["notes", "journal", "document", "fill"]) fireEvent.click(screen.getByTestId(`button-workspace-${kind}`));
+    expect(open.mock.calls.map((c) => c[0])).toEqual(["notes", "journal", "document", "fill"]);
+    fireEvent.click(screen.getByTestId("button-app-documents"));
+    fireEvent.click(screen.getByTestId("button-app-plan"));
+    expect(navigated).toEqual(["/artifacts", "/calendar"]);
+  });
+
+  it("…and the chat box leaves its own row out while the home shows them (once on screen)", () => {
+    const composer = (hideModes: boolean) => (
+      <ChatComposer onSubmit={() => true} isPending={false} searchOpen={false} onToggleSearch={() => {}} onAttach={() => {}}
+        showReset={false} onReset={() => {}} onOpenWorkspace={() => {}} onOpenApp={() => {}} hideModes={hideModes} />
+    );
+    const { unmount } = render(composer(true));
+    expect(screen.queryByTestId("button-workspace-notes")).toBeNull();
+    expect(screen.getByLabelText("Message")).toBeTruthy();
+    unmount();
+    const app = vi.fn();
+    render(<ChatComposer onSubmit={() => true} isPending={false} searchOpen={false} onToggleSearch={() => {}} onAttach={() => {}}
+      showReset onReset={() => {}} onOpenWorkspace={() => {}} onOpenApp={app} />);
+    expect(screen.getByTestId("button-workspace-notes")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("button-app-analyze"));
+    expect(app).toHaveBeenCalledWith("/insights");
+  });
+
+  it("rows that scroll sideways keep their own drag (T1)", () => {
+    render(<Home onOpenWorkspace={() => {}} />);
+    for (const id of ["home-glance-tasks", "home-insight-wellness", "button-mode-chat"]) {
+      expect(screen.getByTestId(id).closest("[data-swipe-ignore]")).not.toBeNull();
+    }
+  });
+});

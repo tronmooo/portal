@@ -47,7 +47,7 @@ function summaryLine(suggestions: ChatSuggestion[]): string | null {
 }
 
 export function ChatSuggestions({
-  suggestions, onPick, name, now = new Date(), testId = "chat-suggestions",
+  suggestions, onPick, name, now = new Date(), testId = "chat-suggestions", bare = false,
 }: {
   suggestions: ChatSuggestion[];
   onPick: (text: string) => void;
@@ -55,6 +55,8 @@ export function ChatSuggestions({
   name?: string | null;
   now?: Date;
   testId?: string;
+  /** Inside the chat home, which has its own greeting: the list alone. */
+  bare?: boolean;
 }) {
   const summary = summaryLine(suggestions);
   return (
@@ -62,7 +64,7 @@ export function ChatSuggestions({
       {/* Brand + greeting. The logo is small and INSIDE the normal flow — the
           old hero was `flex-1` inside a bottom-aligned 72vh box, which pushed
           it above the top of the scroll viewport on a phone. */}
-      <div className="flex items-center gap-3 mb-5">
+      {!bare && <div className="flex items-center gap-3 mb-5">
         <img
           src="/portol-logo-clean.png"
           alt=""
@@ -77,15 +79,15 @@ export function ChatSuggestions({
             {summary ?? "Ask me anything, or start with one of these."}
           </p>
         </div>
-      </div>
+      </div>}
 
-      <p className="micro-label text-muted-foreground mb-2">Suggested for you</p>
+      <p className="micro-label text-muted-foreground mb-2">{!bare ? "Suggested for you" : suggestions.every((s) => s.kind === "explore") ? "Try saying" : summary ? `From your records · ${summary}` : "From your records"}</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {suggestions.map((s, i) => (
           <button
             key={s.id}
             onClick={() => onPick(s.text)}
-            className="bubble-row pressable bubble-enter flex items-center gap-3 px-3 py-2.5 text-left w-full"
+            className="aurora-tile pressable bubble-enter flex items-center gap-3 px-3 py-2.5 text-left w-full"
             style={{ ["--accent-hsl" as any]: conceptAccent(s.icon), ["--i" as any]: i }}
             data-testid={`chat-suggestion-${s.id}`}
           >
