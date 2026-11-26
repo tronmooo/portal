@@ -58,6 +58,9 @@ async function main() {
     check(Array.isArray(l?.projection) && l.projection.length > 12, "and a projection");
     check(l?.currentValue > 0 && typeof l?.lastUpdated?.value === "string", "the current value and when it was valued");
     check(l?.salvage?.source === "ai", "the salvage value it uses is the AI's");
+    check(f.lifecycleAssumptions && "upkeepGrowthPct" in f.lifecycleAssumptions, "the AI chose the upkeep assumptions the optimal disposal point needs");
+    const od = l?.optimalDisposal;
+    check(!!od && /^\d{4}-\d{2}-\d{2}$/.test(od.date) && od.valueAt >= 0 && ["now", "cost_rises", "cheaper_to_replace", "end_of_life"].includes(od.reason), "the optimal disposal point is calculated, with a date, a reason and what it should fetch");
     const snap = await read(`/profiles/${car.id}/valuation`);
     check(snap.salvageDue === false, "the snapshot no longer asks for assumptions");
 

@@ -2,7 +2,8 @@
 // During the value-tracking run the model is asked how THIS asset ages: does
 // it lose value, gain it or hold it; its useful life; the yearly rate; what
 // it is worth (or costs to get rid of) at the end; what a new equivalent
-// costs. Its answer is bounded by `sanitizeLifecycleAssumptions` and stored;
+// costs; its yearly upkeep and how fast that rises (the inputs of the Optimal
+// Disposal Point). Its answer is bounded by `sanitizeLifecycleAssumptions` and stored;
 // every figure the app shows is then calculated by the deterministic engine
 // (shared/asset-lifecycle.ts). Runs beside the market research, so it adds no
 // wait to a refresh. No model, or a refused answer: null, and the engine uses
@@ -24,6 +25,8 @@ Return ONLY a JSON object (no markdown):
   "salvageValue": number | null,         // US dollars at the end of its useful life (scrap, parts, as-is resale). NEGATIVE when getting rid of it costs money (haul-away, hazardous disposal). null unless depreciating
   "disposal": "resell" | "scrap" | "recycle" | "dispose" | "none",
   "replacementCost": number | null,      // today's price of a comparable NEW item, only if you genuinely know its typical price class; else null
+  "annualUpkeep": number | null,         // typical US dollars a year to keep THIS one running at its current age and condition: repairs + maintenance (not fuel, insurance or loan payments); null unless depreciating or when you cannot judge
+  "upkeepGrowthPct": number | null,      // how fast that upkeep rises each year it ages, as a decimal: 0.12 = +12%/yr (cars ~0.08-0.15, electronics ~0.2-0.35 as batteries and parts fail, furniture ~0.03-0.08); null unless depreciating
   "confidence": "high" | "medium" | "low",
   "basis": "one sentence: what kind of asset this is and how it ages",
   "assumptions": ["short plain-language assumption", "..."]   // 2-5, e.g. "15-year useful life for a compact sedan"
@@ -33,7 +36,8 @@ Rules:
 - Use asset-specific behaviour, not one universal rate: cars, electronics, appliances, furniture, tools, boats, property, art, jewelry, collectibles and instruments all age differently. Condition, usage (mileage, hours), repair history and age matter.
 - Property and land usually appreciate; art, collectibles, precious metals and quality instruments are usually stable or appreciating; most everyday goods depreciate.
 - Never invent market data, listings, prices you do not know, or facts that were not given. When unsure, use "low" confidence and leave figures null.
-- salvageValue is never more than the asset cost or is worth now.`;
+- salvageValue is never more than the asset cost or is worth now.
+- annualUpkeep and upkeepGrowthPct decide the Optimal Disposal Point (when owning it starts costing more each year than selling or replacing it). Recorded upkeep, mileage and condition matter: high recorded repairs or heavy use mean higher upkeep. You do not compute the point; the calculator does.`;
 
 function buildPrompt(ctx: ValuationContext, extra: { currentValue: number | null; category: string }): string {
   const attrs = Object.entries(ctx.attributes).slice(0, 25).map(([k, v]) => `  ${k}: ${String(v).slice(0, 120)}`).join("\n") || "  (none)";
@@ -69,7 +73,7 @@ export async function estimateLifecycleAssumptions(
   try {
     const text = await Promise.race([
       callModel({
-        spec, system: SYSTEM_PROMPT, user: buildPrompt(ctx, opts), maxTokens: 600, signal: controller.signal,
+        spec, system: SYSTEM_PROMPT, user: buildPrompt(ctx, opts), maxTokens: 700, signal: controller.signal,
         anthropicClient: spec.provider === "anthropic" ? getAnthropicClient("standard") : undefined,
       }),
       new Promise<string>((_, reject) => controller.signal.addEventListener("abort", () => reject(new Error("lifecycle assumptions timed out")), { once: true })),

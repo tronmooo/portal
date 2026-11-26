@@ -10,7 +10,7 @@ import {
 const NOW = new Date("2026-11-24T12:00:00Z");
 const ai = (over: Partial<LifecycleAssumptions> = {}): LifecycleAssumptions => ({
   source: "ai", valueModel: "depreciating", usefulLifeYears: 15, annualChangePct: -0.12, salvageValue: 1500,
-  disposal: "scrap", replacementCost: 30000, confidence: "high", basis: "Compact sedan.", assumptions: ["15-year life"], asOf: "2026-11-24T00:00:00Z", ...over,
+  disposal: "scrap", replacementCost: 30000, annualUpkeep: null, upkeepGrowthPct: null, confidence: "high", basis: "Compact sedan.", assumptions: ["15-year life"], asOf: "2026-11-24T00:00:00Z", ...over,
 });
 const input = (over: Partial<LifecycleInput> = {}): LifecycleInput => ({
   now: NOW, category: "vehicle", purchasePrice: 19000, purchaseDate: "2016-05-01", ageYears: null,
@@ -211,5 +211,68 @@ describe("nested assets: an expense counts once", () => {
       { id: "d", amount: 60, linkedProfiles: ["car"], description: "Gas", date: "2026-09-01" },
     ], assets);
     expect(repairCosts(m.get("car")!, NOW)).toEqual({ last12m: 400, total: 1300, count: 2 });
+  });
+});
+
+describe("the Optimal Disposal Point (owner, 2026-11-26)", () => {
+  it("is the AI's assumptions run through the arithmetic: rising upkeep brings it forward", () => {
+    const low = computeAssetLifecycle(input({ assumptions: ai({ annualUpkeep: 300, upkeepGrowthPct: 0.05 }) })).optimalDisposal!;
+    const high = computeAssetLifecycle(input({ assumptions: ai({ annualUpkeep: 2500, upkeepGrowthPct: 0.3 }) })).optimalDisposal!;
+    expect(low).toBeTruthy();
+    expect(high).toBeTruthy();
+    expect(Date.parse(high.date)).toBeLessThan(Date.parse(low.date));
+    expect(high.upkeepSource).toBe("ai");
+    expect(high.upkeepNow).toBe(2500);
+    // A date is a calendar day, never before today.
+    expect(high.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(Date.parse(`${high.date}T23:59:59Z`)).toBeGreaterThanOrEqual(NOW.getTime() - 31 * 86_400_000);
+  });
+
+  it("with flat upkeep, owning gets cheaper each year, so the point is the end of its useful life", () => {
+    const l = computeAssetLifecycle(input({ purchaseDate: "2024-05-01", currentValue: 15000, assumptions: ai({ annualUpkeep: 0, upkeepGrowthPct: 0, replacementCost: null }) }));
+    expect(l.optimalDisposal!.reason).toBe("end_of_life");
+    expect(Math.abs(Date.parse(l.optimalDisposal!.date) - Date.parse(l.endOfLifeDate!))).toBeLessThan(62 * 86_400_000);
+  });
+
+  it("past its useful life, the point is now", () => {
+    const l = computeAssetLifecycle(input({ purchaseDate: "2008-01-01", currentValue: 2500 }));
+    expect(l.optimalDisposal!.reason).toBe("now");
+    expect(l.optimalDisposal!.monthsFromNow).toBe(0);
+    expect(l.optimalDisposal!.date).toBe("2026-11-24");
+  });
+
+  it("recorded repairs above the AI's upkeep are used instead", () => {
+    const l = computeAssetLifecycle(input({ repairs12m: 4000, assumptions: ai({ annualUpkeep: 800, upkeepGrowthPct: 0.1 }) }));
+    expect(l.optimalDisposal!.upkeepSource).toBe("repairs");
+    expect(l.optimalDisposal!.upkeepNow).toBe(4000);
+  });
+
+  it("a replacement that is cheaper to own, all-in, than a year of keeping this one decides it", () => {
+    const l = computeAssetLifecycle(input({ assumptions: ai({ annualUpkeep: 3000, upkeepGrowthPct: 0.2, replacementCost: 20000 }) }));
+    const od = l.optimalDisposal!;
+    if (od.reason === "cheaper_to_replace") expect(od.costAfter!).toBeGreaterThan(od.newAnnualCost!);
+    expect(od.newAnnualCost).toBeGreaterThan(0);
+    expect(l.recommendation!.reasons.some((r) => r.startsWith("Optimal disposal point:"))).toBe(true);
+  });
+
+  it("something that gains or holds its value has none", () => {
+    expect(computeAssetLifecycle(input({ category: "real_estate", assumptions: ai({ valueModel: "appreciating", annualChangePct: 0.03, usefulLifeYears: null, salvageValue: null }) })).optimalDisposal).toBeNull();
+    expect(computeAssetLifecycle(input({ category: "collectible", assumptions: ai({ valueModel: "stable", usefulLifeYears: null, salvageValue: null }) })).optimalDisposal).toBeNull();
+  });
+
+  it("the AI's upkeep figures are bounded, not clamped", () => {
+    const ok = sanitizeLifecycleAssumptions({ valueModel: "depreciating", annualUpkeep: "1,200", upkeepGrowthPct: 12 }, { purchasePrice: 20000 })!;
+    expect(ok.annualUpkeep).toBe(1200);
+    expect(ok.upkeepGrowthPct).toBeCloseTo(0.12);
+    const bad = sanitizeLifecycleAssumptions({ valueModel: "depreciating", annualUpkeep: 50000, upkeepGrowthPct: 70 }, { purchasePrice: 20000 })!;
+    expect(bad.annualUpkeep).toBeNull();
+    expect(bad.upkeepGrowthPct).toBeNull();
+  });
+
+  it("an answer stored before upkeep was asked for is asked again, once", () => {
+    const { annualUpkeep, upkeepGrowthPct, ...old } = ai();
+    void annualUpkeep; void upkeepGrowthPct;
+    expect(lifecycleNeedsEstimate({ lifecycleAssumptions: { ...old, inputsKey: "fp1", asOf: NOW.toISOString() } }, "fp1", NOW)).toBe(true);
+    expect(lifecycleNeedsEstimate({ lifecycleAssumptions: { ...ai(), inputsKey: "fp1", asOf: NOW.toISOString() } }, "fp1", NOW)).toBe(false);
   });
 });

@@ -105,6 +105,30 @@ describe("the Value card draws the lifecycle engine's answer", () => {
     expect(screen.queryByTestId("asset-graph-projection")).toBeNull();
   });
 
+  it("the Optimal Disposal Point: the date under the graph, marked on it, and the AI's inputs behind a tap", async () => {
+    const r = row({ annualUpkeep: 1400, upkeepGrowthPct: 0.15 });
+    const od = r.lifecycle.optimalDisposal!;
+    expect(od).toBeTruthy();
+    queryClient.setQueryData(LIFECYCLE_QUERY_KEY, { rows: [r], computedAt: NOW.toISOString() });
+    mount();
+    await screen.findByTestId("asset-lifecycle");
+    const when = od.reason === "now" ? "Now" : new Date(`${od.date}T12:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" });
+    expect(screen.getByTestId("asset-optimal-disposal-date").textContent).toBe(when);
+    expect(screen.getByTestId("asset-optimal-disposal").textContent).toContain("sell for about");
+    expect(screen.getByTestId("lifecycle-optimal-disposal").textContent).toContain(when);
+    if (od.monthsFromNow > 0) {
+      expect(screen.getByTestId("asset-graph-disposal")).toBeTruthy();
+      expect(screen.getByTestId("asset-graph-disposal-legend").textContent).toContain("optimal disposal");
+    }
+    expect(screen.queryByTestId("asset-optimal-disposal-why")).toBeNull();
+    fireEvent.click(screen.getByTestId("asset-optimal-disposal-toggle"));
+    const why = screen.getByTestId("asset-optimal-disposal-why").textContent!;
+    expect(why).toContain("$1,400 a year now");
+    expect(why).toContain("15% a year");
+    expect(why).toContain("AI estimate");
+    expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
+  });
+
   it("before the AI has answered, the category's typical salvage shows, labelled Typical", async () => {
     queryClient.setQueryData(LIFECYCLE_QUERY_KEY, { rows: [{ ...row(), lifecycle: computeAssetLifecycle({ ...(row().lifecycle as any), now: NOW, category: "vehicle", purchasePrice: 19000, purchaseDate: FIELDS.purchaseDate, ageYears: null, currentValue: 7000, currentValueSource: "estimate", assumptions: null }) }], computedAt: NOW.toISOString() });
     mount();

@@ -1215,6 +1215,22 @@ asset page, the Assets tab pill, Needs Attention, the Calendar and Finance can
 never disagree (Rule 1). Never add a second projection beside it: the
 purchase-price `projectDepreciation` line shows only while no lifecycle has
 loaded.
+**LC2a. The Optimal Disposal Point is arithmetic over the AI's upkeep.**
+(Owner, 2026-11-26: "the point at which it makes more financial sense to sell
+or replace an asset than to continue owning it".) The AI adds two assumptions,
+`annualUpkeep` (dollars a year at its current age) and `upkeepGrowthPct`,
+bounded like the rest and always stored (null when it cannot judge); an
+answer stored without them is asked again once. `optimalDisposalPoint`
+(`shared/asset-lifecycle.ts`) walks the engine's projection month by month:
+lost value + upkeep (recorded repairs when higher, else the AI's, else the
+category's typical share) + money tied up (`OPPORTUNITY_RATE`). The point is
+the month the average yearly cost of keeping it is lowest, brought forward
+when a year of keeping it costs more than a new one ALL-IN; past its useful
+life it is now; something that gains or holds value has none. It changes no
+recommendation and raises nothing. The Value card shows it under the graph
+(`OptimalDisposalLine`, `asset-optimal-disposal`) and marks it on the graph's
+"All" range. *Guards:* `tests/asset-lifecycle-engine.test.ts`,
+`tests/asset-lifecycle.dom.test.tsx`.
 **LC3. Nested assets count once.** A parent's lifecycle uses its OWN value;
 its descendants are summed separately (`nested`, "not included above"). An
 expense linked to a parent and a child belongs to the deepest

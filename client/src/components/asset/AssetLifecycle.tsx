@@ -92,6 +92,7 @@ export function LifecycleSection({ profileId }: { profileId: string }) {
   if (l.depreciationNext12m != null) figs.push({ label: dep >= 0 ? "Loss, next 12 months" : "Gain, next 12 months", value: `${dep >= 0 ? "−" : "+"}${formatMoneyCompact(Math.abs(dep))}`, testId: "lifecycle-next12", tone: dep > 0 ? "text-red-400" : dep < 0 ? "text-emerald-400" : "" });
   if (l.sellingWindow && l.sellingWindow.status !== "passed") figs.push({ label: l.sellingWindow.status === "open" ? "Sell by" : "Best time to sell", value: l.sellingWindow.status === "open" ? monthYear(l.sellingWindow.end) : `${monthYear(l.sellingWindow.start)} – ${monthYear(l.sellingWindow.end)}`, testId: "lifecycle-window" });
   if (l.replacementCost.value) figs.push({ label: l.replacementCost.source === "ai" ? "Replacement cost" : "Replacement (est.)", value: formatMoneyCompact(l.replacementCost.value), testId: "lifecycle-replacement" });
+  if (l.optimalDisposal) figs.push({ label: "Optimal disposal", value: l.optimalDisposal.reason === "now" ? "Now" : monthYear(l.optimalDisposal.date), testId: "lifecycle-optimal-disposal", tone: "text-cyan-400" });
   if (l.recommendedReplacementDate) figs.push({ label: "Replace by", value: monthYear(l.recommendedReplacementDate), testId: "lifecycle-replace-by" });
   if (l.accumulatedDepreciation != null && l.accumulatedDepreciation > 0) figs.push({ label: "Depreciated so far", value: formatMoneyCompact(l.accumulatedDepreciation), testId: "lifecycle-accumulated" });
   const by = l.assumptions.source === "ai" ? "AI assumptions" : "Typical figures";

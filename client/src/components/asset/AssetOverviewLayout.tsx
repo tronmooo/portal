@@ -35,6 +35,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { useAssetValuation, useAssetValuationHistory } from "@/hooks/useAssetValuation";
 import { LifecycleSection, useAssetLifecycle } from "@/components/asset/AssetLifecycle";
+import { OPPORTUNITY_RATE, type OptimalDisposal } from "@shared/asset-lifecycle";
 import { SALVAGE_KEY, SALVAGE_BASIS_KEY, SALVAGE_BOOKKEEPING_KEYS, salvageJudgedNone, salvageSource } from "@shared/asset-salvage";
 import { projectDepreciation, recentChange, seriesInRange, valueSeries, VALUE_RANGES, type ValuePoint, type ValueRangeKey } from "@shared/asset-depreciation";
 import { formatTimeAgo } from "@/lib/format";
@@ -223,6 +224,8 @@ export interface GraphAhead {
   salvage: number | null;
   /** The recommended selling window, shaded. */
   window: { start: string; end: string } | null;
+  /** The Optimal Disposal Point (shared/asset-lifecycle.ts `optimalDisposalPoint`), marked. */
+  disposal?: { date: string; value: number } | null;
 }
 
 function ValueGraph({ id, points, ahead }: { id: string; points: ValuePoint[]; ahead?: GraphAhead | null }) {
@@ -247,6 +250,8 @@ function ValueGraph({ id, points, ahead }: { id: string; points: ValuePoint[]; a
   const line = path(xy);
   const first = all[0], lastPast = shown[shown.length - 1] ?? all[0], end = all[all.length - 1];
   const fell = drawable && lastPast.value < first.value;
+  const odT = future.length && ahead?.disposal ? Date.parse(`${ahead.disposal.date}T12:00:00Z`) : NaN;
+  const od = Number.isFinite(odT) && odT >= t0 && odT <= t1 ? { x: X(odT), y: Y(ahead!.disposal!.value) } : null;
   const win = future.length && ahead?.window ? {
     x0: Math.max(6, X(Date.parse(`${ahead.window.start}T12:00:00Z`))),
     x1: Math.min(194, X(Date.parse(`${ahead.window.end}T12:00:00Z`))),
@@ -283,6 +288,11 @@ function ValueGraph({ id, points, ahead }: { id: string; points: ValuePoint[]; a
             )}
             {xy.length >= 2 && <path d={`${line} L ${xy[xy.length - 1][0].toFixed(1)} 58 L ${xy[0][0].toFixed(1)} 58 Z`} fill={`url(#val-fill-${id})`} />}
             {xy.length >= 2 && <path d={line} fill="none" stroke="#a78bfa" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
+            {od && (
+              <g data-testid="asset-graph-disposal">
+                <line x1={od.x} x2={od.x} y1={4} y2={58} stroke="#22d3ee" strokeOpacity="0.85" strokeWidth="1" strokeDasharray="1 2" vectorEffect="non-scaling-stroke" />
+              </g>
+            )}
             {fxy.length >= 2 && (
               <path d={path(fxy)} fill="none" stroke="#a78bfa" strokeOpacity="0.8" strokeWidth="1.5" strokeDasharray="3 3" strokeLinecap="round" vectorEffect="non-scaling-stroke" data-testid="asset-graph-projection" />
             )}
@@ -302,6 +312,7 @@ function ValueGraph({ id, points, ahead }: { id: string; points: ValuePoint[]; a
               <span>── value</span><span>╌╌ projected</span>
               {win && win.x1 > win.x0 && <span className="text-amber-400">▮ best time to sell</span>}
               {salvageLine != null && <span>┄ salvage {formatMoneyCompact(salvageLine)}</span>}
+              {od && <span className="text-cyan-400" data-testid="asset-graph-disposal-legend">┊ optimal disposal</span>}
             </p>
           )}
         </>
@@ -309,6 +320,39 @@ function ValueGraph({ id, points, ahead }: { id: string; points: ValuePoint[]; a
         <p className="py-2 text-[12px] text-muted-foreground" data-testid="asset-value-graph-empty">
           Not enough valuations in this range yet. Each new estimate adds a point.
         </p>
+      )}
+    </div>
+  );
+}
+
+const odMonth = (d: string) => (parseLocalDate(d.slice(0, 10)) ?? new Date(d)).toLocaleDateString("en-US", { month: "short", year: "numeric" });
+
+/**
+ * The Optimal Disposal Point: the date from which owning it costs more than
+ * selling or replacing it. The AI chose the assumptions (life, rate, salvage,
+ * upkeep and how fast it rises); the date and figures are the lifecycle
+ * engine's (shared/asset-lifecycle.ts `optimalDisposalPoint`, Rule 1).
+ */
+export function OptimalDisposalLine({ od }: { od: OptimalDisposal }) {
+  const [open, setOpen] = useState(false);
+  const when = od.reason === "now" ? "Now" : odMonth(od.date);
+  const why = od.reason === "now" ? "Owning it already costs more each year than letting it go."
+    : od.reason === "cheaper_to_replace" ? `From then a year of owning it (about ${formatMoneyCompact(od.costAfter ?? 0)}) costs more than a new one, all-in (about ${formatMoneyCompact(od.newAnnualCost ?? 0)}).`
+    : od.reason === "end_of_life" ? "Owning it gets cheaper each year until the end of its useful life."
+    : `Owning it averages about ${formatMoneyCompact(od.avgAnnualCost)} a year until then${od.costAfter != null ? `, about ${formatMoneyCompact(od.costAfter)} a year after` : ""}.`;
+  const upkeepBy = od.upkeepSource === "ai" ? "AI estimate" : od.upkeepSource === "repairs" ? "your recorded repairs" : "typical for its category";
+  return (
+    <div data-testid="asset-optimal-disposal">
+      <button type="button" className="text-left" onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid="asset-optimal-disposal-toggle">
+        Optimal disposal point: <span className="font-semibold text-cyan-400" data-testid="asset-optimal-disposal-date">{when}</span>
+        {" "}· sell for about <span className="font-semibold tabular-nums text-foreground">{formatMoneyCompact(od.valueAt)}</span>
+        <span className="ml-1 rounded bg-primary/15 px-1 py-px text-[11px] font-semibold text-primary">AI</span>
+      </button>
+      {open && (
+        <div className="mt-0.5 text-[11px] space-y-0.5" data-testid="asset-optimal-disposal-why">
+          <p>{why}</p>
+          <p>Counts the value it loses, its upkeep (about {formatMoneyCompact(od.upkeepNow)} a year now, rising {Math.round(od.upkeepGrowthPct * 100)}% a year — {upkeepBy}) and what the money in it could earn ({Math.round(OPPORTUNITY_RATE * 100)}% a year). Portol's AI chose these assumptions; the date is calculated from them.</p>
+        </div>
       )}
     </div>
   );
@@ -368,7 +412,9 @@ export function ValueCard({ profile, spent = 0 }: {
   const graphAhead: GraphAhead | null = lcOn && lc!.projection.length > 1 ? {
     projection: lc!.projection, salvage: lcSalvage && (lcSalvage.value ?? 0) >= 0 ? lcSalvage.value : null,
     window: lc!.sellingWindow && lc!.sellingWindow.status !== "passed" ? lc!.sellingWindow : null,
+    disposal: lc!.optimalDisposal ? { date: lc!.optimalDisposal.date, value: lc!.optimalDisposal.valueAt } : null,
   } : null;
+  const odp = lcOn ? lc!.optimalDisposal : null;
   const valuedAt = v.record?.valuedAt || null;
   const failed = v.record?.status === "error";
   const up = v.delta > 0;
@@ -434,7 +480,7 @@ export function ValueCard({ profile, spent = 0 }: {
         </p>
       )}
       {v.supported && <ValueGraph id={profile.id} points={points} ahead={graphAhead} />}
-      {(moved || ahead || (lcOn && lc!.valueIn12m != null)) && (
+      {(moved || ahead || odp || (lcOn && lc!.valueIn12m != null)) && (
         <div className="mt-1 mb-1 space-y-0.5 text-[12px] text-muted-foreground">
           {moved && (
             <p data-testid="asset-value-recent-change">
@@ -446,6 +492,7 @@ export function ValueCard({ profile, spent = 0 }: {
               Projected about <span className="font-semibold tabular-nums text-foreground">{formatMoneyCompact(lc!.valueIn12m)}</span> a year from now.
             </p>
           )}
+          {odp && <OptimalDisposalLine od={odp} />}
           {ahead && (
             <p data-testid="asset-value-projection">
               At this rate (about {ahead.annualRatePct}% a year), roughly <span className="font-semibold tabular-nums text-foreground">{formatMoneyCompact(ahead.inOneYear)}</span> a year from now. An estimate from the purchase price and date.

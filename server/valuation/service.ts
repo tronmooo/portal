@@ -87,7 +87,9 @@ async function storeLifecycle(storage: IStorage, profileId: string, a: Lifecycle
   const fields = (latest?.fields as any) || {};
   if (!latest || !isAutoValuationEnabled(fields) || !lifecycleNeedsEstimate(fields, key, now)) return false;
   const patch: Record<string, unknown> = {
-    [LIFECYCLE_ASSUMPTIONS_KEY]: { ...a, source: "ai", inputsKey: key, asOf: now.toISOString() },
+    // The upkeep keys are always written (null when the AI could not judge),
+    // so an answer from before they were asked for is the only one re-asked.
+    [LIFECYCLE_ASSUMPTIONS_KEY]: { ...a, annualUpkeep: a.annualUpkeep ?? null, upkeepGrowthPct: a.upkeepGrowthPct ?? null, source: "ai", inputsKey: key, asOf: now.toISOString() },
   };
   if (salvageSource(fields) !== "user") {
     Object.assign(patch, salvageEstimatePatch({ value: a.valueModel === "depreciating" ? a.salvageValue : null, basis: a.basis }, key, now));

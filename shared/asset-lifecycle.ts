@@ -69,6 +69,14 @@ export interface LifecycleAssumptions {
   disposal: DisposalRoute;
   /** What an equivalent new one costs today; null when unknown. */
   replacementCost: number | null;
+  /**
+   * Typical yearly upkeep (repairs + maintenance, no fuel or insurance) in
+   * dollars at its CURRENT age; null when unknown. Feeds the optimal disposal
+   * point (`optimalDisposalPoint`).
+   */
+  annualUpkeep?: number | null;
+  /** How fast that upkeep rises each year it ages, as a decimal (0.12 = +12 %/yr); null when unknown. */
+  upkeepGrowthPct?: number | null;
   confidence: LifecycleConfidence;
   /** One sentence on why. */
   basis: string;
@@ -127,13 +135,20 @@ export function sanitizeLifecycleAssumptions(
   if (replacement != null && (replacement <= 0 || (ceiling > 0 && replacement > ceiling * 20))) replacement = null;
   if (replacement != null) replacement = Math.round(replacement);
 
+  let upkeep = r.annualUpkeep === null ? null : finite(r.annualUpkeep);
+  if (upkeep != null && (upkeep < 0 || (ceiling > 0 && upkeep > ceiling * 0.5) || upkeep > 100_000)) upkeep = null;
+  if (upkeep != null) upkeep = Math.round(upkeep);
+  let growth = finite(r.upkeepGrowthPct);
+  if (growth != null && Math.abs(growth) > 1) growth = growth / 100;
+  if (growth != null && (growth < 0 || growth > 0.6)) growth = null;
+
   const disposal: DisposalRoute = (["resell", "scrap", "recycle", "dispose", "none"] as const).find((d) => d === r.disposal) ?? (valueModel === "depreciating" ? "resell" : "none");
   const confidence: LifecycleConfidence = r.confidence === "high" || r.confidence === "low" ? r.confidence : "medium";
   const text = (v: unknown, max: number) => typeof v === "string" ? v.trim().replace(/\s+/g, " ").slice(0, max) : "";
   const list = Array.isArray(r.assumptions) ? r.assumptions.map((s) => text(s, 160)).filter(Boolean).slice(0, 5) : [];
   return {
     source: "ai", valueModel, usefulLifeYears: life, annualChangePct: rate, salvageValue: salvage, disposal,
-    replacementCost: replacement, confidence, basis: text(r.basis, 240), assumptions: list,
+    replacementCost: replacement, annualUpkeep: upkeep, upkeepGrowthPct: growth, confidence, basis: text(r.basis, 240), assumptions: list,
   };
 }
 
@@ -151,13 +166,19 @@ export function lifecycleNeedsEstimate(fields: Record<string, any> | null | unde
   const stored = readStoredAssumptions(fields);
   if (!stored) return true;
   if ((stored.inputsKey || "") !== inputsKey) return true;
+  // An answer from before the optimal disposal point was asked for: ask once more.
+  if (stored.valueModel === "depreciating" && !("upkeepGrowthPct" in (fields?.[LIFECYCLE_ASSUMPTIONS_KEY] ?? {}))) return true;
   const at = Date.parse(String(stored.asOf || ""));
   return !Number.isFinite(at) || now.getTime() - at >= LIFECYCLE_MAX_AGE_MS;
 }
 
 // ── Typical assumptions, by category (no AI answer yet) ──────────────────────
 
-interface Typical { model: LifecycleValueModel; life: number | null; rate: number; salvageShare: number | null; disposal: DisposalRoute; label: string }
+interface Typical {
+  model: LifecycleValueModel; life: number | null; rate: number; salvageShare: number | null; disposal: DisposalRoute; label: string;
+  /** Yearly upkeep when new, as a share of the price, and how fast it rises with age. */
+  upkeepShare?: number; upkeepGrowth?: number;
+}
 
 const APPLIANCE_RE = /\b(fridge|refrigerator|freezer|washer|dryer|dishwasher|oven|stove|range|microwave|appliance|furnace|water heater|air conditioner|hvac|ac unit)\b/i;
 const FURNITURE_RE = /\b(sofa|couch|table|chair|bed|desk|dresser|mattress|furniture|bookshelf|cabinet|recliner)\b/i;
@@ -178,16 +199,22 @@ export function lifecycleCategory(entity: { name?: string | null; type?: string 
 }
 
 const TYPICAL: Record<string, Typical> = {
-  vehicle: { model: "depreciating", life: 15, rate: -0.15, salvageShare: 0.06, disposal: "scrap", label: "vehicles" },
-  electronics: { model: "depreciating", life: 5, rate: -0.3, salvageShare: 0.03, disposal: "recycle", label: "electronics" },
-  appliance: { model: "depreciating", life: 12, rate: -0.15, salvageShare: 0, disposal: "recycle", label: "household appliances" },
-  furniture: { model: "depreciating", life: 10, rate: -0.18, salvageShare: 0.03, disposal: "dispose", label: "furniture" },
-  equipment: { model: "depreciating", life: 10, rate: -0.12, salvageShare: 0.08, disposal: "resell", label: "equipment and tools" },
+  vehicle: { model: "depreciating", life: 15, rate: -0.15, salvageShare: 0.06, disposal: "scrap", label: "vehicles", upkeepShare: 0.03, upkeepGrowth: 0.12 },
+  electronics: { model: "depreciating", life: 5, rate: -0.3, salvageShare: 0.03, disposal: "recycle", label: "electronics", upkeepShare: 0.02, upkeepGrowth: 0.3 },
+  appliance: { model: "depreciating", life: 12, rate: -0.15, salvageShare: 0, disposal: "recycle", label: "household appliances", upkeepShare: 0.02, upkeepGrowth: 0.18 },
+  furniture: { model: "depreciating", life: 10, rate: -0.18, salvageShare: 0.03, disposal: "dispose", label: "furniture", upkeepShare: 0.005, upkeepGrowth: 0.06 },
+  equipment: { model: "depreciating", life: 10, rate: -0.12, salvageShare: 0.08, disposal: "resell", label: "equipment and tools", upkeepShare: 0.03, upkeepGrowth: 0.12 },
   real_estate: { model: "appreciating", life: null, rate: 0.03, salvageShare: null, disposal: "none", label: "property" },
   collectible: { model: "stable", life: null, rate: 0, salvageShare: null, disposal: "none", label: "collectibles" },
   jewelry: { model: "stable", life: null, rate: 0, salvageShare: null, disposal: "none", label: "jewelry and precious metals" },
-  generic: { model: "depreciating", life: 8, rate: -0.15, salvageShare: 0.03, disposal: "dispose", label: "household items" },
+  generic: { model: "depreciating", life: 8, rate: -0.15, salvageShare: 0.03, disposal: "dispose", label: "household items", upkeepShare: 0.01, upkeepGrowth: 0.12 },
 };
+
+/** The category's typical upkeep: a share of the price per year when new, and its yearly growth. */
+export function typicalUpkeep(category: string): { share: number; growth: number } {
+  const t = TYPICAL[category] ?? TYPICAL.generic;
+  return { share: t.upkeepShare ?? 0.01, growth: t.upkeepGrowth ?? 0.1 };
+}
 
 /** The category's typical assumptions — labelled typical, low confidence. Null where a lifecycle does not apply. */
 export function typicalAssumptions(category: string, purchasePrice: number | null): LifecycleAssumptions | null {
@@ -201,6 +228,8 @@ export function typicalAssumptions(category: string, purchasePrice: number | nul
   return {
     source: "typical", valueModel: t.model, usefulLifeYears: t.life, annualChangePct: t.rate, salvageValue: t.model === "depreciating" ? salvage : null,
     disposal: t.disposal, replacementCost: null, confidence: "low",
+    // Upkeep in dollars needs a price; the engine scales the share itself when it has none.
+    annualUpkeep: null, upkeepGrowthPct: t.model === "depreciating" ? t.upkeepGrowth ?? null : null,
     basis: `Typical figures for ${t.label}; Portol has not analysed this asset yet.`, assumptions: lines,
   };
 }
@@ -311,6 +340,13 @@ export interface AssetLifecycle {
   sellingWindow: { start: string; end: string; status: "ahead" | "open" | "passed" } | null;
   replacementCost: { value: number | null; source: "ai" | "inflated_purchase" | "none" };
   recommendedReplacementDate: string | null;
+  /**
+   * The Optimal Disposal Point: the month from which owning it costs more,
+   * per year, than it did on average up to then — selling (or replacing) then
+   * is cheapest. Computed by `optimalDisposalPoint` from the AI's assumptions;
+   * null when it gains or holds value, or a figure it needs is missing.
+   */
+  optimalDisposal: OptimalDisposal | null;
   repairVsReplace: { annualKeepCost: number; annualReplaceCost: number; favors: "keep" | "replace" } | null;
   recommendation: LifecycleRecommendation | null;
   confidence: LifecycleConfidence;
@@ -323,6 +359,119 @@ export interface AssetLifecycle {
 }
 
 const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
+
+// ── The Optimal Disposal Point ───────────────────────────────────────────────
+//
+// "The point at which it makes more financial sense to sell or replace an
+// asset than to continue owning it." (Owner, 2026-11-26.) The classic
+// economic-life rule, month by month from today: the cost of keeping it one
+// more month is the value it loses that month, its upkeep (rising as it
+// ages), and what the money tied up in it could earn elsewhere
+// (`OPPORTUNITY_RATE`). The average cost per year of keeping it N more months
+// first falls (depreciation slows) and then rises (upkeep climbs); its lowest
+// point is the optimal disposal point — keeping it past then costs more each
+// year than it did on average. The AI chooses the inputs (rate, life,
+// salvage, upkeep and its growth); this arithmetic chooses the date (LC1).
+
+/** A yearly return the money in the asset could earn instead (cost of capital). */
+export const OPPORTUNITY_RATE = 0.05;
+
+export interface OptimalDisposal {
+  /** The calendar day (first of the month it falls in). */
+  date: string;
+  /** Months from today (0 = now). */
+  monthsFromNow: number;
+  /** Why this date: the cost of owning starts rising, it reaches the end of its useful life, or it is already past its best. */
+  reason: "cost_rises" | "cheaper_to_replace" | "end_of_life" | "now";
+  /** What it should still fetch then. */
+  valueAt: number;
+  /** Average cost per year of owning it from now until then (lost value + upkeep + money tied up). */
+  avgAnnualCost: number;
+  /** What a year of owning it would cost just after that point. */
+  costAfter: number | null;
+  /** A new one's all-in cost per year (lost value, its own upkeep, money tied up), when a replacement price and life are known. */
+  newAnnualCost: number | null;
+  /** The upkeep figures used, per year now, and their source. */
+  upkeepNow: number;
+  upkeepGrowthPct: number;
+  upkeepSource: "ai" | "repairs" | "typical";
+}
+
+/** One plain sentence for the point, for reasons and summaries. */
+export function optimalDisposalSentence(od: OptimalDisposal): string {
+  if (od.reason === "now") return `Optimal disposal point: now — owning it costs about ${money(od.costAfter ?? od.avgAnnualCost)} a year from here${od.newAnnualCost != null ? ` (a new one, all-in, about ${money(od.newAnnualCost)})` : ""}; it should fetch about ${money(od.valueAt)}.`;
+  const when = monthYear(od.date);
+  if (od.reason === "cheaper_to_replace") return `Optimal disposal point: ${when} — from then a year of owning it costs about ${money(od.costAfter ?? 0)}, more than a new one all-in (about ${money(od.newAnnualCost ?? 0)} a year); it should still fetch about ${money(od.valueAt)}.`;
+  if (od.reason === "end_of_life") return `Optimal disposal point: ${when}, the end of its useful life — owning it gets cheaper each year until then; expect about ${money(od.valueAt)}.`;
+  return `Optimal disposal point: ${when} — owning it averages about ${money(od.avgAnnualCost)} a year until then${od.costAfter != null ? ` and about ${money(od.costAfter)} a year after` : ""}; it should still fetch about ${money(od.valueAt)}.`;
+}
+
+export function optimalDisposalPoint(args: {
+  now: number;
+  at: (years: number) => number;
+  remainingYears: number | null;
+  ageYears: number | null;
+  upkeepNow: number;
+  upkeepGrowth: number;
+  upkeepSource: OptimalDisposal["upkeepSource"];
+  /** A replacement's price, its useful life and end value — to price a new one ALL-IN, like this one. */
+  replacement: number | null;
+  lifeYears: number | null;
+  newFloor: number;
+}): OptimalDisposal | null {
+  const { now, at, upkeepNow, upkeepGrowth } = args;
+  const horizon = Math.max(1, Math.min(240, Math.round((args.remainingYears ?? 10) * 12)));
+  const r = OPPORTUNITY_RATE / 12;
+  let cum = 0, best = Infinity, bestM = 0;
+  const monthly: number[] = [];
+  for (let m = 1; m <= horizon; m++) {
+    const v0 = at((m - 1) / 12), v1 = at(m / 12);
+    const c = Math.max(0, v0 - v1) + (upkeepNow / 12) * Math.pow(1 + upkeepGrowth, (m - 1) / 12) + r * Math.max(0, v0);
+    monthly.push(c);
+    cum += c;
+    const avg = cum / m;
+    if (avg < best - 1e-9) { best = avg; bestM = m; }
+  }
+  if (!Number.isFinite(best)) return null;
+  // Replacing wins once a year of keeping it — past its cheapest month, so
+  // the cost is climbing — costs more than a new one would.
+  const yearFrom = (m: number) => { const w = monthly.slice(m, m + 12); return w.length ? (w.reduce((a, b) => a + b, 0) / w.length) * 12 : 0; };
+  let cheapest = 0;
+  for (let m = 1; m < monthly.length; m++) if (monthly[m] < monthly[cheapest]) cheapest = m;
+  // A new one priced the same way: what it loses, its own (lower) upkeep and
+  // the money tied up in it, averaged over its life.
+  let newAnnualCost: number | null = null;
+  if (args.replacement && args.replacement > 0 && args.lifeYears && args.lifeYears > 0) {
+    const R = args.replacement, L = Math.max(1, Math.round(args.lifeYears));
+    const floorNew = Math.min(R, Math.max(0, args.newFloor));
+    const upkeepNew = upkeepNow / Math.pow(1 + upkeepGrowth, Math.max(0, args.ageYears ?? 0));
+    let upkeepTotal = 0;
+    for (let y = 0; y < L; y++) upkeepTotal += upkeepNew * Math.pow(1 + upkeepGrowth, y);
+    newAnnualCost = Math.round((R - floorNew) / L + upkeepTotal / L + OPPORTUNITY_RATE * (R + floorNew) / 2);
+  }
+  let replaceM: number | null = null;
+  if (newAnnualCost != null) {
+    for (let m = cheapest; m < bestM; m++) if (Math.round(yearFrom(m)) > newAnnualCost) { replaceM = m; break; }
+  }
+  const pastLife = args.remainingYears === 0;
+  const rising = pastLife || replaceM === 0 || (monthly.length > 1 && monthly[1] > monthly[0] && bestM <= 1);
+  const reason: OptimalDisposal["reason"] = rising ? "now"
+    : replaceM != null ? "cheaper_to_replace"
+    : bestM >= horizon && args.remainingYears != null ? "end_of_life" : "cost_rises";
+  const months = reason === "now" ? 0 : replaceM ?? bestM;
+  const d = new Date(now + (months / 12) * YEAR);
+  const date = months === 0 ? iso(now) : `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
+  const costTo = months ? (monthly.slice(0, months).reduce((a, b) => a + b, 0) / months) * 12 : monthly[0] * 12;
+  const after = months < monthly.length ? yearFrom(months) : null;
+  return {
+    date, monthsFromNow: months, reason,
+    valueAt: Math.round(at(months / 12)),
+    avgAnnualCost: Math.round(costTo),
+    costAfter: after != null ? Math.round(after) : null,
+    newAnnualCost,
+    upkeepNow: Math.round(upkeepNow), upkeepGrowthPct: Math.round(upkeepGrowth * 1000) / 1000, upkeepSource: args.upkeepSource,
+  };
+}
 /** "Jan 2029" — a calendar month for sentences (never a raw ISO date). */
 const monthYear = (d: string) => new Date(`${d.slice(0, 10)}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
 /** The headline without its "Action —" prefix, capitalised, for a row that already shows the action. */
@@ -371,7 +520,7 @@ export function computeAssetLifecycle(input: LifecycleInput): AssetLifecycle {
     currentValue: V, currentValueSource: input.currentValueSource, purchasePrice: P, ageYears: age == null ? null : Math.round(age * 10) / 10,
     accumulatedDepreciation: P && V ? Math.round(P - V) : null, depreciationNext12m: null, valueIn12m: null,
     salvage: { value: null, source: "none", disposalCost: false }, usefulLifeYears: null, remainingLifeYears: null, endOfLifeDate: null,
-    sellingWindow: null, replacementCost: { value: null, source: "none" }, recommendedReplacementDate: null, repairVsReplace: null,
+    sellingWindow: null, replacementCost: { value: null, source: "none" }, recommendedReplacementDate: null, optimalDisposal: null, repairVsReplace: null,
     recommendation: null, confidence: "low",
     assumptions: { source: a?.source ?? "typical", basis: a?.basis ?? "", items: a?.assumptions ?? [], asOf: a?.asOf ?? null, disposal: a?.disposal ?? "none" },
     sources: input.valuation?.sources ?? [], lastUpdated: { value: input.valuation?.valuedAt ?? null, assumptions: a?.asOf ?? null },
@@ -416,6 +565,24 @@ export function computeAssetLifecycle(input: LifecycleInput): AssetLifecycle {
     const annualKeepCost = Math.round(repairs + Math.max(0, dep12));
     const favors = repairs > 0 && (annualKeepCost > annualReplaceCost || repairs >= 0.5 * value) ? "replace" : "keep";
     rvr = { annualKeepCost, annualReplaceCost, favors };
+  }
+
+  // The Optimal Disposal Point (depreciating things only: something that gains
+  // or holds its value has no money reason to be let go).
+  let optimalDisposal: OptimalDisposal | null = null;
+  if (model === "depreciating" && (remaining == null || remaining > 0 || value > floor)) {
+    const tu = typicalUpkeep(input.category);
+    const growth = a.upkeepGrowthPct ?? tu.growth;
+    const priceBase = replacement.value ?? P ?? value;
+    const typicalNow = priceBase * tu.share * Math.pow(1 + growth, Math.max(0, age ?? 0));
+    const upkeepSource: OptimalDisposal["upkeepSource"] = repairs > 0 && repairs >= (a.annualUpkeep ?? 0) ? "repairs" : a.annualUpkeep != null ? "ai" : "typical";
+    const upkeepNow = upkeepSource === "repairs" ? repairs : upkeepSource === "ai" ? a.annualUpkeep! : typicalNow;
+    optimalDisposal = optimalDisposalPoint({
+      now, at, remainingYears: remaining != null ? Math.max(0, remaining) : null, ageYears: age,
+      upkeepNow, upkeepGrowth: growth, upkeepSource,
+      replacement: replacement.value, lifeYears: life,
+      newFloor: replacement.value && P && salvageValue != null ? (salvageValue / P) * replacement.value : floor,
+    });
   }
 
   // Confidence: the weaker of the value's and the assumptions'.
@@ -482,8 +649,10 @@ export function computeAssetLifecycle(input: LifecycleInput): AssetLifecycle {
     if (remaining != null) reasons.push(`About ${yrs(age!)} old with a typical life of ${life} years.`);
     if (dep12 > 0) reasons.push(`Projected value in a year: ${money(in12)}.`);
     if (window && window.status !== "passed") reasons.push(`Best time to sell: ${monthYear(window.start)} to ${monthYear(window.end)}.`);
-    if (rvr) reasons.push(`Keeping it costs about ${money(rvr.annualKeepCost)} a year; a new one about ${money(rvr.annualReplaceCost)} a year.`);
+    // The optimal disposal point already weighs keeping against a new one, all-in.
+    if (rvr && !optimalDisposal) reasons.push(`Keeping it costs about ${money(rvr.annualKeepCost)} a year; a new one about ${money(rvr.annualReplaceCost)} a year.`);
   }
+  if (optimalDisposal) reasons.splice(Math.min(1, reasons.length), 0, optimalDisposalSentence(optimalDisposal));
   // Typical figures for an unrecognised item are not enough to tell anyone to sell or replace.
   if (a.source === "typical" && input.category === "generic" && SIGNIFICANT_ACTIONS.has(action)) {
     reasons.unshift(`Typical figures suggest: ${LIFECYCLE_ACTION_LABEL[action]}.`);
@@ -509,6 +678,7 @@ export function computeAssetLifecycle(input: LifecycleInput): AssetLifecycle {
     sellingWindow: window,
     replacementCost: replacement,
     recommendedReplacementDate,
+    optimalDisposal,
     repairVsReplace: rvr,
     recommendation: { action, label: LIFECYCLE_ACTION_LABEL[action], headline, reasons: reasons.slice(0, 5) },
     confidence,
