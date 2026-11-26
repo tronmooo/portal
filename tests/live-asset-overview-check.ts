@@ -115,6 +115,14 @@ async function main() {
       const dep = await page.locator(t("asset-depreciation")).innerText();
       check(/Depreciated since purchase|Gained since purchase/.test(dep), `the Value card states the change since purchase (${dep.split("\n")[0]})`);
       check(!/Confidence/.test(await page.locator(t("asset-value-card")).innerText()), "the Value card shows no confidence figure");
+      // ── Optimal disposal: a money line between Current value and Salvage value ──
+      await page.locator(t("asset-optimal-disposal-value")).first().waitFor({ timeout: 20_000 }).catch(() => {});
+      const lineOrder = await page.locator(t("asset-value-card")).evaluate((card) =>
+        Array.from(card.querySelectorAll("[data-testid]")).map((e) => e.getAttribute("data-testid")));
+      const iCur = lineOrder.indexOf("asset-value-row-current-value"), iOd = lineOrder.indexOf("asset-optimal-disposal"), iSal = lineOrder.indexOf("asset-value-salvage");
+      check(iCur >= 0 && iOd > iCur && iSal > iOd, "Optimal disposal sits between Current value and Salvage value");
+      const odText = (await page.locator(t("asset-optimal-disposal-value")).first().innerText().catch(() => "")).trim();
+      check(/^\$[\d,]+$|^None|^Needs|^Not applicable/.test(odText), `the Optimal disposal line shows a figure or says why not (${odText})`);
       await edit("asset-value-salvage", "overview-field-input-salvageValue", "150");
       const withSalvage = await until(stored, (p) => Number(p.fields?.salvageValue) === 150);
       check(Number(withSalvage.fields?.salvageValue) === 150, "the salvage value is stored as a number");
