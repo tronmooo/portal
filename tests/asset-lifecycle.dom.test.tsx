@@ -105,7 +105,7 @@ describe("the Value card draws the lifecycle engine's answer", () => {
     expect(screen.queryByTestId("asset-graph-projection")).toBeNull();
   });
 
-  it("the Optimal Disposal Point: the date under the graph, marked on it, and the AI's inputs behind a tap", async () => {
+  it("the Optimal Disposal Point: a money line between Current value and Salvage value, marked on the graph, the AI's inputs behind a tap", async () => {
     const r = row({ annualUpkeep: 1400, upkeepGrowthPct: 0.15 });
     const od = r.lifecycle.optimalDisposal!;
     expect(od).toBeTruthy();
@@ -114,7 +114,15 @@ describe("the Value card draws the lifecycle engine's answer", () => {
     await screen.findByTestId("asset-lifecycle");
     const when = od.reason === "now" ? "Now" : new Date(`${od.date}T12:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" });
     expect(screen.getByTestId("asset-optimal-disposal-date").textContent).toBe(when);
-    expect(screen.getByTestId("asset-optimal-disposal").textContent).toContain("sell for about");
+    expect(screen.getByTestId("asset-optimal-disposal-value").textContent).toBe("$" + od.valueAt.toLocaleString("en-US"));
+    // It sits between Current value and Salvage value.
+    const order = Array.from(screen.getByTestId("asset-value-card").querySelectorAll("[data-testid]")).map((e) => e.getAttribute("data-testid"));
+    const cur = order.indexOf("asset-value-row-current-value");
+    const odIdx = order.indexOf("asset-optimal-disposal");
+    const sal = order.indexOf("asset-value-salvage");
+    expect(cur).toBeGreaterThanOrEqual(0);
+    expect(odIdx).toBeGreaterThan(cur);
+    expect(sal).toBeGreaterThan(odIdx);
     expect(screen.getByTestId("lifecycle-optimal-disposal").textContent).toContain(when);
     if (od.monthsFromNow > 0) {
       expect(screen.getByTestId("asset-graph-disposal")).toBeTruthy();
@@ -127,6 +135,14 @@ describe("the Value card draws the lifecycle engine's answer", () => {
     expect(why).toContain("15% a year");
     expect(why).toContain("AI estimate");
     expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
+  });
+
+  it("every asset has the line: None for something that gains value, a retry when the lifecycle failed", async () => {
+    const house = row({ valueModel: "appreciating", usefulLifeYears: null, annualChangePct: 0.04, salvageValue: null, replacementCost: null });
+    queryClient.setQueryData(LIFECYCLE_QUERY_KEY, { rows: [house], computedAt: NOW.toISOString() });
+    mount();
+    await screen.findByTestId("asset-lifecycle");
+    expect(screen.getByTestId("asset-optimal-disposal-value").textContent).toBe("None \u2014 it gains value");
   });
 
   it("before the AI has answered, the category's typical salvage shows, labelled Typical", async () => {
@@ -162,6 +178,9 @@ describe("the Value card draws the lifecycle engine's answer", () => {
     });
     mount();
     expect(await screen.findByTestId("asset-lifecycle-error")).toBeTruthy();
+    // The Optimal disposal line says so too, with its own retry.
+    expect(screen.getByTestId("asset-optimal-disposal-value").textContent).toBe("Couldn't load");
+    expect(screen.getByTestId("asset-optimal-disposal-retry")).toBeTruthy();
   });
 });
 

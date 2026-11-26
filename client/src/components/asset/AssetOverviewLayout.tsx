@@ -328,30 +328,71 @@ function ValueGraph({ id, points, ahead }: { id: string; points: ValuePoint[]; a
 const odMonth = (d: string) => (parseLocalDate(d.slice(0, 10)) ?? new Date(d)).toLocaleDateString("en-US", { month: "short", year: "numeric" });
 
 /**
- * The Optimal Disposal Point: the date from which owning it costs more than
- * selling or replacing it. The AI chose the assumptions (life, rate, salvage,
- * upkeep and how fast it rises); the date and figures are the lifecycle
- * engine's (shared/asset-lifecycle.ts `optimalDisposalPoint`, Rule 1).
+ * The Optimal Disposal Point, as a money line between Current value and
+ * Salvage value (owner, 2026-11-26: "there should be a number between current
+ * value and salvage value"): what it should fetch at the point from which
+ * owning it costs more than selling or replacing it, and when. The AI chose
+ * the assumptions (life, rate, salvage, upkeep and how fast it rises); the
+ * figure and the date are the lifecycle engine's (shared/asset-lifecycle.ts
+ * `optimalDisposalPoint`, Rule 1). Every asset gets the line: a figure, "None"
+ * for something that gains or holds its value, what is missing, or a loading
+ * / failed state with a retry (Rule 7) — never a blank.
  */
-export function OptimalDisposalLine({ od }: { od: OptimalDisposal }) {
+export function OptimalDisposalRow({ profileId }: { profileId: string }) {
+  const { row, isLoading, isError, refetch } = useAssetLifecycle(profileId);
   const [open, setOpen] = useState(false);
+  const l = row?.lifecycle ?? null;
+  const od = l?.applicable ? l.optimalDisposal : null;
+  const lineRow = "flex items-center gap-3 min-h-[40px] py-1.5 border-b border-border/30";
+  const label = <span className="text-[13px] text-muted-foreground shrink-0">Optimal disposal</span>;
+  const muted = (text: string, extra?: React.ReactNode) => (
+    <div className={lineRow} data-testid="asset-optimal-disposal">
+      {label}<span className="flex-1" />
+      <span className="min-w-0 truncate text-right text-[13px] text-muted-foreground" data-testid="asset-optimal-disposal-value">{text}</span>
+      {extra ?? <span className="w-4 shrink-0" />}
+    </div>
+  );
+  if (isError) {
+    return muted("Couldn't load", (
+      <button type="button" className="text-[12px] text-primary flex items-center gap-1" onClick={() => void refetch()} data-testid="asset-optimal-disposal-retry">
+        <RefreshCw className="h-3 w-3" /> Retry
+      </button>
+    ));
+  }
+  if (isLoading) return muted("…");
+  if (!l) return muted("Not estimated for this kind of record");
+  if (!od) {
+    if (l.valueModel === "appreciating") return muted("None — it gains value");
+    if (l.valueModel === "stable") return muted("None — it holds its value");
+    // Investments and the like: a market price, nothing that wears out.
+    if (!l.valueModel) return muted("Not applicable — a market price");
+    return muted(l.missing.length ? `Needs ${l.missing.includes("current value") ? "a value" : l.missing[0]}` : "Not enough to work it out");
+  }
   const when = od.reason === "now" ? "Now" : odMonth(od.date);
   const why = od.reason === "now" ? "Owning it already costs more each year than letting it go."
-    : od.reason === "cheaper_to_replace" ? `From then a year of owning it (about ${formatMoneyCompact(od.costAfter ?? 0)}) costs more than a new one, all-in (about ${formatMoneyCompact(od.newAnnualCost ?? 0)}).`
-    : od.reason === "end_of_life" ? "Owning it gets cheaper each year until the end of its useful life."
-    : `Owning it averages about ${formatMoneyCompact(od.avgAnnualCost)} a year until then${od.costAfter != null ? `, about ${formatMoneyCompact(od.costAfter)} a year after` : ""}.`;
+    : od.reason === "cheaper_to_replace" ? `From ${when} a year of owning it (about ${formatMoneyCompact(od.costAfter ?? 0)}) costs more than a new one, all-in (about ${formatMoneyCompact(od.newAnnualCost ?? 0)}).`
+    : od.reason === "end_of_life" ? `Owning it gets cheaper each year until the end of its useful life, ${when}.`
+    : `Owning it averages about ${formatMoneyCompact(od.avgAnnualCost)} a year until ${when}${od.costAfter != null ? `, about ${formatMoneyCompact(od.costAfter)} a year after` : ""}.`;
   const upkeepBy = od.upkeepSource === "ai" ? "AI estimate" : od.upkeepSource === "repairs" ? "your recorded repairs" : "typical for its category";
+  const byAi = l.assumptions.source === "ai";
   return (
     <div data-testid="asset-optimal-disposal">
-      <button type="button" className="text-left" onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid="asset-optimal-disposal-toggle">
-        Optimal disposal point: <span className="font-semibold text-cyan-400" data-testid="asset-optimal-disposal-date">{when}</span>
-        {" "}· sell for about <span className="font-semibold tabular-nums text-foreground">{formatMoneyCompact(od.valueAt)}</span>
-        <span className="ml-1 rounded bg-primary/15 px-1 py-px text-[11px] font-semibold text-primary">AI</span>
+      <button type="button" className={`${lineRow} w-full text-left`} onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid="asset-optimal-disposal-toggle">
+        {label}<span className="flex-1" />
+        <span className="min-w-0 truncate text-right text-[14px] inline-flex items-center justify-end gap-1.5">
+          <span className="font-semibold tabular-nums" data-testid="asset-optimal-disposal-value">{formatMoneyCompact(od.valueAt)}</span>
+          <span className="text-[12px] text-cyan-400" data-testid="asset-optimal-disposal-date">{when}</span>
+          {byAi
+            ? <span className="rounded bg-primary/15 px-1 py-px text-[11px] font-semibold text-primary">AI</span>
+            : <span className="rounded bg-muted px-1 py-px text-[11px] font-semibold text-muted-foreground">Typical</span>}
+        </span>
+        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="mt-0.5 text-[11px] space-y-0.5" data-testid="asset-optimal-disposal-why">
+        <div className="pt-1 pb-1.5 text-[11px] text-muted-foreground space-y-0.5" data-testid="asset-optimal-disposal-why">
+          <p>The point from which owning it costs more than selling or replacing it; it should still fetch about {formatMoneyCompact(od.valueAt)} then.</p>
           <p>{why}</p>
-          <p>Counts the value it loses, its upkeep (about {formatMoneyCompact(od.upkeepNow)} a year now, rising {Math.round(od.upkeepGrowthPct * 100)}% a year — {upkeepBy}) and what the money in it could earn ({Math.round(OPPORTUNITY_RATE * 100)}% a year). Portol's AI chose these assumptions; the date is calculated from them.</p>
+          <p>Counts the value it loses, its upkeep (about {formatMoneyCompact(od.upkeepNow)} a year now, rising {Math.round(od.upkeepGrowthPct * 100)}% a year — {upkeepBy}) and what the money in it could earn ({Math.round(OPPORTUNITY_RATE * 100)}% a year). {byAi ? "Portol's AI chose these assumptions" : "Typical figures for its category until Portol's AI analyses it"}; the figure and date are calculated from them.</p>
         </div>
       )}
     </div>
@@ -414,7 +455,6 @@ export function ValueCard({ profile, spent = 0 }: {
     window: lc!.sellingWindow && lc!.sellingWindow.status !== "passed" ? lc!.sellingWindow : null,
     disposal: lc!.optimalDisposal ? { date: lc!.optimalDisposal.date, value: lc!.optimalDisposal.valueAt } : null,
   } : null;
-  const odp = lcOn ? lc!.optimalDisposal : null;
   const valuedAt = v.record?.valuedAt || null;
   const failed = v.record?.status === "error";
   const up = v.delta > 0;
@@ -480,7 +520,7 @@ export function ValueCard({ profile, spent = 0 }: {
         </p>
       )}
       {v.supported && <ValueGraph id={profile.id} points={points} ahead={graphAhead} />}
-      {(moved || ahead || odp || (lcOn && lc!.valueIn12m != null)) && (
+      {(moved || ahead || (lcOn && lc!.valueIn12m != null)) && (
         <div className="mt-1 mb-1 space-y-0.5 text-[12px] text-muted-foreground">
           {moved && (
             <p data-testid="asset-value-recent-change">
@@ -492,7 +532,6 @@ export function ValueCard({ profile, spent = 0 }: {
               Projected about <span className="font-semibold tabular-nums text-foreground">{formatMoneyCompact(lc!.valueIn12m)}</span> a year from now.
             </p>
           )}
-          {odp && <OptimalDisposalLine od={odp} />}
           {ahead && (
             <p data-testid="asset-value-projection">
               At this rate (about {ahead.annualRatePct}% a year), roughly <span className="font-semibold tabular-nums text-foreground">{formatMoneyCompact(ahead.inOneYear)}</span> a year from now. An estimate from the purchase price and date.
@@ -510,6 +549,7 @@ export function ValueCard({ profile, spent = 0 }: {
       {v.paid > 0 && spent > 0 && (
         <Line label="Total invested" display={formatMoneyCompact(v.paid + spent)} testId="asset-value-row-total-invested" />
       )}
+      <OptimalDisposalRow profileId={profile.id} />
       <Line label={disposalCost > 0 ? "Disposal cost" : "Salvage value"} kind="money"
         display={disposalCost > 0 ? (
           <span className="inline-flex items-center gap-1.5 text-red-400" data-testid="asset-salvage-disposal">

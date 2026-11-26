@@ -1227,9 +1227,11 @@ category's typical share) + money tied up (`OPPORTUNITY_RATE`). The point is
 the month the average yearly cost of keeping it is lowest, brought forward
 when a year of keeping it costs more than a new one ALL-IN; past its useful
 life it is now; something that gains or holds value has none. It changes no
-recommendation and raises nothing. The Value card shows it under the graph
-(`OptimalDisposalLine`, `asset-optimal-disposal`) and marks it on the graph's
-"All" range. *Guards:* `tests/asset-lifecycle-engine.test.ts`,
+recommendation and raises nothing. The graph marks it on the
+"All" range. It is a money line BETWEEN Current value and Salvage value
+(`OptimalDisposalRow`, owner 2026-11-26) on every asset: the figure it should
+fetch then with its month, "None" when it gains or holds value, what is
+missing, or "Couldn't load" with a retry. *Guards:* `tests/asset-lifecycle-engine.test.ts`,
 `tests/asset-lifecycle.dom.test.tsx`.
 **LC3. Nested assets count once.** A parent's lifecycle uses its OWN value;
 its descendants are summed separately (`nested`, "not included above"). An
