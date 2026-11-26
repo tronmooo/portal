@@ -2565,15 +2565,19 @@ export default function ChatPage() {
       // (WA10), so the parameter is read from either place.
       const fromSearch = new URLSearchParams(window.location.search || "").get("artifact");
       const fromUrl = (q ? new URLSearchParams(q).get("artifact") : null) || fromSearch;
-      if (fromUrl) {
-        pendingChatArtifactId = fromUrl;
+      if (fromUrl) pendingChatArtifactId = fromUrl;
+      // The address is cleaned only once the link has been answered, so a
+      // reload (or a remount) before then still opens it.
+      const cleanAddress = () => {
         try {
+          const h = window.location.hash || "";
           const search = new URLSearchParams(window.location.search || "");
+          if (!h.includes("artifact=") && !search.has("artifact")) return;
           search.delete("artifact");
           const rest = search.toString();
           window.history.replaceState(window.history.state, "", `${window.location.pathname}${rest ? `?${rest}` : ""}#/chat`);
         } catch { /* old browser */ }
-      }
+      };
       // The chat can mount, read the link, and be remounted (the first
       // screen settling its scope, T3) before the read answers: the pending
       // id outlives this mount and is cleared only once a viewer opens it.
@@ -2584,11 +2588,12 @@ export default function ChatPage() {
         .then(row => {
           if (!live || pendingChatArtifactId !== id) return;
           pendingChatArtifactId = null;
+          cleanAddress();
           if (!row?.id) return;
           if (row.type === "doc" || row.type === "sheet") hashNavigate(`/editor/${row.id}?source=chat`);
           else setActiveArtifact(row);
         })
-        .catch(() => { if (pendingChatArtifactId === id) pendingChatArtifactId = null; });
+        .catch(() => { if (live && pendingChatArtifactId === id) { pendingChatArtifactId = null; cleanAddress(); } });
     };
     openFromHash();
     window.addEventListener("hashchange", openFromHash);
