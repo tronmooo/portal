@@ -175,9 +175,9 @@ export function sanitizeAnticipatedRepairs(raw: unknown, ceiling: number): Antic
 }
 
 /**
- * The AI's explanation, kept to words: a sentence that states its own dollar
- * figure or year is dropped, so the text can never disagree with the figures
- * the model computed (Rule 1).
+ * The AI's explanation, kept to words: a sentence that states any number of
+ * its own (a price, a year, "within 1–2 years") is dropped, so the text can
+ * never disagree with the date and figures the model computed (Rule 1).
  */
 export function sanitizeDisposalReasoning(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
@@ -185,7 +185,8 @@ export function sanitizeDisposalReasoning(raw: unknown): string | null {
   if (!text) return null;
   const kept = (text.match(/[^.!?]+[.!?]*/g) || [text])
     .map((s) => s.trim())
-    .filter((s) => s && !/\$\s?\d|\b(19|20)\d{2}\b|\d[\d,]*\s?(dollars|usd)\b/i.test(s));
+    // Any number at all (a price, a year, "within 1–2 years") is the model's to state.
+    .filter((s) => s && !/\d/.test(s));
   const out = kept.join(" ").slice(0, 500).trim();
   return out || null;
 }
@@ -483,7 +484,7 @@ export function decideDisposal(inp: DisposalModelInput): OptimalDisposal | null 
         ? `Keep it until ${when}, then sell for about ${money(valueAt)}: owning it averages about ${money(base.avg)} a year until then, and more each year after.`
         : base.reason === "economic_end"
           ? `Keep it until ${when}, then sell for about ${money(valueAt)}. After that a year of owning it would cost more than it would still sell for above scrap, so its economic life ends there.`
-          : `Keeping it stays cheaper than replacing it for as far as the model looks; plan to sell around ${when}, for about ${money(valueAt)}.`;
+          : `Keeping it stays cheaper than replacing it through the end of its expected useful life (about ${money(base.avg)} a year${R != null ? ` against a replacement's ${money(R)}` : ""}); plan to sell around ${when}, for about ${money(valueAt)}.`;
 
   return {
     date, monthsFromNow: months, reason: base.reason, decision: base.reason === "sell_now" ? "sell_now" : "keep",

@@ -75,7 +75,7 @@ async function main() {
     check(["depreciation", "upkeep", "major_failure", "carrying", "capital", "selling"].every((k) => gotFactors.includes(k)), `the point lists every factor it weighed (${gotFactors.join(", ")})`);
     console.log(`  optimal disposal → ${l?.optimalDisposal?.date} (${l?.optimalDisposal?.reason}), fetch ${l?.optimalDisposal?.valueAt}; ${(l?.optimalDisposal?.factors || []).map((x: any) => `${x.key} ${x.now}/${x.source}`).join(" · ")}`);
     const od = l?.optimalDisposal;
-    check(!!od && /^\d{4}-\d{2}-\d{2}$/.test(od.date) && od.valueAt >= 0 && ["now", "cost_rises", "cheaper_to_replace", "end_of_life"].includes(od.reason), "the optimal disposal point is calculated, with a date, a reason and what it should fetch");
+    check(!!od && /^\d{4}-\d{2}-\d{2}$/.test(od.date) && od.valueAt >= 0 && ["sell_now", "cheaper_to_replace", "costs_rise", "economic_end", "horizon"].includes(od.reason), "the optimal disposal point is calculated, with a date, a reason and what it should fetch");
     const snap = await read(`/profiles/${car.id}/valuation`);
     check(snap.salvageDue === false, "the snapshot no longer asks for assumptions");
 

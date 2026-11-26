@@ -37,7 +37,7 @@ Return ONLY a JSON object (no markdown):
   "resaleCurve": [{"years": number, "value": number}] | null, // the MARKET resale value you expect for THIS asset at future intervals from today (e.g. 1, 2, 3, 5, 7, 10 years), in US dollars, starting from the current value given. Reflect its category's real resale pattern, its condition, usage, reliability reputation and market demand. This is what a buyer would pay, NOT the scrap/salvage value; null unless depreciating or stable
   "anticipatedRepairs": [{"item": string, "inYears": number, "cost": number}] | null, // specific repairs or replacements this asset will likely need soon given its age and usage (timing belt, tyres, battery, compressor), up to 6; [] when none expected
   "marketDemand": "high" | "normal" | "low",  // how readily this kind of item sells on the used market right now
-  "disposalReasoning": "2-3 sentences in plain words on when it makes financial sense to sell or replace THIS asset and why (market demand, reliability, coming repairs, how its resale value behaves). Do not state dollar figures or calendar years: the calculator supplies those."
+  "disposalReasoning": "2-3 sentences in plain words on what drives THIS asset's keep-versus-sell economics: market demand, reliability, the repairs coming, how its resale value behaves. Describe the factors only: do NOT say when to sell and use no numbers at all (no prices, years, ages or 'within N years'). A separate calculator compares the cost of keeping it against replacing it and picks the date."
   "confidence": "high" | "medium" | "low",
   "basis": "one sentence: what kind of asset this is and how it ages",
   "assumptions": ["short plain-language assumption", "..."]   // 2-5, e.g. "15-year useful life for a compact sedan"
