@@ -35,7 +35,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { useAssetValuation, useAssetValuationHistory } from "@/hooks/useAssetValuation";
 import { LifecycleSection, useAssetLifecycle } from "@/components/asset/AssetLifecycle";
-import { OPPORTUNITY_RATE, type OptimalDisposal } from "@shared/asset-lifecycle";
+import { type DisposalFactor } from "@shared/asset-lifecycle";
 import { SALVAGE_KEY, SALVAGE_BASIS_KEY, SALVAGE_BOOKKEEPING_KEYS, salvageJudgedNone, salvageSource } from "@shared/asset-salvage";
 import { projectDepreciation, recentChange, seriesInRange, valueSeries, VALUE_RANGES, type ValuePoint, type ValueRangeKey } from "@shared/asset-depreciation";
 import { formatTimeAgo } from "@/lib/format";
@@ -325,6 +325,7 @@ function ValueGraph({ id, points, ahead }: { id: string; points: ValuePoint[]; a
   );
 }
 
+const FACTOR_SOURCE: Record<DisposalFactor["source"], string> = { ai: "AI", typical: "Typical", recorded: "Your records", calculated: "Calculated", on_file: "On file" };
 const odMonth = (d: string) => (parseLocalDate(d.slice(0, 10)) ?? new Date(d)).toLocaleDateString("en-US", { month: "short", year: "numeric" });
 
 /**
@@ -373,7 +374,6 @@ export function OptimalDisposalRow({ profileId }: { profileId: string }) {
     : od.reason === "cheaper_to_replace" ? `From ${when} a year of owning it (about ${formatMoneyCompact(od.costAfter ?? 0)}) costs more than a new one, all-in (about ${formatMoneyCompact(od.newAnnualCost ?? 0)}).`
     : od.reason === "end_of_life" ? `Owning it gets cheaper each year until the end of its useful life, ${when}.`
     : `Owning it averages about ${formatMoneyCompact(od.avgAnnualCost)} a year until ${when}${od.costAfter != null ? `, about ${formatMoneyCompact(od.costAfter)} a year after` : ""}.`;
-  const upkeepBy = od.upkeepSource === "ai" ? "AI estimate" : od.upkeepSource === "repairs" ? "your recorded repairs" : "typical for its category";
   const byAi = l.assumptions.source === "ai";
   return (
     <div data-testid="asset-optimal-disposal">
@@ -389,10 +389,30 @@ export function OptimalDisposalRow({ profileId }: { profileId: string }) {
         <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="pt-1 pb-1.5 text-[11px] text-muted-foreground space-y-0.5" data-testid="asset-optimal-disposal-why">
+        <div className="pt-1 pb-1.5 text-[11px] text-muted-foreground space-y-1" data-testid="asset-optimal-disposal-why">
           <p>The point from which owning it costs more than selling or replacing it; it should still fetch about {formatMoneyCompact(od.valueAt)} then.</p>
           <p>{why}</p>
-          <p>Counts the value it loses, its upkeep (about {formatMoneyCompact(od.upkeepNow)} a year now, rising {Math.round(od.upkeepGrowthPct * 100)}% a year — {upkeepBy}) and what the money in it could earn ({Math.round(OPPORTUNITY_RATE * 100)}% a year). {byAi ? "Portol's AI chose these assumptions" : "Typical figures for its category until Portol's AI analyses it"}; the figure and date are calculated from them.</p>
+          {/* Every factor weighed, a year at a time: the next twelve months, and the year before the point. */}
+          <div className="rounded-lg border border-border/40 px-2 py-1" data-testid="asset-optimal-disposal-factors">
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 font-semibold text-foreground/80">
+              <span>What it weighs (a year)</span><span className="text-right">Now</span><span className="text-right">{od.monthsFromNow > 12 ? `By ${when}` : "At point"}</span>
+            </div>
+            {od.factors.map((f) => (
+              <div key={f.key} className="py-0.5 border-t border-border/20 first:border-t-0" data-testid={`asset-disposal-factor-${f.key}`}>
+                <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-baseline">
+                  <span className="min-w-0">
+                    {f.label}{" "}
+                    <span className="rounded bg-muted px-1 text-[11px] font-semibold">{FACTOR_SOURCE[f.source]}</span>
+                  </span>
+                  <span className="text-right tabular-nums">{f.key === "efficiency" ? "−" : ""}{formatMoneyCompact(f.now)}</span>
+                  <span className="text-right tabular-nums">{f.key === "efficiency" ? "−" : ""}{formatMoneyCompact(f.atPoint)}</span>
+                </div>
+                <p className="text-[11px] leading-snug">{f.detail}</p>
+              </div>
+            ))}
+          </div>
+          {od.notes.map((n, i) => <p key={i} data-testid="asset-optimal-disposal-note">{n}</p>)}
+          <p>{byAi ? "Portol's AI chose these assumptions for this asset" : "Typical figures for its category until Portol's AI analyses it"}; the figure and date are calculated from them, month by month.</p>
         </div>
       )}
     </div>

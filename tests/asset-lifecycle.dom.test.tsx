@@ -133,7 +133,11 @@ describe("the Value card draws the lifecycle engine's answer", () => {
     const why = screen.getByTestId("asset-optimal-disposal-why").textContent!;
     expect(why).toContain("$1,400 a year now");
     expect(why).toContain("15% a year");
-    expect(why).toContain("AI estimate");
+    // Every factor it weighed is listed with its yearly figures.
+    for (const k of ["depreciation", "upkeep", "major_failure", "carrying", "capital", "selling"]) {
+      expect(screen.getByTestId(`asset-disposal-factor-${k}`)).toBeTruthy();
+    }
+    expect(screen.getByTestId("asset-disposal-factor-upkeep").textContent).toContain("AI");
     expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
   });
 

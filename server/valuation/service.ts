@@ -52,7 +52,7 @@ import { loadCachedUnderstanding, resolveUnderstanding } from "./understanding";
 import { MS_PER_HOUR } from "@shared/valuation/planner";
 import { estimateLifecycleAssumptions } from "./lifecycle-ai";
 import { salvageEstimatePatch, salvageSource } from "@shared/asset-salvage";
-import { LIFECYCLE_ASSUMPTIONS_KEY, lifecycleCategory, lifecycleNeedsEstimate, type LifecycleAssumptions } from "@shared/asset-lifecycle";
+import { DISPOSAL_FACTOR_KEYS, LIFECYCLE_ASSUMPTIONS_KEY, lifecycleCategory, lifecycleNeedsEstimate, type LifecycleAssumptions } from "@shared/asset-lifecycle";
 
 // Itemized market research runs several web searches; the lock outlives the
 // whole provider budget so a second open joins the run instead of starting one.
@@ -89,7 +89,11 @@ async function storeLifecycle(storage: IStorage, profileId: string, a: Lifecycle
   const patch: Record<string, unknown> = {
     // The upkeep keys are always written (null when the AI could not judge),
     // so an answer from before they were asked for is the only one re-asked.
-    [LIFECYCLE_ASSUMPTIONS_KEY]: { ...a, annualUpkeep: a.annualUpkeep ?? null, upkeepGrowthPct: a.upkeepGrowthPct ?? null, source: "ai", inputsKey: key, asOf: now.toISOString() },
+    [LIFECYCLE_ASSUMPTIONS_KEY]: {
+      ...a,
+      ...Object.fromEntries(DISPOSAL_FACTOR_KEYS.map((k) => [k, (a as any)[k] ?? null])),
+      source: "ai", inputsKey: key, asOf: now.toISOString(),
+    },
   };
   if (salvageSource(fields) !== "user") {
     Object.assign(patch, salvageEstimatePatch({ value: a.valueModel === "depreciating" ? a.salvageValue : null, basis: a.basis }, key, now));

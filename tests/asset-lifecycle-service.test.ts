@@ -4,7 +4,7 @@
 // on file reaches the recommendation; nothing is written.
 import { describe, it, expect, beforeEach } from "vitest";
 import { MemStorage } from "../server/storage";
-import { computeLifecycles } from "../server/asset-lifecycle-service";
+import { computeLifecycles, securedLoans } from "../server/asset-lifecycle-service";
 
 const NOW = new Date("2026-11-24T12:00:00Z");
 const stamp = (over: Record<string, unknown>) => ({
@@ -67,5 +67,27 @@ describe("computeLifecycles", () => {
         lifecycleAssumptions: stamp({ salvageValue: 1500 }) } } as any);
     const row = (await computeLifecycles(storage, { now: NOW })).find((r) => r.profileId === car.id)!;
     expect(row.lifecycle.salvage).toEqual({ value: 2500, source: "user", disposalCost: false });
+  });
+});
+
+describe("the loan secured by an asset (an optimal disposal factor)", () => {
+  const car = { id: "car", name: "Civic", type: "vehicle", fields: {} };
+  const loan = (id: string, fields: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    ({ id, name: id, type: "loan", fields: { _interestRateUnit: "percent", ...fields }, ...extra });
+
+  it("finds a loan linked in the link table, nested under the asset, or naming it, and weights the rate by balance", () => {
+    const profiles = [car,
+      loan("linked", { balance: 6000, interestRate: 6 }),
+      loan("nested", { balance: 2000, interestRate: 12 }, { parentProfileId: "car" }),
+      loan("named", { balance: 0, interestRate: 20, linkedAssetId: "car" }),
+    ];
+    const m = securedLoans(profiles, [{ liabilityProfileId: "linked", assetProfileId: "car" }]);
+    const l = m.get("car")!;
+    expect(l.balance).toBe(8000);
+    expect(l.ratePct).toBe(7.5);
+  });
+
+  it("an asset with nothing owed has no loan", () => {
+    expect(securedLoans([car, loan("other", { balance: 500, interestRate: 5 })], []).has("car")).toBe(false);
   });
 });

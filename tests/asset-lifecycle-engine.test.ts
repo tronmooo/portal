@@ -10,7 +10,9 @@ import {
 const NOW = new Date("2026-11-24T12:00:00Z");
 const ai = (over: Partial<LifecycleAssumptions> = {}): LifecycleAssumptions => ({
   source: "ai", valueModel: "depreciating", usefulLifeYears: 15, annualChangePct: -0.12, salvageValue: 1500,
-  disposal: "scrap", replacementCost: 30000, annualUpkeep: null, upkeepGrowthPct: null, confidence: "high", basis: "Compact sedan.", assumptions: ["15-year life"], asOf: "2026-11-24T00:00:00Z", ...over,
+  disposal: "scrap", replacementCost: 30000, annualUpkeep: null, upkeepGrowthPct: null,
+  majorRepairCost: null, majorFailureChancePct: null, majorFailureChanceGrowthPct: null, carryingCostPct: null, sellingCostPct: null, newEfficiencySavings: null,
+  confidence: "high", basis: "Compact sedan.", assumptions: ["15-year life"], asOf: "2026-11-24T00:00:00Z", ...over,
 });
 const input = (over: Partial<LifecycleInput> = {}): LifecycleInput => ({
   now: NOW, category: "vehicle", purchasePrice: 19000, purchaseDate: "2016-05-01", ageYears: null,
@@ -269,10 +271,83 @@ describe("the Optimal Disposal Point (owner, 2026-11-26)", () => {
     expect(bad.upkeepGrowthPct).toBeNull();
   });
 
-  it("an answer stored before upkeep was asked for is asked again, once", () => {
-    const { annualUpkeep, upkeepGrowthPct, ...old } = ai();
-    void annualUpkeep; void upkeepGrowthPct;
+  it("an answer stored before every disposal factor was asked for is asked again, once", () => {
+    const { sellingCostPct, ...old } = ai();
+    void sellingCostPct;
     expect(lifecycleNeedsEstimate({ lifecycleAssumptions: { ...old, inputsKey: "fp1", asOf: NOW.toISOString() } }, "fp1", NOW)).toBe(true);
     expect(lifecycleNeedsEstimate({ lifecycleAssumptions: { ...ai(), inputsKey: "fp1", asOf: NOW.toISOString() } }, "fp1", NOW)).toBe(false);
+  });
+});
+
+describe("the Optimal Disposal Point weighs every factor (owner, 2026-11-26: \"take all factors into consideration\")", () => {
+  const base = { annualUpkeep: 600, upkeepGrowthPct: 0.1, majorRepairCost: 3500, majorFailureChancePct: 0.04, majorFailureChanceGrowthPct: 0.15, carryingCostPct: 0.04, sellingCostPct: 0.08, newEfficiencySavings: 0 };
+  const od = (over: Partial<LifecycleAssumptions> = {}, inp: Partial<LifecycleInput> = {}) =>
+    computeAssetLifecycle(input({ assumptions: ai({ ...base, ...over }), ...inp })).optimalDisposal!;
+
+  it("lists each factor with its yearly cost now and before the point, and where its figure came from", () => {
+    const o = od();
+    expect(o.factors.map((f) => f.key)).toEqual(["depreciation", "upkeep", "major_failure", "carrying", "capital", "selling"]);
+    expect(o.factors.find((f) => f.key === "upkeep")!.source).toBe("ai");
+    expect(o.factors.find((f) => f.key === "major_failure")!.now).toBeGreaterThan(0);
+    expect(o.factors.find((f) => f.key === "carrying")!.now).toBeGreaterThan(0);
+    for (const f of o.factors) expect(f.detail.length).toBeGreaterThan(10);
+  });
+
+  it("a rising chance of a major failure brings the point forward", () => {
+    const calm = od({ majorFailureChancePct: 0.01, majorFailureChanceGrowthPct: 0 });
+    const risky = od({ majorFailureChancePct: 0.15, majorFailureChanceGrowthPct: 0.4, majorRepairCost: 6000 });
+    expect(Date.parse(risky.date)).toBeLessThan(Date.parse(calm.date));
+  });
+
+  it("a warranty covers repairs and failures while it runs, and is named", () => {
+    const covered = od({}, { warrantyEnds: "2028-06-01" });
+    const bare = od();
+    expect(covered.factors.find((f) => f.key === "major_failure")!.now).toBe(0);
+    expect(covered.factors.find((f) => f.key === "upkeep")!.now).toBeLessThan(bare.factors.find((f) => f.key === "upkeep")!.now);
+    expect(covered.notes.some((n) => n.startsWith("Warranty runs until"))).toBe(true);
+  });
+
+  it("a loan on it: the money tied up costs the loan's rate, and owing more than it is worth is said", () => {
+    const free = od();
+    const owed = od({}, { loan: { balance: 9000, ratePct: 11, name: "Auto loan" } });
+    const cap = (o: typeof free) => o.factors.find((f) => f.key === "capital")!;
+    expect(cap(owed).now).toBeGreaterThan(cap(free).now);
+    expect(cap(owed).source).toBe("on_file");
+    expect(owed.notes.some((n) => n.includes("more than it is worth today"))).toBe(true);
+  });
+
+  it("a newer model's running-cost saving makes replacing win sooner", () => {
+    const none = od({ newEfficiencySavings: 0, annualUpkeep: 1500, upkeepGrowthPct: 0.2 });
+    const big = od({ newEfficiencySavings: 2500, annualUpkeep: 1500, upkeepGrowthPct: 0.2 });
+    expect(big.newAnnualCost!).toBeLessThan(none.newAnnualCost!);
+    expect(Date.parse(big.date)).toBeLessThanOrEqual(Date.parse(none.date));
+    expect(big.factors.some((f) => f.key === "efficiency")).toBe(true);
+  });
+
+  it("the cost of selling is counted once, at the point", () => {
+    const cheap = od({ sellingCostPct: 0 });
+    const dear = od({ sellingCostPct: 0.3 });
+    expect(dear.factors.find((f) => f.key === "selling")!.atPoint).toBeGreaterThan(0);
+    expect(cheap.factors.find((f) => f.key === "selling")!.atPoint).toBe(0);
+  });
+
+  it("insurance and tax that follow its value fall as it ages", () => {
+    const o = od();
+    const c = o.factors.find((f) => f.key === "carrying")!;
+    if (o.monthsFromNow > 12) expect(c.atPoint).toBeLessThan(c.now);
+  });
+
+  it("with no AI answer, every factor uses the category's typical figures, labelled Typical", () => {
+    const o = computeAssetLifecycle(input({ assumptions: null })).optimalDisposal!;
+    for (const k of ["major_failure", "carrying", "selling"]) expect(o.factors.find((f) => f.key === k)!.source).toBe("typical");
+  });
+
+  it("the AI's factor figures are bounded, not clamped", () => {
+    const ok = sanitizeLifecycleAssumptions({ valueModel: "depreciating", majorRepairCost: "3,000", majorFailureChancePct: 6, carryingCostPct: 0.05, sellingCostPct: 10, newEfficiencySavings: 200 }, { purchasePrice: 20000 })!;
+    expect(ok.majorRepairCost).toBe(3000);
+    expect(ok.majorFailureChancePct).toBeCloseTo(0.06);
+    expect(ok.sellingCostPct).toBeCloseTo(0.1);
+    const bad = sanitizeLifecycleAssumptions({ valueModel: "depreciating", majorRepairCost: 900000, majorFailureChancePct: 95, carryingCostPct: 0.6, sellingCostPct: 80, newEfficiencySavings: -5 }, { purchasePrice: 20000 })!;
+    expect([bad.majorRepairCost, bad.majorFailureChancePct, bad.carryingCostPct, bad.sellingCostPct, bad.newEfficiencySavings]).toEqual([null, null, null, null, null]);
   });
 });

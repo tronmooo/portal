@@ -27,6 +27,12 @@ Return ONLY a JSON object (no markdown):
   "replacementCost": number | null,      // today's price of a comparable NEW item, only if you genuinely know its typical price class; else null
   "annualUpkeep": number | null,         // typical US dollars a year to keep THIS one running at its current age and condition: repairs + maintenance (not fuel, insurance or loan payments); null unless depreciating or when you cannot judge
   "upkeepGrowthPct": number | null,      // how fast that upkeep rises each year it ages, as a decimal: 0.12 = +12%/yr (cars ~0.08-0.15, electronics ~0.2-0.35 as batteries and parts fail, furniture ~0.03-0.08); null unless depreciating
+  "majorRepairCost": number | null,      // US dollars for ONE major failure of this kind of thing (transmission, compressor, logic board, roof); null when unsure
+  "majorFailureChancePct": number | null,// chance of such a failure in the coming year at its current age, mileage and condition, as a decimal (0.05 = 5%)
+  "majorFailureChanceGrowthPct": number | null, // how fast that chance rises each year it ages, as a decimal
+  "carryingCostPct": number | null,      // insurance, property tax, registration that scale with its value, as a yearly share of its value (cars ~0.03-0.07; most household goods 0); 0 when none
+  "sellingCostPct": number | null,       // what selling it costs as a share of the sale price: platform/dealer fees, listing, cleaning/prep, the trade-in discount (cars ~0.05-0.15, electronics ~0.08-0.15)
+  "newEfficiencySavings": number | null, // US dollars a year a NEW equivalent would save in running costs (energy, fuel efficiency); 0 when none
   "confidence": "high" | "medium" | "low",
   "basis": "one sentence: what kind of asset this is and how it ages",
   "assumptions": ["short plain-language assumption", "..."]   // 2-5, e.g. "15-year useful life for a compact sedan"
@@ -37,6 +43,8 @@ Rules:
 - Property and land usually appreciate; art, collectibles, precious metals and quality instruments are usually stable or appreciating; most everyday goods depreciate.
 - Never invent market data, listings, prices you do not know, or facts that were not given. When unsure, use "low" confidence and leave figures null.
 - salvageValue is never more than the asset cost or is worth now.
+- annualUpkeep includes the extra running cost an aging item has (lost efficiency, more energy), not fuel or insurance.
+- Every figure above feeds the Optimal Disposal Point; use THIS asset's facts (age, usage, condition, repair history, make and model reliability, warranty), not a generic average.
 - annualUpkeep and upkeepGrowthPct decide the Optimal Disposal Point (when owning it starts costing more each year than selling or replacing it). Recorded upkeep, mileage and condition matter: high recorded repairs or heavy use mean higher upkeep. You do not compute the point; the calculator does.`;
 
 function buildPrompt(ctx: ValuationContext, extra: { currentValue: number | null; category: string }): string {
@@ -73,7 +81,7 @@ export async function estimateLifecycleAssumptions(
   try {
     const text = await Promise.race([
       callModel({
-        spec, system: SYSTEM_PROMPT, user: buildPrompt(ctx, opts), maxTokens: 700, signal: controller.signal,
+        spec, system: SYSTEM_PROMPT, user: buildPrompt(ctx, opts), maxTokens: 900, signal: controller.signal,
         anthropicClient: spec.provider === "anthropic" ? getAnthropicClient("standard") : undefined,
       }),
       new Promise<string>((_, reject) => controller.signal.addEventListener("abort", () => reject(new Error("lifecycle assumptions timed out")), { once: true })),

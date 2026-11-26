@@ -25,17 +25,69 @@ import {
 } from "@shared/asset-lifecycle";
 export type { LifecycleRow };
 import { evidenceSources, isValuableProfile } from "./valuation/service";
+import { isAssetTabProfile, isLiabilityProfile } from "@shared/asset-value";
+import { readBalance, readInterestRatePct } from "@shared/liability-fields";
+
+/**
+ * The loan secured by each asset — a liability linked to it in the link table,
+ * nested under it, or naming it as its asset — summed per asset with the
+ * balance-weighted rate. One of the optimal disposal point's factors: the
+ * money tied up in the asset costs the loan's rate, and selling while more is
+ * owed than it fetches means covering the gap.
+ */
+export function securedLoans(
+  profiles: ReadonlyArray<any>,
+  links: ReadonlyArray<{ liabilityProfileId: string; assetProfileId: string }>,
+): Map<string, { balance: number; ratePct: number | null; name: string | null }> {
+  const byId = new Map(profiles.map((p: any) => [p.id, p]));
+  // A debt is a liability that is not itself an owned thing (a `vehicle` sits in both type sets).
+  const isDebt = (p: any) => !!p && !p.deletedAt && isLiabilityProfile(p) && !isAssetTabProfile(p);
+  const pairs = new Map<string, Set<string>>();
+  const add = (assetId: string | null | undefined, liabilityId: string) => {
+    if (!assetId || !byId.has(assetId)) return;
+    if (!pairs.has(assetId)) pairs.set(assetId, new Set());
+    pairs.get(assetId)!.add(liabilityId);
+  };
+  for (const l of links) add(l.assetProfileId, l.liabilityProfileId);
+  for (const p of profiles) {
+    if (!isDebt(p)) continue;
+    const parent = p.parentProfileId ? byId.get(p.parentProfileId) : null;
+    if (parent && isAssetTabProfile(parent)) add(parent.id, p.id);
+    const named = p.fields?.linkedAssetId || p.fields?.assetProfileId;
+    if (typeof named === "string") add(named, p.id);
+  }
+  const out = new Map<string, { balance: number; ratePct: number | null; name: string | null }>();
+  for (const [assetId, ids] of pairs) {
+    let balance = 0, weighted = 0, rated = 0;
+    const names: string[] = [];
+    for (const id of ids) {
+      const l = byId.get(id);
+      if (!isDebt(l)) continue;
+      const b = readBalance(l);
+      if (!(b > 0)) continue;
+      balance += b;
+      names.push(l.name);
+      const r = readInterestRatePct(l);
+      if (r > 0) { weighted += r * b; rated += b; }
+    }
+    if (balance > 0) out.set(assetId, { balance: Math.round(balance), ratePct: rated > 0 ? Math.round((weighted / rated) * 100) / 100 : null, name: names.join(", ") || null });
+  }
+  return out;
+}
 
 const isoDay = (v: unknown) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
 
 export async function computeLifecycles(storage: IStorage, opts: { now?: Date } = {}): Promise<LifecycleRow[]> {
   const now = opts.now ?? new Date();
-  const [profiles, records, expenses, documents] = await Promise.all([
+  const [profiles, records, expenses, documents, links] = await Promise.all([
     storage.getProfiles(),
     storage.listAssetValuations().catch(() => ({} as Record<string, any>)),
     storage.getExpenses(),
     storage.getDocuments().catch(() => [] as any[]),
+    // Optional input: without the link table a loan nested under the asset still counts.
+    storage.getLiabilityAssetLinks().catch(() => [] as any[]),
   ]);
+  const loans = securedLoans(profiles as any[], links as any[]);
   const assets = profiles.filter((p: any) => !p.deletedAt && isValuableProfile(p));
   const attributed = attributeAssetExpenses(expenses as any[], assets.map((a: any) => ({ id: a.id, parentProfileId: a.parentProfileId ?? null })));
 
@@ -78,6 +130,7 @@ export async function computeLifecycles(storage: IStorage, opts: { now?: Date } 
       userSalvage: salvageSource(fields) === "user" ? parseMoney(fields[SALVAGE_KEY]) : null,
       repairs12m: repairs.last12m,
       warrantyEnds: warranty.get(p.id) ?? null,
+      loan: loans.get(p.id) ?? null,
     });
     return { profileId: p.id, name: p.name, parentProfileId: p.parentProfileId ?? null, lifecycle, repairs, nested: null };
   });

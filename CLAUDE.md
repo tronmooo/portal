@@ -1231,8 +1231,24 @@ recommendation and raises nothing. The graph marks it on the
 "All" range. It is a money line BETWEEN Current value and Salvage value
 (`OptimalDisposalRow`, owner 2026-11-26) on every asset: the figure it should
 fetch then with its month, "None" when it gains or holds value, what is
-missing, or "Couldn't load" with a retry. *Guards:* `tests/asset-lifecycle-engine.test.ts`,
-`tests/asset-lifecycle.dom.test.tsx`.
+missing, or "Couldn't load" with a retry.
+It weighs EVERY factor (owner, 2026-11-26: "take all factors into
+consideration"), each a yearly figure listed under the line with its source
+(`OptimalDisposal.factors`): lost value; repairs & maintenance (rising; a
+warranty covers `WARRANTY_REPAIR_COVER` of repairs while it runs); the risk of
+a major failure (cost × a chance that rises with age; covered under warranty);
+insurance / tax / registration that follow its value (`carryingCostPct`); the
+money tied up in it (a secured loan's rate on what it finances —
+`securedLoans`, `server/asset-lifecycle-service.ts`: link table, a debt
+nested under it, or one naming it — else `OPPORTUNITY_RATE`); the cost of
+selling it, once, at the point (`sellingCostPct`, or the disposal cost); and a
+newer model's running-cost saving (`newEfficiencySavings`) against the new one.
+The AI chooses each figure (`DISPOSAL_FACTOR_KEYS`, bounded, stored null when
+it cannot judge; an answer missing them is re-asked once); without one the
+category's `typicalDisposalFactors`, labelled Typical. Owing more than it is
+worth today is a note, never a silent change. A new factor is a new key there,
+a new line in `factors`, and a test. *Guards:* `tests/asset-lifecycle-engine.test.ts`,
+`tests/asset-lifecycle-service.test.ts`, `tests/asset-lifecycle.dom.test.tsx`.
 **LC3. Nested assets count once.** A parent's lifecycle uses its OWN value;
 its descendants are summed separately (`nested`, "not included above"). An
 expense linked to a parent and a child belongs to the deepest

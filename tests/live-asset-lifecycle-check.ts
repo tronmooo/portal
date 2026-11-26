@@ -59,6 +59,12 @@ async function main() {
     check(l?.currentValue > 0 && typeof l?.lastUpdated?.value === "string", "the current value and when it was valued");
     check(l?.salvage?.source === "ai", "the salvage value it uses is the AI's");
     check(f.lifecycleAssumptions && "upkeepGrowthPct" in f.lifecycleAssumptions, "the AI chose the upkeep assumptions the optimal disposal point needs");
+    const factorKeys = ["annualUpkeep", "upkeepGrowthPct", "majorRepairCost", "majorFailureChancePct", "majorFailureChanceGrowthPct", "carryingCostPct", "sellingCostPct", "newEfficiencySavings"];
+    const missingKeys = factorKeys.filter((k) => !(k in (f.lifecycleAssumptions || {})));
+    check(missingKeys.length === 0, `the AI's answer carries every disposal factor${missingKeys.length ? ` (missing ${missingKeys.join(", ")})` : ""}`);
+    const gotFactors = (l?.optimalDisposal?.factors || []).map((x: any) => x.key);
+    check(["depreciation", "upkeep", "major_failure", "carrying", "capital", "selling"].every((k) => gotFactors.includes(k)), `the point lists every factor it weighed (${gotFactors.join(", ")})`);
+    console.log(`  optimal disposal → ${l?.optimalDisposal?.date} (${l?.optimalDisposal?.reason}), fetch ${l?.optimalDisposal?.valueAt}; ${(l?.optimalDisposal?.factors || []).map((x: any) => `${x.key} ${x.now}/${x.source}`).join(" · ")}`);
     const od = l?.optimalDisposal;
     check(!!od && /^\d{4}-\d{2}-\d{2}$/.test(od.date) && od.valueAt >= 0 && ["now", "cost_rises", "cheaper_to_replace", "end_of_life"].includes(od.reason), "the optimal disposal point is calculated, with a date, a reason and what it should fetch");
     const snap = await read(`/profiles/${car.id}/valuation`);
