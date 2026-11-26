@@ -2557,9 +2557,17 @@ export default function ChatPage() {
     const openFromHash = () => {
       const hash = window.location.hash || "";
       const q = hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : "";
-      const id = q ? new URLSearchParams(q).get("artifact") : null;
+      // The router can move a query out of the hash into location.search
+      // (WA10), so the parameter is read from either place.
+      const fromSearch = new URLSearchParams(window.location.search || "").get("artifact");
+      const id = (q ? new URLSearchParams(q).get("artifact") : null) || fromSearch;
       if (!id) return;
-      try { window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#/chat`); } catch { /* old browser */ }
+      try {
+        const search = new URLSearchParams(window.location.search || "");
+        search.delete("artifact");
+        const rest = search.toString();
+        window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}#/chat`);
+      } catch { /* old browser */ }
       apiRequest("GET", `/api/artifacts/${encodeURIComponent(id)}`)
         .then(r => r.json())
         .then(row => {

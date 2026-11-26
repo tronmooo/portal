@@ -130,11 +130,11 @@ const overflow = (page: any, within?: string) => page.evaluate((sel: string | un
       madeDocs.push(d1.id, d2.id);
     }
 
-    for (const surface of [
+    for (const surface of ([
       { name: "phone 390", phone: true, viewport: { width: 390, height: 844 } },
       { name: "phone 360", phone: true, viewport: { width: 360, height: 740 } },
       { name: "desktop", phone: false, viewport: { width: 1400, height: 950 } },
-    ]) {
+    ] as const).filter((x) => !process.env.SURFACES || process.env.SURFACES.split(",").includes(x.name))) {
       const ctx = await browser.newContext({
         viewport: surface.viewport, hasTouch: surface.phone, isMobile: surface.phone,
         deviceScaleFactor: SHOTS ? 2 : 1, timezoneId: "America/Los_Angeles", acceptDownloads: true,
@@ -400,7 +400,8 @@ const overflow = (page: any, within?: string) => page.evaluate((sel: string | un
       await page.reload();
       const v = page.locator(t("artifact-viewer"));
       await v.waitFor({ timeout: 30000 }).catch(() => undefined);
-      check((await page.locator(t("artifact-viewer-title")).textContent().catch(() => ""))?.includes(tag) ?? false, L("#/chat?artifact= opens that artifact over the chat"));
+      const vt = (await page.locator(t("artifact-viewer-title")).textContent().catch(() => "")) || "";
+      check(vt.includes(tag), L(`#/chat?artifact= opens that artifact over the chat${vt.includes(tag) ? "" : ` (title "${vt}", hash ${await page.evaluate(() => location.hash)}, viewers ${await page.locator(t("artifact-viewer")).count()})`}`));
       check(!(await page.evaluate(() => location.hash)).includes("artifact="), L("the artifact parameter leaves the address"));
       if (await v.isVisible().catch(() => false)) await press(t("button-artifact-viewer-close"));
 
@@ -408,7 +409,7 @@ const overflow = (page: any, within?: string) => page.evaluate((sel: string | un
     }
 
     // ── 6 · an artifact the chat makes opens from its card ──────────────
-    {
+    if (!process.env.SKIP_CHAT) {
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: SHOTS ? 2 : 1 });
       const page = await ctx.newPage();
       await wire(page, []);
