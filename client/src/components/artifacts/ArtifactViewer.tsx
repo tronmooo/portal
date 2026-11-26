@@ -80,7 +80,7 @@ export function ArtifactViewer({ artifact, onClose, from, owners }: ArtifactView
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent
         hideCloseButton
-        className="p-0 gap-0 flex flex-col overflow-hidden left-0 top-0 translate-x-0 translate-y-0 w-full max-w-none h-[100dvh] max-h-none rounded-none border-0 sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:max-w-4xl sm:h-[92dvh] sm:max-h-[92dvh] sm:rounded-2xl sm:border data-[state=open]:slide-in-from-left-0 data-[state=open]:slide-in-from-top-0"
+        className="p-0 gap-0 flex flex-col overflow-hidden left-0 top-0 translate-x-0 translate-y-0 w-full max-w-none h-[100dvh] max-h-none rounded-none border-0 sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:max-w-4xl sm:h-[92dvh] sm:max-h-[92dvh] sm:rounded-2xl sm:border max-sm:!animate-none sm:data-[state=closed]:slide-out-to-left-1/2"
         data-testid="artifact-viewer"
       >
         {live && (

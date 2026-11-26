@@ -485,6 +485,7 @@ export default defineConfig({
       'tests/artifact-panel-failures.dom.test.tsx',
       'tests/artifact-viewer.dom.test.tsx',
       'tests/clipboard-in-dialog.dom.test.tsx',
+      'tests/chat-artifact-card-id.test.ts',
       'tests/editor-mobile-controls.test.ts',
       'tests/finance-tab-qa-2026-09-16.test.ts',
       // QA 2026-09-18 — health, wellness & trackers (F-32…F-43): shared rules + rendered copy.

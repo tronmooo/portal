@@ -2338,7 +2338,7 @@ const MessageRow = memo(function MessageRow({
                     // Find the saved artifact by id (server returns it on the
                     // action) so clicks open the real artifact rather than just
                     // bouncing to the Artifacts list. Fallback: navigate to /artifacts.
-                    const aid = (action.data as any)?.id || (action.data as any)?.artifactId;
+                    const aid = (action.data as any)?.id || (action.data as any)?._entityId || (action.data as any)?.artifactId;
                     const atype = (action.data as any)?.type;
                     const open = () => {
                       if (atype === "doc" || atype === "sheet") {
@@ -2348,7 +2348,9 @@ const MessageRow = memo(function MessageRow({
                       }
                       // Other types: open the side panel viewer directly when we
                       // have the full payload, else go to /artifacts.
-                      if (action.data) setActiveArtifact(action.data as any);
+                      // With the saved id the viewer finds the LIVE row (star,
+                      // view-only link, checklist taps stored — AR1).
+                      if (action.data) setActiveArtifact(aid ? { ...(action.data as any), id: aid } : (action.data as any));
                       else hashNavigate("/artifacts");
                     };
                     return (

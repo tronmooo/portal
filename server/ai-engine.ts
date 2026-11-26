@@ -16538,7 +16538,7 @@ async function runBulkLogPath(
         continue;
       }
       await recordActionLog(turnVerifyCtx, op.tool, actionType, inputWithCtx, result, beforeRows);
-      const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
+      const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id || (op_isArtifactResult(result) ? result.result.id : undefined);
       // The storage layer's short-window duplicate guard returns the EXISTING
       // entry for identical values — flag reuse honestly instead of counting
       // it as a fresh write.
@@ -18772,7 +18772,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             });
           }
           const inp = toolUse.input as Record<string, any>;
-          const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
+          const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id || (op_isArtifactResult(result) ? result.result.id : undefined);
           // Only count as a real action if it succeeded (no error field)
           // Captured so the tool_result stream frame carries the exact same
           // ParsedAction object the buffered response will contain.
@@ -19954,6 +19954,14 @@ export function resolveEntityOwner(
 }
 
 // Fallback rule-based parsing when AI is unavailable
+/** create_artifact answers { result: artifact }: that row's id is the entity
+ *  the chat card opens (Artifact rule AR1 — without it the viewer had an
+ *  unsaved copy: no star, no link, checklist taps not stored). */
+function op_isArtifactResult(result: any): boolean {
+  return !!result && typeof result === "object" && !!result.result && typeof result.result === "object"
+    && typeof result.result.id === "string" && typeof result.result.title === "string" && "type" in result.result;
+}
+
 async function fallbackParse(message: string): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; documentPreview?: { id: string; name: string; mimeType: string; data: string } }> {
   const lower = message.toLowerCase();
   const actions: ParsedAction[] = [];

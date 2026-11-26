@@ -358,7 +358,9 @@ const overflow = (page: any, within?: string) => page.evaluate((sel: string | un
         await card.tap();
         const viewer = page.locator(t("artifact-viewer"));
         await viewer.waitFor({ timeout: 20000 }).catch(() => undefined);
+        await page.waitForTimeout(600);
         const body = await page.locator(t("artifact-viewer-body")).innerText().catch(() => "");
+        check(await page.locator(t("button-artifact-viewer-star")).isVisible().catch(() => false), "chat · the viewer has the saved artifact (its star is there)");
         check(await viewer.isVisible() && body.length > 20 && !/Unknown artifact type/.test(body), "chat · Open artifact shows the whole artifact full screen");
         const box = await viewer.boundingBox();
         check(!!box && box.width >= 389, "chat · the viewer fills the phone's width");
