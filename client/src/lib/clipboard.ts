@@ -25,17 +25,25 @@ function copyViaSelection(text: string): boolean {
   ta.style.left = "-9999px";
   ta.style.opacity = "0";
   ta.style.fontSize = "16px";
-  document.body.appendChild(ta);
+  // Inside an open modal (the artifact viewer, any Radix dialog) the dialog's
+  // focus trap takes focus back from a box appended to <body>; execCommand
+  // then "copies" an empty selection and still answers true — Copy did
+  // nothing (live, 2026-11-26). So the box goes inside the open dialog, and
+  // a box that still could not take focus is a failed copy, which falls
+  // through to the async clipboard API.
+  const dialogs = document.querySelectorAll('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]');
+  const host = (dialogs.length ? dialogs[dialogs.length - 1] : document.body) as HTMLElement;
+  host.appendChild(ta);
   let ok = false;
   try {
     ta.focus({ preventScroll: true });
     ta.select();
     ta.setSelectionRange(0, text.length); // iOS ignores select()
-    ok = document.execCommand("copy");
+    ok = document.activeElement === ta && document.execCommand("copy");
   } catch {
     ok = false;
   } finally {
-    document.body.removeChild(ta);
+    ta.remove();
     try { active?.focus?.({ preventScroll: true }); } catch { /* ignore */ }
   }
   return ok;
