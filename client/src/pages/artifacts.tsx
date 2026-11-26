@@ -29,16 +29,17 @@ import {
   Archive, FileText, Brain, Camera, Heart, Layers, StickyNote, BarChart3, ListChecks,
   Shield, CreditCard, Scale, Folder, Search, X, Star, Tag, Trash2, Pencil, Plus,
   LayoutGrid, List as ListIcon, Image as ImageIcon, ChevronDown, MoreHorizontal,
-  MessageSquare, Sparkles, Table2, Share2, ExternalLink,
+  MessageSquare, Sparkles, Table2, Share2, ExternalLink, Send,
 } from "lucide-react";
 import type { Artifact } from "@shared/schema";
 import type { Document } from "@shared/schema";
 import type { Profile } from "@shared/schema";
-import { documentHasFile } from "@shared/document-file";
+import { documentHasFile, documentFormatLabel } from "@shared/document-file";
 import { previewForContent, prefetchMermaid, tryParseChartSpec } from "@/components/artifacts/ArtifactContent";
 import { ArtifactViewer } from "@/components/artifacts/ArtifactViewer";
 import { ArtifactShareMenu } from "@/components/artifacts/ArtifactShareMenu";
 import { ArtifactThumb, chartThumbData } from "@/components/artifacts/ArtifactThumb";
+import { DocumentThumb, documentHasPicture } from "@/components/artifacts/DocumentThumb";
 import { KindBadge, artifactKind, displayTypeOf } from "@/components/artifacts/artifact-kinds";
 
 // ─── Unified artifact type ──────────────────────────────────
@@ -285,7 +286,9 @@ function ArtifactCard({ item, actions, large }: { item: UnifiedArtifact; actions
       data-testid={`artifact-card-${item.id}`}
     >
       <div className="relative">
-        <ArtifactThumb type={kindKey} source={item.source} preview={item.preview} large={large} />
+        {item.isArtifact || !documentHasPicture(item.source)
+          ? <ArtifactThumb type={kindKey} source={item.source} preview={item.preview} large={large} />
+          : <DocumentThumb doc={item.source} className={large ? "h-40" : "h-24"} fallback={<ArtifactThumb type={kindKey} source={item.source} preview={item.preview} large={large} />} />}
         <span
           className="absolute left-2 top-2 h-8 w-8 rounded-lg flex items-center justify-center border backdrop-blur"
           style={{ background: `hsl(${kind.hsl} / 0.18)`, borderColor: `hsl(${kind.hsl} / 0.45)` }}
@@ -312,18 +315,72 @@ function ArtifactCard({ item, actions, large }: { item: UnifiedArtifact; actions
 }
 
 // ─── Artifact row (list) ─────────────────────────────────────
-function ArtifactRow({ item, actions }: { item: UnifiedArtifact; actions: CardActions }) {
+// The owner's design (2026-11-26): a real preview on the left (a PDF's first
+// page, the photo of a scan, or the artifact drawn small), then the title,
+// "Kind · Format · when", two lines of what it holds, its tags, and star ·
+// Send · ⋯. On a phone the actions sit under the text so the title keeps its
+// width; from sm up they sit at the top right as in the design.
+
+/** "Today, 4:42 PM" · "Yesterday, 2:16 PM" · "Sep 1, 10:24 AM" (year when not this year). */
+export function rowWhen(dateStr: string, now: Date = new Date()): string {
+  const d = new Date(dateStr);
+  if (!dateStr || isNaN(d.getTime())) return "";
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86400000);
+  if (diff === 0) return `Today, ${time}`;
+  if (diff === 1) return `Yesterday, ${time}`;
+  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+  return `${d.toLocaleDateString(undefined, opts)}, ${time}`;
+}
+
+/** "Document · PDF" · "Scan" · "AI Note" — what the row is, in the design's words. */
+export function rowKindLine(item: UnifiedArtifact): string {
+  if (!item.isArtifact) {
+    if (item.type === "scan") return "Scan";
+    const fmt = documentFormatLabel(item.source as any);
+    return fmt ? `Document · ${fmt}` : "Document";
+  }
+  const label = artifactKind(kindKeyOf(item)).label;
+  const src = item.source?.source;
+  return src === "chat" || src === "ai" ? `AI ${label}` : label;
+}
+
+function RowThumb({ item, className }: { item: UnifiedArtifact; className: string }) {
   const kindKey = kindKeyOf(item);
-  const kind = artifactKind(kindKey);
-  const Icon = kind.icon;
+  const drawn = <ArtifactThumb type={kindKey} source={item.source} preview={item.preview} compact title={item.title} className={className} />;
+  if (item.isArtifact || !documentHasPicture(item.source)) return drawn;
+  return <DocumentThumb doc={item.source} className={className} fallback={drawn} />;
+}
+
+const sendTrigger = (
+  <span className="inline-flex items-center gap-1.5 h-8 px-3 rounded-full border border-border/80 bg-background/40 text-xs font-medium text-foreground hover:bg-muted/60 transition-colors">
+    <Send className="h-3.5 w-3.5" /> Send
+  </span>
+);
+
+function RowActions({ item, actions }: { item: UnifiedArtifact; actions: CardActions }) {
   const share = shareTargetOf(item);
+  return (
+    <div className="flex items-center gap-1 shrink-0">
+      <StarButton item={item} actions={actions} />
+      <ArtifactShareMenu artifact={share.artifact} documentFile={share.documentFile} trigger={sendTrigger} />
+      <CardMenu item={item} actions={actions} />
+    </div>
+  );
+}
+
+function ArtifactRow({ item, actions }: { item: UnifiedArtifact; actions: CardActions }) {
+  const kind = artifactKind(kindKeyOf(item));
+  const tags = (item.tags || []).slice(0, 3);
   return (
     <div
       role="button"
       tabIndex={0}
       aria-label={`Open ${item.title}`}
-      className="bubble bubble-interactive flex items-center gap-3 !rounded-xl px-3 py-2.5 cursor-pointer pressable"
-      style={{ ["--accent-hsl" as any]: kind.hsl }}
+      className="bubble bubble-interactive flex items-stretch gap-3 !rounded-2xl p-3 cursor-pointer pressable min-w-0"
+      style={{ ["--accent-hsl" as any]: kind.hsl, borderColor: `hsl(${kind.hsl} / 0.4)`, boxShadow: `0 8px 24px -14px hsl(${kind.hsl} / 0.55)` }}
       onClick={() => actions.onOpen(item)}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
@@ -331,19 +388,28 @@ function ArtifactRow({ item, actions }: { item: UnifiedArtifact; actions: CardAc
       }}
       data-testid={`artifact-card-${item.id}`}
     >
-      <span className="h-10 w-10 shrink-0 rounded-xl flex items-center justify-center border" style={{ background: `hsl(${kind.hsl} / 0.14)`, borderColor: `hsl(${kind.hsl} / 0.35)` }}>
-        <Icon className="h-5 w-5" style={{ color: `hsl(${kind.hsl})` }} />
-      </span>
-      <div className="flex-1 min-w-0">
-        <h4 className="text-sm font-semibold truncate">{item.title}</h4>
-        <p className="text-xs text-muted-foreground truncate">
-          {item.typeLabel} · {formatDate(item.date)}{item.preview ? ` · ${item.preview}` : ""}
-        </p>
-        <div className="mt-1"><OwnerChips item={item} /></div>
+      <RowThumb item={item} className="!h-28 sm:!h-32 w-24 sm:w-36 shrink-0 self-start" />
+      <div className="flex-1 min-w-0 flex flex-col">
+        <div className="flex items-start gap-2 min-w-0">
+          <div className="flex-1 min-w-0">
+            <h4 className="text-sm sm:text-base font-semibold leading-snug line-clamp-2">{item.title}</h4>
+            <p className="text-xs text-muted-foreground truncate mt-0.5" data-testid={`artifact-row-meta-${item.id}`}>
+              {[rowKindLine(item), rowWhen(item.date)].filter(Boolean).join(" · ")}
+            </p>
+          </div>
+          <div className="hidden sm:block"><RowActions item={item} actions={actions} /></div>
+        </div>
+        {item.preview && <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{item.preview}</p>}
+        <div className="flex flex-wrap items-end gap-x-2 gap-y-1 mt-auto pt-1.5 min-w-0">
+          <div className="flex flex-wrap gap-1 min-w-0 max-w-full">
+            {tags.map(t => (
+              <span key={t} className="text-[11px] px-2 py-0.5 rounded-full bg-muted/60 text-foreground/80">#{t}</span>
+            ))}
+            <OwnerChips item={item} />
+          </div>
+          <div className="sm:hidden ml-auto -mr-1"><RowActions item={item} actions={actions} /></div>
+        </div>
       </div>
-      <StarButton item={item} actions={actions} />
-      <ArtifactShareMenu artifact={share.artifact} documentFile={share.documentFile} trigger={shareTrigger} />
-      <CardMenu item={item} actions={actions} />
     </div>
   );
 }
@@ -718,11 +784,11 @@ export default function ArtifactsPage() {
           {/* QA 2026-09-18 F-59 / BUG-30: the header uses the PAGE's word,
               "artifacts", for the whole set, and says "N of M" only when a
               filter narrows what is showing. */}
-          <p className="text-xs text-muted-foreground truncate" data-testid="artifacts-header-count">
+          <p className="text-xs text-muted-foreground line-clamp-2" data-testid="artifacts-header-count">
             {!countsReady
               ? (isLoading ? "Loading your artifacts…" : "Couldn't load your artifacts")
               : <>{filtered.length !== profileFiltered.length ? `${filtered.length} of ` : ""}
-                {profileFiltered.length} artifact{profileFiltered.length === 1 ? "" : "s"}</>} · Everything you've created with AI and beyond
+                {profileFiltered.length} artifact{profileFiltered.length === 1 ? "" : "s"}</>} · Everything you create with Portol gets saved here.
           </p>
         </div>
         <DropdownMenu>
@@ -888,7 +954,11 @@ export default function ArtifactsPage() {
             );
           })}
         </div>
-        <div className="flex-1" />
+        <p className="hidden md:flex flex-1 min-w-0 items-center gap-2 text-xs text-muted-foreground" data-testid="artifacts-gallery-hint">
+          <ImageIcon className="h-4 w-4 shrink-0" />
+          <span className="leading-snug">Gallery shows larger previews (PDFs, images, etc.)</span>
+        </p>
+        <div className="flex-1 md:hidden" />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" className="inline-flex items-center gap-1.5 h-9 px-3 rounded-xl border border-border/70 bg-muted/30 text-xs font-medium" data-testid="button-artifacts-sort">
@@ -904,6 +974,12 @@ export default function ArtifactsPage() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {view !== "gallery" && (
+        <p className="md:hidden -mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <ImageIcon className="h-3.5 w-3.5 shrink-0" /> Gallery shows larger previews (PDFs, images, etc.)
+        </p>
+      )}
 
       {/* Content — a single malformed item can no longer blank the whole page
           (SectionErrorBoundary shows an inline retry). */}

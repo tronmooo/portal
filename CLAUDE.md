@@ -1469,6 +1469,12 @@ share, ⋯). Every count comes from the one filter pipeline: Total is the
 rendered set, Files + Notes & reports add up to it, each chip's count is what
 pressing it shows. View and sort are per-device conveniences that never hide a
 row. A star is the artifact's own `pinned` flag.
+The List row is the owner's design (2026-11-26): a real preview (an uploaded
+PDF's first page / a scan's photo through `DocumentThumb` — the shared blob
+loader, only once the row is near the screen; else the artifact drawn small),
+the title, "Kind · Format · when" (`rowKindLine`, `rowWhen`), two lines, tags,
+then star · **Send** · ⋯ (top right from `sm`, beside the tags on a phone). A
+preview never takes the row's width (the live check measures it).
 
 ## Touch rules (the app is used on a phone; a mouse click proves nothing about a finger)
 

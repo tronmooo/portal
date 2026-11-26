@@ -93,6 +93,7 @@ const overflow = (page: any, within?: string) => page.evaluate((sel: string | un
   const release = await acquireGateLock(preferenceLockIo(api as any) as any, { gate: "live-artifacts" });
   const tag = Math.random().toString(36).slice(2, 6).toUpperCase();
   const made: string[] = [];
+  const madeDocs: string[] = [];
   const browser = await chromium.launch();
   try {
     // ── Records, one per kind ───────────────────────────────────────────
@@ -110,6 +111,23 @@ const overflow = (page: any, within?: string) => page.evaluate((sel: string | un
     for (const k of kinds) {
       const row = await call("POST", "/artifacts", { ...k.body, source: "chat" });
       ids[k.key] = row.id; made.push(row.id);
+    }
+
+    // A real PDF and a real photo, so the List view's previews are proven on
+    // actual files (owner's design, 2026-11-26: a PDF's first page, a scan).
+    const docs: Record<string, string> = {};
+    {
+      const maker = await (await browser.newContext()).newPage();
+      await maker.setContent(`<html><body style="font-family:sans-serif;padding:40px"><h1>Avery Chen ${tag}</h1><h3>Product Manager</h3><p>Six years building user-centric products.</p><ul><li>Led growth</li><li>Shipped mobile apps</li></ul></body></html>`);
+      const pdf = (await maker.pdf({ format: "A4" })).toString("base64");
+      await maker.setViewportSize({ width: 300, height: 420 });
+      await maker.setContent(`<html><body style="margin:0;background:#fff;font-family:monospace;padding:20px"><h2 style="text-align:center">Sunny Day Cafe ${tag}</h2><p>Iced Latte ........ $4.75</p><p>Avocado Toast ..... $7.50</p><p><b>Total ............. $12.25</b></p></body></html>`);
+      const png = (await maker.screenshot({ type: "png" })).toString("base64");
+      await maker.context().close();
+      const d1 = await call("POST", "/documents", { name: `Resume ${tag}.pdf`, title: `Résumé ${tag}`, type: "other", mimeType: "application/pdf", fileData: pdf, tags: ["career"], extractedData: { name: `Avery Chen ${tag}` } });
+      const d2 = await call("POST", "/documents", { name: `Sunny Day Cafe ${tag}.png`, title: `Sunny Day Cafe Receipt ${tag}`, type: "receipt", mimeType: "image/png", fileData: png, tags: ["receipt"], extractedData: { total: 12.25 } });
+      docs.pdf = d1.id; docs.png = d2.id;
+      madeDocs.push(d1.id, d2.id);
     }
 
     for (const surface of [
@@ -172,6 +190,55 @@ const overflow = (page: any, within?: string) => page.evaluate((sel: string | un
         const o = await overflow(page);
         check(o === "", L(`the Artifacts tab fits the screen in ${v} view${o ? ` (${o})` : ""}`));
       }
+      // The List view: real previews, kind · format · time, tags, Send.
+      await press(t("view-list"));
+      for (const [k, id] of Object.entries(docs)) {
+        const row = page.locator(t(`artifact-card-${id}`));
+        await row.scrollIntoViewIfNeeded();
+        const thumb = row.locator(t(`doc-thumb-${id}`));
+        const drawn = await thumb.locator(k === "pdf" ? "canvas" : "img").first().waitFor({ timeout: 30000 }).then(() => true).catch(() => false);
+        let ok = drawn;
+        if (drawn && k === "png") ok = await thumb.locator("img").first().evaluate((im: any) => im.complete && im.naturalWidth > 0);
+        if (drawn && k === "pdf") ok = await thumb.locator("canvas").first().evaluate((c: any) => c.width > 0 && c.height > 0);
+        check(ok, L(`the ${k === "pdf" ? "PDF's first page" : "photo"} is the row's preview`));
+        const meta = (await row.locator(t(`artifact-row-meta-${id}`)).textContent()) || "";
+        check(k === "pdf" ? /^Document · PDF · (Today|Yesterday|\w{3} \d)/.test(meta) : /^Scan · /.test(meta), L(`the row says "${meta}"`));
+        check(await row.getByText("Send").locator("visible=true").count() === 1, L(`the ${k} row has one Send`));
+      }
+      await page.waitForTimeout(500);
+      // Every row keeps its preview at the side: the thumbnail is narrower
+      // than the row and the text column starts to its right, inside the row.
+      const rowsBad = await page.evaluate(() => [...document.querySelectorAll('[data-testid^="artifact-card-"]')].map((row) => {
+        const r = row.getBoundingClientRect();
+        const kids = [...row.children] as HTMLElement[];
+        const thumb = kids[0]?.getBoundingClientRect(); const text = kids[1]?.getBoundingClientRect();
+        // Nothing inside the text column overlaps another control (the star
+        // over the owner chip, 2026-11-26).
+        const els = [...(kids[1]?.querySelectorAll("button, span.rounded-full") || [])].map((n) => (n as HTMLElement).getBoundingClientRect()).filter((b) => b.width > 0);
+        const overlap = els.some((a, i) => els.some((b, j) => j > i && a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1 && !(a.left >= b.left && a.right <= b.right && a.top >= b.top && a.bottom <= b.bottom) && !(b.left >= a.left && b.right <= a.right && b.top >= a.top && b.bottom <= a.bottom)));
+        const bad = !thumb || !text || overlap || thumb.width > r.width * 0.45 || text.left < thumb.right - 1 || text.right > r.right + 1 || text.width < 120;
+        return bad ? `${row.getAttribute("data-testid")}${overlap ? " controls overlap" : ""} thumb ${Math.round(thumb?.width ?? 0)} text ${Math.round(text?.left ?? 0)}..${Math.round(text?.right ?? 0)} of ${Math.round(r.right)}` : "";
+      }).filter(Boolean));
+      check(rowsBad.length === 0, L(`every List row keeps its preview at the side and its text inside${rowsBad.length ? ` (${rowsBad.join("; ")})` : ""}`));
+      const ol = await overflow(page);
+      check(ol === "", L(`the List view fits the screen${ol ? ` (${ol})` : ""}`));
+      if (SHOTS) {
+        await page.locator(t(`artifact-card-${docs.pdf}`)).scrollIntoViewIfNeeded();
+        await page.screenshot({ path: `${SHOTS}/${surface.name.replace(" ", "-")}-list.png` });
+      }
+      if (surface.phone) {
+        // Send on an uploaded document hands the share sheet the file itself.
+        const row = page.locator(t(`artifact-card-${docs.pdf}`));
+        await row.getByText("Send").locator("visible=true").first().tap();
+        await page.locator(t("share-document-file")).waitFor({ timeout: 10000 });
+        await page.locator(t("share-document-file")).tap();
+        await page.waitForFunction(() => ((window as any).__shared || []).some((x: any) => x.files?.length), undefined, { timeout: 20000 }).catch(() => undefined);
+        const sent = await page.evaluate(() => ((window as any).__shared || []).find((x: any) => x.files?.length));
+        check(sent?.files?.[0]?.type === "application/pdf" && sent.files[0].size > 1000, L(`Send on a PDF hands the share sheet the PDF (${JSON.stringify(sent?.files?.[0])})`));
+        await page.evaluate(() => { (window as any).__shared = []; });
+      }
+      await press(t("view-grid"));
+      await page.waitForTimeout(300);
       const cards = await page.locator('[data-testid^="artifact-card-"]').count();
       const total = Number((await page.locator(`${t("artifacts-stat-showing")} p`).nth(0).textContent())?.trim() || "-1");
       check(cards === total, L(`the Total tile (${total}) equals the cards drawn (${cards})`));
@@ -393,6 +460,7 @@ const overflow = (page: any, within?: string) => page.evaluate((sel: string | un
     check(false, `run stopped: ${e?.message || e}`);
   } finally {
     for (const id of made) await api("DELETE", `/artifacts/${id}`).catch(() => undefined);
+    for (const id of madeDocs) await api("POST", `/documents/${id}/purge`).catch(() => undefined);
     await browser.close();
     await release();
   }

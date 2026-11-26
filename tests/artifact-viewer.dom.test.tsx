@@ -33,7 +33,7 @@ vi.mock("@/lib/queryClient", async () => {
 
 import { ArtifactViewer } from "../client/src/components/artifacts/ArtifactViewer";
 import { ArtifactPanel } from "../client/src/components/ArtifactPanel";
-import ArtifactsPage from "../client/src/pages/artifacts";
+import ArtifactsPage, { rowWhen } from "../client/src/pages/artifacts";
 import { artifactFile, artifactPlainText, sheetToCsv } from "../client/src/lib/artifact-share";
 
 const writes = () => calls.filter((c) => c.method !== "GET");
@@ -182,6 +182,44 @@ describe("the Artifacts tab", () => {
     fireEvent.click(screen.getByTestId("filter-checklists"));
     await waitFor(() => expect(screen.queryAllByTestId(/^artifact-card-/).length).toBe(1));
     expect(screen.getByTestId("artifact-card-cl-1")).toBeTruthy();
+  });
+});
+
+describe("the List view (owner's design, 2026-11-26)", () => {
+  const PDF = {
+    id: "d-pdf", name: "Resume.pdf", title: "Résumé", type: "other", mimeType: "application/pdf",
+    createdAt: "2026-11-25T22:42:00.000Z", linkedProfiles: [], extractedData: { name: "Avery Chen" }, tags: ["plan", "career"], hasFile: true,
+  };
+  beforeEach(() => {
+    try { localStorage.setItem("portol_artifacts_view", "list"); } catch { /* jsdom */ }
+    respond = (_m, url) => (url === "/api/artifacts" ? [{ ...MARKDOWN, source: "chat", tags: ["sleep", "energy"] }] : url === "/api/documents" ? [PDF] : []);
+  });
+  afterEach(() => { try { localStorage.removeItem("portol_artifacts_view"); } catch { /* jsdom */ } });
+
+  it("each row names its kind, format and time, shows its tags and a Send button", async () => {
+    mount(<ArtifactsPage />);
+    const row = await screen.findByTestId("artifact-card-d-pdf");
+    expect(within(row).getByTestId("artifact-row-meta-d-pdf").textContent).toMatch(/^Document · PDF · /);
+    expect(within(row).getAllByText("#plan").length).toBeGreaterThan(0);
+    expect(within(row).getAllByText("Send").length).toBeGreaterThan(0);
+    const note = screen.getByTestId("artifact-card-md-1");
+    expect(within(note).getByTestId("artifact-row-meta-md-1").textContent).toMatch(/^AI Note · /);
+    expect(screen.getAllByText(/Gallery shows larger previews/).length).toBeGreaterThan(0);
+  });
+
+  it("a file preview downloads nothing until its row is on screen, and opening the list writes nothing", async () => {
+    mount(<ArtifactsPage />);
+    await screen.findByTestId("artifact-card-d-pdf");
+    expect(calls.some((c) => c.url.includes("/file"))).toBe(false);
+    expect(writes()).toEqual([]);
+  });
+
+  it("dates read like the design", () => {
+    const now = new Date("2026-11-26T12:00:00");
+    expect(rowWhen("2026-11-26T16:42:00", now)).toMatch(/^Today, /);
+    expect(rowWhen("2026-11-25T14:16:00", now)).toMatch(/^Yesterday, /);
+    expect(rowWhen("2026-09-01T10:24:00", now)).toMatch(/^Sep 1, /);
+    expect(rowWhen("2025-09-01T10:24:00", now)).toMatch(/2025/);
   });
 });
 

@@ -107,29 +107,43 @@ function textLines(src: any): string[] {
     .slice(0, 4);
 }
 
-export function ArtifactThumb({ type, source, preview, large }: {
+export function ArtifactThumb({ type, source, preview, large, compact, title, className = "" }: {
   /** The artifact's own type (chart, doc, note…), or document/scan. */
   type: string;
   source: any;
   preview?: string;
   large?: boolean;
+  /** List row: no icon chip over it, a small title line on top, fills its box. */
+  compact?: boolean;
+  /** The artifact's title, drawn as that line in compact mode. */
+  title?: string;
+  className?: string;
 }) {
   const kind = artifactKind(type);
   const chart = useMemo(() => (type === "chart" || type === "note" || type === "markdown" ? chartThumbData(source) : null), [type, source]);
-  const h = large ? "h-40" : "h-24";
-  const frame = `relative ${h} w-full overflow-hidden rounded-xl border border-white/5 p-3`;
+  const h = compact ? "h-full" : large ? "h-40" : "h-24";
+  const frame = `relative ${h} ${compact ? "" : "w-full"} overflow-hidden rounded-xl border border-white/10 ${compact ? "p-2" : "p-3"} ${className}`;
+  // Compact (list row): the icon chip is not drawn over the picture, so the
+  // content starts at the top under a one-line title.
+  const pad = compact ? "" : "!pt-12";
+  const head = compact && title
+    ? <p className="text-[11px] font-semibold text-foreground/90 truncate mb-1">{title}</p>
+    : null;
   const bg = { background: `linear-gradient(160deg, hsl(${kind.hsl} / 0.16), hsl(${kind.hsl} / 0.04) 60%, transparent)` };
 
   if (chart) {
-    return <div className={frame} style={bg} aria-hidden><MiniChart data={chart} /></div>;
+    return compact
+      ? <div className={`${frame} flex flex-col`} style={bg} aria-hidden>{head}<div className="flex-1 min-h-0"><MiniChart data={chart} /></div></div>
+      : <div className={frame} style={bg} aria-hidden><MiniChart data={chart} /></div>;
   }
   if (type === "checklist") {
     const items: { text: string; checked: boolean }[] = Array.isArray(source?.items) && source.items.length
       ? source.items
       : String(source?.content || "").split("\n").filter(Boolean).map((l: string) => ({ text: l.replace(/^\s*(?:[-*]\s*)?\[[ xX]\]\s*/, ""), checked: /\[[xX]\]/.test(l) }));
     return (
-      <div className={`${frame} !pt-12 space-y-1.5`} style={bg} aria-hidden>
-        {items.slice(0, large ? 5 : 2).map((it, i) => (
+      <div className={`${frame} ${pad} space-y-1.5`} style={bg} aria-hidden>
+        {head}
+        {items.slice(0, large ? 5 : compact ? 3 : 2).map((it, i) => (
           <div key={i} className="flex items-center gap-2 text-[11px] text-muted-foreground">
             {it.checked ? <CheckSquare className="h-3.5 w-3.5 shrink-0 text-emerald-400" /> : <Square className="h-3.5 w-3.5 shrink-0" />}
             <span className={`truncate ${it.checked ? "line-through opacity-70" : ""}`}>{it.text}</span>
@@ -140,7 +154,7 @@ export function ArtifactThumb({ type, source, preview, large }: {
   }
   if (type === "code") {
     return (
-      <div className={`${frame} !pt-12 bg-zinc-950/80`} aria-hidden>
+      <div className={`${frame} ${pad} bg-zinc-950/80`} aria-hidden>
         <pre className="text-[11px] leading-snug font-mono text-emerald-300/80 whitespace-pre overflow-hidden">{String(source?.content || "").split("\n").slice(0, large ? 9 : 5).join("\n")}</pre>
       </div>
     );
@@ -163,10 +177,10 @@ export function ArtifactThumb({ type, source, preview, large }: {
   const lines = textLines(source);
   const Icon = kind.icon;
   return (
-    <div className={`${frame} ${lines.length > 0 || preview ? "!pt-12" : ""}`} style={bg} aria-hidden>
+    <div className={`${frame} ${lines.length > 0 || preview ? pad : ""}`} style={bg} aria-hidden>
       {lines.length > 0 || preview ? (
         <div className="space-y-1">
-          {(lines.length ? lines : [preview || ""]).slice(0, large ? 6 : 2).map((l, i) => (
+          {(lines.length ? lines : [preview || ""]).slice(0, large ? 6 : compact ? 4 : 2).map((l, i) => (
             <p key={i} className={`truncate ${i === 0 ? "text-[11px] font-semibold text-foreground/80" : "text-[11px] text-muted-foreground"}`}>{l}</p>
           ))}
         </div>

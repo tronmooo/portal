@@ -47,10 +47,13 @@ export function preloadPdfjs() {
 export default function PdfCanvas({
   blob,
   className,
+  maxPages,
 }: {
   blob: Blob;
   /** Extra classes for the canvas host (e.g. spacing). */
   className?: string;
+  /** Render at most this many pages (a list thumbnail draws page 1 only). */
+  maxPages?: number;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -73,7 +76,7 @@ export default function PdfCanvas({
       const pdf = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
       if (seq !== seqRef.current) { pdf.destroy(); return; }
 
-      const numPages = pdf.numPages;
+      const numPages = maxPages && maxPages > 0 ? Math.min(pdf.numPages, maxPages) : pdf.numPages;
       // Cap backing-store resolution so a high-DPI phone doesn't allocate huge
       // canvases for a many-page document.
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -123,7 +126,7 @@ export default function PdfCanvas({
       console.error("[PdfCanvas] failed to render PDF:", e);
       if (seq === seqRef.current) setStatus("error");
     }
-  }, [blob]);
+  }, [blob, maxPages]);
 
   useEffect(() => { render(); }, [render]);
 
