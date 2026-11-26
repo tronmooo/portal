@@ -131,6 +131,11 @@ export async function computeLifecycles(storage: IStorage, opts: { now?: Date } 
       repairs12m: repairs.last12m,
       warrantyEnds: warranty.get(p.id) ?? null,
       loan: loans.get(p.id) ?? null,
+      facts: {
+        hasUsage: Object.keys(ctx.usage || {}).length > 0,
+        hasCondition: !!ctx.condition,
+        maintenanceRecords: repairs.count,
+      },
     });
     return { profileId: p.id, name: p.name, parentProfileId: p.parentProfileId ?? null, lifecycle, repairs, nested: null };
   });

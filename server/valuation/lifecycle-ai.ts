@@ -33,6 +33,11 @@ Return ONLY a JSON object (no markdown):
   "carryingCostPct": number | null,      // insurance, property tax, registration that scale with its value, as a yearly share of its value (cars ~0.03-0.07; most household goods 0); 0 when none
   "sellingCostPct": number | null,       // what selling it costs as a share of the sale price: platform/dealer fees, listing, cleaning/prep, the trade-in discount (cars ~0.05-0.15, electronics ~0.08-0.15)
   "newEfficiencySavings": number | null, // US dollars a year a NEW equivalent would save in running costs (energy, fuel efficiency); 0 when none
+  "currentValueEstimate": number | null, // only when the current value is unknown: your estimate of what it would sell for today; the resaleCurve then starts from it
+  "resaleCurve": [{"years": number, "value": number}] | null, // the MARKET resale value you expect for THIS asset at future intervals from today (e.g. 1, 2, 3, 5, 7, 10 years), in US dollars, starting from the current value given. Reflect its category's real resale pattern, its condition, usage, reliability reputation and market demand. This is what a buyer would pay, NOT the scrap/salvage value; null unless depreciating or stable
+  "anticipatedRepairs": [{"item": string, "inYears": number, "cost": number}] | null, // specific repairs or replacements this asset will likely need soon given its age and usage (timing belt, tyres, battery, compressor), up to 6; [] when none expected
+  "marketDemand": "high" | "normal" | "low",  // how readily this kind of item sells on the used market right now
+  "disposalReasoning": "2-3 sentences in plain words on when it makes financial sense to sell or replace THIS asset and why (market demand, reliability, coming repairs, how its resale value behaves). Do not state dollar figures or calendar years: the calculator supplies those."
   "confidence": "high" | "medium" | "low",
   "basis": "one sentence: what kind of asset this is and how it ages",
   "assumptions": ["short plain-language assumption", "..."]   // 2-5, e.g. "15-year useful life for a compact sedan"
@@ -44,6 +49,7 @@ Rules:
 - Never invent market data, listings, prices you do not know, or facts that were not given. When unsure, use "low" confidence and leave figures null.
 - salvageValue is never more than the asset cost or is worth now.
 - annualUpkeep includes the extra running cost an aging item has (lost efficiency, more energy), not fuel or insurance.
+- The resaleCurve must be specific to this asset and category (a car, a phone, a sofa and a guitar lose value very differently); never a single universal percentage, and never the salvage value.
 - Every figure above feeds the Optimal Disposal Point; use THIS asset's facts (age, usage, condition, repair history, make and model reliability, warranty), not a generic average.
 - annualUpkeep and upkeepGrowthPct decide the Optimal Disposal Point (when owning it starts costing more each year than selling or replacing it). Recorded upkeep, mileage and condition matter: high recorded repairs or heavy use mean higher upkeep. You do not compute the point; the calculator does.`;
 
@@ -57,7 +63,7 @@ function buildPrompt(ctx: ValuationContext, extra: { currentValue: number | null
     `Characteristics:`,
     attrs,
     `Purchase: ${ctx.purchase.price ? `$${ctx.purchase.price.toLocaleString()}` : "unknown price"}${ctx.purchase.date ? ` on ${ctx.purchase.date}` : ""}`,
-    `Current value: ${extra.currentValue ? `$${Math.round(extra.currentValue).toLocaleString()}` : "unknown"}`,
+    `Current value: ${extra.currentValue ? `$${Math.round(extra.currentValue).toLocaleString()} (the resaleCurve starts from this)` : "unknown"}`,
     `Age: ${ctx.ageYears != null ? `${ctx.ageYears} years` : "unknown"}`,
     `Condition: ${ctx.condition || (ctx.notesSignals.length ? ctx.notesSignals.join(", ") : "unknown")}`,
     usage ? `Usage: ${usage}` : "",
@@ -76,12 +82,12 @@ export async function estimateLifecycleAssumptions(
   let spec;
   try { spec = selectModel("fast"); } catch { return null; }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 25_000);
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 35_000);
   (timer as any).unref?.();
   try {
     const text = await Promise.race([
       callModel({
-        spec, system: SYSTEM_PROMPT, user: buildPrompt(ctx, opts), maxTokens: 900, signal: controller.signal,
+        spec, system: SYSTEM_PROMPT, user: buildPrompt(ctx, opts), maxTokens: 1400, signal: controller.signal,
         anthropicClient: spec.provider === "anthropic" ? getAnthropicClient("standard") : undefined,
       }),
       new Promise<string>((_, reject) => controller.signal.addEventListener("abort", () => reject(new Error("lifecycle assumptions timed out")), { once: true })),

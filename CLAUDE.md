@@ -1215,40 +1215,45 @@ asset page, the Assets tab pill, Needs Attention, the Calendar and Finance can
 never disagree (Rule 1). Never add a second projection beside it: the
 purchase-price `projectDepreciation` line shows only while no lifecycle has
 loaded.
-**LC2a. The Optimal Disposal Point is arithmetic over the AI's upkeep.**
-(Owner, 2026-11-26: "the point at which it makes more financial sense to sell
-or replace an asset than to continue owning it".) The AI adds two assumptions,
-`annualUpkeep` (dollars a year at its current age) and `upkeepGrowthPct`,
-bounded like the rest and always stored (null when it cannot judge); an
-answer stored without them is asked again once. `optimalDisposalPoint`
-(`shared/asset-lifecycle.ts`) walks the engine's projection month by month:
-lost value + upkeep (recorded repairs when higher, else the AI's, else the
-category's typical share) + money tied up (`OPPORTUNITY_RATE`). The point is
-the month the average yearly cost of keeping it is lowest, brought forward
-when a year of keeping it costs more than a new one ALL-IN; past its useful
-life it is now; something that gains or holds value has none. It changes no
-recommendation and raises nothing. The graph marks it on the
-"All" range. It is a money line BETWEEN Current value and Salvage value
-(`OptimalDisposalRow`, owner 2026-11-26) on every asset: the figure it should
-fetch then with its month, "None" when it gains or holds value, what is
-missing, or "Couldn't load" with a retry.
-It weighs EVERY factor (owner, 2026-11-26: "take all factors into
-consideration"), each a yearly figure listed under the line with its source
-(`OptimalDisposal.factors`): lost value; repairs & maintenance (rising; a
-warranty covers `WARRANTY_REPAIR_COVER` of repairs while it runs); the risk of
-a major failure (cost × a chance that rises with age; covered under warranty);
-insurance / tax / registration that follow its value (`carryingCostPct`); the
-money tied up in it (a secured loan's rate on what it finances —
-`securedLoans`, `server/asset-lifecycle-service.ts`: link table, a debt
-nested under it, or one naming it — else `OPPORTUNITY_RATE`); the cost of
-selling it, once, at the point (`sellingCostPct`, or the disposal cost); and a
-newer model's running-cost saving (`newEfficiencySavings`) against the new one.
-The AI chooses each figure (`DISPOSAL_FACTOR_KEYS`, bounded, stored null when
-it cannot judge; an answer missing them is re-asked once); without one the
-category's `typicalDisposalFactors`, labelled Typical. Owing more than it is
-worth today is a note, never a silent change. A new factor is a new key there,
-a new line in `factors`, and a test. *Guards:* `tests/asset-lifecycle-engine.test.ts`,
-`tests/asset-lifecycle-service.test.ts`, `tests/asset-lifecycle.dom.test.tsx`.
+**LC2a. The Optimal Disposal Point is an economic decision model, never the
+salvage value** (`shared/disposal-model.ts`; owner, 2026-11-26: "it's giving
+me the same value as the salvage value … rebuild the optimal disposal
+calculation as an independent, intelligent AI-powered economic decision
+model"). The AI, in the lifecycle call, studies THIS asset and chooses its
+inputs (`DISPOSAL_FACTOR_KEYS`): a resale CURVE — the market value it expects
+at future intervals, from the value it was given or its own
+`currentValueEstimate`, stored as ratios (`resaleRetention`) so a new
+valuation re-prices the plan without a new call; anticipated repairs; upkeep
+and its growth; a major failure's cost and rising chance; carrying and
+selling costs; a newer model's running saving; market demand; and an
+explanation in words (`sanitizeDisposalReasoning` drops any sentence with its
+own dollar figure or year — the figures are the model's). `decideDisposal`
+decides, month by month: keeping it a year costs the drop in its resale value
+(net of selling costs) plus every running cost; the alternative is a
+replacement's equivalent annual cost priced the same way (the AI's price, the
+purchase price inflated, else estimated back from today's value); the point is
+the first month keeping costs more than replacing (with none in view, the
+month its average yearly cost is lowest), bounded by its ECONOMIC end (a year
+of owning it would cost more than it still sells for above scrap) and never a
+month whose value is at or near the salvage value (`salvageGuard`). That one
+market-value path (the AI's curve, else the category's) is also the
+lifecycle's projection, so the graph, the 12-month figure and the point agree.
+The answer carries the disposal value, date, decision (sell now / keep),
+economic life left, projected depreciation, the intervals compared
+(`schedule`), every factor with its source, a range (the model read
+pessimistically and optimistically, wider when less is known), a confidence
+score from what is on file (`disposalConfidence`) and what is missing; when
+confidence is low it is an ESTIMATE and the range leads. With no current value,
+today's is estimated from the purchase price along the category's pace. It is
+computed on read from the records (repairs, usage, condition and valuations
+feed it; a change to any re-asks the AI through the input fingerprint). It
+changes no Keep/Sell recommendation and raises nothing. The Value card shows
+it as a money line BETWEEN Current value and Salvage value
+(`OptimalDisposalRow`) on every asset — "None" when it gains or holds value,
+what is missing, "Couldn't load" with a retry — and the graph marks it.
+A new input is a new key there, a factor line, and a test.
+*Guards:* `tests/asset-lifecycle-engine.test.ts`, `tests/asset-lifecycle-service.test.ts`,
+`tests/asset-lifecycle.dom.test.tsx`.
 **LC3. Nested assets count once.** A parent's lifecycle uses its OWN value;
 its descendants are summed separately (`nested`, "not included above"). An
 expense linked to a parent and a child belongs to the deepest

@@ -59,7 +59,16 @@ async function main() {
     check(l?.currentValue > 0 && typeof l?.lastUpdated?.value === "string", "the current value and when it was valued");
     check(l?.salvage?.source === "ai", "the salvage value it uses is the AI's");
     check(f.lifecycleAssumptions && "upkeepGrowthPct" in f.lifecycleAssumptions, "the AI chose the upkeep assumptions the optimal disposal point needs");
-    const factorKeys = ["annualUpkeep", "upkeepGrowthPct", "majorRepairCost", "majorFailureChancePct", "majorFailureChanceGrowthPct", "carryingCostPct", "sellingCostPct", "newEfficiencySavings"];
+    const factorKeys = ["annualUpkeep", "upkeepGrowthPct", "majorRepairCost", "majorFailureChancePct", "majorFailureChanceGrowthPct", "carryingCostPct", "sellingCostPct", "newEfficiencySavings", "resaleRetention", "anticipatedRepairs", "marketDemand", "disposalReasoning"];
+    const odm = l?.optimalDisposal;
+    check(Array.isArray(f.lifecycleAssumptions?.resaleRetention) && f.lifecycleAssumptions.resaleRetention.length >= 2, "the AI gave its own resale curve for this asset");
+    check(odm?.curveSource === "ai", "the disposal point follows the AI's resale curve");
+    const salvageNow = Number(l?.salvage?.value ?? 0);
+    check(!!odm && odm.valueAt > Math.max(0, salvageNow), `the disposal value (${odm?.valueAt}) is above the salvage value (${salvageNow}), never equal to it`);
+    check(!!odm && ["keep", "sell_now"].includes(odm.decision) && typeof odm.remainingEconomicLifeYears === "number" && typeof odm.projectedDepreciation === "number", "it says sell now or keep, the economic life left and the projected depreciation");
+    check(!!odm && ["high", "medium", "low"].includes(odm.confidence) && odm.range.valueLow <= odm.valueAt && odm.range.valueHigh >= odm.valueAt, `a confidence (${odm?.confidence}) and a range around the value`);
+    check(typeof odm?.explanation?.ai === "string" && odm.explanation.ai.length > 20 && !/\$\d/.test(odm.explanation.ai), "an AI explanation in words, with no figure of its own");
+    console.log(`  decision → ${odm?.decision} ${odm?.date}: $${odm?.valueAt} (salvage $${salvageNow}); ${odm?.explanation?.ai}`);
     const missingKeys = factorKeys.filter((k) => !(k in (f.lifecycleAssumptions || {})));
     check(missingKeys.length === 0, `the AI's answer carries every disposal factor${missingKeys.length ? ` (missing ${missingKeys.join(", ")})` : ""}`);
     const gotFactors = (l?.optimalDisposal?.factors || []).map((x: any) => x.key);

@@ -369,19 +369,30 @@ export function OptimalDisposalRow({ profileId }: { profileId: string }) {
     if (!l.valueModel) return muted("Not applicable — a market price");
     return muted(l.missing.length ? `Needs ${l.missing.includes("current value") ? "a value" : l.missing[0]}` : "Not enough to work it out");
   }
-  const when = od.reason === "now" ? "Now" : odMonth(od.date);
-  const why = od.reason === "now" ? "Owning it already costs more each year than letting it go."
-    : od.reason === "cheaper_to_replace" ? `From ${when} a year of owning it (about ${formatMoneyCompact(od.costAfter ?? 0)}) costs more than a new one, all-in (about ${formatMoneyCompact(od.newAnnualCost ?? 0)}).`
-    : od.reason === "end_of_life" ? `Owning it gets cheaper each year until the end of its useful life, ${when}.`
-    : `Owning it averages about ${formatMoneyCompact(od.avgAnnualCost)} a year until ${when}${od.costAfter != null ? `, about ${formatMoneyCompact(od.costAfter)} a year after` : ""}.`;
+  const sellNow = od.decision === "sell_now";
+  const when = sellNow ? "Sell now" : odMonth(od.date);
+  const sameRange = od.range.valueLow === od.range.valueHigh;
+  // Too little on file for one figure: the range leads (never the salvage value).
+  const headline = od.estimated && !sameRange
+    ? `${formatMoneyCompact(od.range.valueLow)}–${formatMoneyCompact(od.range.valueHigh)}`
+    : formatMoneyCompact(od.valueAt);
+  const dateRange = od.range.dateLow === od.range.dateHigh ? null : `${odMonth(od.range.dateLow)} – ${odMonth(od.range.dateHigh)}`;
+  const life = od.monthsFromNow < 12 ? `${Math.max(0, od.monthsFromNow)} mo` : `${od.remainingEconomicLifeYears} yrs`;
+  const conf = od.confidence[0].toUpperCase() + od.confidence.slice(1);
   const byAi = l.assumptions.source === "ai";
+  const figure = (k: string, v: React.ReactNode, testId: string, tone = "") => (
+    <div className="min-w-0" data-testid={testId}>
+      <p className="text-[11px] text-muted-foreground truncate">{k}</p>
+      <p className={`text-[13px] font-semibold tabular-nums truncate ${tone}`}>{v}</p>
+    </div>
+  );
   return (
     <div data-testid="asset-optimal-disposal">
       <button type="button" className={`${lineRow} w-full text-left`} onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid="asset-optimal-disposal-toggle">
         {label}<span className="flex-1" />
         <span className="min-w-0 truncate text-right text-[14px] inline-flex items-center justify-end gap-1.5">
-          <span className="font-semibold tabular-nums" data-testid="asset-optimal-disposal-value">{formatMoneyCompact(od.valueAt)}</span>
-          <span className="text-[12px] text-cyan-400" data-testid="asset-optimal-disposal-date">{when}</span>
+          <span className="font-semibold tabular-nums" data-testid="asset-optimal-disposal-value">{headline}</span>
+          <span className={`text-[12px] ${sellNow ? "text-amber-400" : "text-cyan-400"}`} data-testid="asset-optimal-disposal-date">{when}</span>
           {byAi
             ? <span className="rounded bg-primary/15 px-1 py-px text-[11px] font-semibold text-primary">AI</span>
             : <span className="rounded bg-muted px-1 py-px text-[11px] font-semibold text-muted-foreground">Typical</span>}
@@ -389,16 +400,64 @@ export function OptimalDisposalRow({ profileId }: { profileId: string }) {
         <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="pt-1 pb-1.5 text-[11px] text-muted-foreground space-y-1" data-testid="asset-optimal-disposal-why">
-          <p>The point from which owning it costs more than selling or replacing it; it should still fetch about {formatMoneyCompact(od.valueAt)} then.</p>
-          <p>{why}</p>
-          {/* Every factor weighed, a year at a time: the next twelve months, and the year before the point. */}
+        <div className="pt-1.5 pb-2 text-[12px] text-muted-foreground space-y-2" data-testid="asset-optimal-disposal-why">
+          {/* The decision and its figures. */}
+          <div className={`rounded-lg px-2.5 py-1.5 font-semibold ${sellNow ? "bg-amber-500/10 text-amber-300" : "bg-cyan-500/10 text-cyan-300"}`} data-testid="asset-optimal-disposal-decision">
+            {sellNow ? "Sell now — keeping it costs more than letting it go." : `Keep it until ${when}, then sell or replace it.`}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1.5" data-testid="asset-optimal-disposal-figures">
+            {figure("Optimal disposal value", od.estimated && !sameRange ? headline : formatMoneyCompact(od.valueAt), "od-fig-value")}
+            {figure("Recommended date", od.estimated && dateRange ? dateRange : (sellNow ? "Now" : when), "od-fig-date")}
+            {figure("Economic life left", life, "od-fig-life")}
+            {figure("Projected depreciation", `−${formatMoneyCompact(od.projectedDepreciation)}`, "od-fig-depreciation", od.projectedDepreciation > 0 ? "text-red-400" : "")}
+            {figure("Confidence", `${conf} (${od.confidenceScore})`, "od-fig-confidence")}
+            {figure("After selling costs", formatMoneyCompact(od.netProceeds), "od-fig-net")}
+          </div>
+          {!od.estimated && (!sameRange || dateRange) && (
+            <p data-testid="asset-optimal-disposal-range">
+              Likely range: {formatMoneyCompact(od.range.valueLow)}–{formatMoneyCompact(od.range.valueHigh)}{dateRange ? `, ${dateRange}` : ""}.
+            </p>
+          )}
+          {/* The explanation: the AI's reading of this asset, then the model's figures. */}
+          <div className="space-y-1" data-testid="asset-optimal-disposal-explanation">
+            {od.explanation.ai && (
+              <p data-testid="asset-optimal-disposal-ai-explanation">
+                <span className="mr-1 rounded bg-primary/15 px-1 py-px text-[11px] font-semibold text-primary">AI</span>{od.explanation.ai}
+              </p>
+            )}
+            <p className="text-foreground/85">{od.explanation.summary}</p>
+            {od.marketDemand && <p>Market demand for it: {od.marketDemand}.</p>}
+          </div>
+          {od.missing.length > 0 && (
+            <p data-testid="asset-optimal-disposal-missing">
+              {od.estimated ? "This is an estimate. " : ""}It would be sharper with: {od.missing.join(", ")}.
+            </p>
+          )}
+          {/* Selling at each interval, compared. */}
+          {od.schedule.length > 0 && (
+            <div className="rounded-lg border border-border/40 px-2 py-1" data-testid="asset-optimal-disposal-schedule">
+              <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 font-semibold text-foreground/80">
+                <span>If you sell in…</span><span className="text-right">Worth then</span><span className="text-right">Owning costs</span>
+              </div>
+              <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 border-t border-border/20 py-0.5">
+                <span>Now</span><span className="text-right tabular-nums">{formatMoneyCompact(od.currentValue)}</span><span className="text-right">—</span>
+              </div>
+              {od.schedule.map((r) => (
+                <div key={r.years} className={`grid grid-cols-[1fr_auto_auto] gap-x-3 border-t border-border/20 py-0.5 ${Math.round(od.monthsFromNow / 12) === r.years && !sellNow ? "text-cyan-300 font-semibold" : ""}`}>
+                  <span>{r.years} year{r.years === 1 ? "" : "s"}</span>
+                  <span className="text-right tabular-nums">{formatMoneyCompact(r.value)}</span>
+                  <span className="text-right tabular-nums">{formatMoneyCompact(r.keepCostPerYear)}/yr</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Every factor weighed, a year at a time. */}
           <div className="rounded-lg border border-border/40 px-2 py-1" data-testid="asset-optimal-disposal-factors">
             <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 font-semibold text-foreground/80">
               <span>What it weighs (a year)</span><span className="text-right">Now</span><span className="text-right">{od.monthsFromNow > 12 ? `By ${when}` : "At point"}</span>
             </div>
             {od.factors.map((f) => (
-              <div key={f.key} className="py-0.5 border-t border-border/20 first:border-t-0" data-testid={`asset-disposal-factor-${f.key}`}>
+              <div key={f.key} className="py-0.5 border-t border-border/20" data-testid={`asset-disposal-factor-${f.key}`}>
                 <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-baseline">
                   <span className="min-w-0">
                     {f.label}{" "}
@@ -410,9 +469,14 @@ export function OptimalDisposalRow({ profileId }: { profileId: string }) {
                 <p className="text-[11px] leading-snug">{f.detail}</p>
               </div>
             ))}
+            {od.newAnnualCost != null && (
+              <p className="pt-0.5 border-t border-border/20 text-[11px]" data-testid="asset-optimal-disposal-replacement">
+                A replacement{od.replacementCost != null ? ` (about ${formatMoneyCompact(od.replacementCost)}${od.replacementSource === "estimated" ? ", estimated" : od.replacementSource === "inflated_purchase" ? ", from the purchase price" : ""})` : ""} costs about {formatMoneyCompact(od.newAnnualCost)} a year to own, all-in.
+              </p>
+            )}
           </div>
           {od.notes.map((n, i) => <p key={i} data-testid="asset-optimal-disposal-note">{n}</p>)}
-          <p>{byAi ? "Portol's AI chose these assumptions for this asset" : "Typical figures for its category until Portol's AI analyses it"}; the figure and date are calculated from them, month by month.</p>
+          <p className="text-[11px]">{byAi ? "Portol's AI studied this asset and chose these inputs" : "Typical figures for its category until Portol's AI analyses it"}; the date and values are calculated from them and recalculated whenever its value, repairs, usage or condition change.</p>
         </div>
       )}
     </div>

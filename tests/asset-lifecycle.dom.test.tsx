@@ -112,7 +112,7 @@ describe("the Value card draws the lifecycle engine's answer", () => {
     queryClient.setQueryData(LIFECYCLE_QUERY_KEY, { rows: [r], computedAt: NOW.toISOString() });
     mount();
     await screen.findByTestId("asset-lifecycle");
-    const when = od.reason === "now" ? "Now" : new Date(`${od.date}T12:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" });
+    const when = od.decision === "sell_now" ? "Sell now" : new Date(`${od.date}T12:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" });
     expect(screen.getByTestId("asset-optimal-disposal-date").textContent).toBe(when);
     expect(screen.getByTestId("asset-optimal-disposal-value").textContent).toBe("$" + od.valueAt.toLocaleString("en-US"));
     // It sits between Current value and Salvage value.
@@ -138,6 +138,14 @@ describe("the Value card draws the lifecycle engine's answer", () => {
       expect(screen.getByTestId(`asset-disposal-factor-${k}`)).toBeTruthy();
     }
     expect(screen.getByTestId("asset-disposal-factor-upkeep").textContent).toContain("AI");
+    // The decision model's figures, the decision, the explanation and the intervals compared.
+    for (const id of ["od-fig-value", "od-fig-date", "od-fig-life", "od-fig-depreciation", "od-fig-confidence", "asset-optimal-disposal-decision", "asset-optimal-disposal-explanation", "asset-optimal-disposal-schedule"]) {
+      expect(screen.getByTestId(id)).toBeTruthy();
+    }
+    expect(screen.getByTestId("od-fig-confidence").textContent).toMatch(/High|Medium|Low/);
+    // Never the salvage value ($1,500).
+    expect(od.valueAt).toBeGreaterThan(1500);
+    expect(screen.getByTestId("asset-optimal-disposal-value").textContent).not.toBe("$1,500");
     expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
   });
 

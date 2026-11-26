@@ -32,6 +32,10 @@
 
 import { classifyOverviewEntity } from "./overview-semantics";
 import type { AttentionItem } from "./attention";
+import {
+  curveFromRetention, decideDisposal, optimalDisposalSentence, sanitizeAnticipatedRepairs, sanitizeDisposalReasoning, sanitizeResaleCurve,
+  type AnticipatedRepair, type MarketDemand, type OptimalDisposal, type ResalePoint,
+} from "./disposal-model";
 
 const DAY = 86_400_000;
 const YEAR = 365.25 * DAY;
@@ -55,8 +59,11 @@ export const SIGNIFICANT_ACTIONS: ReadonlySet<LifecycleAction> = new Set(["consi
 /** The stored field holding the AI's assumptions (a valuation OUTPUT, never an input). */
 export const LIFECYCLE_ASSUMPTIONS_KEY = "lifecycleAssumptions";
 /** The newest assumption key; a stored answer without it predates the full set of disposal factors. */
-export const DISPOSAL_FACTOR_KEYS = ["annualUpkeep", "upkeepGrowthPct", "majorRepairCost", "majorFailureChancePct", "majorFailureChanceGrowthPct", "carryingCostPct", "sellingCostPct", "newEfficiencySavings"] as const;
-const DISPOSAL_FACTOR_MARKER = "sellingCostPct";
+export const DISPOSAL_FACTOR_KEYS = [
+  "annualUpkeep", "upkeepGrowthPct", "majorRepairCost", "majorFailureChancePct", "majorFailureChanceGrowthPct", "carryingCostPct", "sellingCostPct", "newEfficiencySavings",
+  "resaleRetention", "anticipatedRepairs", "marketDemand", "disposalReasoning",
+] as const;
+const DISPOSAL_FACTOR_MARKER = "disposalReasoning";
 /** An AI answer is re-asked at most this often when nothing it used changed. */
 export const LIFECYCLE_MAX_AGE_MS = 180 * DAY;
 
@@ -92,6 +99,14 @@ export interface LifecycleAssumptions {
   sellingCostPct?: number | null;
   /** Yearly running cost a NEW one would save (energy, fuel efficiency), in dollars; 0 when none. */
   newEfficiencySavings?: number | null;
+  /** The resale values the AI expects at future intervals, as ratios of the value it was given (never the salvage value). */
+  resaleRetention?: ResalePoint[] | null;
+  /** Specific repairs the AI expects (timing belt, tyres, battery), with when and what they cost. */
+  anticipatedRepairs?: AnticipatedRepair[] | null;
+  /** How readily this kind of thing sells right now. */
+  marketDemand?: MarketDemand | null;
+  /** The AI's explanation of this asset's disposal economics, in words (figures are the model's). */
+  disposalReasoning?: string | null;
   confidence: LifecycleConfidence;
   /** One sentence on why. */
   basis: string;
@@ -165,6 +180,17 @@ export function sanitizeLifecycleAssumptions(
   const carryingCostPct = pct(r.carryingCostPct, 0.25);
   const sellingCostPct = pct(r.sellingCostPct, 0.5);
   const newEfficiencySavings = dollars(r.newEfficiencySavings, Math.max(ceil * 0.5, 200));
+  // The curve is in dollars from the value the AI was given; with none, from its own stated estimate.
+  const ownEstimate = finite(r.currentValueEstimate);
+  const resaleBase = finite(bounds.currentValue)
+    ?? (ownEstimate != null && ownEstimate > 0 && (!(ceiling > 0) || ownEstimate <= ceiling * 2) ? ownEstimate : null)
+    ?? finite(bounds.purchasePrice);
+  const resaleRetention = valueModel === "depreciating" || valueModel === "stable"
+    ? sanitizeResaleCurve({ resaleCurve: r.resaleCurve, resaleRetention: r.resaleRetention }, resaleBase, valueModel === "depreciating")
+    : null;
+  const anticipatedRepairs = sanitizeAnticipatedRepairs(r.anticipatedRepairs, ceiling);
+  const marketDemand: MarketDemand | null = r.marketDemand === "high" || r.marketDemand === "normal" || r.marketDemand === "low" ? r.marketDemand : null;
+  const disposalReasoning = sanitizeDisposalReasoning(r.disposalReasoning);
 
   const disposal: DisposalRoute = (["resell", "scrap", "recycle", "dispose", "none"] as const).find((d) => d === r.disposal) ?? (valueModel === "depreciating" ? "resell" : "none");
   const confidence: LifecycleConfidence = r.confidence === "high" || r.confidence === "low" ? r.confidence : "medium";
@@ -174,6 +200,7 @@ export function sanitizeLifecycleAssumptions(
     source: "ai", valueModel, usefulLifeYears: life, annualChangePct: rate, salvageValue: salvage, disposal,
     replacementCost: replacement, annualUpkeep: upkeep, upkeepGrowthPct: growth,
     majorRepairCost, majorFailureChancePct, majorFailureChanceGrowthPct, carryingCostPct, sellingCostPct, newEfficiencySavings,
+    resaleRetention, anticipatedRepairs, marketDemand, disposalReasoning,
     confidence, basis: text(r.basis, 240), assumptions: list,
   };
 }
@@ -350,6 +377,8 @@ export interface LifecycleInput {
   warrantyEnds?: string | null;
   /** A loan secured by it (a linked liability): what is owed and its yearly rate as a percent. */
   loan?: { balance: number; ratePct: number | null; name?: string | null } | null;
+  /** What is on file about it, for the disposal model's confidence and missing information. */
+  facts?: { hasUsage: boolean; hasCondition: boolean; maintenanceRecords: number } | null;
 }
 
 export interface LifecycleRecommendation {
@@ -401,225 +430,14 @@ export interface AssetLifecycle {
 
 const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
 
-// ── The Optimal Disposal Point ───────────────────────────────────────────────
-//
-// "The point at which it makes more financial sense to sell or replace an
-// asset than to continue owning it." (Owner, 2026-11-26.) The classic
-// economic-life rule, month by month from today: the cost of keeping it one
-// more month is the value it loses that month, its upkeep (rising as it
-// ages), and what the money tied up in it could earn elsewhere
-// (`OPPORTUNITY_RATE`). The average cost per year of keeping it N more months
-// first falls (depreciation slows) and then rises (upkeep climbs); its lowest
-// point is the optimal disposal point — keeping it past then costs more each
-// year than it did on average. The AI chooses the inputs (rate, life,
-// salvage, upkeep and its growth); this arithmetic chooses the date (LC1).
+// ── The Optimal Disposal Point: shared/disposal-model.ts ─────────────────────
+// An economic decision model of its own (owner, 2026-11-26): the AI's resale
+// curve and cost inputs, compared month by month against selling or replacing.
+export {
+  OPPORTUNITY_RATE, WARRANTY_REPAIR_COVER, optimalDisposalSentence, salvageGuard,
+  type OptimalDisposal, type DisposalFactor, type DisposalFactorKey, type DisposalReason, type ResalePoint, type AnticipatedRepair, type MarketDemand,
+} from "./disposal-model";
 
-/** A yearly return the money in the asset could earn instead (cost of capital). */
-export const OPPORTUNITY_RATE = 0.05;
-
-export interface OptimalDisposal {
-  /** The calendar day (first of the month it falls in). */
-  date: string;
-  /** Months from today (0 = now). */
-  monthsFromNow: number;
-  /** Why this date: the cost of owning starts rising, it reaches the end of its useful life, or it is already past its best. */
-  reason: "cost_rises" | "cheaper_to_replace" | "end_of_life" | "now";
-  /** What it should still fetch then. */
-  valueAt: number;
-  /** Average cost per year of owning it from now until then (lost value + upkeep + money tied up). */
-  avgAnnualCost: number;
-  /** What a year of owning it would cost just after that point. */
-  costAfter: number | null;
-  /** A new one's all-in cost per year (lost value, its own upkeep, money tied up), when a replacement price and life are known. */
-  newAnnualCost: number | null;
-  /** The upkeep figures used, per year now, and their source. */
-  upkeepNow: number;
-  upkeepGrowthPct: number;
-  upkeepSource: "ai" | "repairs" | "typical";
-  /** Every factor weighed, with its yearly cost now and in the year before the point, and where its figure came from. */
-  factors: DisposalFactor[];
-  /** Facts that shaped the point without being a yearly cost (warranty end, the loan gap, selling costs). */
-  notes: string[];
-}
-
-export type DisposalFactorKey = "depreciation" | "upkeep" | "major_failure" | "carrying" | "capital" | "selling" | "efficiency";
-export interface DisposalFactor {
-  key: DisposalFactorKey;
-  label: string;
-  /** Yearly cost over the next twelve months. */
-  now: number;
-  /** Yearly cost over the twelve months before the point (equal to `now` when the point is within a year). */
-  atPoint: number;
-  source: "ai" | "typical" | "recorded" | "calculated" | "on_file";
-  detail: string;
-}
-
-/** Share of routine repairs a warranty covers (maintenance is still yours); a major failure is covered whole. */
-export const WARRANTY_REPAIR_COVER = 0.6;
-
-/** One plain sentence for the point, for reasons and summaries. */
-export function optimalDisposalSentence(od: OptimalDisposal): string {
-  if (od.reason === "now") return `Optimal disposal point: now — owning it costs about ${money(od.costAfter ?? od.avgAnnualCost)} a year from here${od.newAnnualCost != null ? ` (a new one, all-in, about ${money(od.newAnnualCost)})` : ""}; it should fetch about ${money(od.valueAt)}.`;
-  const when = monthYear(od.date);
-  if (od.reason === "cheaper_to_replace") return `Optimal disposal point: ${when} — from then a year of owning it costs about ${money(od.costAfter ?? 0)}, more than a new one all-in (about ${money(od.newAnnualCost ?? 0)} a year); it should still fetch about ${money(od.valueAt)}.`;
-  if (od.reason === "end_of_life") return `Optimal disposal point: ${when}, the end of its useful life — owning it gets cheaper each year until then; expect about ${money(od.valueAt)}.`;
-  return `Optimal disposal point: ${when} — owning it averages about ${money(od.avgAnnualCost)} a year until then${od.costAfter != null ? ` and about ${money(od.costAfter)} a year after` : ""}; it should still fetch about ${money(od.valueAt)}.`;
-}
-
-export interface DisposalInputs {
-  now: number;
-  at: (years: number) => number;
-  remainingYears: number | null;
-  ageYears: number | null;
-  upkeepNow: number;
-  upkeepGrowth: number;
-  upkeepSource: OptimalDisposal["upkeepSource"];
-  /** A replacement's price, its useful life and end value — to price a new one ALL-IN, like this one. */
-  replacement: number | null;
-  lifeYears: number | null;
-  newFloor: number;
-  /** Major failure: cost, chance this year, yearly growth of the chance. */
-  major: { cost: number; chance: number; growth: number; source: "ai" | "typical" };
-  /** Insurance / tax / registration as a yearly share of value. */
-  carrying: { pct: number; source: "ai" | "typical" };
-  /** Selling / disposal cost as a share of the sale price; plus a flat disposal cost when it is worth nothing. */
-  selling: { pct: number; disposalCost: number; source: "ai" | "typical" };
-  /** Running cost a new one saves a year. */
-  efficiency: { savings: number; source: "ai" | "typical" };
-  /** Years from now the warranty runs (0 when none or ended). */
-  warrantyYears: number;
-  /** A secured loan: owed now and its yearly rate (decimal). */
-  loan: { balance: number; rate: number } | null;
-}
-
-export function optimalDisposalPoint(args: DisposalInputs): OptimalDisposal | null {
-  const { now, at, upkeepNow, upkeepGrowth, major, carrying, selling, efficiency, warrantyYears, loan } = args;
-  const horizon = Math.max(1, Math.min(240, Math.round((args.remainingYears ?? 10) * 12)));
-  // The money tied up in it: what a loan on it charges for the part it
-  // finances, the opportunity rate for the rest.
-  const capitalRate = (v: number) => {
-    if (!(v > 0)) return 0;
-    if (!loan || !(loan.balance > 0)) return OPPORTUNITY_RATE;
-    const financed = Math.min(v, loan.balance);
-    return (financed * Math.max(loan.rate, OPPORTUNITY_RATE) + (v - financed) * OPPORTUNITY_RATE) / v;
-  };
-  // Each month's cost, by factor.
-  type Parts = Record<"depreciation" | "upkeep" | "major_failure" | "carrying" | "capital", number>;
-  const parts: Parts[] = [];
-  const monthly: number[] = [];
-  for (let m = 1; m <= horizon; m++) {
-    const t0 = (m - 1) / 12;
-    const v0 = Math.max(0, at(t0)), v1 = Math.max(0, at(m / 12));
-    const covered = t0 < warrantyYears;
-    const p: Parts = {
-      depreciation: Math.max(0, v0 - v1),
-      upkeep: (upkeepNow / 12) * Math.pow(1 + upkeepGrowth, t0) * (covered ? 1 - WARRANTY_REPAIR_COVER : 1),
-      major_failure: covered ? 0 : (Math.min(0.9, major.chance * Math.pow(1 + major.growth, t0)) * major.cost) / 12,
-      carrying: (carrying.pct * v0) / 12,
-      capital: (capitalRate(v0) * v0) / 12,
-    };
-    parts.push(p);
-    monthly.push(p.depreciation + p.upkeep + p.major_failure + p.carrying + p.capital);
-  }
-  // Letting it go at month n costs the selling fees on what it fetches then
-  // (or the disposal cost once it is worth nothing): part of the average.
-  const sellCostAt = (m: number) => {
-    const v = Math.max(0, at(m / 12));
-    return v > 0 ? selling.pct * v : selling.disposalCost;
-  };
-  let cum = 0, best = Infinity, bestM = 0;
-  for (let m = 1; m <= horizon; m++) {
-    cum += monthly[m - 1];
-    const avg = (cum + sellCostAt(m)) / m;
-    if (avg < best - 1e-9) { best = avg; bestM = m; }
-  }
-  if (!Number.isFinite(best)) return null;
-  const yearFrom = (m: number) => { const w = monthly.slice(m, m + 12); return w.length ? (w.reduce((a, b) => a + b, 0) / w.length) * 12 : 0; };
-  let cheapest = 0;
-  for (let m = 1; m < monthly.length; m++) if (monthly[m] < monthly[cheapest]) cheapest = m;
-  // A new one priced the same way, every factor included: what it loses, its
-  // own (lower) upkeep and failure risk after its warranty, insurance on its
-  // higher value, the money in it, selling it at the end — less the running
-  // cost it saves.
-  let newAnnualCost: number | null = null;
-  if (args.replacement && args.replacement > 0 && args.lifeYears && args.lifeYears > 0) {
-    const R = args.replacement, L = Math.max(1, Math.round(args.lifeYears));
-    const floorNew = Math.min(R, Math.max(0, args.newFloor));
-    const ageNow = Math.max(0, args.ageYears ?? 0);
-    const upkeepNew = upkeepNow / Math.pow(1 + upkeepGrowth, ageNow);
-    const chanceNew = major.chance / Math.pow(1 + major.growth, ageNow);
-    const majorNew = major.cost; // the same repair on the same kind of thing
-    let running = 0;
-    for (let y = 0; y < L; y++) {
-      const newWarranty = y < 1; // a new one comes with at least a year's cover
-      running += upkeepNew * Math.pow(1 + upkeepGrowth, y) * (newWarranty ? 1 - WARRANTY_REPAIR_COVER : 1);
-      running += newWarranty ? 0 : Math.min(0.9, chanceNew * Math.pow(1 + major.growth, y)) * majorNew;
-    }
-    const avgValue = (R + floorNew) / 2;
-    newAnnualCost = Math.round(
-      (R - floorNew) / L + running / L + carrying.pct * avgValue + OPPORTUNITY_RATE * avgValue
-      + (floorNew > 0 ? selling.pct * floorNew : selling.disposalCost) / L - efficiency.savings,
-    );
-  }
-  let replaceM: number | null = null;
-  if (newAnnualCost != null) {
-    for (let m = cheapest; m < bestM; m++) if (Math.round(yearFrom(m)) > newAnnualCost) { replaceM = m; break; }
-  }
-  const pastLife = args.remainingYears === 0;
-  const rising = pastLife || replaceM === 0 || (monthly.length > 1 && monthly[1] > monthly[0] && bestM <= 1);
-  const reason: OptimalDisposal["reason"] = rising ? "now"
-    : replaceM != null ? "cheaper_to_replace"
-    : bestM >= horizon && args.remainingYears != null ? "end_of_life" : "cost_rises";
-  const months = reason === "now" ? 0 : replaceM ?? bestM;
-  const d = new Date(now + (months / 12) * YEAR);
-  const date = months === 0 ? iso(now) : `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
-  const costTo = months ? (monthly.slice(0, months).reduce((a, b) => a + b, 0) / months) * 12 : monthly[0] * 12;
-  const after = months < monthly.length ? yearFrom(months) : null;
-
-  // The factors, as yearly figures: the next twelve months, and the twelve before the point.
-  const yearly = (key: keyof Parts, from: number) => {
-    const w = parts.slice(Math.max(0, from), Math.max(0, from) + 12);
-    return w.length ? Math.round((w.reduce((a, p) => a + p[key], 0) / w.length) * 12) : 0;
-  };
-  const pre = Math.max(0, months - 12);
-  const valueAt = Math.round(Math.max(0, at(months / 12)));
-  const upkeepWord = args.upkeepSource === "repairs" ? "recorded" : args.upkeepSource;
-  const factors: DisposalFactor[] = [
-    { key: "depreciation", label: "Lost value", now: yearly("depreciation", 0), atPoint: yearly("depreciation", pre), source: "calculated", detail: "From the value projection (its rate, useful life and salvage value)." },
-    { key: "upkeep", label: "Repairs & maintenance", now: yearly("upkeep", 0), atPoint: yearly("upkeep", pre), source: upkeepWord as DisposalFactor["source"],
-      detail: `About ${money(upkeepNow)} a year now, rising ${Math.round(upkeepGrowth * 100)}% a year as it ages${warrantyYears > 0 ? `; the warranty covers about ${Math.round(WARRANTY_REPAIR_COVER * 100)}% of repairs until it ends` : ""}.` },
-    { key: "major_failure", label: "Risk of a major failure", now: yearly("major_failure", 0), atPoint: yearly("major_failure", pre), source: major.source,
-      detail: `A ${Math.round(major.chance * 100)}% chance this year of a ${money(major.cost)} repair, rising ${Math.round(major.growth * 100)}% a year${warrantyYears > 0 ? "; covered while under warranty" : ""}.` },
-    { key: "carrying", label: "Insurance, tax & registration", now: yearly("carrying", 0), atPoint: yearly("carrying", pre), source: carrying.source,
-      detail: carrying.pct > 0 ? `About ${Math.round(carrying.pct * 1000) / 10}% of its value a year — falls as it loses value.` : "None that scale with its value." },
-    { key: "capital", label: "Money tied up in it", now: yearly("capital", 0), atPoint: yearly("capital", pre), source: loan ? "on_file" : "calculated",
-      detail: loan ? `The loan on it charges ${Math.round(loan.rate * 1000) / 10}% on the ${money(loan.balance)} owed; ${Math.round(OPPORTUNITY_RATE * 100)}% on the rest.` : `What its value could earn elsewhere, ${Math.round(OPPORTUNITY_RATE * 100)}% a year.` },
-    { key: "selling", label: "Cost of selling it", now: Math.round(sellCostAt(0)), atPoint: Math.round(sellCostAt(months)), source: selling.source,
-      detail: valueAt > 0 ? `About ${Math.round(selling.pct * 100)}% of the sale price in fees, listing and prep — once, when you let it go.` : `Getting rid of it costs about ${money(selling.disposalCost)} — once.` },
-  ];
-  if (efficiency.savings > 0) factors.push({ key: "efficiency", label: "Running cost a new one saves", now: Math.round(efficiency.savings), atPoint: Math.round(efficiency.savings), source: efficiency.source, detail: "Energy or fuel a newer model would save each year — counted against replacing late." });
-
-  const notes: string[] = [];
-  if (warrantyYears > 0) {
-    const w = new Date(now + warrantyYears * YEAR);
-    notes.push(`Warranty runs until ${w.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })}; repairs cost more after that.`);
-  }
-  if (loan && loan.balance > 0) {
-    const worthNow = Math.round(Math.max(0, at(0)));
-    notes.push(loan.balance > worthNow
-      ? `${money(loan.balance)} is owed on it — more than it is worth today (${money(worthNow)}). Selling before the loan is paid down below its value means covering the difference.`
-      : `${money(loan.balance)} is owed on it; selling pays that off and stops the interest${loan.rate > 0 ? ` (${Math.round(loan.rate * 1000) / 10}%)` : ""}.`);
-  }
-  return {
-    date, monthsFromNow: months, reason,
-    valueAt,
-    avgAnnualCost: Math.round(costTo),
-    costAfter: after != null ? Math.round(after) : null,
-    newAnnualCost,
-    upkeepNow: Math.round(upkeepNow), upkeepGrowthPct: Math.round(upkeepGrowth * 1000) / 1000, upkeepSource: args.upkeepSource,
-    factors, notes,
-  };
-}
 /** "Jan 2029" — a calendar month for sentences (never a raw ISO date). */
 const monthYear = (d: string) => new Date(`${d.slice(0, 10)}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
 /** The headline without its "Action —" prefix, capitalised, for a row that already shows the action. */
@@ -688,7 +506,10 @@ export function computeAssetLifecycle(input: LifecycleInput): AssetLifecycle {
   const remaining = life != null && age != null ? Math.round((life - age) * 10) / 10 : null;
   const endT = life != null && Number.isFinite(startT) ? startT + life * YEAR : NaN;
 
-  const at = projector(model, value, floor, remaining, a.annualChangePct);
+  // One market-value path for every figure (Rule 1): the AI's resale curve for
+  // this asset, scaled to today's value, when it gave one; else the category's.
+  const aiCurve = model === "depreciating" && a.source === "ai" && a.resaleRetention && a.resaleRetention.length >= 2 ? a.resaleRetention : null;
+  const at = aiCurve ? curveFromRetention(aiCurve, value) : projector(model, value, floor, remaining, a.annualChangePct);
   const horizon = model === "depreciating" ? Math.min(10, Math.max(2, Math.ceil((remaining ?? 5) + 0.5))) : 5;
   const projection: Array<{ at: string; value: number }> = [];
   for (let m = 0; m <= horizon * 12; m++) projection.push({ at: new Date(now + (m / 12) * YEAR).toISOString(), value: Math.round(at(m / 12)) });
@@ -717,24 +538,37 @@ export function computeAssetLifecycle(input: LifecycleInput): AssetLifecycle {
 
   // The Optimal Disposal Point (depreciating things only: something that gains
   // or holds its value has no money reason to be let go).
+  // The Optimal Disposal Point (shared/disposal-model.ts): something that
+  // gains or holds its value has no money reason to be let go.
   let optimalDisposal: OptimalDisposal | null = null;
-  if (model === "depreciating" && (remaining == null || remaining > 0 || value > floor)) {
+  if (model === "depreciating" && value > 0) {
     const tu = typicalUpkeep(input.category);
     const growth = a.upkeepGrowthPct ?? tu.growth;
-    const priceBase = replacement.value ?? P ?? value;
-    const typicalNow = priceBase * tu.share * Math.pow(1 + growth, Math.max(0, age ?? 0));
+    const td = typicalDisposalFactors(input.category);
+    // A replacement's price: the AI's, the purchase price inflated, else
+    // estimated back from today's value along the category's pace.
+    const rate = a.annualChangePct != null && a.annualChangePct < 0 ? a.annualChangePct : (typical?.annualChangePct ?? -0.15);
+    // With no current value, today's is estimated from the purchase price along
+    // the category's pace (a three-year-old laptop is not worth what it cost).
+    const startValue = V ?? (P && age != null && age > 0.25 ? Math.max(1, Math.round(P * Math.pow(1 + rate, age))) : value);
+    const scale = startValue / value;
+    const estimatedNew = age != null && age > 0.25 ? Math.round(startValue / Math.pow(1 + rate, age)) : null;
+    const repl = replacement.value
+      ? { cost: replacement.value, source: replacement.source as OptimalDisposal["replacementSource"] }
+      : estimatedNew ? { cost: estimatedNew, source: "estimated" as const } : { cost: null, source: "none" as const };
+    const base = repl.cost ?? P ?? value;
+    const typicalNow = base * tu.share * Math.pow(1 + growth, Math.max(0, age ?? 0));
     const upkeepSource: OptimalDisposal["upkeepSource"] = repairs > 0 && repairs >= (a.annualUpkeep ?? 0) ? "repairs" : a.annualUpkeep != null ? "ai" : "typical";
     const upkeepNow = upkeepSource === "repairs" ? repairs : upkeepSource === "ai" ? a.annualUpkeep! : typicalNow;
-    const td = typicalDisposalFactors(input.category);
-    const base = replacement.value ?? P ?? value;
     const src = (v: unknown) => (v != null ? "ai" : "typical") as "ai" | "typical";
     const warrantyT = input.warrantyEnds ? Date.parse(`${input.warrantyEnds.slice(0, 10)}T12:00:00Z`) : NaN;
     const loan = input.loan && input.loan.balance > 0 ? { balance: input.loan.balance, rate: Math.max(0, (input.loan.ratePct ?? 0) / 100) } : null;
-    optimalDisposal = optimalDisposalPoint({
-      now, at, remainingYears: remaining != null ? Math.max(0, remaining) : null, ageYears: age,
-      upkeepNow, upkeepGrowth: growth, upkeepSource,
-      replacement: replacement.value, lifeYears: life,
-      newFloor: replacement.value && P && salvageValue != null ? (salvageValue / P) * replacement.value : floor,
+    const usageExpected = input.category === "vehicle" || input.category === "equipment";
+    optimalDisposal = decideDisposal({
+      now, currentValue: startValue, salvage: salvageValue ?? null,
+      curve: scale === 1 ? at : (t: number) => at(t) * scale, curveSource: aiCurve ? "ai" : "category",
+      remainingYears: remaining, ageYears: age, lifeYears: life,
+      upkeep: { now: upkeepNow, growth, source: upkeepSource },
       major: {
         cost: a.majorRepairCost ?? Math.round(base * td.majorShare),
         chance: a.majorFailureChancePct ?? Math.min(0.9, td.failChance * Math.pow(1 + td.failGrowth, Math.max(0, age ?? 0))),
@@ -744,8 +578,23 @@ export function computeAssetLifecycle(input: LifecycleInput): AssetLifecycle {
       carrying: { pct: a.carryingCostPct ?? td.carrying, source: src(a.carryingCostPct) },
       selling: { pct: a.sellingCostPct ?? td.selling, disposalCost: salvageValue != null && salvageValue < 0 ? -salvageValue : 0, source: src(a.sellingCostPct) },
       efficiency: { savings: a.newEfficiencySavings ?? Math.round(base * td.savingsShare), source: src(a.newEfficiencySavings) },
+      anticipated: a.anticipatedRepairs ?? [],
       warrantyYears: Number.isFinite(warrantyT) && warrantyT > now ? (warrantyT - now) / YEAR : 0,
       loan,
+      replacement: {
+        cost: repl.cost, source: repl.source, lifeYears: life ?? typical?.usefulLifeYears ?? 8,
+        yearlyChange: rate, endShare: P && salvageValue != null && salvageValue > 0 ? salvageValue / P : (td.majorShare > 0 ? 0.05 : 0),
+      },
+      marketDemand: a.marketDemand ?? null,
+      aiReasoning: a.source === "ai" ? a.disposalReasoning ?? null : null,
+      confidence: {
+        assumptions: a.source, aiConfidence: a.confidence,
+        valueSource: input.currentValueSource, valueConfidence: input.valuation?.confidenceLabel ?? null,
+        hasAge: age != null, hasPurchasePrice: !!P,
+        usageExpected, hasUsage: !!input.facts?.hasUsage, hasCondition: !!input.facts?.hasCondition,
+        maintenanceExpected: input.category === "vehicle" || input.category === "appliance" || input.category === "equipment",
+        maintenanceRecords: input.facts?.maintenanceRecords ?? 0,
+      },
     });
   }
 

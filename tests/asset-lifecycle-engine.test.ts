@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import {
   attributeAssetExpenses, computeAssetLifecycle, lifecycleCategory, lifecycleNeedsEstimate, repairCosts,
-  sanitizeLifecycleAssumptions, typicalAssumptions, type LifecycleAssumptions, type LifecycleInput,
+  sanitizeLifecycleAssumptions, salvageGuard, typicalAssumptions, type LifecycleAssumptions, type LifecycleInput,
 } from "@shared/asset-lifecycle";
 
 const NOW = new Date("2026-11-24T12:00:00Z");
@@ -12,6 +12,7 @@ const ai = (over: Partial<LifecycleAssumptions> = {}): LifecycleAssumptions => (
   source: "ai", valueModel: "depreciating", usefulLifeYears: 15, annualChangePct: -0.12, salvageValue: 1500,
   disposal: "scrap", replacementCost: 30000, annualUpkeep: null, upkeepGrowthPct: null,
   majorRepairCost: null, majorFailureChancePct: null, majorFailureChanceGrowthPct: null, carryingCostPct: null, sellingCostPct: null, newEfficiencySavings: null,
+  resaleRetention: null, anticipatedRepairs: null, marketDemand: null, disposalReasoning: null,
   confidence: "high", basis: "Compact sedan.", assumptions: ["15-year life"], asOf: "2026-11-24T00:00:00Z", ...over,
 });
 const input = (over: Partial<LifecycleInput> = {}): LifecycleInput => ({
@@ -216,64 +217,114 @@ describe("nested assets: an expense counts once", () => {
   });
 });
 
-describe("the Optimal Disposal Point (owner, 2026-11-26)", () => {
-  it("is the AI's assumptions run through the arithmetic: rising upkeep brings it forward", () => {
-    const low = computeAssetLifecycle(input({ assumptions: ai({ annualUpkeep: 300, upkeepGrowthPct: 0.05 }) })).optimalDisposal!;
-    const high = computeAssetLifecycle(input({ assumptions: ai({ annualUpkeep: 2500, upkeepGrowthPct: 0.3 }) })).optimalDisposal!;
-    expect(low).toBeTruthy();
-    expect(high).toBeTruthy();
-    expect(Date.parse(high.date)).toBeLessThan(Date.parse(low.date));
-    expect(high.upkeepSource).toBe("ai");
-    expect(high.upkeepNow).toBe(2500);
-    // A date is a calendar day, never before today.
-    expect(high.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(Date.parse(`${high.date}T23:59:59Z`)).toBeGreaterThanOrEqual(NOW.getTime() - 31 * 86_400_000);
+describe("the Optimal Disposal Point: an economic decision model (owner, 2026-11-26)", () => {
+  const curve = [{ years: 1, value: 6200 }, { years: 2, value: 5500 }, { years: 3, value: 4900 }, { years: 5, value: 3900 }, { years: 8, value: 2700 }];
+  const aiInputs = { annualUpkeep: 900, upkeepGrowthPct: 0.12, majorRepairCost: 3500, majorFailureChancePct: 0.05, majorFailureChanceGrowthPct: 0.2, carryingCostPct: 0.04, sellingCostPct: 0.08, newEfficiencySavings: 0, marketDemand: "normal", disposalReasoning: "Compact sedans sell easily. Sell before the next major service. It will fetch $5,000 in 2029." };
+  const withCurve = (over: Record<string, unknown> = {}) => {
+    const a = sanitizeLifecycleAssumptions({ valueModel: "depreciating", usefulLifeYears: 15, annualChangePct: -0.12, salvageValue: 1500, replacementCost: 30000, confidence: "high", resaleCurve: curve, ...aiInputs, ...over }, { purchasePrice: 19000, currentValue: 7000 })!;
+    return { ...a, asOf: NOW.toISOString() };
+  };
+  const od = (over: Record<string, unknown> = {}, inp: Partial<LifecycleInput> = {}) =>
+    computeAssetLifecycle(input({ assumptions: withCurve(over), facts: { hasUsage: true, hasCondition: true, maintenanceRecords: 2 }, ...inp })).optimalDisposal!;
+
+  it("never reports the salvage value: the disposal value is a market value comfortably above it", () => {
+    const cases = [
+      od(),
+      od({ annualUpkeep: 0, upkeepGrowthPct: 0, majorFailureChancePct: 0, replacementCost: null }),
+      computeAssetLifecycle(input({ assumptions: ai({ annualUpkeep: 0, upkeepGrowthPct: 0 }) })).optimalDisposal!,
+      computeAssetLifecycle(input({ category: "furniture", purchasePrice: 2000, purchaseDate: "2023-01-01", currentValue: 900, assumptions: null })).optimalDisposal!,
+    ];
+    // The sofa's typical salvage is 3% of $2,000 = $60: never that, never near it.
+    expect(cases[3].valueAt).toBeGreaterThanOrEqual(salvageGuard(60, 900));
+    // The car's salvage is $1,500: its disposal value is well above it.
+    expect(cases[0].valueAt).toBeGreaterThan(1500 + 0.05 * 7000);
+    expect(cases[1].valueAt).toBeGreaterThan(1500 + 0.05 * 7000);
+    expect(cases[2].valueAt).toBeGreaterThan(1500);
   });
 
-  it("with flat upkeep, owning gets cheaper each year, so the point is the end of its useful life", () => {
-    const l = computeAssetLifecycle(input({ purchaseDate: "2024-05-01", currentValue: 15000, assumptions: ai({ annualUpkeep: 0, upkeepGrowthPct: 0, replacementCost: null }) }));
-    expect(l.optimalDisposal!.reason).toBe("end_of_life");
-    expect(Math.abs(Date.parse(l.optimalDisposal!.date) - Date.parse(l.endOfLifeDate!))).toBeLessThan(62 * 86_400_000);
+  it("follows the AI's resale curve for this asset, scaled to today's value", () => {
+    const o = od();
+    expect(o.curveSource).toBe("ai");
+    // The schedule's values are the AI's curve: $5,500 at two years from $7,000.
+    expect(o.schedule.find((r) => r.years === 2)!.value).toBe(5500);
+    // A new valuation re-prices the plan without asking the AI again.
+    const revalued = od({}, { currentValue: 8400 });
+    expect(revalued.schedule.find((r) => r.years === 2)!.value).toBe(Math.round(5500 * 1.2));
   });
 
-  it("past its useful life, the point is now", () => {
-    const l = computeAssetLifecycle(input({ purchaseDate: "2008-01-01", currentValue: 2500 }));
-    expect(l.optimalDisposal!.reason).toBe("now");
-    expect(l.optimalDisposal!.monthsFromNow).toBe(0);
-    expect(l.optimalDisposal!.date).toBe("2026-11-24");
+  it("compares keeping it against replacing it at every interval and names the decision", () => {
+    const o = od();
+    expect(["keep", "sell_now"]).toContain(o.decision);
+    expect(o.newAnnualCost).toBeGreaterThan(0);
+    expect(o.schedule.length).toBeGreaterThan(1);
+    for (const r of o.schedule) expect(r.keepCostPerYear).toBeGreaterThan(0);
+    if (o.reason === "cheaper_to_replace") expect(o.costAfter!).toBeGreaterThan(o.newAnnualCost!);
+    expect(o.remainingEconomicLifeYears).toBeCloseTo(o.monthsFromNow / 12, 1);
+    expect(o.projectedDepreciation).toBe(7000 - o.valueAt);
   });
 
-  it("recorded repairs above the AI's upkeep are used instead", () => {
-    const l = computeAssetLifecycle(input({ repairs12m: 4000, assumptions: ai({ annualUpkeep: 800, upkeepGrowthPct: 0.1 }) }));
-    expect(l.optimalDisposal!.upkeepSource).toBe("repairs");
-    expect(l.optimalDisposal!.upkeepNow).toBe(4000);
+  it("an anticipated repair and a rising failure risk bring the point forward", () => {
+    const calm = od({ majorFailureChancePct: 0.01, majorFailureChanceGrowthPct: 0, anticipatedRepairs: [] });
+    const hard = od({ majorFailureChancePct: 0.2, majorFailureChanceGrowthPct: 0.4, majorRepairCost: 6000, anticipatedRepairs: [{ item: "Transmission", inYears: 1.5, cost: 4500 }] });
+    expect(Date.parse(hard.date)).toBeLessThanOrEqual(Date.parse(calm.date));
+    expect(hard.factors.some((f) => f.key === "anticipated" && f.detail.includes("Transmission"))).toBe(true);
   });
 
-  it("a replacement that is cheaper to own, all-in, than a year of keeping this one decides it", () => {
-    const l = computeAssetLifecycle(input({ assumptions: ai({ annualUpkeep: 3000, upkeepGrowthPct: 0.2, replacementCost: 20000 }) }));
-    const od = l.optimalDisposal!;
-    if (od.reason === "cheaper_to_replace") expect(od.costAfter!).toBeGreaterThan(od.newAnnualCost!);
-    expect(od.newAnnualCost).toBeGreaterThan(0);
-    expect(l.recommendation!.reasons.some((r) => r.startsWith("Optimal disposal point:"))).toBe(true);
+  it("an asset that costs more to keep than to replace is sold now, at its current value", () => {
+    const o = computeAssetLifecycle(input({ purchaseDate: "2008-01-01", currentValue: 2500, assumptions: ai({ annualUpkeep: 4000, upkeepGrowthPct: 0.2 }) })).optimalDisposal!;
+    expect(o.decision).toBe("sell_now");
+    expect(o.monthsFromNow).toBe(0);
+    expect(o.date).toBe("2026-11-24");
+    expect(o.valueAt).toBe(2500);
   });
 
-  it("something that gains or holds its value has none", () => {
-    expect(computeAssetLifecycle(input({ category: "real_estate", assumptions: ai({ valueModel: "appreciating", annualChangePct: 0.03, usefulLifeYears: null, salvageValue: null }) })).optimalDisposal).toBeNull();
-    expect(computeAssetLifecycle(input({ category: "collectible", assumptions: ai({ valueModel: "stable", usefulLifeYears: null, salvageValue: null }) })).optimalDisposal).toBeNull();
+  it("is specific to the category: a laptop and a car with the same value do not share a date", () => {
+    const car = computeAssetLifecycle(input({ category: "vehicle", purchasePrice: 6000, purchaseDate: "2025-05-01", currentValue: 5000, assumptions: null })).optimalDisposal!;
+    const laptop = computeAssetLifecycle(input({ category: "electronics", purchasePrice: 6000, purchaseDate: "2025-05-01", currentValue: 5000, assumptions: null })).optimalDisposal!;
+    expect(car.date).not.toBe(laptop.date);
   });
 
-  it("the AI's upkeep figures are bounded, not clamped", () => {
-    const ok = sanitizeLifecycleAssumptions({ valueModel: "depreciating", annualUpkeep: "1,200", upkeepGrowthPct: 12 }, { purchasePrice: 20000 })!;
-    expect(ok.annualUpkeep).toBe(1200);
-    expect(ok.upkeepGrowthPct).toBeCloseTo(0.12);
-    const bad = sanitizeLifecycleAssumptions({ valueModel: "depreciating", annualUpkeep: 50000, upkeepGrowthPct: 70 }, { purchasePrice: 20000 })!;
-    expect(bad.annualUpkeep).toBeNull();
-    expect(bad.upkeepGrowthPct).toBeNull();
+  it("says how sure it is, what is missing, and gives a range when it is only an estimate", () => {
+    const thin = computeAssetLifecycle(input({ purchaseDate: null, purchasePrice: null, ageYears: null, currentValueSource: "estimate", valuation: { valuedAt: null, confidenceLabel: "low", sources: [] }, assumptions: null })).optimalDisposal!;
+    expect(thin.confidence).toBe("low");
+    expect(thin.estimated).toBe(true);
+    expect(thin.missing).toEqual(expect.arrayContaining(["the purchase date or model year", "the purchase price"]));
+    expect(thin.range.valueLow).toBeLessThanOrEqual(thin.valueAt);
+    expect(thin.range.valueHigh).toBeGreaterThanOrEqual(thin.valueAt);
+    const rich = od();
+    expect(rich.confidence).not.toBe("low");
   });
 
-  it("an answer stored before every disposal factor was asked for is asked again, once", () => {
-    const { sellingCostPct, ...old } = ai();
-    void sellingCostPct;
+  it("shows the AI's explanation without any figure of its own, beside the model's summary", () => {
+    const o = od();
+    expect(o.explanation.ai).toBe("Compact sedans sell easily. Sell before the next major service.");
+    expect(o.explanation.summary).toMatch(/\$[\d,]+/);
+  });
+
+  it("with no current value, today's is estimated from the purchase price, never taken as it", () => {
+    const o = computeAssetLifecycle(input({ category: "electronics", purchasePrice: 1200, purchaseDate: "2023-11-24", currentValue: null, currentValueSource: "none", assumptions: null })).optimalDisposal!;
+    expect(o.currentValue).toBeLessThan(1200);
+    expect(o.missing).toContain("a current value");
+  });
+
+  it("recalculates from the records: maintenance records raise its confidence, usage too", () => {
+    const without = computeAssetLifecycle(input({ assumptions: withCurve(), facts: { hasUsage: false, hasCondition: false, maintenanceRecords: 0 } })).optimalDisposal!;
+    const withAll = od();
+    expect(withAll.confidenceScore).toBeGreaterThan(without.confidenceScore);
+    expect(without.missing).toEqual(expect.arrayContaining(["its usage (mileage or hours)", "its condition", "maintenance and repair records"]));
+  });
+
+  it("the AI's curve is checked: rising points, out-of-range years and too few points are refused", () => {
+    expect(sanitizeLifecycleAssumptions({ valueModel: "depreciating", resaleCurve: [{ years: 1, value: 900 }] }, { currentValue: 1000 })!.resaleRetention).toBeNull();
+    const c = sanitizeLifecycleAssumptions({ valueModel: "depreciating", resaleCurve: [{ years: 1, value: 900 }, { years: 2, value: 1300 }, { years: 3, value: 700 }, { years: 99, value: 10 }] }, { currentValue: 1000 })!.resaleRetention!;
+    expect(c).toEqual([{ years: 1, ratio: 0.9 }, { years: 3, ratio: 0.7 }]);
+    // Read back from storage as ratios, unchanged.
+    expect(sanitizeLifecycleAssumptions({ valueModel: "depreciating", resaleRetention: c }, {})!.resaleRetention).toEqual(c);
+  });
+
+  it("an answer stored before the decision model's inputs were asked for is asked again, once", () => {
+    const { disposalReasoning, ...old } = ai();
+    void disposalReasoning;
     expect(lifecycleNeedsEstimate({ lifecycleAssumptions: { ...old, inputsKey: "fp1", asOf: NOW.toISOString() } }, "fp1", NOW)).toBe(true);
     expect(lifecycleNeedsEstimate({ lifecycleAssumptions: { ...ai(), inputsKey: "fp1", asOf: NOW.toISOString() } }, "fp1", NOW)).toBe(false);
   });
