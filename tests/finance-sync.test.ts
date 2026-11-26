@@ -871,14 +871,17 @@ describe("content security policy", () => {
   });
 
   it("stays byte-identical to the copy in vercel.json", async () => {
-    const { CONTENT_SECURITY_POLICY } = await import("../server/security-headers");
+    const { CONTENT_SECURITY_POLICY, ARTIFACT_FRAME_CSP, ARTIFACT_FRAME_PATH } = await import("../server/security-headers");
     const vercel = JSON.parse(read("vercel.json"));
-    const headerValues = vercel.headers
-      .flatMap((h: any) => h.headers)
-      .filter((kv: any) => kv.key === "Content-Security-Policy")
-      .map((kv: any) => kv.value);
-    expect(headerValues.length).toBeGreaterThan(0);
-    for (const value of headerValues) expect(value).toBe(CONTENT_SECURITY_POLICY);
+    const cspOf = (rule: any) => rule.headers.find((kv: any) => kv.key === "Content-Security-Policy")?.value;
+    const rules = vercel.headers.filter((h: any) => cspOf(h));
+    expect(rules.length).toBeGreaterThan(0);
+    // Every page's policy is the app's — except the one sandboxed page an HTML
+    // artifact runs in (Artifact rule AR2), which has its own, also mirrored.
+    for (const rule of rules) {
+      expect(cspOf(rule)).toBe(rule.source === ARTIFACT_FRAME_PATH ? ARTIFACT_FRAME_CSP : CONTENT_SECURITY_POLICY);
+    }
+    expect(rules.filter((r: any) => r.source === ARTIFACT_FRAME_PATH)).toHaveLength(1);
   });
 });
 

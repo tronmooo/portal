@@ -189,8 +189,8 @@ export function ArtifactViewer({ artifact, onClose, from, owners }: ArtifactView
             </div>
 
             {/* The whole artifact, scrolling under the header. */}
-            <div className="flex-1 overflow-y-auto overscroll-contain" data-testid="artifact-viewer-body">
-              <div className="mx-auto w-full max-w-3xl px-4 sm:px-6 py-5" style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}>
+            <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain" data-testid="artifact-viewer-body">
+              <div className="mx-auto w-full max-w-3xl min-w-0 px-4 sm:px-6 py-5" style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}>
                 <SectionErrorBoundary name="artifact-viewer" inline>
                   {isStructuredArtifact(live)
                     ? <StructuredArtifactBody type={live.type} data={live.data} />

@@ -159,19 +159,7 @@ export function ArtifactContent({ artifact, artifactId, isArtifact, readOnly, fi
       return <CodeRenderer content={content || ""} language={language} />;
 
     case "html":
-      // Scripts run so an HTML artifact (a calculator, a mini app) is usable,
-      // but WITHOUT allow-same-origin: the frame is an opaque origin and can
-      // reach neither this page, its storage nor the signed-in session.
-      return (
-        <iframe
-          srcDoc={content}
-          sandbox="allow-scripts allow-forms allow-modals"
-          className={`w-full rounded-xl border border-border bg-white ${fill ? "h-[calc(100dvh-11rem)] min-h-[420px]" : "h-[420px]"}`}
-          title="HTML artifact"
-          referrerPolicy="no-referrer"
-          data-testid="artifact-html-frame"
-        />
-      );
+      return <HtmlArtifactFrame html={content || ""} fill={fill} />;
 
     case "svg": {
       const sanitized = DOMPurify.sanitize(content || "", { USE_PROFILES: { svg: true } });
@@ -197,7 +185,7 @@ export function ArtifactContent({ artifact, artifactId, isArtifact, readOnly, fi
       if (!html.replace(/<[^>]+>/g, "").trim()) return <p className="text-sm text-muted-foreground">This document is empty.</p>;
       return (
         <div
-          className="prose prose-sm dark:prose-invert max-w-none rounded-xl bg-card/60 border border-border/60 p-4 sm:p-6 [&_img]:max-w-full [&_table]:w-full"
+          className="prose prose-sm dark:prose-invert max-w-none min-w-0 [overflow-wrap:anywhere] rounded-xl bg-card/60 border border-border/60 p-4 sm:p-6 [&_img]:max-w-full [&_table]:w-full"
           data-testid="artifact-doc-html"
           dangerouslySetInnerHTML={{ __html: html }}
         />
@@ -243,6 +231,41 @@ export function ArtifactContent({ artifact, artifactId, isArtifact, readOnly, fi
       return <Markdown content={content || ""} />;
     }
   }
+}
+
+// An HTML artifact runs in /artifact-frame.html: a sandboxed frame with scripts
+// but WITHOUT allow-same-origin (an opaque origin that reaches neither this
+// page, its storage nor the session), under that page's own CSP — the app's
+// policy would block the artifact's inline scripts in a srcdoc frame (live,
+// 2026-11-26: the tip calculator's button did nothing). The HTML is posted
+// to the frame when it says it is ready; a new body reloads the frame.
+export const ARTIFACT_FRAME_SRC = "/artifact-frame.html";
+function HtmlArtifactFrame({ html, fill }: { html: string; fill?: boolean }) {
+  const ref = useRef<HTMLIFrameElement>(null);
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const win = ref.current?.contentWindow;
+      if (!win || e.source !== win) return;
+      if ((e.data as any)?.type !== "portol-artifact-frame-ready") return;
+      // The frame is an opaque origin, so "*" is the only target that reaches
+      // it; the message goes to that one window, never broadcast.
+      win.postMessage({ type: "portol-artifact-html", html }, "*");
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [html]);
+  return (
+    <iframe
+      key={html}
+      ref={ref}
+      src={ARTIFACT_FRAME_SRC}
+      sandbox="allow-scripts allow-forms allow-modals"
+      className={`w-full rounded-xl border border-border bg-white ${fill ? "h-[calc(100dvh-11rem)] min-h-[420px]" : "h-[420px]"}`}
+      title="HTML artifact"
+      referrerPolicy="no-referrer"
+      data-testid="artifact-html-frame"
+    />
+  );
 }
 
 // A checklist with its progress. Each row is a real button when the stored
@@ -331,7 +354,7 @@ function SheetTable({ sheetData }: { sheetData: any }) {
 // only when the `prose` plugin's table styles aren't reset by the app theme.
 export function Markdown({ content }: { content: string }) {
   return (
-    <div className="prose prose-sm dark:prose-invert max-w-none" data-testid="artifact-markdown">
+    <div className="prose prose-sm dark:prose-invert max-w-none min-w-0 [overflow-wrap:anywhere] [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_pre]:[overflow-wrap:normal]" data-testid="artifact-markdown">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

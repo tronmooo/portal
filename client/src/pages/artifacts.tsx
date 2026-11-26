@@ -548,6 +548,8 @@ export default function ArtifactsPage() {
             : a.type === "checklist" && a.items?.length > 0
               ? `${a.items.filter(i => i.checked).length} of ${a.items.length} done · ${a.items.map(i => i.text).join(", ")}`.slice(0, 100)
               : a.type === "html" ? "Interactive — opens and runs full screen"
+              : a.type === "svg" ? "Graphic — opens full size"
+              : a.type === "mermaid" ? "Diagram — opens full size"
               : a.type === "chart" && !tryParseChartSpec(a.content || "")
                 ? (() => { const c = chartThumbData(a); return c ? `${c.kind === "pie" ? "Pie" : c.kind === "line" ? "Line" : "Bar"} chart · ${c.values.length} data points` : "Chart"; })()
               : (previewForContent(a.content)?.replace(/[#*_`>|]/g, "").replace(/\s+/g, " ").trim() || ""),

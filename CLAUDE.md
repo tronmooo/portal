@@ -1435,6 +1435,10 @@ reading "Unknown artifact type: markdown". Read these before touching
 `client/src/components/artifacts/*`, `client/src/pages/artifacts.tsx`,
 `client/src/lib/artifact-share.ts` or the chat's artifact cards.
 *Guard:* `tests/artifact-viewer.dom.test.tsx` (with `tests/artifacts-counts.dom.test.tsx`).
+*Live check (deployed app, smoke account; phone 390 / 360 with touch and
+desktop: every kind full screen and fitting, checklist and star stored, every
+share route, the public link signed out, Open in Chat, a chat-made artifact):*
+`npx tsx tests/live-artifacts-check.ts`.
 
 **AR1. One renderer, one viewer.** Every artifact body is drawn by
 `ArtifactContent` (`components/artifacts/ArtifactContent.tsx`) — the tab, the
@@ -1447,8 +1451,14 @@ note's Edit opens the Notes workspace (W8). "Open in Chat" is
 `#/chat?artifact=<id>` (a read; the parameter is removed from the address).
 **AR2. Interactive where the artifact is.** A checklist tap writes the stored
 row through the per-item toggle route; a chart's type switch is a view, never
-saved; an HTML artifact runs in a frame with `allow-scripts` and NEVER
-`allow-same-origin`.
+saved; an HTML artifact runs in `/artifact-frame.html` (a static page with
+its OWN CSP, `ARTIFACT_FRAME_CSP` in `server/security-headers.ts`, mirrored in
+`vercel.json`: inline scripts yes, requests / form posts / frames no), in a
+frame with `allow-scripts` and NEVER `allow-same-origin`; the HTML is posted
+to it when it says it is ready. Never `srcdoc`: a srcdoc frame inherits the
+app's CSP, which blocks the artifact's scripts (live, 2026-11-26: the
+calculator's button did nothing). Body text wraps (`[overflow-wrap:anywhere]`);
+only a code block or table scrolls sideways, inside itself.
 **AR3. Sent anywhere, written only on a tap.** `ArtifactShareMenu`: the system
 share sheet, a file, a view-only link (minted on the tap —
 `POST /api/artifacts/:id/share`; turned off with DELETE), text, email, text

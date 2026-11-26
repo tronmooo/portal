@@ -74,7 +74,16 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
   // Mirrors the document-route header in vercel.json so API and SPA responses agree.
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  res.setHeader('Content-Security-Policy', contentSecurityPolicyFor(process.env.NODE_ENV));
+  if (req.path === ARTIFACT_FRAME_PATH) {
+    // The frame an HTML artifact runs in (Artifact rule AR2): its own policy,
+    // embeddable by the app only. Mirrors the "/artifact-frame.html" rule in
+    // vercel.json.
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Content-Security-Policy', ARTIFACT_FRAME_CSP);
+  } else {
+    res.setHeader('Content-Security-Policy', contentSecurityPolicyFor(process.env.NODE_ENV));
+  }
   // API responses are per-user and carry PII. Without an explicit directive a
   // browser (or a shared cache in front of us) may heuristically cache a GET,
   // so the next person at a shared machine could see the previous user's data
@@ -136,6 +145,17 @@ export function contentSecurityPolicyFor(nodeEnv: string | undefined): string {
  *     Inter/JetBrains Mono are now self-hosted — harmless, and fontshare is
  *     still loaded remotely.
  */
+/**
+ * The page an HTML artifact runs in, inside a sandboxed iframe WITHOUT
+ * allow-same-origin (client/public/artifact-frame.html). The app's policy
+ * would block the artifact's inline scripts, so this page has its own: scripts
+ * and styles inline, pictures and fonts, and NOTHING that leaves the frame —
+ * no requests, no form posts, no nested frames — and only the app may embed it.
+ * The one copy vercel.json carries must equal this (tests/finance-sync.test.ts).
+ */
+export const ARTIFACT_FRAME_PATH = "/artifact-frame.html";
+export const ARTIFACT_FRAME_CSP = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; connect-src 'none'; form-action 'none'; frame-src 'none'; base-uri 'none'; frame-ancestors 'self'";
+
 export const CONTENT_SECURITY_POLICY =
   "default-src 'self'; " +
   "script-src 'self' 'unsafe-eval' https://accounts.google.com https://apis.google.com https://challenges.cloudflare.com https://js.stripe.com; " +

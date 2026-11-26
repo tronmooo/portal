@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Artifact</title>
+<!--
+  The frame an HTML artifact runs in (Artifact rule AR2). It is loaded into a
+  sandboxed iframe WITHOUT allow-same-origin, so it is an opaque origin: it
+  can reach neither the app, its storage nor the signed-in session. Its own
+  Content-Security-Policy (vercel.json, "/artifact-frame.html") lets the
+  artifact's inline scripts run — the app's policy would block them — while
+  forbidding every network request, form post and nested frame.
+  The app posts the artifact's HTML here once; this page writes it as its
+  document. Nothing else is accepted, and only from the embedding window.
+-->
+</head>
+<body>
+<script>
+(function () {
+  window.addEventListener("message", function (e) {
+    if (e.source !== window.parent) return;
+    var d = e.data;
+    if (!d || d.type !== "portol-artifact-html" || typeof d.html !== "string") return;
+    document.open();
+    document.write(d.html);
+    document.close();
+  });
+  window.parent.postMessage({ type: "portol-artifact-frame-ready" }, "*");
+})();
+</script>
+</body>
+</html>

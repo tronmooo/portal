@@ -124,6 +124,31 @@ describe("the artifact viewer opened from chat", () => {
     const sandbox = frame.getAttribute("sandbox") || "";
     expect(sandbox).toContain("allow-scripts");
     expect(sandbox).not.toContain("allow-same-origin");
+    // It runs in the frame page with its own CSP (the app's would block the
+    // artifact's inline scripts in a srcdoc frame), not as srcdoc.
+    expect(frame.getAttribute("src")).toBe("/artifact-frame.html");
+    expect(frame.hasAttribute("srcdoc")).toBe(false);
+    // When the frame says it is ready, the HTML is posted to THAT window only.
+    const win = (frame as HTMLIFrameElement).contentWindow!;
+    const post = vi.spyOn(win, "postMessage").mockImplementation(() => {});
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "portol-artifact-frame-ready" }, source: window as any }));
+    expect(post).not.toHaveBeenCalled();
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "portol-artifact-frame-ready" }, source: win as any }));
+    expect(post).toHaveBeenCalledWith({ type: "portol-artifact-html", html: html.content }, "*");
+  });
+
+  it("the frame page lets the artifact's scripts run but reaches nothing else", async () => {
+    const fs = await import("node:fs");
+    const cfg = JSON.parse(fs.readFileSync("vercel.json", "utf8"));
+    const rule = cfg.headers.find((h: any) => h.source === "/artifact-frame.html");
+    const csp = rule.headers.find((h: any) => h.key === "Content-Security-Policy").value as string;
+    expect(csp).toContain("script-src 'unsafe-inline'");
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("form-action 'none'");
+    // The app's own policy does not also apply to the frame page.
+    const app = cfg.headers.find((h: any) => /assets\/\|api\//.test(h.source));
+    expect(new RegExp(`^${app.source.replace(/\(\(\?!/, "((?!")}$`).test("/artifact-frame.html")).toBe(false);
+    expect(fs.readFileSync("client/public/artifact-frame.html", "utf8")).toContain("e.source !== window.parent");
   });
 });
 
