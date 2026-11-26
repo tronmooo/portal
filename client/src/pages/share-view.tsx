@@ -1,13 +1,14 @@
 // Public read-only share viewer for artifacts. No auth required — server returns
 // only artifacts whose metadata.shareToken matches the URL token. Renders docs
-// (sanitized HTML), sheets (read-only react-spreadsheet), notes/markdown/code,
-// and checklists. Print/PDF works via the browser's native dialog.
+// (sanitized HTML), sheets (read-only react-spreadsheet), and every other kind
+// through the app's own ArtifactContent renderer (read-only). Print/PDF works via the browser's native dialog.
 import { useEffect, useMemo, useState } from "react";
 import { useRoute } from "wouter";
 import DOMPurify from "dompurify";
 import Spreadsheet from "react-spreadsheet";
 import { Loader2, Printer } from "lucide-react";
 import { decodeSheetData, sheetCellDisplayValue } from "@shared/sheet-data";
+import { ArtifactContent } from "@/components/artifacts/ArtifactContent";
 
 interface PublicArtifact {
   id: string;
@@ -131,25 +132,11 @@ export default function ShareViewPage() {
           </div>
         )}
 
-        {(artifact.type === "note" || artifact.type === "markdown") && (
-          <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{artifact.content}</pre>
-        )}
-
-        {artifact.type === "code" && (
-          <pre className="rounded bg-muted p-4 text-xs overflow-auto">
-            <code>{artifact.content}</code>
-          </pre>
-        )}
-
-        {artifact.type === "checklist" && (
-          <ul className="space-y-2">
-            {(artifact.items || []).map((it, i) => (
-              <li key={it.id || i} className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={!!it.checked} disabled className="opacity-70" />
-                <span className={it.checked ? "line-through text-muted-foreground" : ""}>{it.text}</span>
-              </li>
-            ))}
-          </ul>
+        {/* Every other kind is drawn by the same renderer the app uses
+            (markdown, code, charts, diagrams, graphics, interactive HTML,
+            checklists), read-only: nothing on this page can write. */}
+        {artifact.type !== "doc" && artifact.type !== "sheet" && (
+          <ArtifactContent artifact={artifact} readOnly />
         )}
 
         <div className="mt-12 pt-6 border-t text-xs text-muted-foreground print:hidden">

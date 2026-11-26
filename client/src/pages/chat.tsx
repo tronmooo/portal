@@ -29,16 +29,16 @@ import { isInScope, ownerChainForProfile, selfIdsFrom } from "@shared/scope";
 // chat.tsx is the EAGER home page (imported non-lazy in App.tsx). Anything
 // imported statically here lands in the cold-load main bundle, so the heavy,
 // conditionally-rendered pieces are code-split:
-//  - ArtifactPanel pulls in recharts (~400KB) — only mounts when a chat
-//    message produces an artifact and the user opens it.
+//  - ArtifactViewer pulls in recharts (~400KB) and the artifact renderers —
+//    only mounts when a chat message produces an artifact and the user opens it.
 //  - ChatChartRenderer owns the direct recharts usage for inline charts —
 //    only fetched when a message actually contains a chart/report.
 //  - SmartFillDialog (600-line PDF form-fill flow) — only mounts when the
 //    user starts a Smart Fill.
 //  - DocumentViewer (1200-line viewer + share/link stack) — only mounts when
 //    a message carries a document preview.
-const ArtifactPanel = lazy(() =>
-  import("@/components/ArtifactPanel").then((m) => ({ default: m.ArtifactPanel }))
+const ArtifactViewer = lazy(() =>
+  import("@/components/artifacts/ArtifactViewer").then((m) => ({ default: m.ArtifactViewer }))
 );
 const SmartFillDialog = lazy(() =>
   import("@/components/SmartFillDialog").then((m) => ({ default: m.SmartFillDialog }))
@@ -2371,7 +2371,7 @@ const MessageRow = memo(function MessageRow({
                         >
                           Open artifact →
                         </button>
-                        <span className="text-[11px] text-muted-foreground">click anywhere to open</span>
+                        <span className="text-[11px] text-muted-foreground">opens full screen</span>
                       </div>
                     </div>
                     );
@@ -2548,6 +2548,29 @@ export default function ChatPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<any>(null);
+  // "Open in Chat" from the Artifacts tab lands on #/chat?artifact=<id>: the
+  // chat opens that artifact in its viewer (a READ — nothing is written), and
+  // the parameter is taken off the address so a reload doesn't reopen it.
+  useEffect(() => {
+    const openFromHash = () => {
+      const hash = window.location.hash || "";
+      const q = hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : "";
+      const id = q ? new URLSearchParams(q).get("artifact") : null;
+      if (!id) return;
+      try { window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#/chat`); } catch { /* old browser */ }
+      apiRequest("GET", `/api/artifacts/${encodeURIComponent(id)}`)
+        .then(r => r.json())
+        .then(row => {
+          if (!row?.id) return;
+          if (row.type === "doc" || row.type === "sheet") hashNavigate(`/editor/${row.id}?source=chat`);
+          else setActiveArtifact(row);
+        })
+        .catch(() => { /* not found / offline: the chat simply opens */ });
+    };
+    openFromHash();
+    window.addEventListener("hashchange", openFromHash);
+    return () => window.removeEventListener("hashchange", openFromHash);
+  }, []);
 
   // Attachments: array supports both single and batch
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
@@ -3761,7 +3784,7 @@ export default function ChatPage() {
   return (
     <div className="flex h-full overflow-x-hidden max-w-full" data-testid="page-chat">
       {/* Chat area */}
-      <div className={`flex-1 flex flex-col min-w-0 ${activeArtifact ? 'w-1/2' : 'w-full'} transition-all`}>
+      <div className="flex-1 flex flex-col min-w-0 w-full">
       {/* Hidden file inputs */}
       <input
         ref={fileInputRef}
@@ -4054,29 +4077,20 @@ export default function ChatPage() {
       )}
       </div>
 
-      {/* Artifact panel — lazy boundary only mounts when a chat has an artifact
-          open, so recharts + the artifact rendering stack stay out of the
-          cold-load bundle */}
+      {/* Artifact viewer — full screen with an X, the whole artifact, its own
+          controls and Share. The lazy boundary only mounts once a chat has an
+          artifact open, so recharts + the renderers stay out of the
+          cold-load bundle. */}
       {activeArtifact && (
-        <div className="w-1/2 border-l border-border">
-          <Suspense
-            fallback={
-              <div className="h-full flex flex-col bg-background border-l border-border" aria-label="Loading artifact panel">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
-                  <div className="h-4 w-40 rounded bg-muted/60 animate-pulse" />
-                  <div className="h-7 w-7 rounded bg-muted/60 animate-pulse" />
-                </div>
-                <div className="flex-1 p-4 space-y-3">
-                  <div className="h-24 rounded-lg bg-muted/40 animate-pulse" />
-                  <div className="h-40 rounded-lg bg-muted/40 animate-pulse" />
-                  <div className="h-24 rounded-lg bg-muted/40 animate-pulse" />
-                </div>
-              </div>
-            }
-          >
-            <ArtifactPanel artifact={activeArtifact} onClose={() => setActiveArtifact(null)} />
-          </Suspense>
-        </div>
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 bg-background/95 flex items-center justify-center" aria-label="Loading artifact">
+              <div className="h-10 w-10 rounded-full border-2 border-primary/40 border-t-primary animate-spin" />
+            </div>
+          }
+        >
+          <ArtifactViewer artifact={activeArtifact} from="chat" onClose={() => setActiveArtifact(null)} />
+        </Suspense>
       )}
     </div>
   );

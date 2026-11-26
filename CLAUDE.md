@@ -1428,6 +1428,38 @@ border and shadow only — no layout or size, so no screen's arrangement moves.
 today against the week's average day); the summary is rule-written, not
 model-written.
 
+## Artifact rules (one viewer, the whole artifact, sent anywhere)
+
+Owner, 2026-11-26: an artifact opened from chat showed a half-width pane
+reading "Unknown artifact type: markdown". Read these before touching
+`client/src/components/artifacts/*`, `client/src/pages/artifacts.tsx`,
+`client/src/lib/artifact-share.ts` or the chat's artifact cards.
+*Guard:* `tests/artifact-viewer.dom.test.tsx` (with `tests/artifacts-counts.dom.test.tsx`).
+
+**AR1. One renderer, one viewer.** Every artifact body is drawn by
+`ArtifactContent` (`components/artifacts/ArtifactContent.tsx`) — the tab, the
+chat and the public share page alike; a structured chat payload (`data`) by
+`StructuredArtifactBody`. Nothing prints "Unknown artifact type". An artifact
+opens FULL SCREEN in `ArtifactViewer` (X at the upper right, star, Share, ⋯),
+from chat and from the tab; it renders the LIVE row from `/api/artifacts`
+(Rule 6/7) and writes nothing on open (Rule 3). A doc/sheet opens its editor; a
+note's Edit opens the Notes workspace (W8). "Open in Chat" is
+`#/chat?artifact=<id>` (a read; the parameter is removed from the address).
+**AR2. Interactive where the artifact is.** A checklist tap writes the stored
+row through the per-item toggle route; a chart's type switch is a view, never
+saved; an HTML artifact runs in a frame with `allow-scripts` and NEVER
+`allow-same-origin`.
+**AR3. Sent anywhere, written only on a tap.** `ArtifactShareMenu`: the system
+share sheet, a file, a view-only link (minted on the tap —
+`POST /api/artifacts/:id/share`; turned off with DELETE), text, email, text
+message, download; an uploaded document sends its own file.
+**AR4. The tab is the owner's design** (stat tiles, search + Smart Fill +
+filter, chips, Grid / List / Gallery, sort, cards with a drawn preview, star,
+share, ⋯). Every count comes from the one filter pipeline: Total is the
+rendered set, Files + Notes & reports add up to it, each chip's count is what
+pressing it shows. View and sort are per-device conveniences that never hide a
+row. A star is the artifact's own `pinned` flag.
+
 ## Touch rules (the app is used on a phone; a mouse click proves nothing about a finger)
 
 **T1. A drag on a control never navigates.** The shell turns a quick sideways

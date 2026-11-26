@@ -100,7 +100,7 @@ describe("static guards", () => {
     // the server allowlist) and a chart artifact's data binding (a chat READ
     // turn, which the server refuses to let write — Rule 1).
     const allowed = new Set([
-      "client/src/pages/artifacts.tsx:/api/chat",
+      "client/src/components/artifacts/ArtifactContent.tsx:/api/chat",
       "client/src/pages/editor.tsx:/api/ai-transform",
     ]);
     const offenders: string[] = [];

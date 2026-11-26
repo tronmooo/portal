@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { X, BarChart3, FileText, CheckSquare, Calculator, LayoutGrid, ClipboardList, Zap, TrendingUp, TrendingDown, Minus, ChevronRight } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { apiRequest } from "@/lib/queryClient";
+import { ArtifactContent } from "@/components/artifacts/ArtifactContent";
 
 // Color tokens for charts
 const COLORS = {
@@ -41,7 +42,9 @@ export function ArtifactPanel({ artifact, onClose }: { artifact: any; onClose: (
       
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4">
-        <ArtifactRenderer type={artifact.type} data={artifact.data} />
+        {isStructuredArtifact(artifact)
+          ? <StructuredArtifactBody type={artifact.type} data={artifact.data} />
+          : <ArtifactContent artifact={artifact} artifactId={artifact.id} isArtifact={!!artifact.id} fill />}
       </div>
     </div>
   );
@@ -64,7 +67,13 @@ function typeIcon(type: string) {
 // ═══════════════════════════════════════════════
 // RENDERER — dispatches to type-specific component
 // ═══════════════════════════════════════════════
-function ArtifactRenderer({ type, data }: { type: string; data: any }) {
+/** True for the structured chat artifacts this file draws (they carry `data`). */
+export const STRUCTURED_ARTIFACT_TYPES = new Set(["chart", "summary_report", "kpi_cards", "checklist", "structured_plan", "calculator", "quick_entry_form"]);
+export function isStructuredArtifact(artifact: any): boolean {
+  return !!artifact && artifact.data != null && typeof artifact.data === "object" && STRUCTURED_ARTIFACT_TYPES.has(artifact.type);
+}
+
+export function StructuredArtifactBody({ type, data }: { type: string; data: any }) {
   switch (type) {
     case "chart": return <ChartArtifact data={data} />;
     case "summary_report": return <SummaryReportArtifact data={data} />;
@@ -73,7 +82,8 @@ function ArtifactRenderer({ type, data }: { type: string; data: any }) {
     case "structured_plan": return <StructuredPlanArtifact data={data} />;
     case "calculator": return <CalculatorArtifact data={data} />;
     case "quick_entry_form": return <QuickEntryFormArtifact data={data} />;
-    default: return <div className="text-sm text-muted-foreground">Unknown artifact type: {type}</div>;
+    // Never "Unknown artifact type": anything else is a saved artifact body.
+    default: return <ArtifactContent artifact={{ type, ...(data || {}) }} />;
   }
 }
 
