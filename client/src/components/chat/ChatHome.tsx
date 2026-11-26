@@ -19,7 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Activity, BarChart3, Brain, CalendarDays, Car, CheckSquare, ChevronRight, Coins, Droplet, Dumbbell,
   FileText, HeartPulse, Lightbulb, Moon, Receipt, RefreshCw, Scale, Sparkles, Target, TrendingDown,
-  TrendingUp, Wallet, ArrowUp, ArrowDown, NotebookPen, Layers, MessageCircle, LineChart, Utensils, type LucideIcon,
+  TrendingUp, Wallet, ArrowUp, ArrowDown, NotebookPen, LineChart, Utensils, type LucideIcon,
 } from "lucide-react";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { hashNavigate } from "@/lib/hashNavigate";
@@ -39,8 +39,7 @@ import {
 } from "@shared/chat-home";
 import type { ChatSuggestion } from "@shared/chat-suggestions";
 import { ChatSuggestions } from "./ChatSuggestions";
-import { CHAT_APPS } from "./ChatComposer";
-import { WORKSPACES, type WorkspaceKind } from "@/components/workspace/WorkspaceShell";
+import { type WorkspaceKind } from "@/components/workspace/WorkspaceShell";
 
 // ── Looks ────────────────────────────────────────────────────────────────────
 
@@ -185,7 +184,6 @@ function SectionTitle({ icon: Icon, children, action }: { icon: LucideIcon; chil
   );
 }
 
-const MODE_TILE = "aurora-mode pressable shrink-0 min-w-[68px] px-2.5 py-2.5 rounded-2xl text-[11.5px] font-medium flex flex-col items-center justify-center gap-1.5";
 const linkCls = "aurora-link inline-flex items-center gap-0.5 text-xs font-semibold";
 
 function Delta({ d }: { d: NonNullable<HomeKpi["delta"]> }) {
@@ -465,30 +463,8 @@ export function ChatHomeView({ home, name, todayISO, suggestions, onPick, onSend
       {/* Earned from the user's own records */}
       {suggestions.length > 0 && <ChatSuggestions suggestions={suggestions} onPick={onPick} now={now} bare />}
 
-      {/* AI Modes. Chat is the box below; each of the others is its own tool. */}
-      {onOpenWorkspace && (
-        <section aria-label="AI modes" data-testid="chat-modes">
-          <SectionTitle icon={Layers}>AI Modes <span className="text-xs font-medium text-muted-foreground">(Apps)</span></SectionTitle>
-          <div className="flex items-stretch gap-2 overflow-x-auto no-scrollbar -mx-4 px-4 pb-1" data-swipe-ignore>
-            <button type="button" onClick={onFocusChat} aria-current="true" className={`${MODE_TILE} aurora-mode-active`} data-testid="button-mode-chat">
-              <MessageCircle className="h-5 w-5" aria-hidden="true" /> Chat
-            </button>
-            {(Object.keys(WORKSPACES) as WorkspaceKind[]).map((kind) => {
-              const { label, icon: Icon, blurb } = WORKSPACES[kind];
-              return (
-                <button key={kind} type="button" onClick={() => onOpenWorkspace(kind)} title={blurb} className={MODE_TILE} data-testid={`button-workspace-${kind}`}>
-                  <Icon className="h-5 w-5" aria-hidden="true" /> {label}
-                </button>
-              );
-            })}
-            {CHAT_APPS.map(({ id, label, icon: Icon, href, blurb }) => (
-              <button key={id} type="button" onClick={() => hashNavigate(href)} title={blurb} className={MODE_TILE} data-testid={`button-app-${id}`}>
-                <Icon className="h-5 w-5" aria-hidden="true" /> {label}
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
+      {/* AI Modes are not drawn here: they live in the chat box (ChatComposer,
+          `modeTiles`) so they stay pinned with it while this page scrolls. */}
     </div>
   );
 }

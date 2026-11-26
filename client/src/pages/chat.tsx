@@ -4073,7 +4073,7 @@ export default function ChatPage() {
           newDocButton={<NewDocSheetButton disabled={isPending} />}
           onOpenWorkspace={(kind) => hashNavigate(WORKSPACES[kind].route)}
           onOpenApp={hashNavigate}
-          hideModes={messages.length <= 1 && !searchOpen}
+          modeTiles={messages.length <= 1 && !searchOpen}
           onDropFiles={(files) => { void handleFileSelect({ target: { files } } as any); }}
         />
       )}

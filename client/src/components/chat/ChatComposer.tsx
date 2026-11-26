@@ -21,7 +21,7 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { BarChart3, CalendarDays, Camera, FolderOpen, LayoutGrid, Loader2, Mic, Paperclip, RotateCcw, Search, Send, type LucideIcon } from "lucide-react";
+import { BarChart3, CalendarDays, Camera, FolderOpen, Layers, LayoutGrid, Loader2, MessageCircle, Mic, Paperclip, RotateCcw, Search, Send, type LucideIcon } from "lucide-react";
 import { WORKSPACES, type WorkspaceKind } from "@/components/workspace/WorkspaceShell";
 import { useToast } from "@/hooks/use-toast";
 
@@ -98,7 +98,8 @@ export const CHAT_APPS: Array<{ id: string; label: string; icon: LucideIcon; hre
   { id: "more", label: "More", icon: LayoutGrid, href: "/dashboard", blurb: "The full dashboard" },
 ];
 
-const MODE_PILL = "aurora-mode pressable shrink-0 h-7 px-2.5 rounded-full text-xs font-medium flex items-center gap-1";
+const MODE_TILE = "aurora-mode pressable shrink-0 min-w-[68px] px-2.5 py-2.5 rounded-2xl text-[11.5px] font-medium flex flex-col items-center justify-center gap-1.5";
+const MODE_PILL ="aurora-mode pressable shrink-0 h-7 px-2.5 rounded-full text-xs font-medium flex items-center gap-1";
 
 export interface ChatComposerHandle {
   /** Current draft text (used to seed an attachment note from the draft). */
@@ -135,8 +136,8 @@ interface ChatComposerProps {
   onOpenWorkspace?: (kind: WorkspaceKind) => void;
   /** The Documents / Analyze / Plan / More tiles: each goes to its page. */
   onOpenApp?: (href: string) => void;
-  /** The chat home is showing the modes as tiles: leave the row out. */
-  hideModes?: boolean;
+  /** Before the first message the modes are drawn as tiles, pinned with the box. */
+  modeTiles?: boolean;
   /** Files dropped onto the box (same as picking them with the paperclip). */
   onDropFiles?: (files: File[]) => void;
 }
@@ -155,7 +156,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     newDocButton,
     onOpenWorkspace,
     onOpenApp,
-    hideModes,
+    modeTiles,
     onDropFiles,
   },
   ref,
@@ -249,7 +250,33 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             version of this box. Before the first message the chat home shows
             them as tiles instead (`hideModes`), so they are on screen once.
             The row scrolls sideways inside itself (T1: data-swipe-ignore). */}
-        {onOpenWorkspace && !hideModes && (
+        {onOpenWorkspace && modeTiles && (
+          <section aria-label="AI modes" data-testid="chat-modes" className="pb-2">
+            <div className="flex items-center gap-2 pb-2 text-[15px] font-bold">
+              <Layers className="h-4 w-4 text-primary" aria-hidden="true" /> AI Modes{" "}
+              <span className="text-xs font-medium text-muted-foreground">(Apps)</span>
+            </div>
+            <div className="flex items-stretch gap-2 overflow-x-auto no-scrollbar -mx-3 px-3" data-swipe-ignore>
+              <button type="button" onClick={() => textareaRef.current?.focus()} aria-current="true" className={`${MODE_TILE} aurora-mode-active`} data-testid="button-mode-chat">
+                <MessageCircle className="h-5 w-5" aria-hidden="true" /> Chat
+              </button>
+              {(Object.keys(WORKSPACES) as WorkspaceKind[]).map((kind) => {
+                const { label, icon: Icon, blurb } = WORKSPACES[kind];
+                return (
+                  <button key={kind} type="button" onClick={() => onOpenWorkspace(kind)} title={blurb} className={MODE_TILE} data-testid={`button-workspace-${kind}`}>
+                    <Icon className="h-5 w-5" aria-hidden="true" /> {label}
+                  </button>
+                );
+              })}
+              {onOpenApp && CHAT_APPS.map(({ id, label, icon: Icon, href, blurb }) => (
+                <button key={id} type="button" onClick={() => onOpenApp(href)} title={blurb} className={MODE_TILE} data-testid={`button-app-${id}`}>
+                  <Icon className="h-5 w-5" aria-hidden="true" /> {label}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+        {onOpenWorkspace && !modeTiles && (
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar -mx-3 px-3 pb-2" data-swipe-ignore data-testid="chat-modes">
             {(Object.keys(WORKSPACES) as WorkspaceKind[]).map((kind) => {
               const { label, icon: Icon, blurb } = WORKSPACES[kind];

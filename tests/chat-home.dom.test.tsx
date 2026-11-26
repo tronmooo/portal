@@ -131,27 +131,25 @@ describe("chat home", () => {
     expect(screen.queryByTestId("home-retry")).toBeNull();
   });
 
-  it("the modes are tiles on the home: Chat focuses the box, the rest open their own tool", () => {
-    const open = vi.fn(); const focus = vi.fn();
-    render(<Home onOpenWorkspace={open} onFocusChat={focus} />);
+  it("the modes are tiles pinned with the chat box: Chat focuses it, the rest open their own tool", () => {
+    const open = vi.fn(); const app = vi.fn();
+    render(<ChatComposer onSubmit={() => true} isPending={false} searchOpen={false} onToggleSearch={() => {}} onAttach={() => {}}
+      showReset={false} onReset={() => {}} onOpenWorkspace={open} onOpenApp={app} modeTiles />);
     fireEvent.click(screen.getByTestId("button-mode-chat"));
-    expect(focus).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(screen.getByLabelText("Message"));
     for (const kind of ["notes", "journal", "document", "fill"]) fireEvent.click(screen.getByTestId(`button-workspace-${kind}`));
     expect(open.mock.calls.map((c) => c[0])).toEqual(["notes", "journal", "document", "fill"]);
     fireEvent.click(screen.getByTestId("button-app-documents"));
-    fireEvent.click(screen.getByTestId("button-app-plan"));
-    expect(navigated).toEqual(["/artifacts", "/calendar"]);
+    expect(app).toHaveBeenCalledWith("/artifacts");
+    expect(screen.getByTestId("button-mode-chat").closest("[data-swipe-ignore]")).not.toBeNull();
   });
 
-  it("…and the chat box leaves its own row out while the home shows them (once on screen)", () => {
-    const composer = (hideModes: boolean) => (
-      <ChatComposer onSubmit={() => true} isPending={false} searchOpen={false} onToggleSearch={() => {}} onAttach={() => {}}
-        showReset={false} onReset={() => {}} onOpenWorkspace={() => {}} onOpenApp={() => {}} hideModes={hideModes} />
-    );
-    const { unmount } = render(composer(true));
-    expect(screen.queryByTestId("button-workspace-notes")).toBeNull();
-    expect(screen.getByLabelText("Message")).toBeTruthy();
-    unmount();
+  it("the home itself no longer draws the modes (they would scroll away)", () => {
+    render(<Home onOpenWorkspace={() => {}} />);
+    expect(screen.queryByTestId("button-mode-chat")).toBeNull();
+  });
+
+  it("in a conversation the chat box shows the compact row", () => {
     const app = vi.fn();
     render(<ChatComposer onSubmit={() => true} isPending={false} searchOpen={false} onToggleSearch={() => {}} onAttach={() => {}}
       showReset onReset={() => {}} onOpenWorkspace={() => {}} onOpenApp={app} />);
@@ -162,7 +160,7 @@ describe("chat home", () => {
 
   it("rows that scroll sideways keep their own drag (T1)", () => {
     render(<Home onOpenWorkspace={() => {}} />);
-    for (const id of ["home-glance-tasks", "home-insight-wellness", "button-mode-chat"]) {
+    for (const id of ["home-glance-tasks", "home-insight-wellness"]) {
       expect(screen.getByTestId(id).closest("[data-swipe-ignore]")).not.toBeNull();
     }
   });
