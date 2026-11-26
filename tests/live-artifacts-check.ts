@@ -394,8 +394,26 @@ const overflow = (page: any, within?: string) => page.evaluate((sel: string | un
         await anon.close();
       }
       await page.keyboard.press("Escape").catch(() => undefined);
+      // Close the viewer the way a person does (its X), not by typing an
+      // address over an open dialog.
+      if (await page.locator(t("button-artifact-viewer-close")).isVisible().catch(() => false)) {
+        await press(t("button-artifact-viewer-close"));
+        await page.locator(t("artifact-viewer")).waitFor({ state: "detached", timeout: 10000 }).catch(() => undefined);
+      }
 
       // ── 5 · Open in Chat ──────────────────────────────────────────────
+      // From the viewer's ⋯ menu, as a person taps it…
+      await page.goto(`${UI_BASE}/#/artifacts`);
+      await page.locator(t(`artifact-card-${ids.markdown}`)).first().waitFor({ timeout: 30000 });
+      await press(t(`artifact-card-${ids.markdown}`));
+      await page.locator(t("artifact-viewer")).waitFor({ timeout: 15000 });
+      await press(t("button-artifact-viewer-more"));
+      await press(t("artifact-open-in-chat"));
+      await page.waitForFunction(() => location.hash.startsWith("#/chat"), undefined, { timeout: 15000 }).catch(() => undefined);
+      const mt = (await page.locator(t("artifact-viewer-title")).textContent({ timeout: 20000 }).catch(() => "")) || "";
+      check(mt.includes(tag) && (await page.evaluate(() => location.hash)) === "#/chat", L(`the viewer's ⋯ → Open in Chat opens it over the chat (${await page.evaluate(() => location.hash)})`));
+      if (await page.locator(t("button-artifact-viewer-close")).isVisible().catch(() => false)) await press(t("button-artifact-viewer-close"));
+      // …and from a link.
       await page.goto(`${UI_BASE}/#/chat?artifact=${ids.markdown}`);
       await page.reload();
       const v = page.locator(t("artifact-viewer"));

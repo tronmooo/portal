@@ -37,6 +37,9 @@ import { isInScope, ownerChainForProfile, selfIdsFrom } from "@shared/scope";
 //    user starts a Smart Fill.
 //  - DocumentViewer (1200-line viewer + share/link stack) — only mounts when
 //    a message carries a document preview.
+/** "Open in Chat" (#/chat?artifact=<id>) waiting for a mounted chat to open it. */
+let pendingChatArtifactId: string | null = null;
+
 const ArtifactViewer = lazy(() =>
   import("@/components/artifacts/ArtifactViewer").then((m) => ({ default: m.ArtifactViewer }))
 );
@@ -2554,32 +2557,42 @@ export default function ChatPage() {
   // chat opens that artifact in its viewer (a READ — nothing is written), and
   // the parameter is taken off the address so a reload doesn't reopen it.
   useEffect(() => {
+    let live = true;
     const openFromHash = () => {
       const hash = window.location.hash || "";
       const q = hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : "";
       // The router can move a query out of the hash into location.search
       // (WA10), so the parameter is read from either place.
       const fromSearch = new URLSearchParams(window.location.search || "").get("artifact");
-      const id = (q ? new URLSearchParams(q).get("artifact") : null) || fromSearch;
+      const fromUrl = (q ? new URLSearchParams(q).get("artifact") : null) || fromSearch;
+      if (fromUrl) {
+        pendingChatArtifactId = fromUrl;
+        try {
+          const search = new URLSearchParams(window.location.search || "");
+          search.delete("artifact");
+          const rest = search.toString();
+          window.history.replaceState(window.history.state, "", `${window.location.pathname}${rest ? `?${rest}` : ""}#/chat`);
+        } catch { /* old browser */ }
+      }
+      // The chat can mount, read the link, and be remounted (the first
+      // screen settling its scope, T3) before the read answers: the pending
+      // id outlives this mount and is cleared only once a viewer opens it.
+      const id = pendingChatArtifactId;
       if (!id) return;
-      try {
-        const search = new URLSearchParams(window.location.search || "");
-        search.delete("artifact");
-        const rest = search.toString();
-        window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}#/chat`);
-      } catch { /* old browser */ }
       apiRequest("GET", `/api/artifacts/${encodeURIComponent(id)}`)
         .then(r => r.json())
         .then(row => {
+          if (!live || pendingChatArtifactId !== id) return;
+          pendingChatArtifactId = null;
           if (!row?.id) return;
           if (row.type === "doc" || row.type === "sheet") hashNavigate(`/editor/${row.id}?source=chat`);
           else setActiveArtifact(row);
         })
-        .catch(() => { /* not found / offline: the chat simply opens */ });
+        .catch(() => { if (pendingChatArtifactId === id) pendingChatArtifactId = null; });
     };
     openFromHash();
     window.addEventListener("hashchange", openFromHash);
-    return () => window.removeEventListener("hashchange", openFromHash);
+    return () => { live = false; window.removeEventListener("hashchange", openFromHash); };
   }, []);
 
   // Attachments: array supports both single and batch
