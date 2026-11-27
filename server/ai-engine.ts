@@ -11278,7 +11278,13 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           const selfP = profiles.find((p: any) => p.type === "self");
           if (selfP) pNameLC = selfP.name.toLowerCase();
         }
-        const partyPick = pickProfileByName(profiles.filter((p: any) => p.type === "person" || p.type === "self"), pNameLC, s.partyName);
+        // "me" IS the Self profile. It used to be resolved to the Self's name
+        // and then looked up again by the raw word "me", which missed — the
+        // account holder's share was dropped and the reply still said
+        // "70% you / 30% Robin" (integrity run, 2026-11-27, 7 of 7).
+        const saidSelf = /^(me|myself|i|self|mine)$/.test(String(s.partyName).toLowerCase().trim());
+        const selfParty = saidSelf ? profiles.find((p: any) => p.type === "self") : undefined;
+        const partyPick = selfParty ? { profile: selfParty } : pickProfileByName(profiles.filter((p: any) => p.type === "person" || p.type === "self"), pNameLC, s.partyName);
         if ("error" in partyPick && /^Several profiles match/.test(partyPick.error)) return { error: partyPick.error };
         let party: any = "profile" in partyPick ? partyPick.profile : undefined;
         if (!party) {
@@ -11312,6 +11318,11 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
             created.push(link);
           }
         } catch (e: any) { logger.warn("ai", `split create failed for ${s.partyName}: ${e?.message}`); }
+      }
+      // A share that was asked for and not stored is not a success: say which.
+      if (created.length < splits.length) {
+        const stored = created.map((l: any) => `${profiles.find((p: any) => p.id === l.partyProfileId)?.name ?? "?"} ${l.ownershipPercentage}%`).join(", ") || "none";
+        return { error: `Only ${created.length} of the ${splits.length} shares were stored (${stored}). Tell the user exactly which shares are stored and which are not — do not say the split is done.`, result: { subject: subject.id, kind, created } };
       }
       return { result: { subject: subject.id, kind, created }, actions: [{ type: "split", category: kind, data: { subjectId: subject.id, count: created.length } }] };
     }
@@ -13652,8 +13663,43 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if (!isFinite(amt) || amt < 0) return { error: `Invalid amount: ${input.changes.amount}` };
         patch.amount = amt;
       }
-      const updated = await storage.updateLiabilityPayment(target.id, patch);
-      return { updated: true, liability: liability.name, payment: updated };
+      // The amount and the date are the head of a pipeline (L5): the split,
+      // the balance, the paid stamp and the logged expense follow them. This
+      // tool wrote the amount alone — "$350, not $300" left the principal,
+      // the balance-after and the debt's balance describing $300 (integrity
+      // run, 2026-11-27, 7 of 7). Same operation as PATCH
+      // /api/liability-payments/:id: a bill's payment is re-priced in place;
+      // a debt's is retracted and recorded again.
+      const moneyOrDate = patch.amount !== undefined || patch.paymentDate !== undefined;
+      const newAmount = patch.amount !== undefined ? Number(patch.amount) : Number(target.amount);
+      const newDate = patch.paymentDate !== undefined ? String(patch.paymentDate).slice(0, 10) : String(target.paymentDate || "").slice(0, 10);
+      const unchanged = Math.abs(newAmount - Number(target.amount)) < 0.005 && newDate === String(target.paymentDate || "").slice(0, 10);
+      if (!moneyOrDate || unchanged) {
+        const cosmetic = patch.notes !== undefined ? { notes: patch.notes } : {};
+        const updated = Object.keys(cosmetic).length ? await storage.updateLiabilityPayment(target.id, cosmetic) : target;
+        return { updated: true, liability: liability.name, payment: updated };
+      }
+      if (isRecurringBillProfile(liability)) {
+        const { repriceBillPayment } = await import("./liability-payments");
+        const repriced = await repriceBillPayment(storage, target.id, { amount: newAmount, paymentDate: newDate }, { expense: "sync" });
+        if (!repriced.ok) return { error: `Couldn't change the ${liability.name} payment` };
+        const payment = patch.notes !== undefined ? ((await storage.updateLiabilityPayment(target.id, { notes: patch.notes })) ?? repriced.payment) : repriced.payment;
+        return { updated: true, liability: liability.name, payment };
+      }
+      const tzPay = aiUserTimezone();
+      const undonePay = await unpayBillOccurrence(storage, liability.id, { paymentId: target.id, source: "ai", reopen: true } as any, tzPay);
+      if (!undonePay.ok) return { error: `Couldn't change the ${liability.name} payment — nothing was changed` };
+      const record = (amount: number, date: string, notes: any) => payBillOccurrence(storage, liability.id, {
+        occurrenceDate: date || null, amount, paymentDate: date, method: (target as any).sourceAccount ?? null, notes: notes ?? null, source: "ai",
+      } as any, tzPay);
+      const redone = await record(newAmount, newDate, patch.notes !== undefined ? patch.notes : (target as any).notes);
+      if (!redone.ok) {
+        // put the original back rather than leave the debt with no payment
+        await record(Number(target.amount), String(target.paymentDate || "").slice(0, 10), (target as any).notes).catch(() => undefined);
+        return { error: `Couldn't change the ${liability.name} payment — the original payment was kept` };
+      }
+      const afterEdit: any = await storage.getProfile(liability.id);
+      return { updated: true, liability: liability.name, payment: (redone as any).payment, balance: afterEdit?.fields?.balance };
     }
 
     case "mark_loan_payment": {
@@ -13673,6 +13719,21 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if (!target) return { error: `Every scheduled ${loanRows[0].loan_name} payment is already marked paid` };
       }
       if (target.paid) return { alreadyPaid: true, loan: target.loan_name, paymentNumber: target.payment_number };
+      // The ledger first, the flag second — exactly as PATCH
+      // /api/loans/payment/:id/mark. This tool flipped the flag alone: the
+      // reply said "marked as paid", no payment existed and the balance had
+      // not moved (integrity run, 2026-11-27, 7 of 7; L5).
+      if (target.loan_id) {
+        const paidRow = await payBillOccurrence(storage, target.loan_id, {
+          occurrenceDate: String(target.payment_date || "").slice(0, 10) || null,
+          amount: Number(target.total_payment) || null,
+          principal: Number(target.principal_amount) || null,
+          interest: Number(target.interest_amount) || null,
+          notes: `Amortization payment #${target.payment_number ?? ""}`.trim(),
+          source: "ai",
+        } as any, aiUserTimezone());
+        if (!paidRow.ok) return { error: `Couldn't record payment #${target.payment_number} on ${target.loan_name} — nothing was marked paid` };
+      }
       const marked = await storage.markLoanPayment(target.id);
       return { marked: true, loan: target.loan_name, paymentNumber: target.payment_number, date: target.payment_date, amount: target.total_payment, payment: marked };
     }
@@ -13844,7 +13905,20 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         }
         return { error: ceResult.error || "Event not found", candidates: ceResult.candidates, checkedKinds: resolved.searched };
       }
-      const completed = await storage.updateEvent(ceResult.match.id, { status: "completed" } as any);
+      // Events have no status column: "completed" was written nowhere while
+      // the reply said "marked as completed" (integrity run, 2026-11-27,
+      // 7 of 7). An occurrence is completed by its mark on the stored tags —
+      // the same write the Calendar's check-off makes (O3, I6).
+      const evtDay = String((input as any).date || (ceResult.match as any).date || getUserToday(aiUserTimezone())).slice(0, 10);
+      const doneDay = (ceResult.match as any).recurrence && (ceResult.match as any).recurrence !== "none" && !(input as any).date ? getUserToday(aiUserTimezone()) : evtDay;
+      const { writeFromStoredRow } = await import("./stored-row-write");
+      const wroteDone = await writeFromStoredRow({
+        read: () => storage.getEvent(ceResult.match!.id),
+        compute: (existing: any) => ({ patch: { tags: pruneRecurringOccurrenceTags(markRecurringOccurrence(existing?.tags ?? [], doneDay, "done"), getUserToday(aiUserTimezone())) } }),
+        write: (p: any) => storage.updateEvent(ceResult.match!.id, p as any),
+      } as any);
+      if (!(wroteDone as any).ok) return { error: `Couldn't mark "${ceResult.match.title}" completed — nothing was changed` };
+      const completed = (wroteDone as any).row;
       if (input.removeFromSchedule) {
         // Also mark as hidden from upcoming by setting date to past
         await storage.deleteEvent(ceResult.match.id);
