@@ -20,7 +20,8 @@ const DOORS: Door[] = [
   { name: "profile", path: "/profiles", table: "profiles", nameCol: "name", textField: "name", valid: (t) => ({ type: "asset", name: `${t} x`, fields: { currentValue: 1 } }) },
   { name: "note", path: "/notes", table: "artifacts", nameCol: "title", textField: "title", valid: (t) => ({ title: `${t} x`, content: `${t} body` }),
     // J8: a note's title never costs a save — a blank one is written from the text, a number is its own text.
-    allows: ["a blank name", "a name that is a number"] },
+    // An object is not a title either: it is ignored and the title is written from the text.
+    allows: ["a blank name", "a name that is a number", "a name that is an object"] },
 ];
 
 scenario({
@@ -50,7 +51,7 @@ scenario({
       );
       if ("date" in valid) cases.push(
         ["Feb 30", { ...valid, date: "2026-02-30" }], ["month 13", { ...valid, date: "2026-13-01" }],
-        ["a date in words", { ...valid, date: "next tuesday" }], ["a date with a time zone trick", { ...valid, date: "2026-11-27T25:99:00Z" }],
+        ["a date in words", { ...valid, date: "next tuesday" }], ["day zero", { ...valid, date: "2026-11-00" }],
       );
       if ("target" in valid) cases.push(["target \"lots\"", { ...valid, target: "lots" }]);
       const statuses: string[] = [];
@@ -119,6 +120,16 @@ scenario({
       ctx.check("db", !/<script/i.test(stored) || stored === xss, `${door}: script markup is stored inert (stripped) or verbatim as text`, stored.slice(0, 120));
       ctx.step(`${door} stored: ${stored.slice(0, 100)}`);
     }
+    // a title that is not text is never saved as the text of an object
+    const odd = await ctx.api("POST", "/notes", { title: { $ne: null }, content: `${ctx.tag} body of an untitled note` });
+    if (odd.ok) {
+      const id = odd.data.id ?? odd.data.note?.id;
+      ctx.cleanup(() => ctx.api("DELETE", `/notes/${id}`));
+      const row = await ctx.db.row("artifacts", id);
+      const ok = ctx.check("db", !!row?.title && !/\[object Object\]/.test(row.title), "a note sent with an object for a title is titled from its text", JSON.stringify(row?.title));
+      if (!ok) ctx.finding({ severity: "bug", title: "A note's title can be saved as \"[object Object]\"", detail: `POST /api/notes {title: {…}} stored the title ${JSON.stringify(row?.title)}` });
+    } else ctx.check("action", odd.status < 500, "a note with an object for a title: refused cleanly", `${odd.status}`);
+
     // a very long body is kept whole (W11: no silent cut)
     const long = `${ctx.tag} ` + "long entry. ".repeat(2500); // ~30,000 chars
     const j = await ctx.api("POST", "/journal", { date: ctx.today, content: long });
@@ -401,6 +412,7 @@ scenario({
       return { status: response.status, data };
     };
     const other = await getOtherToken();
+    const mineTok = await getSmokeToken();
     const tables = ["profiles", "expenses", "tasks", "events", "habits", "habit_checkins", "goals", "journal_entries", "artifacts", "documents", "trackers", "tracker_entries", "liability_payments", "incomes", "preferences", "memories", "entity_links", "net_worth_snapshots", "asset_party_links", "liability_profile_links", "financial_accounts", "financial_transactions", "ai_action_log", "ai_chat_runs", "audit_log", "user_notifications", "captures", "chat_artifacts"];
     const leaks: string[] = [], anonLeaks: string[] = [], foreign: string[] = [];
     for (const tbl of tables) {
@@ -408,12 +420,9 @@ scenario({
       if (Array.isArray(asOther.data) && asOther.data.length) leaks.push(tbl);
       const anon = await pg(`${tbl}?select=user_id&limit=1`, null);
       if (Array.isArray(anon.data) && anon.data.length) anonLeaks.push(tbl);
-      const mine = await pg(`${tbl}?select=user_id&user_id=neq.${SMOKE_USER_ID}&limit=1`, token_());
+      const mine = await pg(`${tbl}?select=user_id&user_id=neq.${SMOKE_USER_ID}&limit=1`, mineTok);
       if (Array.isArray(mine.data) && mine.data.length) foreign.push(tbl);
     }
-    async function noop() { /* keeps the helper below hoisted */ }
-    void noop;
-    function token_() { return smokeTok; }
     ctx.check("isolation", leaks.length === 0, `database: the other account reads none of this account's rows (${tables.length} tables)`, leaks.join(", "));
     ctx.check("isolation", anonLeaks.length === 0, "database: a signed-out reader reads no rows", anonLeaks.join(", "));
     ctx.check("isolation", foreign.length === 0, "database: this account reads nobody else's rows", foreign.join(", "));
@@ -427,8 +436,6 @@ scenario({
     ctx.check("db", planted === 0, `database: the other account cannot insert a row owned by this account (answer ${ins.status})`, `${planted} planted`);
   },
 });
-let smokeTok = "";
-getSmokeToken().then((t) => { smokeTok = t; }).catch(() => undefined);
 
 scenario({
   id: "hardening.date-edges",

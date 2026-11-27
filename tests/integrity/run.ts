@@ -12,7 +12,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { api } from "../smoke/fixture/api";
-import { UI_BASE } from "../smoke/fixture/account";
+import { API_BASE, UI_BASE } from "../smoke/fixture/account";
 import { acquireGateLock, preferenceLockIo } from "../smoke/fixture/gate-lock";
 import { allScenarios, runScenarios, type UiHandle } from "./framework";
 import "./scenarios/index";
@@ -32,7 +32,7 @@ async function main() {
   let browser: any;
   try {
     const version = await api("GET", "/version");
-    console.log(`production serves ${String(version.data?.sha).slice(0, 7)}; seed ${seed}`);
+    console.log(`${new URL(API_BASE).host} serves ${String(version.data?.sha).slice(0, 7)}; seed ${seed}`);
     const profiles = await api("GET", "/profiles");
     const self = (profiles.data as any[]).find((p) => p.type === "self");
     if (!self) throw new Error("the smoke account has no self profile");
@@ -60,6 +60,10 @@ async function main() {
     }
 
     const { results, findings, timings } = await runScenarios({ seed, only, chat: !flag("--no-chat"), browser: wantBrowser, outDir, ui, self: { id: self.id, name: self.name } });
+    // which deployment this run judged
+    const resultsFile = path.join(outDir, "results.json");
+    const saved = JSON.parse(fs.readFileSync(resultsFile, "utf8"));
+    fs.writeFileSync(resultsFile, JSON.stringify({ target: new URL(API_BASE).host, sha: String(version.data?.sha || "").slice(0, 7), ...saved }, null, 2));
     const by = (s: string) => results.filter((r) => r.status === s);
     console.log(`\n${by("pass").length} pass · ${by("fail").length} fail · ${by("incomplete").length} incomplete · ${by("error").length} error · ${by("skipped").length} skipped`);
     for (const r of [...by("fail"), ...by("error"), ...by("incomplete")]) {

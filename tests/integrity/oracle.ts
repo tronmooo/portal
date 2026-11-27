@@ -112,18 +112,24 @@ export function levelPayment(principal: number, aprPct: number, months: number):
   return cents((principal * r) / (1 - Math.pow(1 + r, -months)));
 }
 
-/** Month-by-month payoff: months to zero and total interest. */
+/** Month-by-month payoff: months to zero and total interest.
+ *  A lender closes a loan with its last payment: what would be left after a
+ *  payment, when it is under half a payment, is paid with that payment rather
+ *  than standing as a month of its own (the owner's rule: "$48,629.10 at 6.49%
+ *  with $912.40/mo pays off in 63 payments", not 64). */
 export function payoff(balance: number, aprPct: number, payment: number): { months: number; totalInterest: number } | null {
   let b = balance, months = 0, totalInterest = 0;
   while (b > 0.005) {
-    const i = monthInterest(b, aprPct);
+    const i = (b * aprPct) / 100 / 12;
     if (payment <= i) return null; // never pays off
-    const p = Math.min(payment - i, b);
-    b = cents(b - p);
-    totalInterest = cents(totalInterest + i);
+    let p = Math.min(payment - i, b);
+    const left = b - p;
+    if (left > 0 && left < payment / 2) p = b;
+    b -= p;
+    totalInterest += i;
     if (++months > 1200) return null;
   }
-  return { months, totalInterest };
+  return { months, totalInterest: cents(totalInterest) };
 }
 
 // ── net worth ───────────────────────────────────────────────────────────────

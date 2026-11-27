@@ -111,7 +111,7 @@ scenario({
   id: "money.loan-payments",
   title: "Loan payments: interest once a month, principal off the balance, reversal restores everything",
   area: "Liabilities",
-  covers: ["liabilityPayment.create.api", "liabilityPayment.delete.api", "liability.edit.api"],
+  covers: ["liabilityPayment.create.api", "liabilityPayment.delete.api", "liability.edit.api", "liability.delete.api"],
   requires: ["action", "db", "derived"],
   run: async (ctx) => {
     const balance = ctx.int(80, 200) * 100;
@@ -185,6 +185,20 @@ scenario({
     ctx.near("db", prof3?.fields?.balance, balance, "refused payments left the balance alone");
     ctx.check("db", (await ctx.db.count("liability_payments", `liability_profile_id=eq.${loan.id}`)) === 0, "and wrote no ledger row");
     void month;
+
+    // deleting the debt takes its ledger and its calendar dates, and the debt total follows
+    const last = must(await ctx.api("POST", `/liabilities/${loan.id}/payments`, { amount: 120, paymentDate: ctx.today }), "one more payment");
+    const debtBefore = (await snapshot(ctx)).totalLiabilities;
+    const owed = (await ctx.db.row("profiles", loan.id)).fields.balance;
+    const del = await ctx.api("DELETE", `/profiles/${loan.id}`);
+    ctx.check("action", del.ok, "the debt is deleted", `${del.status}`);
+    const lRow = await ctx.db.row("profiles", loan.id);
+    ctx.check("db", lRow === null || lRow.deleted_at != null, "its row is deleted or marked deleted");
+    const orphan = await ctx.db.rows("liability_payments", `id=eq.${last.id}`);
+    ctx.check("db", orphan.length === 0 || lRow !== null, "no payment row is left pointing at a debt that has no row", `${orphan.length} payment row(s), debt row ${lRow === null ? "absent" : "kept as deleted"}`);
+    ctx.near("derived", O.cents(debtBefore - (await snapshot(ctx)).totalLiabilities), owed, "total debt fell by the deleted debt's balance");
+    const dates = listOf(must(await ctx.api("GET", `/calendar/timeline?start=${ctx.today}&end=${O.addDays(ctx.today, 70)}`), "timeline")).filter((i: any) => i.sourceId === loan.id);
+    ctx.check("derived", dates.length === 0, "its payment dates left the calendar", `${dates.length} left`);
   },
 });
 
