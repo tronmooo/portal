@@ -16,7 +16,9 @@ describe("chat navigate tool reaches the router", () => {
     for (const page of pages) {
       // The tool's REAL result, exactly as the turn's `results` carries it.
       const result = await executeTool("navigate", { page, profileId: "p-1" }, "user-1");
-      expect(result.navigateTo, `navigate(${page}) result`).toBe(page);
+      // An AI Mode named by a name the account doesn't have opens the list of modes instead.
+      if (page === "ai_mode") expect(["ai_mode", "ai_modes"]).toContain(result.navigateTo);
+      else expect(result.navigateTo, `navigate(${page}) result`).toBe(page);
       const route = chatNavigationRoute([result]);
       if (page === "chat") expect(route).toBeNull();
       else expect(route, `route for page "${page}"`).toMatch(/^\/[a-z]/);

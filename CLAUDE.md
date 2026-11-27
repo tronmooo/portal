@@ -1556,6 +1556,20 @@ returns a proposal reviewed and saved like a generated one (journal off).
 Three reports from different people hide an entry. A missing table is "not
 available yet" (503), never an empty library.
 *Guard:* `tests/ai-mode-library.test.ts`.
+**AM9. A mode is reachable from everywhere, and acts through the main chat.**
+The main chat's `navigate` tool opens a mode by its spoken name
+(`matchModeByName`; an unknown name opens the list and names the modes), the
+list, or the builder with the user's words (`create_ai_mode` →
+`#/workspace/modes?new=1&describe=…`, which builds a PROPOSAL at once — the
+chat itself creates nothing). Search lists the person's modes and "AI Modes"
+(shortcut M); Settings has an AI Modes tile; a check-in's notification opens
+its mode. A mode's own AI changes nothing (AM5): under each reply,
+"Do this in Portol chat" hands the question to the main chat
+(`portol_chat_prefill`), where the app's checks apply. A backup
+(`GET /api/export`) carries `aiModes`; a restore adds the ones the account
+lacks by name.
+*Guards:* `tests/ai-modes-connected.test.ts`, `tests/chat-navigation.test.ts`.
+*Live check (deployed app, smoke account, phone touch):* `npx tsx tests/live-ai-modes-check.ts`.
 *Not built (2026-11-27):* premium (paid) modes; a mode that creates forms
 other than a tracker log, or a dashboard outside its own tabs; editing an
 installed mode's published original; moderation beyond reports.

@@ -5027,16 +5027,18 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Navigation ---
   {
     name: "navigate",
-    description: "Navigate the UI to a specific page. Use when user says 'go to...', 'show me...', 'open dashboard', etc.",
+    description: "Navigate the UI to a specific page. Use when user says 'go to...', 'show me...', 'open dashboard', etc. AI Modes are the user's own AI workspaces (e.g. 'Fitness Coach', 'Life Coach'): 'open my fitness coach' → page ai_mode with modeName; 'show my AI modes' → ai_modes; 'make/build/create an AI mode that …' or 'I want an AI that …' → create_ai_mode with description (the user's own words; it opens the mode builder, which proposes a mode for them to review — nothing is created until they save).",
     input_schema: {
       type: "object" as const,
       properties: {
         page: {
           type: "string",
-          enum: ["dashboard", "chat", "trackers", "profiles", "profile_detail"],
+          enum: ["dashboard", "chat", "trackers", "profiles", "profile_detail", "ai_modes", "ai_mode", "create_ai_mode"],
           description: "Page to navigate to",
         },
         profileId: { type: "string", description: "Profile ID (only for profile_detail)" },
+        modeName: { type: "string", description: "Name of one of the user's AI modes (only for ai_mode)" },
+        description: { type: "string", description: "What the new AI mode should do, in the user's words (only for create_ai_mode)" },
       },
       required: ["page"],
     },
@@ -13034,8 +13036,31 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       return doc;
     }
 
-    case "navigate":
+    case "navigate": {
+      // AI Modes (shared/ai-modes.ts): opening one resolves its NAME against
+      // the stored list; making one opens the builder with the user's words —
+      // the builder proposes and the user saves (AM4), so nothing is written here.
+      if (input.page === "ai_mode") {
+        const { readModes } = await import("./ai-modes");
+        const { matchModeByName } = await import("@shared/ai-modes");
+        let modes: Awaited<ReturnType<typeof readModes>>;
+        try { modes = await readModes(); }
+        catch { return { navigateTo: "ai_modes", message: "I couldn't read your AI modes just now — opening the list." }; }
+        const hit = matchModeByName(modes, String(input.modeName || ""));
+        if (!hit) {
+          return modes.length
+            ? { navigateTo: "ai_modes", message: `No AI mode called "${String(input.modeName || "").slice(0, 60)}". Your modes: ${modes.map((m) => m.name).join(", ")}.` }
+            : { navigateTo: "ai_modes", message: "You don't have any AI modes yet. Opening AI Modes, where you can build one." };
+        }
+        return { navigateTo: "ai_mode", modeId: hit.id, message: `Opening ${hit.name}.` };
+      }
+      if (input.page === "create_ai_mode") {
+        const said = String(input.description || input.__userMessage || "").replace(/\s+/g, " ").trim().slice(0, 600);
+        return { navigateTo: "create_ai_mode", description: said, message: "Opening the AI mode builder with your description. Review what it proposes, change anything, then Save." };
+      }
+      if (input.page === "ai_modes") return { navigateTo: "ai_modes", message: "Opening your AI modes." };
       return { navigateTo: input.page, profileId: input.profileId };
+    }
 
     case "set_dashboard_scope": {
       // Resolve the target so the CLIENT can apply the profile filter. The

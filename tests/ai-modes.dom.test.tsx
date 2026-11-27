@@ -261,3 +261,29 @@ describe("the library", () => {
     await waitFor(() => expect(writes()).toEqual([{ method: "POST", url: "/api/workspace/modes/library/11111111-1111-4111-8111-111111111111/report", body: undefined }]));
   });
 });
+
+describe("connected to the rest of the app", () => {
+  it("a mode's reply can hand the question to Portol's main chat, which does the saving", async () => {
+    const coach = modeFromTemplate(MODE_TEMPLATES.find((t) => t.key === "life-coach")!, [], new Date());
+    modes = [coach];
+    answers["/api/workspace/modes/chat"] = { answer: "Sounds good — tap below to add it.", note: "", remembered: [] };
+    mount(<ModeWorkspacePage params={{ id: "life-coach" }} />);
+    fireEvent.click(await screen.findByTestId("workspace-tab-chat"));
+    fireEvent.change(await screen.findByTestId("mode-chat-input"), { target: { value: "Add a task to call the dentist tomorrow" } });
+    fireEvent.click(screen.getByTestId("mode-chat-send"));
+    fireEvent.click(await screen.findByTestId("mode-chat-handoff"));
+    expect(sessionStorage.getItem("portol_chat_prefill")).toBe("Add a task to call the dentist tomorrow");
+    expect(navigated).toEqual(["/chat"]);
+    expect(writes()).toEqual([]); // the mode itself wrote nothing
+  });
+
+  it("words handed over from the main chat are built into a proposal at once — still nothing saved", async () => {
+    const reflection = modeFromTemplate(MODE_TEMPLATES.find((t) => t.key === "reflection")!, [], new Date());
+    answers["/api/workspace/modes/generate"] = { mode: reflection, suggestJournal: true, by: "ai" };
+    window.location.hash = `#/workspace/modes?new=1&describe=${encodeURIComponent("An AI that helps me with my moods")}`;
+    mount(<ModesWorkspacePage />);
+    await screen.findByTestId("mode-review");
+    expect(calls.find((c) => c.url === "/api/workspace/modes/generate")!.body).toEqual({ description: "An AI that helps me with my moods" });
+    expect(writes()).toEqual([]);
+  });
+});

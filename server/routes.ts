@@ -10293,6 +10293,9 @@ Rules:
         habits, obligations, artifacts, journalEntries, memories, domains, captures,
         incomes, goals, paychecks, budgets: budgetsByMonth, liabilityPayments,
         assetPartyLinks, liabilityProfileLinks,
+        // The person's own AI Modes (shared/ai-modes.ts): their setup, so a
+        // restore brings them back. Conversations and memories stay out.
+        aiModes: await import("./ai-modes").then((m) => m.readModes()).catch(() => []),
       };
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${getUserToday(getTimezone(req))}.json"`);
@@ -10726,6 +10729,21 @@ Rules:
             projections: c.projections, clarifyingQuestion: c.clarifyingQuestion,
             ownerProfileId: remap(c.ownerProfileId ? [c.ownerProfileId] : [])[0] ?? importSelf?.id ?? null,
           }));
+        }
+      }
+
+      // AI Modes: one the account already has by name is kept as it is.
+      if (Array.isArray(data.aiModes) && data.aiModes.length > 0) {
+        const modesApi = await import("./ai-modes");
+        const have = new Set((await modesApi.readModes()).map((m) => m.name.toLowerCase()));
+        for (const m of data.aiModes.slice(0, 40)) {
+          const name = String(m?.name || "").trim();
+          if (!name || have.has(name.toLowerCase())) continue;
+          have.add(name.toLowerCase());
+          await tryImport("aiModes", name, async () => {
+            const out = await modesApi.createMode(m);
+            if (!out.ok) throw new Error(out.error);
+          });
         }
       }
 

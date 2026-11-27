@@ -327,6 +327,17 @@ export function sanitizeAiMode(raw: unknown, opts: { id?: string; now?: Date; ke
   };
 }
 
+/** The mode a spoken name points at ("my fitness coach" → Fitness Coach), or null. */
+export function matchModeByName<T extends Pick<AiMode, "id" | "name">>(modes: readonly T[], said: string): T | null {
+  const norm = (x: string) => x.toLowerCase().replace(/\b(my|the|mode|ai|app|workspace)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
+  const want = norm(said);
+  if (!want) return null;
+  return modes.find((m) => norm(m.name) === want)
+    ?? modes.find((m) => norm(m.name).includes(want) || want.includes(norm(m.name)))
+    ?? modes.find((m) => want.split(" ").filter((w) => w.length > 2).every((w) => norm(m.name).includes(w)))
+    ?? null;
+}
+
 /** A fresh id for a new mode, from its name, unique among `existing`. */
 export function newModeId(existing: ReadonlyArray<Pick<AiMode, "id">>, name: string): string {
   const base = slug(name, 28) || "mode";

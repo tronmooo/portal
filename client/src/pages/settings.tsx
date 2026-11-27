@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-shell";
-import { Settings as SettingsIcon } from "lucide-react";
+import { Settings as SettingsIcon, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -37,6 +37,7 @@ import { localTodayISO } from "@/lib/dates";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { hashNavigate } from "@/lib/hashNavigate";
+import { useAiModes } from "@/lib/ai-modes-client";
 
 function PWAInstallCard() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -259,6 +260,7 @@ function GoogleCalendarRow() {
 export default function SettingsPage() {
   useEffect(() => { document.title = "Settings — Portol"; }, []);
   const { user, signOut } = useAuth();
+  const aiModes = useAiModes();
   const { mode, resolvedMode, setMode, primary, setPreset, setHue } = useTheme();
   // Pull current hue from the live --primary CSS var so the slider always reflects what's applied.
   const currentHue = (() => {
@@ -537,6 +539,11 @@ export default function SettingsPage() {
                 <StatCard icon={ListTodo} label="Active Tasks" hint="Open · all profiles" value={stats?.activeTasks || 0} href="/dashboard/tasks" accent="262 65% 62%" testId="stat-active-tasks" />
                 <StatCard icon={Activity} label="Trackers" hint="All profiles" value={stats?.totalTrackers || 0} href="/linked" accent="173 60% 44%" testId="stat-trackers" />
                 <StatCard icon={FileText} label="Documents" hint="Across all profiles" value={allDocs.length} href="/artifacts?type=documents" accent="25 80% 54%" testId="stat-documents" />
+              </div>
+              {/* Custom AI Modes (shared/ai-modes.ts): manage them, build one, browse the library. */}
+              <div className="mt-2">
+                <StatCard icon={Layers} label="AI Modes" hint="Your own AI workspaces — build, manage, browse the library"
+                  value={aiModes.failed ? "Couldn't load" : aiModes.modes ? aiModes.modes.length : "…"} href="/workspace/modes" accent="262 83% 66%" testId="stat-ai-modes" />
               </div>
             </div>
 

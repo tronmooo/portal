@@ -394,8 +394,10 @@ export function MemoryPanel({ app, view, onChanged, onClose }: { app: MemoryApp;
  * this sitting only, and the screen says which.
  */
 export function AiConversation({
-  app, ask, intro, suggestions, placeholder, boundary, testId, footer, memoryApp, greet, wrapUp, onSaveReply, accessLine, sendNow,
+  app, ask, intro, suggestions, placeholder, boundary, testId, footer, memoryApp, greet, wrapUp, onSaveReply, accessLine, sendNow, onHandoff,
 }: {
+  /** Offers "Do this in Portol chat" under each reply: hands the question that led to it to the main chat, which can act on records. */
+  onHandoff?: (text: string) => void;
   /** In place of the workspace AI-access line (a custom AI Mode carries its own switches). */
   accessLine?: ReactNode;
   /** A message to send as soon as it changes (a suggested conversation tapped on another tab). */
@@ -547,6 +549,12 @@ export function AiConversation({
                   </span>
                 )}
                 {t.note && <span className="block mt-1.5 text-[11px] opacity-70">{t.note}</span>}
+                {t.role === "assistant" && onHandoff && i > 0 && turns[i - 1]?.role === "user" && (
+                  <button type="button" onClick={() => onHandoff(turns[i - 1].content)}
+                    className="block mt-1.5 text-[11px] underline opacity-80" data-testid={`${testId}-handoff`}>
+                    Do this in Portol chat
+                  </button>
+                )}
                 {t.role === "assistant" && onSaveReply && (
                   <button type="button" disabled={!!savedReplies[i]} onClick={() => void saveReply(i, t.content)}
                     className="block mt-1.5 text-[11px] underline opacity-80 disabled:no-underline disabled:opacity-60" data-testid={`${testId}-save-reply`}>

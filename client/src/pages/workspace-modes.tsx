@@ -7,7 +7,7 @@
 //    the fixed rules) proposes a whole mode → review and change every part →
 //    Save. Generating writes nothing (W5). A template or an imported file
 //    goes through the same review.
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Copy, Download, Flag, GripVertical, Layers, Library, Loader2, Pin, PinOff, Plus, Search, Sparkles, Upload, Wand2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDragReorder } from "@/components/modes/useDragReorder";
@@ -158,7 +158,9 @@ export default function ModesWorkspacePage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Create
-  const [description, setDescription] = useState("");
+  // A description handed over from the main chat ("make me an AI that …").
+  const handed = (query.get("describe") || "").trim().slice(0, 1500);
+  const [description, setDescription] = useState(handed);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const [draft, setDraft] = useState<ModeProposal | null>(null);
@@ -183,6 +185,16 @@ export default function ModesWorkspacePage() {
       setDraft({ mode, suggestJournal: !!j.suggestJournal, by: j.by === "rules" ? "rules" : "ai" });
     } catch (err) { setGenError(aiErrorText(err)); } finally { setGenerating(false); }
   };
+
+  // Asked for in the chat: build the proposal at once (a proposal writes
+  // nothing — AM4; the person still reviews and saves).
+  const autoBuilt = useRef(false);
+  useEffect(() => {
+    if (!handed || autoBuilt.current) return;
+    autoBuilt.current = true;
+    void generate(handed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const save = async () => {
     if (!draft || saving) return;

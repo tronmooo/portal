@@ -399,6 +399,12 @@ export default function ModeWorkspacePage({ params }: { params?: { id?: string }
                 suggestions={mode.prompts}
                 placeholder={`Talk to ${mode.name}…`}
                 sendNow={sendNow}
+                onHandoff={(text) => {
+                  // The main chat is where records are written (it has the app's
+                  // checks); the mode's own AI changes nothing (AM5).
+                  try { sessionStorage.setItem("portol_chat_prefill", text); } catch { /* the chat opens empty */ }
+                  hashNavigate("/chat");
+                }}
                 ask={async (turns) => {
                   const r = await apiRequest("POST", "/api/workspace/modes/chat", { modeId: mode.id, messages: turns });
                   const j = await r.json();

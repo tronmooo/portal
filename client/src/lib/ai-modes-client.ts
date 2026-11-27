@@ -12,7 +12,7 @@ import { parseAiModes, type AiMode } from "@shared/ai-modes";
 
 export const AI_MODES_KEY = ["/api/workspace/modes"] as const;
 
-export function useAiModes() {
+export function useAiModes(opts: { enabled?: boolean } = {}) {
   const qc = useQueryClient();
   const query = useQuery<AiMode[]>({
     queryKey: AI_MODES_KEY,
@@ -23,6 +23,7 @@ export function useAiModes() {
       return parseAiModes(j.modes);
     },
     staleTime: 60_000,
+    enabled: opts.enabled ?? true,
   });
   /** Run one change; the server's list replaces the cached one. Returns the mode it names, if any. */
   const run = useCallback(async (method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<AiMode | null> => {

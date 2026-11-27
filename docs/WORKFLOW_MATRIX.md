@@ -9,14 +9,14 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 | | Total | No test at all | Not exercised on the deployed app |
 |---|---:|---:|---:|
-| API write routes | 209 | 39 | 85 |
-| API read routes | 117 | 33 | 57 |
+| API write routes | 209 | 36 | 75 |
+| API read routes | 117 | 33 | 55 |
 | Chat tools that write | 111 | 0 | 0 |
 | Chat tools that read | 42 | 0 | 0 |
 
 Screens: 32 pages (51 routes). 5 are opened by no live browser check, 5 by none in a touch (phone) context.
 Write routes no screen calls: 48 (chat-only, script-only or dead).
-Test files read: 662. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 664. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -38,7 +38,7 @@ Test files read: 662. Test files no config runs: 2 (`tests/critical-flows.test.t
 | Wellness dashboard | 1 | 0 | 1 | 1 | 0 | 0 |
 | Executive dashboard & alerts | 3 | 0 | 1 | 10 | 9 | 0 |
 | Documents & artifacts | 20 | 5 | 7 | 7 | 12 | 0 |
-| Workspaces | 30 | 9 | 23 | 6 | 0 | 0 |
+| Workspaces | 30 | 6 | 13 | 6 | 0 | 0 |
 | Journal & notes | 9 | 0 | 3 | 4 | 9 | 0 |
 | Record details | 6 | 0 | 6 | 4 | 3 | 0 |
 | AI chat | 9 | 2 | 4 | 5 | 22 | 0 |
@@ -53,7 +53,7 @@ reached only by clicking through is not detected).
 |---|---|---:|---:|---:|
 | ArtifactsPage | `/artifacts` `/dashboard/documents` `/dashboard/artifacts` | 4 | 3 | 5 |
 | CalendarPage | `/calendar` | 6 | 1 | 1 |
-| ChatPage | `/chat` | 7 | 3 | **0** |
+| ChatPage | `/chat` | 7 | 4 | **0** |
 | DashboardPage | `/dashboard` `/dashboard/executive` `/dashboard/daily` | 4 | 1 | **0** |
 | DetailsPage | `/details` | 1 | 1 | **0** |
 | DocumentDetailPage | `/documents/:id` | 1 | 1 | 2 |
@@ -76,7 +76,7 @@ reached only by clicking through is not detected).
 | ProfilesListPage | `/profiles/list` | 1 | 1 | **0** |
 | ResetPasswordPage | `/reset-password` | **0** | **0** | **0** |
 | RootRedirect | `/` | 2 | 1 | **0** |
-| SettingsPage | `/settings` | 1 | 1 | 1 |
+| SettingsPage | `/settings` | 1 | 2 | 1 |
 | ShareViewPage | `/share/:token` | 1 | 1 | **0** |
 | TasksPage | `/dashboard/tasks` `/tasks` | 2 | 1 | 3 |
 | TermsPage | `/terms` | 1 | 1 | **0** |
@@ -106,13 +106,13 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/auth/signout` | yes | **0** | **0** |
 | `POST /api/auth/signup` | yes | **0** | **0** |
 | `DELETE /api/data/all` | yes | 2 | 1 |
-| `GET /api/export` | yes | 2 | 1 |
-| `POST /api/import` | yes | 2 | **0** |
+| `GET /api/export` | yes | 3 | 2 |
+| `POST /api/import` | yes | 3 | **0** |
 | `POST /api/import/bank-csv` | yes | **0** | **0** |
 | `GET /api/onboarding-status` | yes | **0** | 1 |
 | `POST /api/onboarding/complete` | yes | **0** | **0** |
 | `GET /api/preferences/:key` | yes | 11 | 6 |
-| `PUT /api/preferences/:key` | yes | 5 | 5 |
+| `PUT /api/preferences/:key` | yes | 5 | 6 |
 | `GET /api/public/artifacts/:token` | yes | 1 | 1 |
 
 ### Profiles
@@ -374,9 +374,9 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `GET /api/tasks` | yes | 27 | 15 |
-| `POST /api/tasks` | yes | 7 | 15 |
-| `DELETE /api/tasks/:id` | yes | 4 | 18 |
+| `GET /api/tasks` | yes | 27 | 16 |
+| `POST /api/tasks` | yes | 7 | 16 |
+| `DELETE /api/tasks/:id` | yes | 4 | 19 |
 | `GET /api/tasks/:id` | yes | 5 | **0** |
 | `PATCH /api/tasks/:id` | yes | 7 | 2 |
 | `POST /api/tasks/:id/occurrence` | yes | 3 | 1 |
@@ -472,11 +472,11 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/tracker-entries/:entryId/enrich` | **no** | **0** | **0** |
 | `POST /api/tracker-entries/:entryId/rescale` | yes | **0** | **0** |
 | `GET /api/trackers` | yes | 13 | 22 |
-| `POST /api/trackers` | yes | 3 | 12 |
-| `DELETE /api/trackers/:id` | yes | 1 | 13 |
+| `POST /api/trackers` | yes | 3 | 13 |
+| `DELETE /api/trackers/:id` | yes | 1 | 14 |
 | `GET /api/trackers/:id` | yes | 1 | 3 |
 | `PATCH /api/trackers/:id` | yes | 1 | 2 |
-| `POST /api/trackers/:id/entries` | yes | 3 | 5 |
+| `POST /api/trackers/:id/entries` | yes | 3 | 6 |
 | `DELETE /api/trackers/:id/entries/:entryId` | yes | **0** | 4 |
 | `PATCH /api/trackers/:id/entries/:entryId` | yes | 2 | 1 |
 | `POST /api/trackers/migrate-to-self` | **no** | 2 | **0** |
@@ -593,26 +593,26 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/workspace/journal/prompts` | yes | **0** | **0** |
 | `POST /api/workspace/journal/reflect` | yes | 1 | **0** |
 | `DELETE /api/workspace/memory/:app` | **no** | 1 | 2 |
-| `GET /api/workspace/memory/:app` | yes | 2 | 2 |
+| `GET /api/workspace/memory/:app` | yes | 2 | 3 |
 | `DELETE /api/workspace/memory/:app/conversation` | yes | 2 | **0** |
 | `DELETE /api/workspace/memory/:app/items/:id` | **no** | 2 | 1 |
 | `POST /api/workspace/memory/:app/remember` | **no** | 1 | 1 |
-| `GET /api/workspace/modes` | yes | 2 | **0** |
-| `POST /api/workspace/modes` | **no** | 2 | **0** |
-| `DELETE /api/workspace/modes/:id` | **no** | 1 | **0** |
-| `PATCH /api/workspace/modes/:id` | **no** | 2 | **0** |
+| `GET /api/workspace/modes` | yes | 2 | 1 |
+| `POST /api/workspace/modes` | **no** | 2 | 1 |
+| `DELETE /api/workspace/modes/:id` | **no** | 1 | 1 |
+| `PATCH /api/workspace/modes/:id` | **no** | 2 | 1 |
 | `GET /api/workspace/modes/:id/digest` | yes | **0** | **0** |
 | `POST /api/workspace/modes/:id/duplicate` | **no** | 1 | **0** |
-| `POST /api/workspace/modes/chat` | yes | 1 | **0** |
-| `POST /api/workspace/modes/generate` | yes | 1 | **0** |
-| `POST /api/workspace/modes/insights` | yes | 1 | **0** |
-| `GET /api/workspace/modes/library` | yes | 1 | **0** |
-| `POST /api/workspace/modes/library` | yes | **0** | **0** |
-| `DELETE /api/workspace/modes/library/:id` | yes | **0** | **0** |
-| `POST /api/workspace/modes/library/:id/install` | yes | **0** | **0** |
+| `POST /api/workspace/modes/chat` | yes | 1 | 1 |
+| `POST /api/workspace/modes/generate` | yes | 1 | 1 |
+| `POST /api/workspace/modes/insights` | yes | 1 | 1 |
+| `GET /api/workspace/modes/library` | yes | 1 | 1 |
+| `POST /api/workspace/modes/library` | yes | **0** | 1 |
+| `DELETE /api/workspace/modes/library/:id` | yes | **0** | 1 |
+| `POST /api/workspace/modes/library/:id/install` | yes | **0** | 1 |
 | `POST /api/workspace/modes/library/:id/report` | yes | 1 | **0** |
 | `POST /api/workspace/modes/order` | **no** | 1 | **0** |
-| `POST /api/workspace/modes/revise` | yes | 1 | **0** |
+| `POST /api/workspace/modes/revise` | yes | 1 | 1 |
 | `POST /api/workspace/notes/assist` | yes | **0** | 1 |
 | `POST /api/workspace/notes/categorize` | yes | **0** | **0** |
 | `POST /api/workspace/notes/chat` | yes | **0** | 1 |
@@ -678,7 +678,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 |---|---|---:|---:|
 | `POST /api/ai-transform` | yes | 1 | **0** |
 | `POST /api/ai/summary` | yes | 2 | 1 |
-| `POST /api/chat` | yes | 4 | 23 |
+| `POST /api/chat` | yes | 4 | 24 |
 | `POST /api/chat/confirm-extraction` | yes | 9 | **0** |
 | `GET /api/chat/runs/:requestId` | yes | **0** | **0** |
 | `GET /api/chat/warmup` | yes | **0** | **0** |
@@ -693,11 +693,11 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `search` | read | 12 | 8 |
+| `search` | read | 13 | 8 |
 | `get_summary` | read | 2 | 1 |
 | `recall_memory` | read | 2 | 1 |
 | `save_memory` | write | 2 | 1 |
-| `navigate` | read | 4 | 7 |
+| `navigate` | read | 5 | 7 |
 | `link_entities` | write | 3 | 1 |
 | `get_related` | read | **0** | 1 |
 | `delete_memory` | write | 1 | 1 |

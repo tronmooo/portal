@@ -11,6 +11,7 @@ const PAGE_ROUTES: Record<string, string> = {
   dashboard: "/dashboard",
   trackers: "/trackers",
   profiles: "/profiles",
+  ai_modes: "/workspace/modes",
 };
 
 /**
@@ -26,6 +27,15 @@ export function chatNavigationRoute(results: unknown): string | null {
     if (page === "profile_detail") {
       const id = (r as { profileId?: unknown }).profileId;
       return typeof id === "string" && id ? `/profiles/${encodeURIComponent(id)}` : "/profiles";
+    }
+    // AI Modes (shared/ai-modes.ts): one mode by id; the builder with the words.
+    if (page === "ai_mode") {
+      const id = (r as { modeId?: unknown }).modeId;
+      return typeof id === "string" && /^[a-z0-9][a-z0-9-]{0,39}$/.test(id) ? `/workspace/mode/${id}` : "/workspace/modes";
+    }
+    if (page === "create_ai_mode") {
+      const said = String((r as { description?: unknown }).description ?? "").trim().slice(0, 600);
+      return said ? `/workspace/modes?new=1&describe=${encodeURIComponent(said)}` : "/workspace/modes?new=1";
     }
     if (PAGE_ROUTES[page]) return PAGE_ROUTES[page];
   }
