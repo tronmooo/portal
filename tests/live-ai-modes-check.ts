@@ -141,7 +141,8 @@ async function main() {
 
       await page.goto(`${UI_BASE}/#/chat`);
       await page.waitForSelector(t("chat-modes"), { timeout: 30000 });
-      check(await page.locator(t(`button-ai-mode-${modeId}`)).count() === 1, "the pinned mode is in the chat home's modes row");
+      // The modes list loads after the home's own figures; the tile joins the row when it lands.
+      check(await page.waitForSelector(t(`button-ai-mode-${modeId}`), { timeout: 20000 }).then(() => true, () => false), "the pinned mode is in the chat home's modes row");
       check(await page.locator(t("chat-composer-inline")).count() === 1 && await page.locator(t("chat-composer-pinned")).count() === 0, "the chat box is in the home's flow, not pinned");
       await page.tap(t("button-modes-more"));
       await page.waitForSelector(t(`modes-sheet-open-${modeId}`), { timeout: 15000 });
