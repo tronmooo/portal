@@ -355,7 +355,7 @@ scenario({
   title: "Habits and the journal by hand (mouse and touch): made, checked, written and deleted — each stored once",
   area: "Browser",
   browser: true,
-  covers: ["habit.create.ui", "habit.complete.ui", "journal.create.ui", "journal.delete.ui"],
+  covers: ["habit.create.ui", "habit.complete.ui", "journal.create.ui", "journal.delete.ui", "journal.cancel.ui"],
   requires: ["action", "db", "screen"],
   run: async (ctx) => {
     for (const s of surfaces(ctx)) {
@@ -388,8 +388,12 @@ scenario({
       // a journal entry, then delete it with two taps
       const text = `${ctx.tag} ${s.surface}: walked to the harbour and felt rested.`;
       await goto(s, "/journal", "");
+      ctx.step(L(`open #/journal, press "New entry", choose "Free write", type the text, press Save`));
       const free = s.page.locator(t("input-journal-free-text")).locator("visible=true").first();
-      if (!(await free.isVisible().catch(() => false))) await s.press(t("button-new-journal")).catch(() => undefined);
+      if (!(await free.isVisible().catch(() => false))) {
+        await s.press(t("button-new-journal"));
+        await s.press(t("btn-journal-mode-free"));
+      }
       await free.waitFor({ timeout: 15000 });
       await free.fill(text);
       await s.press(t("button-save-journal-free"));
@@ -405,16 +409,26 @@ scenario({
         const there = await del.waitFor({ timeout: 12000 }).then(() => true).catch(() => false);
         ctx.check("screen", there, L("the entry is listed without a reload"));
         if (there) {
-          await (s.surface === "phone" ? del.tap() : del.click());
-          await sleep(1200);
+          // Delete asks first (a confirmation dialog): Cancel keeps the entry, Delete removes it.
+          const dialog = s.page.getByRole("alertdialog");
+          const tapIt = async (loc: any) => (s.surface === "phone" ? loc.tap() : loc.click());
+          await tapIt(del);
+          await dialog.waitFor({ timeout: 8000 });
           const afterOne = await ctx.db.row("journal_entries", jid);
-          const armedOnly = ctx.check("db", !!afterOne && afterOne.deleted_at == null, L("one tap on Delete only arms it: the row is still there"));
-          if (!armedOnly) ctx.finding({ severity: "bug", title: "The journal's Delete removes an entry on the first tap", detail: `${s.surface}: the row was deleted by a single tap (Rule 8: two taps)` });
-          if (armedOnly) {
-            await (s.surface === "phone" ? del.tap() : del.click()).catch(() => undefined);
-            const goneRows = await waitRows(ctx, "journal_entries", `id=eq.${jid}&deleted_at=is.null`, (n) => n === 0, 10000);
-            ctx.check("db", goneRows.length === 0, L("the second tap deletes it"));
-          }
+          const asksFirst = ctx.check("db", !!afterOne && afterOne.deleted_at == null, L("pressing the trash icon only asks: the row is still there"));
+          if (!asksFirst) ctx.finding({ severity: "bug", title: "The journal's Delete removes an entry before it is confirmed", detail: `${s.surface}: the row was deleted by the first press (Rule 8)` });
+          await tapIt(dialog.getByRole("button", { name: /cancel/i }));
+          await sleep(1000);
+          const afterCancel = await ctx.db.row("journal_entries", jid);
+          ctx.check("db", !!afterCancel && afterCancel.deleted_at == null, L("Cancel leaves the entry exactly as it was"));
+          ctx.check("screen", await s.page.locator(t(`card-journal-${jid}`)).first().isVisible().catch(() => false), L("and it is still listed"));
+          await tapIt(del);
+          await dialog.waitFor({ timeout: 8000 });
+          await tapIt(dialog.getByRole("button", { name: /delete/i }));
+          const goneRows = await waitRows(ctx, "journal_entries", `id=eq.${jid}&deleted_at=is.null`, (n) => n === 0, 10000);
+          ctx.check("db", goneRows.length === 0, L("confirming deletes the row"));
+          const off = await s.page.locator(t(`card-journal-${jid}`)).first().waitFor({ state: "detached", timeout: 8000 }).then(() => true).catch(() => false);
+          ctx.check("screen", off, L("and it leaves the list without a reload"));
         }
       }
       const problems = s.problems();

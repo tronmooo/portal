@@ -156,6 +156,36 @@ export interface RunOptions {
   ui?: UiHandle; self: { id: string; name: string };
 }
 
+// The run's own requests behave like the app's: each carries the data version
+// the last answers reported (X-Data-Version after a write, X-Server-Data-Version
+// on a read, `dataVersion` in a chat answer), so a read made right after a
+// write is never served another server instance's pre-write cache. Without it
+// the run was "another device" to itself and could read up to ~2 s behind —
+// a failure of the test client, not of the app (known.ts has the real limit).
+const seenVersions: Record<string, number> = {};
+function noteVersions(raw: unknown): void {
+  for (const part of String(raw ?? "").split(",")) {
+    const [k, v] = part.split(":");
+    const n = Number(v);
+    if (k && Number.isFinite(n) && n > (seenVersions[k] ?? 0)) seenVersions[k] = n;
+  }
+}
+async function asTheApp(method: string, p: string, body?: any): Promise<ApiResponse> {
+  const token = Object.entries(seenVersions).map(([k, v]) => `${k}:${v}`).join(",");
+  const { response, ms } = await fetchWithRateLimitRetry(`${API_BASE}${p}`, {
+    method,
+    headers: { "Content-Type": "application/json", "X-Timezone": "America/Los_Angeles", Authorization: `Bearer ${await getSmokeToken()}`, ...(token ? { "X-Data-Version": token } : {}) },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await response.text();
+  let data: any = text;
+  try { data = JSON.parse(text); } catch { /* text */ }
+  noteVersions(response.headers.get("x-data-version"));
+  noteVersions(response.headers.get("x-server-data-version"));
+  if (data && typeof data === "object" && typeof data.dataVersion === "string") noteVersions(data.dataVersion);
+  return { status: response.status, ok: response.ok, data, headers: response.headers, ms };
+}
+
 const shape = (p: string) => p.split("?")[0].replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, ":id");
 
 export async function runScenarios(opts: RunOptions): Promise<{ results: ScenarioResult[]; findings: Finding[]; timings: Array<{ call: string; ms: number }> }> {
@@ -184,7 +214,7 @@ export async function runScenarios(opts: RunOptions): Promise<{ results: Scenari
       pick: (xs) => xs[Math.floor(rng() * xs.length)],
       today: laToday(),
       api: async (method, p, body) => {
-        const r = await smokeApi(method, p, body);
+        const r = await asTheApp(method, p, body);
         timings.push({ call: `${method} ${shape(p)}`, ms: r.ms });
         res.steps.push(`${method} /api${p}${body !== undefined ? ` ${JSON.stringify(body).slice(0, 300)}` : ""} → ${r.status}`);
         return r;
