@@ -35,7 +35,9 @@ async function chat(ctx: Ctx, message: string, history: Msg[] = []): Promise<Tur
   console.log(`    · "${message.slice(0, 80)}" → [${tools.join(", ")}] ${reply.replace(/\s+/g, " ").slice(0, 150)}`);
   return { said: message, reply, tools, data: r.data };
 }
-const ASKS_TO_PROCEED = /(shall i|should i|do you want me to|want me to|would you like me to|can you confirm|please confirm|are you sure|confirm)[^?]{0,200}\?\s*$/i;
+// A question that closes the reply, or "are you sure … ?" / "please confirm" anywhere in it
+// (a delete may ask and then add what would be lost).
+const ASKS_TO_PROCEED = /(shall i|should i|do you want me to|want me to|would you like me to|can you confirm|please confirm|are you sure|confirm)[^?]{0,200}\?\s*$|\bare you sure\b[^?]{0,200}\?|\b(please|can you) confirm\b|\bconfirm and i.ll\b|\breply\s+["“']?yes\b/i;
 /** A message, with ONE "yes" when the chat asks before acting (Rule 8): that
  *  is an answer, not a refusal, and the outcome is held to the same check. */
 async function say(ctx: Ctx, message: string): Promise<Turn> {
@@ -96,7 +98,7 @@ const pref = async (ctx: Ctx, key: string): Promise<string | null> => { const ro
 // ─────────────────────────────────────────────────────────────────────────────
 scenario({
   id: "chat-tools.debts",
-  title: "Chat: a recorded payment removed; a debt linked to its collateral, shared and deleted — the ledger, the balance and the totals follow",
+  title: "Chat: a recorded payment removed; a debt linked to its collateral, detached and deleted — the ledger, the balance and the totals follow",
   area: "AI Chat",
   chat: true,
   covers: ["liabilityPayment.delete.chat", "liability.transfer.chat", "liability.cancel.chat", "liability.delete.chat"],
@@ -106,7 +108,6 @@ scenario({
     const T = ctx.tag;
     const loan = await mk(ctx, { type: "liability", type_key: "auto_loan", name: `Vanloan ${T}`, fields: { balance: 12000, monthlyPayment: 300, dueDay: 12, interestRate: 6, _interestRateUnit: "percent" } }, "?deleteHistory=1");
     const camper = await mk(ctx, { type: "asset", name: `Camper ${T}`, fields: { currentValue: 9000 } });
-    const dana = await mk(ctx, { type: "person", name: `Dana ${T}`, fields: { relationship: "partner" } });
     const s0 = await snapshot(ctx);
     const balance = async () => Number((await ctx.db.row("profiles", loan.id))?.fields?.balance);
     const ledger = () => ctx.db.rows("liability_payments", `liability_profile_id=eq.${loan.id}`);
@@ -169,19 +170,6 @@ scenario({
       }
     });
 
-    await part(ctx, "link_liability_owner", async () => {
-      const sA = await snapshot(ctx);
-      const t = await say(ctx, `My "${loan.name}" is split 50/50 between me and "${dana.name}".`);
-      const rows = await ctx.db.rows("liability_profile_links", `liability_profile_id=eq.${loan.id}`);
-      const share = (id: string) => rows.filter((r: any) => r.party_profile_id === id).map((r: any) => Number(r.ownership_percentage));
-      const ok = ctx.check("db", rows.length === 2 && json(share(ctx.self.id)) === "[50]" && json(share(dana.id)) === "[50]", "two owner rows: 50% me, 50% the partner", json(rows.map((r: any) => [r.party_profile_id === dana.id ? "partner" : r.party_profile_id === ctx.self.id ? "me" : r.party_profile_id, r.ownership_percentage, r.role])));
-      report(ctx, ok, "bug", "Chat: a 50/50 split of a debt is not what the owner rows hold", t, json(rows.map((r: any) => [r.party_profile_id, r.ownership_percentage, r.role])), "I16, Rule 9");
-      const b = await balance();
-      ctx.near("derived", (await snapshot(ctx, [dana.id])).totalLiabilities, O.netWorth([], [{ value: b, sharePct: 50 }]).liabilities, "the partner's debt is half the stored balance");
-      ctx.near("derived", (await snapshot(ctx)).totalLiabilities, sA.totalLiabilities, "the household's total debt did not change when the loan was shared");
-      ctx.check("db", (await ctx.db.count("profiles", `name=ilike.*${T}*&deleted_at=is.null`)) === 3, "no profile was created for the split", `${await ctx.db.count("profiles", `name=ilike.*${T}*&deleted_at=is.null`)} tagged profiles`);
-    });
-
     await part(ctx, "delete_profile (a debt)", async () => {
       const b = await balance();
       const sA = await snapshot(ctx);
@@ -193,7 +181,8 @@ scenario({
       const sB = await snapshot(ctx);
       ctx.near("derived", O.cents(sA.totalLiabilities - sB.totalLiabilities), O.cents(b), "total debt fell by the deleted debt's stored balance");
       ctx.near("derived", sB.totalAssetValue, sA.totalAssetValue, "the asset that secured it still counts in full");
-      ctx.check("db", !gone(await ctx.db.row("profiles", camper.id)) && !gone(await ctx.db.row("profiles", dana.id)), "the linked asset and the co-owner were not deleted with it");
+      ctx.check("db", !gone(await ctx.db.row("profiles", camper.id)), "the linked asset was not deleted with it");
+      ctx.check("db", (await ctx.db.count("liability_asset_links", `liability_profile_id=eq.${loan.id}&asset_profile_id=eq.${camper.id}`)) <= 1, "and no second link row appeared for it");
       ctx.same("db", moved(c0, await census(ctx, ["tasks", "events", "trackers", "documents", "artifacts"])), {}, "nothing else was created or removed");
     });
     ctx.check("action", true, "chat answered each message");
@@ -364,11 +353,11 @@ scenario({
 
 // ─────────────────────────────────────────────────────────────────────────────
 scenario({
-  id: "chat-tools.asset-ownership",
-  title: "Chat: a co-owner added and an asset split between two people — the owner rows hold the shares, and each person counts theirs",
+  id: "chat-tools.ownership-shares",
+  title: "Chat: a co-owner added, an asset split and a debt split between two people — the owner rows hold the shares, and each person counts theirs",
   area: "AI Chat",
   chat: true,
-  covers: ["asset.transfer.chat"],
+  covers: ["asset.transfer.chat", "liability.transfer.chat"],
   requires: ["action", "db", "derived"],
   run: async (ctx) => {
     sweepAfter(ctx);
@@ -378,6 +367,8 @@ scenario({
     const asset = await mk(ctx, { type: "asset", name, fields: { currentValue: 900, purchasePrice: 1200 } });
     const assetId: string = asset.id;
     const value = async () => Number((await ctx.db.row("profiles", assetId))?.fields?.currentValue);
+    const loan = await mk(ctx, { type: "liability", type_key: "auto_loan", name: `Vanloan ${T}`, fields: { balance: 12000, monthlyPayment: 300, dueDay: 12, interestRate: 6, _interestRateUnit: "percent" } }, "?deleteHistory=1");
+    const balance = async () => Number((await ctx.db.row("profiles", loan.id))?.fields?.balance);
     await settle();
 
     await part(ctx, "link_asset_owner", async () => {
@@ -396,14 +387,33 @@ scenario({
     await part(ctx, "split_ownership", async () => {
       const v = await value();
       const sA = await snapshot(ctx);
+      const myPct = async () => { const r = await ctx.db.rows("asset_party_links", `asset_profile_id=eq.${assetId}`); return r.length === 0 ? 100 : r.filter((x: any) => x.party_profile_id === ctx.self.id).reduce((n: number, x: any) => n + Number(x.ownership_percentage), 0); };
+      const [pct0, mine0] = [await myPct(), (await snapshot(ctx, [ctx.self.id])).totalAssetValue];
       const t = await say(ctx, `Split ownership of my "${name}" 70/30 between me and "${robin.name}".`);
       const rows = await ctx.db.rows("asset_party_links", `asset_profile_id=eq.${assetId}`);
       const share = (id: string) => rows.filter((r: any) => r.party_profile_id === id).map((r: any) => Number(r.ownership_percentage));
       const ok = ctx.check("db", rows.length === 2 && json(share(ctx.self.id)) === "[70]" && json(share(robin.id)) === "[30]", "exactly two owner rows: 70% me, 30% the partner (the earlier 40% is replaced)", json(rows.map((r: any) => [r.party_profile_id === robin.id ? "partner" : r.party_profile_id === ctx.self.id ? "me" : r.party_profile_id, r.ownership_percentage])));
       report(ctx, ok, "bug", "Chat: a 70/30 split of an asset is not what the owner rows hold", t, json(rows.map((r: any) => [r.party_profile_id, r.ownership_percentage, r.role])), "I16");
       ctx.near("derived", (await snapshot(ctx, [robin.id])).totalAssetValue, O.netWorth([{ value: v, sharePct: 30 }], []).assets, "the partner's assets are 30% of its stored value");
+      ctx.near("derived", O.cents((await snapshot(ctx, [ctx.self.id])).totalAssetValue - mine0), O.cents((v * (70 - pct0)) / 100), `my own assets hold 70% of it (I held ${pct0}% before)`);
       ctx.near("derived", (await snapshot(ctx)).totalAssetValue, sA.totalAssetValue, "the household still counts the whole asset");
       ctx.check("db", (await ctx.db.count("profiles", "type=eq.person&deleted_at=is.null&name=ilike.*" + T + "*")) === 1, "no second person was created for the split");
+    });
+
+    await part(ctx, "link_liability_owner / split_ownership (a debt, 50/50)", async () => {
+      const sA = await snapshot(ctx);
+      const mine0 = (await snapshot(ctx, [ctx.self.id])).totalLiabilities;
+      const t = await say(ctx, `My "${loan.name}" is split 50/50 between me and "${robin.name}".`);
+      const rows = await ctx.db.rows("liability_profile_links", `liability_profile_id=eq.${loan.id}`);
+      const share = (id: string) => rows.filter((r: any) => r.party_profile_id === id).map((r: any) => Number(r.ownership_percentage));
+      const ok = ctx.check("db", rows.length === 2 && json(share(ctx.self.id)) === "[50]" && json(share(robin.id)) === "[50]", "two owner rows: 50% me, 50% the partner", json(rows.map((r: any) => [r.party_profile_id === robin.id ? "partner" : r.party_profile_id === ctx.self.id ? "me" : r.party_profile_id, r.ownership_percentage, r.role])));
+      report(ctx, ok, "bug", "Chat: a 50/50 split of a debt is not what the owner rows hold", t, json(rows.map((r: any) => [r.party_profile_id, r.ownership_percentage, r.role])), "I16, Rule 9");
+      const b = await balance();
+      ctx.near("derived", (await snapshot(ctx, [robin.id])).totalLiabilities, O.netWorth([], [{ value: b, sharePct: 50 }]).liabilities, "the partner's debt is half the stored balance");
+      ctx.near("derived", O.cents(mine0 - (await snapshot(ctx, [ctx.self.id])).totalLiabilities), O.cents(b / 2), "my own debt fell by the half that is now the partner's");
+      ctx.near("derived", (await snapshot(ctx)).totalLiabilities, sA.totalLiabilities, "the household's total debt did not change when the loan was shared");
+      ctx.check("db", (await ctx.db.count("profiles", `name=ilike.*${T}*&deleted_at=is.null`)) === 3, "no profile was created for the split", `${await ctx.db.count("profiles", `name=ilike.*${T}*&deleted_at=is.null`)} tagged profiles`);
+      ctx.check("action", ok || !/50\s?%\s*(you|me|yours)|you\b[^.]{0,20}50\s?%/i.test(t.reply), "the reply does not give the account holder a 50% share the rows do not hold (I16)", t.reply.replace(/\s+/g, " ").slice(0, 200));
     });
 
     ctx.check("action", true, "chat answered each message");

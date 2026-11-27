@@ -634,7 +634,7 @@ scenario({
       ctx.check("screen", await seen(s, renamed, 8000, card), L("the Tasks row shows the new title without a reload"));
       await goto(s, "/dashboard", "page-dashboard");
       ctx.check("screen", await seen(s, renamed, 12000, t("exec-card-tasks")), L("the dashboard's Tasks card names it by its new title"));
-      ctx.check("screen", await unseen(s, title + " ", 3000, t("executive-briefing")) && !(await wordsOf(s, t("executive-briefing"))).includes(`${title} `) , L("and nowhere on the dashboard by the old one"));
+      ctx.check("screen", await until(async () => !(await wordsOf(s, t("executive-briefing"))).includes(title), 8000), L("and nowhere on the dashboard by the old one"));
       const nextImportant = await until(async () => (await wordsOf(s, t("exec-kpi-next"))).includes(renamed), 8000);
       ctx.check("screen", nextImportant, L("Next Important — the nearest dated item, due today — names it"), await wordsOf(s, t("exec-kpi-next")));
       await s.press(t("button-notification-bell"));
@@ -774,6 +774,307 @@ scenario({
         await goto(s, "/calendar", "calendar-view");
         ctx.check("screen", await onDay(s, want, settled[0].id, true), L(`and on the Calendar on ${want}`));
       }
+      await closing(ctx, s, L, reloads());
+    }
+  },
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Habits: today's check-in taken back, renamed, deleted and restored
+// ════════════════════════════════════════════════════════════════════════════
+scenario({
+  id: "ui-planning.habit",
+  title: "A habit by hand (mouse and touch): checked in and un-checked, renamed, its frequency changed, deleted and restored — the streak follows the check-ins",
+  area: "Browser · planning",
+  browser: true,
+  covers: ["habit.complete.ui", "habit.cancel.ui", "habit.edit.ui", "habit.delete.ui", "habit.restore.ui"],
+  requires: ["action", "db", "derived", "screen"],
+  run: async (ctx) => {
+    const tell = finder(ctx);
+    for (const s of surfaces(ctx)) {
+      const L = (x: string) => `[${s.surface}] ${x}`;
+      const name = `${ctx.tag} ${s.surface} stretch`;
+      const renamed = `${ctx.tag} ${s.surface} long stretch`;
+      const habit = must(await ctx.api("POST", "/habits", { name, frequency: "daily" }), "habit");
+      const id = habit.id as string;
+      ctx.cleanup(() => ctx.api("DELETE", `/habits/${id}`));
+      for (const back of [1, 2]) must(await ctx.api("POST", `/habits/${id}/checkin`, { date: O.addDays(ctx.today, -back) }), "an earlier check-in");
+      const row = () => ctx.db.row("habits", id);
+      const checkins = () => ctx.db.rows("habit_checkins", `habit_id=eq.${id}`);
+      const streakWanted = async () => O.dailyStreak((await checkins()).map((c: any) => String(c.date).slice(0, 10)), ctx.today);
+      const card = t(`card-habit-${id}`);
+      const streakShown = () => numberIn(s, t(`stat-streak-${id}`));
+      await goto(s, "/dashboard", "page-dashboard");
+      await goto(s, "/habits", "");
+      const reloads = countReloads(s);
+      ctx.check("screen", await visible(s, card, 15000), L("a habit with check-ins on the last two days is listed"));
+      ctx.check("derived", await until(async () => (await streakShown()) === 2, 8000) && (await streakWanted()) === 2, L("its streak reads 2: yesterday and the day before, today still open"), `shown ${await streakShown()}`);
+
+      // ── Check in ──
+      ctx.step(L("on #/habits press the habit's check-in dot"));
+      await s.press(t(`button-seg-${id}-0`));
+      const after = await waitRows(ctx, "habit_checkins", `habit_id=eq.${id}&date=eq.${ctx.today}`, (n) => n >= 1);
+      await sleep(1200);
+      ctx.check("action", after.length >= 1, L("the tap checked the habit in"));
+      ctx.check("db", (await ctx.db.count("habit_checkins", `habit_id=eq.${id}&date=eq.${ctx.today}`)) === 1 && (await ctx.db.count("habit_checkins", `habit_id=eq.${id}`)) === 3, L("one check-in row for today (three in all)"));
+      const want3 = await streakWanted();
+      ctx.same("derived", (await waitRow(ctx, "habits", id, (r) => r?.current_streak === want3))?.current_streak, want3, L("the stored streak (three days running)"));
+      ctx.check("derived", want3 === 3 && await until(async () => (await streakShown()) === 3, 8000), L("the card's streak reads 3"), `shown ${await streakShown()}`);
+      ctx.check("screen", await until(async () => /done today/i.test(await wordsOf(s, t(`text-habit-today-${id}`))), 6000), L("and it says \"Done today\""), await wordsOf(s, t(`text-habit-today-${id}`)));
+      await goto(s, "/dashboard", "page-dashboard");
+      // the Habits card is off in Quiet Mode: it is named under the grid and opens in place
+      if (!(await s.page.locator(t("exec-card-habits")).locator("visible=true").count())) await s.press(t("exec-hidden-habits")).catch(() => undefined);
+      const tile = t(`exec-habit-checkin-${id}`);
+      const onDash = await visible(s, tile, 10000);
+      ctx.check("screen", onDash, L("the dashboard's Habits card lists it without a reload"));
+      const dashSaysDone = await until(async () => /1\s*of\s*1\s*done|1\s*\/\s*1/i.test(await wordsOf(s, t("exec-card-habits"))), 6000);
+      ctx.check("screen", dashSaysDone, L("and counts today's check-in"), (await wordsOf(s, t("exec-card-habits"))).slice(0, 160));
+
+      // ── Undo today's check-in ──
+      ctx.step(L("back on #/habits press the filled dot (\"Tap to undo\")"));
+      await goto(s, "/habits", "");
+      await visible(s, card, 10000);
+      await s.press(t(`button-seg-${id}-0`));
+      const undone = await waitRows(ctx, "habit_checkins", `habit_id=eq.${id}&date=eq.${ctx.today}`, (n) => n === 0);
+      ctx.check("db", undone.length === 0 && (await ctx.db.count("habit_checkins", `habit_id=eq.${id}`)) === 2, L("today's check-in row is gone; the two earlier ones are untouched"));
+      const want2 = await streakWanted();
+      ctx.same("derived", (await waitRow(ctx, "habits", id, (r) => r?.current_streak === want2))?.current_streak, want2, L("the stored streak (back to two)"));
+      ctx.check("derived", want2 === 2 && await until(async () => (await streakShown()) === 2, 8000), L("the card's streak reads 2 again"), `shown ${await streakShown()}`);
+      ctx.check("screen", await until(async () => !/done today/i.test(await wordsOf(s, t(`text-habit-today-${id}`))), 6000), L("and it no longer says \"Done today\""), await wordsOf(s, t(`text-habit-today-${id}`)));
+      await goto(s, "/dashboard", "page-dashboard");
+      if (!(await s.page.locator(t("exec-card-habits")).locator("visible=true").count())) await s.press(t("exec-hidden-habits")).catch(() => undefined);
+      const dashOpen = await until(async () => /0\s*of\s*1\s*done|0\s*\/\s*1/i.test(await wordsOf(s, t("exec-card-habits"))), 8000);
+      ctx.check("screen", dashOpen, L("the dashboard's Habits card shows today as open again without a reload"), (await wordsOf(s, t("exec-card-habits"))).slice(0, 160));
+
+      // ── Rename: Cancel writes nothing, Save writes the name ──
+      ctx.step(L("on #/habits press the pencil by the name, type a new name, press the X (cancel)"));
+      await goto(s, "/habits", "");
+      await visible(s, card, 10000);
+      const before = await row();
+      await hit(s, s.page.locator(card).locator(t("button-edit-title")));
+      const box = s.page.locator(card).locator('input[type="text"]').first();
+      await box.waitFor({ timeout: 8000 });
+      await box.fill(renamed);
+      await hit(s, s.page.locator(card).locator('button[title="Cancel"]'));
+      await sleep(1200);
+      const kept = await row();
+      ctx.check("db", kept?.name === name && kept?.updated_at === before?.updated_at, L("cancelling the rename writes nothing"), JSON.stringify([kept?.name, kept?.updated_at, before?.updated_at]));
+      ctx.step(L(`press the pencil again, type "${renamed}", press the check (save)`));
+      await hit(s, s.page.locator(card).locator(t("button-edit-title")));
+      await box.waitFor({ timeout: 8000 });
+      await box.fill(renamed);
+      await hit(s, s.page.locator(card).locator('button[title="Save"]'));
+      const named = await waitRow(ctx, "habits", id, (r) => r?.name === renamed);
+      ctx.check("db", named?.name === renamed && named?.frequency === "daily" && named?.current_streak === 2 && (await ctx.db.count("habit_checkins", `habit_id=eq.${id}`)) === 2,
+        L("the row has the new name; frequency, streak and check-ins are untouched"), JSON.stringify([named?.name, named?.frequency, named?.current_streak]));
+      ctx.check("screen", await seen(s, renamed, 8000, card), L("the card shows the new name without a reload"));
+      await goto(s, "/dashboard", "page-dashboard");
+      if (!(await s.page.locator(t("exec-card-habits")).locator("visible=true").count())) await s.press(t("exec-hidden-habits")).catch(() => undefined);
+      ctx.check("screen", await seen(s, renamed, 10000, t("exec-card-habits")), L("the dashboard's Habits card names it by the new name"));
+
+      // ── Frequency ──
+      ctx.step(L("on #/habits open the frequency menu on the card, choose Weekly"));
+      await goto(s, "/habits", "");
+      await s.press(t(`select-freq-${id}`));
+      await hit(s, s.page.getByRole("option", { name: /^weekly$/i }));
+      const weekly = await waitRow(ctx, "habits", id, (r) => r?.frequency === "weekly");
+      ctx.check("db", weekly?.frequency === "weekly" && weekly?.name === renamed && weekly?.deleted_at == null && (await ctx.db.count("habit_checkins", `habit_id=eq.${id}`)) === 2,
+        L("the row is weekly; the name and the check-ins are untouched"), JSON.stringify([weekly?.frequency, weekly?.name]));
+      ctx.check("screen", await until(async () => /weekly/i.test(await wordsOf(s, t(`select-freq-${id}`))), 6000), L("the card says weekly"));
+
+      // ── Delete (asks first), then Undo ──
+      ctx.step(L("press the trash on the card: Cancel; press it again: Delete; then \"Undo\" on the toast"));
+      const trash = s.page.locator(card).getByRole("button", { name: /delete habit/i });
+      const dialog = s.page.getByRole("alertdialog");
+      await hit(s, trash);
+      await dialog.waitFor({ timeout: 8000 });
+      const dialogWords = (await dialog.innerText()).replace(/\s+/g, " ");
+      await sleep(500);
+      const asks = ctx.check("db", (await row())?.deleted_at == null, L("the trash only asks: the row is still there (Rule 8)"));
+      if (!asks) tell(s, { severity: "bug", title: "A habit is deleted before the confirmation is answered", detail: "the row was marked deleted while the dialog was still open" });
+      await hit(s, dialog.getByRole("button", { name: /^cancel$/i }));
+      await sleep(800);
+      ctx.check("db", (await row())?.deleted_at == null, L("Cancel keeps the habit"));
+      ctx.check("screen", await visible(s, card, 4000), L("and it is still listed"));
+      await hit(s, trash);
+      await dialog.waitFor({ timeout: 8000 });
+      await hit(s, dialog.getByRole("button", { name: /^delete$/i }));
+      const deleted = await waitRow(ctx, "habits", id, (r) => !r || r.deleted_at != null);
+      ctx.check("db", !deleted || deleted.deleted_at != null, L("confirming deletes it (the row is marked deleted)"));
+      ctx.check("screen", await hidden(s, card, 8000), L("it leaves the list without a reload"));
+      const undo = await visible(s, t("toast-undo"), 6000);
+      ctx.check("screen", undo, L("the confirmation offers Undo"));
+      if (undo) {
+        await s.press(t("toast-undo"));
+        const restored = await waitRow(ctx, "habits", id, (r) => !!r && r.deleted_at == null);
+        const n = await ctx.db.count("habit_checkins", `habit_id=eq.${id}`);
+        const keeps = ctx.check("db", !!restored && restored.deleted_at == null && restored.name === renamed && restored.frequency === "weekly" && n === 2,
+          L("Undo restores the same row with its name, frequency and both check-ins"), JSON.stringify([restored?.deleted_at, restored?.name, restored?.frequency, n]));
+        if (!keeps && n !== 2) tell(s, { severity: "bug", title: "Restoring a deleted habit loses its check-ins", detail: `${n} of 2 check-in rows after Undo` });
+        ctx.check("screen", await visible(s, card, 10000), L("and it is back on the list without a reload"));
+        // The dialog's words against what the app then does.
+        if (n === 2 && /permanently/i.test(dialogWords)) tell(s, { severity: "discrepancy", title: "The habit delete dialog says the history is permanently removed, but it is kept and Undo restores it", detail: `the dialog reads "${dialogWords.slice(0, 160)}"; after Delete the habit row is only marked deleted, its check-in rows stay, and "Undo" on the toast brings both back. The wording (client/src/pages/habits.tsx) promises more loss than happens.` });
+      }
+      await closing(ctx, s, L, reloads());
+    }
+  },
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Goals
+// ════════════════════════════════════════════════════════════════════════════
+scenario({
+  id: "ui-planning.goal",
+  title: "A goal by hand (mouse and touch): made, progress logged, edited and deleted — its percent and the page's totals follow the stored row",
+  area: "Browser · planning",
+  browser: true,
+  covers: ["goal.create.ui", "goal.edit.ui", "goal.delete.ui"],
+  requires: ["action", "db", "derived", "screen"],
+  run: async (ctx) => {
+    const tell = finder(ctx);
+    for (const s of surfaces(ctx)) {
+      const L = (x: string) => `[${s.surface}] ${x}`;
+      const title = `${ctx.tag} ${s.surface} read`;
+      const renamed = `${ctx.tag} ${s.surface} read more`;
+      const deadline = O.addDays(ctx.today, 60);
+      const q = `title=ilike.*${enc(`${ctx.tag} ${s.surface}`)}*&deleted_at=is.null`;
+      // What the page's header should say, from the stored rows alone.
+      const overallWanted = async () => {
+        const rows = await ctx.db.rows("goals", "deleted_at=is.null");
+        const pcts = rows.filter((g: any) => !/^(completed|abandoned)$/i.test(String(g.status || "")))
+          .map((g: any) => (Number(g.target) > 0 ? Math.min(100, ((Number(g.current) || 0) / Number(g.target)) * 100) : 0)).filter((x: number) => x < 100);
+        return { active: pcts.length, avg: pcts.length ? Math.round(pcts.reduce((a: number, b: number) => a + b, 0) / pcts.length) : 0 };
+      };
+      const header = async () => {
+        const words = await wordsOf(s, t("page-goals"));
+        return { avg: Number((/overall progress\s*(\d+)%/i.exec(words) || [])[1]), active: await numberIn(s, t("goals-chip-active")) };
+      };
+      const headerIs = async () => {
+        let got = { avg: NaN, active: NaN }, want = { avg: 0, active: 0 };
+        const ok = await until(async () => { want = await overallWanted(); got = await header(); return got.avg === want.avg && got.active === want.active; }, 10000, 500);
+        return { ok, got, want };
+      };
+      const openForm = async () => {
+        const add = (await s.page.locator(t("btn-add-goal")).locator("visible=true").count()) ? "btn-add-goal" : "btn-create-first-goal";
+        await s.press(t(add));
+        await s.page.waitForSelector(t("input-goal-title"), { timeout: 10000 });
+      };
+      const formDialog = () => s.page.getByRole("dialog").filter({ has: s.page.locator(t("input-goal-title")) });
+      const closeForm = async () => {
+        const x = formDialog().getByRole("button", { name: /close/i }).first();
+        if (await x.count()) await hit(s, x); else await s.page.keyboard.press("Escape");
+        await hidden(s, t("input-goal-title"), 6000);
+      };
+      await goto(s, "/dashboard", "page-dashboard");
+      await goto(s, "/goals", "page-goals");
+      await s.page.waitForSelector(`${t("btn-add-goal")}, ${t("btn-create-first-goal")}`, { timeout: 20000 });
+      const reloads = countReloads(s);
+
+      // ── Closing the form writes nothing ──
+      ctx.step(L(`open #/goals, press "Add Goal", type a title and a target, close the form`));
+      await openForm();
+      await typeInto(s, t("input-goal-title"), title);
+      await typeInto(s, t("input-goal-target"), "200");
+      await closeForm();
+      await sleep(1000);
+      ctx.check("db", (await ctx.db.count("goals", q)) === 0, L("closing the new-goal form stores nothing"));
+
+      // ── Create ──
+      ctx.step(L(`"Add Goal": "${title}", target 200 pages, deadline ${deadline}; press Create twice quickly`));
+      await openForm();
+      await typeInto(s, t("input-goal-title"), title);
+      await typeInto(s, t("input-goal-target"), "200");
+      await typeInto(s, t("input-goal-unit"), "pages");
+      await typeInto(s, t("input-goal-deadline"), deadline);
+      const save = s.page.locator(t("btn-save-goal")).locator("visible=true").first();
+      await (s.surface === "phone" ? save.tap() : save.dblclick()).catch(() => undefined);
+      if (s.surface === "phone") await save.tap({ timeout: 300 }).catch(() => undefined);
+      await waitRows(ctx, "goals", q, (n) => n >= 1);
+      await sleep(1500);
+      const made = await ctx.db.rows("goals", q);
+      for (const g of made) ctx.cleanup(() => ctx.api("DELETE", `/goals/${g.id}`));
+      const one = ctx.check("db", made.length === 1 && made[0].title === title && Number(made[0].target) === 200 && made[0].unit === "pages" && made[0].deadline === deadline && (Number(made[0].current) || 0) === 0 && made[0].status === "active",
+        L("one goal row: the title, 200 pages, the deadline, nothing done yet, active (a double press of Create)"), `${made.length} rows ${JSON.stringify(made.map((g: any) => [g.title, g.target, g.unit, g.deadline, g.current, g.status]))}`);
+      if (!one && made.length > 1) {
+        tell(s, { severity: "bug", title: "A double click on Create in the goal form makes two goals", detail: `#/goals → "Add Goal" → title, target 200, unit, deadline → double-click "Create": ${made.length} identical goal rows are stored (POST /api/goals twice). The button is disabled only while a request is pending, and the form stays open until the first answer, so the second click of a double click is sent too. The task, event, expense and habit forms each store one. (A double tap on the phone stored one in this run.)` });
+        // go on with one goal: the extra rows are removed through the API and the list is read again
+        ctx.step(L(`removed ${made.length - 1} duplicate goal row(s) through the API to go on`));
+        for (const g of made.slice(1)) await ctx.api("DELETE", `/goals/${g.id}`);
+        await goto(s, "/dashboard", "page-dashboard");
+        await goto(s, "/goals", "page-goals");
+        await until(async () => (await s.page.getByRole("button", { name: `Open goal: ${title}` }).count()) === 1, 12000);
+      }
+      const id = made[0]?.id;
+      if (!ctx.check("action", !!id, L("the form saved a goal")) || !id) { await closing(ctx, s, L, reloads()); continue; }
+      const row = () => ctx.db.row("goals", id);
+      const card = t(`goal-card-${id}`);
+      const pctShown = async () => Number((/(\d+)%/.exec(await wordsOf(s, card)) || [])[1]);
+      ctx.check("screen", await visible(s, card, 12000), L("the goal is listed without a reload"));
+      let h = await headerIs();
+      ctx.check("derived", h.ok, L(`the header counts it: ${h.want.active} active, ${h.want.avg}% overall (worked out from the stored goals)`), `shows ${JSON.stringify(h.got)}`);
+      const openSheet = async (name: string) => {
+        await hit(s, s.page.getByRole("button", { name: `Open goal: ${name}` }));
+        await s.page.waitForSelector(t("input-goal-progress"), { timeout: 10000 });
+      };
+      const sheet = () => s.page.getByRole("dialog").filter({ has: s.page.locator(t("input-goal-progress")) });
+
+      // ── Progress ──
+      ctx.step(L("press the goal, type 50 under Update Progress, Save"));
+      await openSheet(title);
+      await typeInto(s, t("input-goal-progress"), "50");
+      await hit(s, sheet().getByRole("button", { name: /^save$/i }));
+      const prog = await waitRow(ctx, "goals", id, (r) => Number(r?.current) === 50);
+      ctx.check("db", Number(prog?.current) === 50 && Number(prog?.target) === 200 && prog?.title === title, L("the row holds 50 of 200"), JSON.stringify([prog?.current, prog?.target]));
+      ctx.check("derived", await until(async () => (await pctShown()) === Math.round((50 / 200) * 100), 8000), L("the goal reads 25%"), `shows ${await pctShown()}%`);
+      h = await headerIs();
+      ctx.check("derived", h.ok, L(`the overall progress follows (${h.want.avg}%)`), `shows ${JSON.stringify(h.got)}`);
+
+      // ── Edit: closing writes nothing; Update writes what changed ──
+      ctx.step(L("press the goal → Edit, change the title and the target, close the form"));
+      const before = await row();
+      await openSheet(title);
+      await hit(s, sheet().getByRole("button", { name: /^edit$/i }));
+      await s.page.waitForSelector(t("input-goal-title"), { timeout: 10000 });
+      await typeInto(s, t("input-goal-title"), renamed);
+      await typeInto(s, t("input-goal-target"), "100");
+      await closeForm();
+      await sleep(1000);
+      const afterClose = await row();
+      ctx.check("db", afterClose?.title === title && Number(afterClose?.target) === 200 && afterClose?.updated_at === before?.updated_at, L("closing the edit form writes nothing"), JSON.stringify([afterClose?.title, afterClose?.target]));
+      ctx.step(L(`press the goal → Edit, title "${renamed}", target 100, press Update`));
+      await openSheet(title);
+      await hit(s, sheet().getByRole("button", { name: /^edit$/i }));
+      await s.page.waitForSelector(t("input-goal-title"), { timeout: 10000 });
+      await typeInto(s, t("input-goal-title"), renamed);
+      await typeInto(s, t("input-goal-target"), "100");
+      await s.press(t("btn-save-goal"));
+      const edited = await waitRow(ctx, "goals", id, (r) => r?.title === renamed && Number(r?.target) === 100);
+      ctx.check("db", edited?.title === renamed && Number(edited?.target) === 100 && Number(edited?.current) === 50 && edited?.unit === "pages" && edited?.deadline === deadline && edited?.status === "active",
+        L("the row has the new title and target; progress, unit, deadline and status are as they were"), JSON.stringify([edited?.title, edited?.target, edited?.current, edited?.unit, edited?.deadline, edited?.status]));
+      ctx.check("screen", await seen(s, renamed, 8000, card), L("the list shows the new title without a reload"));
+      ctx.check("derived", await until(async () => (await pctShown()) === 50, 8000), L("50 of 100 reads 50%"), `shows ${await pctShown()}%`);
+      h = await headerIs();
+      ctx.check("derived", h.ok, L(`the overall progress follows (${h.want.avg}%)`), `shows ${JSON.stringify(h.got)}`);
+      // leave and come back inside the app: still the stored values
+      await goto(s, "/dashboard", "page-dashboard");
+      await goto(s, "/goals", "page-goals");
+      ctx.check("screen", await seen(s, renamed, 10000, card) && (await until(async () => (await pctShown()) === 50, 6000)), L("after leaving and reopening Goals (in-app) it still reads the new title and 50%"));
+
+      // ── Delete: two taps ──
+      ctx.step(L("press the goal → Edit → Delete (first tap arms), tap again"));
+      await openSheet(renamed);
+      await hit(s, sheet().getByRole("button", { name: /^edit$/i }));
+      await s.press(t("btn-delete-goal"));
+      await sleep(900);
+      const armed = await row();
+      const asks = ctx.check("db", !!armed && armed.deleted_at == null, L("the first tap on Delete only arms it (Rule 8)"));
+      if (!asks) tell(s, { severity: "bug", title: "A goal is deleted by the first tap on Delete", detail: "Rule 8: destructive buttons take two taps" });
+      else await s.press(t("btn-delete-goal"));
+      const gone = await waitRow(ctx, "goals", id, (r) => !r || r.deleted_at != null);
+      ctx.check("db", !gone || gone.deleted_at != null, L("the second tap deletes the row"));
+      ctx.check("screen", await hidden(s, card, 8000), L("it leaves the list without a reload"));
+      h = await headerIs();
+      ctx.check("derived", h.ok, L(`the header no longer counts it (${h.want.active} active, ${h.want.avg}%)`), `shows ${JSON.stringify(h.got)}`);
       await closing(ctx, s, L, reloads());
     }
   },
