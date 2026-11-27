@@ -38,6 +38,7 @@ scenario({
       await goto(s, "/tasks", "page-tasks");
       let reloads = 0;
       s.page.on("load", () => { reloads++; });
+      ctx.step(L(`open #/tasks, press "New task", type the title "${title}" and the due date ${due}, press Save twice quickly`));
       await s.press(t("button-new-task"));
       await s.page.fill(t("input-task-title"), title);
       await s.page.fill(t("input-task-due-date"), due);
@@ -67,14 +68,23 @@ scenario({
       ctx.check("screen", onDash, L("the dashboard shows it without a reload"));
 
       // tick it off
+      ctx.step(L("open #/calendar, then #/dashboard (in-app links, no reload); back on #/tasks tick the task's checkbox; open #/dashboard again"));
       await goto(s, "/tasks", "page-tasks");
       await s.press(t(`checkbox-task-${id}`));
       const done = await waitRows(ctx, "tasks", `id=eq.${id}&status=eq.done`, (n) => n === 1);
       ctx.check("db", done.length === 1, L("ticking the box stores the task as done"));
       await goto(s, "/dashboard", "page-dashboard");
-      await sleep(1500);
-      const stillOpen = await s.page.locator(`${t("exec-overview")} >> text=${title}`).first().isVisible().catch(() => false);
-      ctx.check("screen", !stillOpen, L("the dashboard no longer lists the finished task"));
+      // "Done means gone" (Rule 8): give the refetch ten seconds, then it is a failure, not a delay
+      let stillOpen = true;
+      const t0 = Date.now();
+      while (Date.now() - t0 < 10_000) {
+        stillOpen = await s.page.locator(`${t("exec-overview")} >> text=${title}`).first().isVisible().catch(() => false);
+        if (!stillOpen) break;
+        await sleep(500);
+      }
+      ctx.step(L(`the dashboard ${stillOpen ? "still listed the finished task after 10 s" : `dropped the finished task ${Date.now() - t0} ms after opening`}`));
+      const gone = ctx.check("screen", !stillOpen, L("the dashboard no longer lists the finished task (within 10 s of opening it)"));
+      if (!gone) ctx.finding({ severity: "sync", title: "A task ticked done on Tasks stays open on the dashboard", detail: `${s.surface}: the row is stored as done, but the dashboard opened right after (in-app navigation) kept it under Tasks "Remaining", Timeline and Next Important until the page was left. Intermittent (about one run in three on production and on the preview, 2026-11-27); the cause is not established.` });
       ctx.check("screen", reloads === 0, L("none of this reloaded the page"), `${reloads} reload(s)`);
       const over = await s.overflow();
       ctx.check("screen", over === "", L("nothing is wider than the screen"), over);

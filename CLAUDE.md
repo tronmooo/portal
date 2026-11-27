@@ -1550,6 +1550,63 @@ response to the end (`warmProfileDetail`): one nobody reads never finishes.
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
 
+## Integrity run rules (a feature passes on evidence, not on a success answer)
+
+Owner, 2026-11-27: "Do not mark a feature as passing simply because a button
+responds or a success notification appears. A feature passes only when the
+intended action, persisted data, dependent calculations, and all affected
+screens have been verified." Read `tests/integrity/README.md` before touching
+`tests/integrity/*`, `scripts/gen-integrity-map.ts` or `scripts/gen-integrity-report.ts`.
+*Guards:* `tests/integrity-model.test.ts`, `tests/integrity-oracle-properties.test.ts`,
+`tests/integrity-run-fixes-2026-11-27.test.ts`.
+*Live run (deployed app, smoke account, desktop and phone):* `npm run integrity`
+(`npx tsx tests/integrity/run.ts --only <id> --seed <n>` for one scenario).
+It also runs after every production deploy and nightly
+(`.github/workflows/integrity.yml`); a red run opens an issue.
+
+**I1. Every scenario owes evidence.** `action` (read back through the app),
+`db` (the row read straight from Postgres with the account's own token — not
+through the app), `derived` (each dependent figure against `oracle.ts`) and
+`screen` (a real browser, mouse and touch, no reload). A scenario short of a
+kind it declares is INCOMPLETE, never PASS (`runScenarios`,
+`tests/integrity/framework.ts`). A new scenario declares at least one kind
+beyond `action`.
+**I2. The oracle is a second opinion.** `tests/integrity/oracle.ts` imports
+nothing from `shared/`, `server/` or `client/`. When the app and the oracle
+disagree, decide which is wrong from the owner's stated rule; never paste the
+app's answer into the oracle. (2026-11-27: the oracle said a loan pays off a
+month later than the app — the app folds a last payment under half a payment
+into the one before, as a lender does; the oracle gained that rule. The same
+day the oracle was right that a `loan`-typed profile is not an asset.)
+**I3. Every door has a data type.** A new API route or chat tool is placed in
+`tests/integrity/model.ts` (its `routes` / `tools` matchers), and what it must
+then change goes in that data type's `derived` / `dependents`.
+`docs/INTEGRITY_MAP.md` (`npm run integrity:map`) is the dependency map and the
+data type × operation × door coverage matrix: `V` = a scenario verified the
+consequences, `tN` = a test names the door (evidence, not proof).
+**I4. A finding is not a loosened check.** A deliberate limit or an open
+question goes in `tests/integrity/known.ts` with where it was seen, and the
+report prints it. A check that fails for a reason the product owns stays
+failing until the product is fixed.
+**I5. The run cleans up by its tag.** Every record a scenario makes carries
+`ctx.tag`; after its own undo steps the run deletes anything still carrying it
+(`sweepTagged`) — a payment's expense outlives the bill it paid, a completed
+repeating task leaves its next occurrence. Chat scenarios also sweep by time
+(`sweepAfter`), because the model may name a record in its own words.
+**I6. A change computed from the stored row is written over the row that was
+read.** Tag lists that hold occurrence marks (tasks, events) are written
+through `writeFromStoredRow` (`server/stored-row-write.ts`): it passes the
+`updatedAt` it read and, when the storage layer refuses the write, reads and
+computes again. (2026-11-27: two dates skipped at the same moment both
+answered 200 and one mark was lost — the route's comment said they "all
+survive".) A new route that reads a row, changes part of a JSON or array
+column and writes it back uses it (profiles already compare-and-retry inside
+`updateProfile`).
+**I7. Pass the profile, not its fields, to `resolveAssetValue`.** The loan
+rule needs the type: handed bare `fields`, a `loan`-typed profile's balance was
+counted as an asset AND a debt in the server's finance snapshot while
+`computeNetWorth` (which passes the profile) counted it once (2026-11-27).
+
 ## Data and credentials
 
 - This repository is **public**. Never commit a password, token or real

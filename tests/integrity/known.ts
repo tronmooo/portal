@@ -16,6 +16,12 @@ export interface Known {
 export const KNOWN: Known[] = [
   {
     kind: "sync",
+    title: "OPEN, NOT FIXED — a task ticked done on Tasks sometimes stays open on the dashboard",
+    detail: "The row is stored as done, but the dashboard opened right after by in-app navigation keeps the task under Tasks \"Remaining\", Timeline and Next Important for more than ten seconds (until the page is left or reloaded). Intermittent: 1 of 3 repeat runs on production and 1 run on the preview, desktop each time. A local write invalidates with refetchType \"active\" (client/src/lib/cache-bus.ts), so the cause is not the sibling-tab rule; it has not been established. Breaks \"Done means gone\" (Rule 8). The scenario keeps failing when it happens.",
+    evidence: "browser.task-form (screenshot test-results/integrity/screenshots/browser.task-form-desktop.png); rerun: npx tsx tests/integrity/run.ts --only browser.task-form",
+  },
+  {
+    kind: "sync",
     title: "A record written on another device is not shown by in-app navigation for up to 3 minutes",
     detail: "Lists are trusted for 3 minutes inside one sitting (staleTime) and only the five aggregate payloads refetch on a real resume (15 s away). Nothing tells an open tab that another DEVICE, or the Auto Pay cron, wrote. A reload shows it at once. Deliberate (it ended the 2026-07 refetch storm); the cost is a short window in which two devices disagree.",
     evidence: "browser.written-elsewhere (records whether navigation alone showed the task); client/src/lib/queryClient.ts",

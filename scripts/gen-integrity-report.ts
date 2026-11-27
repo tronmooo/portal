@@ -69,7 +69,8 @@ if (local) {
 }
 if (checks) {
   const bad = checks.filter((c) => !c.ok);
-  out(`**Existing live checks** (\`tests/live-*-check.ts\`, ${checks.length} run against the deployed app): ${checks.length - bad.length} passed${bad.length ? `, **${bad.length} failed**: ${bad.map((c) => `\`${c.name}\``).join(", ")}` : ""}.`);
+  const all = fs.readdirSync(path.join(ROOT, "tests")).filter((f) => /^live-.*-check\.ts$/.test(f)).length;
+  out(`**Existing live checks** (\`tests/live-*-check.ts\`; ${checks.length} of ${all} were run against production in this pass${checks.length < all ? " — it was time-boxed, the rest were not run" : ""}): ${checks.length - bad.length} passed${bad.length ? `, **${bad.length} failed**: ${bad.map((c) => `\`${c.name}\``).join(", ")}. These failures are on production as it is, were not caused by this work, and have not been investigated; each line is in the table below` : ""}.`);
   out();
 }
 
@@ -116,8 +117,7 @@ for (const r of failing) {
   out(`Rerun: \`npx tsx tests/integrity/run.ts --only '^${r.id.replace(/\./g, "\\.")}$' --seed ${run.seed}\``);
   out("</details>");
   out();
-  for (const shot of r.screenshots) out(`![${r.id}](${path.relative("docs", shot)})`);
-  if (r.screenshots.length) out();
+  if (r.screenshots.length) { out(`Screenshots (in the run's results folder / the CI run's \`integrity-results\` artifact): ${r.screenshots.map((x) => `\`${x}\``).join(", ")}`); out(); }
 }
 
 // ── findings by kind ────────────────────────────────────────────────────────
@@ -128,12 +128,18 @@ const group = (sev: Finding["severity"][], title: string, extra: typeof KNOWN = 
   if (!fs_.length && !extra.length) { out("None found."); out(); return; }
   const seen = new Set<string>();
   for (const f of fs_) { if (seen.has(f.title)) continue; seen.add(f.title); out(`- **${esc(f.title)}** — ${esc(f.detail)} _(${f.scenario})_`); }
-  for (const k of extra) out(`- **${k.title}** _(known${k.kind === "question" ? ", open question for the owner" : ""})_ — ${k.detail} Seen in: ${k.evidence}.`);
+  for (const k of extra) out(`- **${k.title}** — ${k.detail} Seen in: ${k.evidence}.`);
   out();
 };
 group(["bug"], "Bugs open in this run");
 group(["discrepancy"], "Calculation discrepancies", KNOWN.filter((k) => k.kind === "discrepancy"));
 group(["sync"], "Synchronization problems", KNOWN.filter((k) => k.kind === "sync"));
+if (fs.existsSync(path.join(ROOT, "docs/integrity-evidence/task-done-still-on-dashboard.jpg"))) {
+  out("Screenshot of the open finding (the task is stored as done; the dashboard still counts it as remaining):");
+  out();
+  out("![a finished task still on the dashboard](integrity-evidence/task-done-still-on-dashboard.jpg)");
+  out();
+}
 
 // ── performance ─────────────────────────────────────────────────────────────
 out("## Performance");
