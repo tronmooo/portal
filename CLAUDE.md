@@ -1699,6 +1699,33 @@ retry instruction is never shown (`isRetryBackTalk`).
 *Guards:* `tests/goal-same-title-different-target.test.ts`,
 `tests/chat-retraction.test.ts`, `tests/chat-context-version.test.ts`.
 
+**I17. The isolated stack is where accounts are made and destroyed.**
+`tests/isolated/up.sh` starts a throwaway Postgres 17 with the production
+schema's STRUCTURE (`tests/isolated/schema.sql`, from `dump-schema.sql`: no
+rows), auth, REST, file storage and a mail catcher, plus the test accounts
+(`ISOLATED_WORKER=1..9` for side-by-side runs). `Integrity (isolated database)`
+(`.github/workflows/integrity-isolated.yml`) runs every non-chat scenario on it
+for each push to a working branch and each pull request — before a merge.
+A scenario that signs up, wipes, exports or floods is `isolatedOnly` and runs
+only when the app AND the database are on this machine (`IS_ISOLATED`,
+`tests/integrity/framework.ts`); never point one at a deployed app. After a
+migration is applied to production, regenerate `schema.sql`:
+`tests/isolated/schema-check.ts` fails CI when it lacks anything
+`shared/schema-expectations.ts` lists. Chat scenarios still need the deployed
+app (the stack has no AI provider: AI routes answer 503 `AI_UNAVAILABLE`).
+**I18. Sign-in never runs on the server's privileged client, and a reset link
+is accepted for what it is.** `getSupabaseAuth()` is the server's own client;
+a user sign-in or token refresh runs on `userSessionClient()` (no session
+kept), or the privileged client carries the last user's session into its
+database calls (2026-11-27: the shared sign-in limiter's insert was refused by
+row-level security and it fell back to one instance's memory). A password
+reset accepts the session an e-mailed link yields — `amr` method `otp`,
+`recovery` or `magiclink`, alone and within the hour (`isRecoverySession`,
+`server/auth.ts`); it used to accept `recovery` only, so every real link was
+refused. A password or OAuth session never resets a password.
+*Guards:* `tests/password-reset-link-session.test.ts`; live on the isolated
+stack: `accounts.password-change-and-reset`, `security.permissions`.
+
 ## Data and credentials
 
 - This repository is **public**. Never commit a password, token or real

@@ -192,7 +192,7 @@ async function counts(token: string): Promise<Record<string, number>> {
 scenario({
   id: "accounts.delete-all-data",
   title: "Wiping an account: without the typed confirmation nothing goes; with it every row of THAT account goes and nobody else's does",
-  area: "access", covers: ["access.delete.api", "access.cancel.api", "isolation.write"], requires: ["action", "db"], isolatedOnly: true,
+  area: "access", covers: ["access.delete.api", "access.archive.api", "access.cancel.api", "isolation.write"], requires: ["action", "db"], isolatedOnly: true,
   run: async (ctx) => {
     const a = await signUp(ctx, "wipe", ipFor(ctx));
     const made = await fill(ctx, a.token);

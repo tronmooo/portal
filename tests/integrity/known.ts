@@ -15,6 +15,18 @@ export interface Known {
 
 export const KNOWN: Known[] = [
   {
+    kind: "gap",
+    title: "There is no way to delete the account itself",
+    detail: "Settings → \"Delete all data\" (DELETE /api/data/all) removes every record and leaves the sign-in in place: no route or screen removes the auth user. A person who asks for their account to be deleted keeps an empty one. Building it is a product decision (it must also end sessions and remove stored files, which the wipe already sweeps).",
+    evidence: "accounts.delete-all-data on the isolated stack, 2026-11-27; server/auth.ts and server/routes.ts have no user-deletion route",
+  },
+  {
+    kind: "question",
+    title: "OPEN — chat: two purchases of the same NAME in one message are created once",
+    detail: "The tool gate's \"one request creates ONE record\" rule (findDuplicateCreateInTurn) refuses a second create of the same name for the same owner within one chat turn; it exists to stop the model filing one thing twice under two types. It is not a comparison with stored transactions, so rule I14 does not remove it — but \"two coffees, $5 each\" said in one message can come out as one $5 expense. Identical purchases said in SEPARATE messages are two expenses, as ruled. Left as is: relaxing it for expenses risks the model's own double call.",
+    evidence: "shared/ai-tool-routing.ts findDuplicateCreateInTurn; not observed failing in the chat check",
+  },
+  {
     kind: "discrepancy",
     title: "Chat sometimes asks before a delete the person asked for directly",
     detail: "The chat's instructions say a direct \"delete X\" counts as confirmation. About one delete in six still came back as \"…Shall I go ahead?\" (a tracker entry, a budget). Nothing is lost and a \"yes\" completes it; the chat scenarios answer once and hold the result to the same database check.",
