@@ -841,22 +841,6 @@ scenario({
       ctx.check("derived", json(detail, 200000).replace(/\D/g, "").includes("5550142"), "the profile's page shows the number");
     });
 
-    await part(ctx, "a task filed under a person (link_entities or update_task)", async () => {
-      const task = must(await ctx.api("POST", "/tasks", { title: `Call plumber ${T}`, dueDate: O.addDays(ctx.today, 6) }), "task");
-      ctx.cleanup(() => ctx.api("DELETE", `/tasks/${task.id}`));
-      const c0 = await census(ctx, ["tasks", "profiles", "events"]);
-      await settle();
-      const t = await say(ctx, `Link the task "Call plumber ${T}" to "${kin.name}".`);
-      const row = await ctx.db.row("tasks", task.id);
-      const edges = await ctx.db.rows("entity_links", `or=(source_id.eq.${task.id},target_id.eq.${task.id})`).catch(() => [] as any[]);
-      const ok = ctx.check("db", (row?.linked_profiles || []).includes(kin.id), "the task row is filed under that person", json({ linked: row?.linked_profiles, edges: edges.length }));
-      report(ctx, ok, "discrepancy", "Chat: a task \"linked\" to a person through link_entities is not filed under them (through update_task it is)", t, `task.linked_profiles=${json(row?.linked_profiles)} (the person is ${kin.id}); entity_links rows touching the task: ${json(edges.map((e: any) => [e.source_type, e.source_id === kin.id ? "person" : e.source_id === task.id ? "task" : e.source_id, e.target_type, e.target_id === kin.id ? "person" : e.target_id === task.id ? "task" : e.target_id, e.relationship]))}`, "Rule 9 (ownership has one writer), I16");
-      ctx.check("db", row?.title === `Call plumber ${T}` && row.due_date === O.addDays(ctx.today, 6) && row.status === "todo", "the task itself (title, date, status) is untouched");
-      ctx.same("db", moved(c0, await census(ctx, ["tasks", "profiles", "events"])), {}, "no task, profile or event was created");
-      const scoped = listOf(must(await ctx.api("GET", `/tasks?profileIds=${kin.id}`), "tasks for the person"));
-      ctx.check("derived", scoped.some((x: any) => x.id === task.id), "the person's own task list now includes it");
-    });
-
     await part(ctx, "link_entities (an expense and a document)", async () => {
       const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
       const doc = must(await ctx.api("POST", "/documents", { name: `Warranty ${T}`, type: "warranty", mimeType: "image/png", fileData: PNG, linkedProfiles: [ctx.self.id] }), "document");
@@ -975,6 +959,39 @@ scenario({
       report(ctx, ok, "bug", "Chat: asked to delete a custom domain (and told yes), the domain is still there", t, json(left.map((d: any) => d.name)), "I16");
     });
     ctx.check("action", true, "chat answered each message");
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+scenario({
+  id: "chat-tools.task-linked-to-person",
+  title: "Chat: a task linked to a person is filed under that person, whichever tool makes the link",
+  area: "AI Chat",
+  chat: true,
+  covers: ["profile.transfer.chat"],
+  requires: ["action", "db", "derived"],
+  run: async (ctx) => {
+    sweepAfter(ctx);
+    const T = ctx.tag;
+    const kin = await mk(ctx, { type: "person", name: `Kin ${T}`, fields: { relationship: "sibling" } });
+
+    await part(ctx, "a task filed under a person (link_entities or update_task)", async () => {
+      const task = must(await ctx.api("POST", "/tasks", { title: `Call plumber ${T}`, dueDate: O.addDays(ctx.today, 6) }), "task");
+      ctx.cleanup(() => ctx.api("DELETE", `/tasks/${task.id}`));
+      const c0 = await census(ctx, ["tasks", "profiles", "events"]);
+      await settle();
+      const t = await say(ctx, `Link the task "Call plumber ${T}" to "${kin.name}".`);
+      const row = await ctx.db.row("tasks", task.id);
+      const edges = await ctx.db.rows("entity_links", `or=(source_id.eq.${task.id},target_id.eq.${task.id})`).catch(() => [] as any[]);
+      const ok = ctx.check("db", (row?.linked_profiles || []).includes(kin.id), "the task row is filed under that person", json({ linked: row?.linked_profiles, edges: edges.length }));
+      report(ctx, ok, "discrepancy", "Chat: a task \"linked\" to a person through link_entities is not filed under them (through update_task it is)", t, `task.linked_profiles=${json(row?.linked_profiles)} (the person is ${kin.id}); entity_links rows touching the task: ${json(edges.map((e: any) => [e.source_type, e.source_id === kin.id ? "person" : e.source_id === task.id ? "task" : e.source_id, e.target_type, e.target_id === kin.id ? "person" : e.target_id === task.id ? "task" : e.target_id, e.relationship]))}`, "Rule 9 (ownership has one writer), I16");
+      ctx.check("db", row?.title === `Call plumber ${T}` && row.due_date === O.addDays(ctx.today, 6) && row.status === "todo", "the task itself (title, date, status) is untouched");
+      ctx.same("db", moved(c0, await census(ctx, ["tasks", "profiles", "events"])), {}, "no task, profile or event was created");
+      const scoped = listOf(must(await ctx.api("GET", `/tasks?profileIds=${kin.id}`), "tasks for the person"));
+      ctx.check("derived", scoped.some((x: any) => x.id === task.id), "the person's own task list now includes it");
+    });
+
+    ctx.check("action", true, "chat answered the message");
   },
 });
 
