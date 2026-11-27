@@ -611,6 +611,12 @@ export default defineConfig({
       // pet food, vehicles, devices, subscriptions and accounts.
       'tests/item-identity.test.ts',
       'tests/item-enrichment-flow.test.ts',
+      // Integrity system (owner, 2026-11-27): the dependency model and coverage
+      // matrix, the independent oracle held against the app's own calculations
+      // on random inputs, and the local guards for what the first live run found.
+      'tests/integrity-model.test.ts',
+      'tests/integrity-oracle-properties.test.ts',
+      'tests/integrity-run-fixes-2026-11-27.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

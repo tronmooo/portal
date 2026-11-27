@@ -1226,6 +1226,8 @@ export class MemStorage implements IStorage {
     for (const [month, arr] of this.budgetStore.entries()) {
       if (arr.some((b) => b.profileId === id)) this.budgetStore.set(month, arr.filter((b) => b.profileId !== id));
     }
+    // …and its characteristic values (a preferences row no cascade reaches).
+    this.preferences.delete(recordDetailsKey("profile", id));
 
     // Cascade delete: for each entity type, if sole owner → delete; if shared → remove profile ID from linkedProfiles
 

@@ -22,3 +22,4 @@ api/_bundle.mjs
 api/chunks/
 tests/perf/out/
 .scratch/
+test-results/

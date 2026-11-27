@@ -54,6 +54,7 @@ import { registerFinanceRoutes } from "./finance-routes";
 import { registerRecordDetailRoutes } from "./record-details-routes";
 import { registerWorkspaceRoutes, WORKSPACE_AI_PATHS } from "./workspace-routes";
 import { forgetVersions, keepVersionBeforeWrite, readRecordText } from "./content-versions";
+import { writeFromStoredRow } from "./stored-row-write";
 import { appendDetailSearchHits } from "./record-details";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
@@ -7169,7 +7170,10 @@ Rules:
     }
     const content = sanitizeLongText(req.body.content);
     // A note with no title gets one written from its text.
-    const title = (req.body.title ? sanitize(String(req.body.title)).trim() : "") || await generateTitle(content, "note");
+    // Only text (or a number, which is its own text) is a title: an object
+    // was saved as the title "[object Object]" (integrity run, 2026-11-27).
+    const typedTitle = typeof req.body.title === "string" || typeof req.body.title === "number" ? String(req.body.title) : "";
+    const title = (typedTitle ? sanitize(typedTitle).trim() : "") || await generateTitle(content, "note");
     // Honour the active-profile scope header the same way every other create
     // does, so a note made while a profile is selected belongs to that profile.
     const scoped: Record<string, any> = {};
@@ -7304,20 +7308,24 @@ Rules:
     if (action === "move" && !isCalendarDay(String(newDate || ""))) {
       return res.status(400).json({ error: "newDate (YYYY-MM-DD) required" });
     }
-    const existing = await storage.getTask(req.params.id);
-    if (!existing) return res.status(404).json({ error: "Not found" });
-    const result = applyTaskOccurrenceAction(
-      { dueDate: existing.dueDate, tags: existing.tags, status: existing.status },
-      { action, date, newDate },
-      getUserToday(getTimezone(req)),
-    );
-    if (!result.ok) return res.status(409).json({ error: result.error });
-    const updated = await storage.updateTask(req.params.id, { dueDate: result.dueDate, tags: result.tags } as any);
-    if (!updated) return res.status(404).json({ error: "Not found" });
+    const todayForTask = getUserToday(getTimezone(req));
+    let seriesEnded = false;
+    const wrote = await writeFromStoredRow({
+      read: () => storage.getTask(req.params.id),
+      compute: (existing) => {
+        const result = applyTaskOccurrenceAction({ dueDate: existing.dueDate, tags: existing.tags, status: existing.status }, { action, date, newDate }, todayForTask);
+        if (!result.ok) return { status: 409, error: result.error };
+        seriesEnded = !!result.ended;
+        return { patch: { dueDate: result.dueDate, tags: result.tags } };
+      },
+      write: (patch) => storage.updateTask(req.params.id, patch as any),
+    });
+    if (!wrote.ok) return res.status(wrote.status).json({ error: wrote.error });
+    const updated = wrote.row;
     const uid_to = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_to}`); bustCache(`stats:${uid_to}`); bustCache(`calendar:${uid_to}`); bustCache(`notifications:${uid_to}`);
     await syncDateRulesForEntity(storage, uid_to, "task", updated.id).catch(() => null);
-    res.json({ ...updated, ...(result.ended ? { seriesEnded: true } : {}) });
+    res.json({ ...updated, ...(seriesEnded ? { seriesEnded: true } : {}) });
   }));
   // Change a task's repeat rule (cadence, end, pause) on the stored tags.
   app.post("/api/tasks/:id/schedule", asyncHandler(async (req, res) => {
@@ -7342,11 +7350,13 @@ Rules:
       if (typeof b.paused !== "boolean") return res.status(400).json({ error: "paused must be true or false" });
       patch.paused = b.paused;
     }
-    const existing = await storage.getTask(req.params.id);
-    if (!existing) return res.status(404).json({ error: "Not found" });
-    const tags = applyTaskSchedule({ dueDate: existing.dueDate, tags: existing.tags }, patch);
-    const updated = await storage.updateTask(req.params.id, { tags } as any);
-    if (!updated) return res.status(404).json({ error: "Not found" });
+    const wrote = await writeFromStoredRow({
+      read: () => storage.getTask(req.params.id),
+      compute: (existing) => ({ patch: { tags: applyTaskSchedule({ dueDate: existing.dueDate, tags: existing.tags }, patch) } }),
+      write: (p) => storage.updateTask(req.params.id, p as any),
+    });
+    if (!wrote.ok) return res.status(wrote.status).json({ error: wrote.error });
+    const updated = wrote.row;
     const uid_ts = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_ts}`); bustCache(`stats:${uid_ts}`); bustCache(`calendar:${uid_ts}`); bustCache(`notifications:${uid_ts}`);
     await syncDateRulesForEntity(storage, uid_ts, "task", updated.id).catch(() => null);
@@ -8043,6 +8053,9 @@ Rules:
   }));
   app.post("/api/events", asyncHandler(async (req, res) => {
     applyActiveProfileScope(req, req.body);
+    // The edit route always refused a blank title; the create route took "   "
+    // and the calendar drew an event with no name (integrity run, 2026-11-27).
+    if (typeof req.body?.title === "string" && !req.body.title.trim()) return res.status(400).json({ error: "Event title must be a non-empty string" });
     const parsed = insertEventSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     // Duplicate detection (shared/domain/dedup): same title, date and time is
@@ -8086,12 +8099,14 @@ Rules:
     const state = req.body?.state;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) required" });
     if (state !== "done" && state !== "skip" && state !== "clear") return res.status(400).json({ error: "state must be done, skip or clear" });
-    const existing = await storage.getEvent(req.params.id);
-    if (!existing) return res.status(404).json({ error: "Not found" });
     const today = getUserToday(getTimezone(req));
-    const tags = pruneRecurringOccurrenceTags(markRecurringOccurrence((existing as any).tags ?? [], date, state), today);
-    const updated = await storage.updateEvent(req.params.id, { tags } as any);
-    if (!updated) return res.status(404).json({ error: "Not found" });
+    const wrote = await writeFromStoredRow({
+      read: () => storage.getEvent(req.params.id),
+      compute: (existing) => ({ patch: { tags: pruneRecurringOccurrenceTags(markRecurringOccurrence((existing as any).tags ?? [], date, state), today) } }),
+      write: (p) => storage.updateEvent(req.params.id, p as any),
+    });
+    if (!wrote.ok) return res.status(wrote.status).json({ error: wrote.error });
+    const updated = wrote.row;
     const uid_evo = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`events:${uid_evo}`); bustCache(`stats:${uid_evo}`); bustCache(`calendar:${uid_evo}`); bustCache(`notifications:${uid_evo}`);
     res.json(updated);
@@ -8104,10 +8119,13 @@ Rules:
     const on = req.body?.on;
     if (flag !== "paused" && flag !== "archived") return res.status(400).json({ error: "flag must be paused or archived" });
     if (typeof on !== "boolean") return res.status(400).json({ error: "on (boolean) required" });
-    const existing = await storage.getEvent(req.params.id);
-    if (!existing) return res.status(404).json({ error: "Not found" });
-    const updated = await storage.updateEvent(req.params.id, { tags: setRecurringSeriesFlag((existing as any).tags ?? [], flag, on) } as any);
-    if (!updated) return res.status(404).json({ error: "Not found" });
+    const wrote = await writeFromStoredRow({
+      read: () => storage.getEvent(req.params.id),
+      compute: (existing) => ({ patch: { tags: setRecurringSeriesFlag((existing as any).tags ?? [], flag, on) } }),
+      write: (p) => storage.updateEvent(req.params.id, p as any),
+    });
+    if (!wrote.ok) return res.status(wrote.status).json({ error: wrote.error });
+    const updated = wrote.row;
     const uid_evf = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`events:${uid_evf}`); bustCache(`stats:${uid_evf}`); bustCache(`calendar:${uid_evf}`); bustCache(`notifications:${uid_evf}`);
     res.json(updated);
@@ -8131,10 +8149,13 @@ Rules:
       if (typeof b.requireComplete !== "boolean") return res.status(400).json({ error: "requireComplete must be true or false" });
       patch.requireComplete = b.requireComplete;
     }
-    const existing = await storage.getEvent(req.params.id);
-    if (!existing) return res.status(404).json({ error: "Not found" });
-    const updated = await storage.updateEvent(req.params.id, { tags: applySeriesSettings((existing as any).tags ?? [], patch) } as any);
-    if (!updated) return res.status(404).json({ error: "Not found" });
+    const wrote = await writeFromStoredRow({
+      read: () => storage.getEvent(req.params.id),
+      compute: (existing) => ({ patch: { tags: applySeriesSettings((existing as any).tags ?? [], patch) } }),
+      write: (p) => storage.updateEvent(req.params.id, p as any),
+    });
+    if (!wrote.ok) return res.status(wrote.status).json({ error: wrote.error });
+    const updated = wrote.row;
     const uid_evs = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`events:${uid_evs}`); bustCache(`stats:${uid_evs}`); bustCache(`calendar:${uid_evs}`); bustCache(`notifications:${uid_evs}`);
     res.json(updated);
@@ -11654,6 +11675,11 @@ No emojis. No prose outside the JSON.`,
     if (req.body.amount === undefined || req.body.amount === null) {
       return res.status(400).json({ error: "amount is required" });
     }
+    // An amount is a number or a number typed as text. Number([5]) is 5 and
+    // Number(true) is 1: a list or a switch was stored as income (integrity run, 2026-11-27).
+    if (typeof req.body.amount !== "number" && typeof req.body.amount !== "string") {
+      return res.status(400).json({ error: "amount must be a number" });
+    }
     const amt = typeof req.body.amount === "number" ? req.body.amount : Number(req.body.amount);
     {
       const amountError = validateTransactionAmount(amt);
@@ -12798,7 +12824,7 @@ No emojis. No prose outside the JSON.`,
       try {
         const p: any = await storage.getProfile(aid);
         if (p) {
-          const v = resolveAssetValue((p as any).fields);
+          const v = resolveAssetValue(p);
           assetById[aid] = { id: p.id, name: p.name, type: p.type, currentValue: v || null };
         }
       } catch {}

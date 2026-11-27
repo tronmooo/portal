@@ -2362,6 +2362,21 @@ export class SupabaseStorage implements IStorage {
   }
 
   /**
+   * A profile's characteristic values live in a preferences row
+   * (`details:profile:<id>`) the SQL cascade never touches. They stayed after
+   * the profile was deleted, and the catalog's "used on N records" kept
+   * counting them (integrity run, 2026-11-27). Best effort, like the budget
+   * prune: the profile is already gone.
+   */
+  private async pruneDetailsForProfile(profileId: string): Promise<void> {
+    try {
+      await this.saveRecordDetails("profile", profileId, { values: {}, updatedAt: "" });
+    } catch (e: any) {
+      console.warn(`[deleteProfile] details prune for ${profileId} failed: ${e?.message || e}`);
+    }
+  }
+
+  /**
    * The shares a profile holds on other people's assets and loans, keyed by
    * subject, captured BEFORE the delete cascade drops the link rows.
    */
@@ -2460,6 +2475,7 @@ export class SupabaseStorage implements IStorage {
     if (!rpcError) {
       console.log(`[deleteProfile] atomic cascade RPC path for ${id}: ${JSON.stringify(rpcCounts)}`);
       await this.pruneBudgetsForProfile(id);
+      await this.pruneDetailsForProfile(id);
       await this.redistributePartyShares(heldShares);
       return true;
     }
@@ -2679,7 +2695,7 @@ export class SupabaseStorage implements IStorage {
     }
     // The profile row is gone: its per-person budgets go with it (D127) and
     // its co-ownership shares return to the remaining owners (D139).
-    if (!error) { await this.pruneBudgetsForProfile(id); await this.redistributePartyShares(heldShares); }
+    if (!error) { await this.pruneBudgetsForProfile(id); await this.pruneDetailsForProfile(id); await this.redistributePartyShares(heldShares); }
     // Return false if EITHER the final profile-row delete failed OR any cascade
     // step failed. Previously we returned `!error` even when child cascade
     // operations failed, so the route reported success while orphan rows
@@ -8516,7 +8532,7 @@ export class SupabaseStorage implements IStorage {
     const assetBreakdown: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
       if (!isAssetProfile(p)) continue;
-      const gross = resolveAssetValue(p.fields);
+      const gross = resolveAssetValue(p);
       if (gross <= 0) continue;
       const share = shareForAsset(p);
       if (share <= 0) continue;
@@ -8648,7 +8664,7 @@ export class SupabaseStorage implements IStorage {
             if (!isAssetProfile(p)) return s;
             const share = shareForAsset(p);
             if (share <= 0) return s;
-            return s + (resolveAssetValue(p.fields) * share / 100);
+            return s + (resolveAssetValue(p) * share / 100);
           }, 0);
         })(),
         // Liabilities: profiles carrying a loan/remaining balance (financed cars, mortgages,
@@ -9971,7 +9987,7 @@ export class SupabaseStorage implements IStorage {
     const assets: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
       if (!isAssetProfile(p)) continue;
-      const gross = resolveAssetValue(p.fields);
+      const gross = resolveAssetValue(p);
       if (gross <= 0) continue;
       const share = shareForItem(p, assetLinksByAsset);
       if (share <= 0) continue;
