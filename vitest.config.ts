@@ -617,6 +617,7 @@ export default defineConfig({
       // pet food, vehicles, devices, subscriptions and accounts.
       'tests/item-identity.test.ts',
       'tests/item-enrichment-flow.test.ts',
+      'tests/password-reset-link-session.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

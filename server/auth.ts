@@ -85,6 +85,26 @@ function getSupabaseAuth(): SupabaseClient | null {
   return supabaseAuth;
 }
 
+/**
+ * A client for ONE user sign-in (password check, token refresh), used once and
+ * dropped.
+ *
+ * `getSupabaseAuth()` is the server's own privileged client. Signing a user in
+ * ON it made the client carry that user's session: every database call it
+ * made afterwards went out as the last person who signed in on that server
+ * instance, under their row-level security — the shared sign-in limiter's
+ * insert into auth_rate_limits was refused ("new row violates row-level
+ * security policy") and the limiter silently fell back to per-instance
+ * counting (found 2026-11-27 on the isolated stack, in the server's own log).
+ * A sign-in never touches the privileged client now.
+ */
+function userSessionClient(): SupabaseClient | null {
+  const url = process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+}
+
 // Extend Express Request with user info
 declare global {
   namespace Express {
@@ -457,16 +477,37 @@ function decodeJwtPayload(token: string): Record<string, any> | null {
 }
 
 /**
- * True when the session behind `accessToken` was created by the password
- * recovery flow. Supabase lists the authentication methods that produced a
- * session in the JWT `amr` claim as `[{ method, timestamp }]`; a reset-link
- * session carries `method: "recovery"`. A password/OAuth session does not,
- * and must not be allowed to set a new password without the current one.
+ * True when the session behind `accessToken` was created by a link e-mailed
+ * to the account's address — which is what a password reset proves: control
+ * of the mailbox. Supabase lists the authentication methods that produced a
+ * session in the JWT `amr` claim as `[{ method, timestamp }]`.
+ *
+ * The emailed reset link is followed through `/auth/v1/verify?type=recovery`,
+ * and the session GoTrue issues there carries `method: "otp"` — a ONE-TIME
+ * link, not "recovery" (that name appears only when the link is exchanged in
+ * the PKCE flow). This check used to accept "recovery" alone, so EVERY real
+ * reset link was refused with "Invalid or expired reset token": password reset
+ * by e-mail did not work (found 2026-11-27 by the first end-to-end run of the
+ * flow, on the isolated stack — no earlier test followed a real link).
+ *
+ * Accepted: a session created ONLY by an e-mailed link ("recovery", "otp",
+ * "magiclink"), and created recently. Refused, as before: any session that
+ * involved a password or an OAuth sign-in — those must not set a new password
+ * without the current one (that is /api/auth/change-password).
  */
-function isRecoverySession(accessToken: string): boolean {
+export const RESET_LINK_METHODS: ReadonlySet<string> = new Set(["recovery", "otp", "magiclink"]);
+export const RESET_SESSION_MAX_AGE_S = 60 * 60;
+export function isRecoverySession(accessToken: string, nowMs: number = Date.now()): boolean {
   const payload = decodeJwtPayload(accessToken);
-  const amr = Array.isArray(payload?.amr) ? payload!.amr : [];
-  return amr.some((m: any) => m === "recovery" || (m && typeof m === "object" && m.method === "recovery"));
+  const amr: Array<{ method: string; timestamp: number | null }> = (Array.isArray(payload?.amr) ? payload!.amr : [])
+    .map((m: any) => (typeof m === "string" ? { method: m, timestamp: null } : { method: String(m?.method ?? ""), timestamp: Number.isFinite(Number(m?.timestamp)) ? Number(m.timestamp) : null }))
+    .filter((m: { method: string }) => m.method);
+  if (amr.length === 0) return false;
+  if (!amr.every((m) => RESET_LINK_METHODS.has(m.method))) return false;
+  // Fresh: the link was followed within the hour (the claim's own time when
+  // it has one, else the token's issue time).
+  const at = Math.max(...amr.map((m) => m.timestamp ?? Number(payload?.iat ?? 0)));
+  return at > 0 && nowMs / 1000 - at <= RESET_SESSION_MAX_AGE_S;
 }
 
 /**
@@ -596,7 +637,7 @@ export function registerAuthRoutes(app: Express) {
     }
 
     // Sign in immediately to get a session
-    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+    const { data: signInData, error: signInError } = await (userSessionClient() ?? supabase).auth.signInWithPassword({
       email,
       password,
     });
@@ -633,7 +674,7 @@ export function registerAuthRoutes(app: Express) {
       return res.status(400).json({ error: "Email and password required" });
     }
 
-    const { data, error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await (userSessionClient() ?? supabase).auth.signInWithPassword({
       email,
       password,
     });
@@ -667,7 +708,7 @@ export function registerAuthRoutes(app: Express) {
       return res.status(400).json({ error: "Refresh token required" });
     }
 
-    const { data, error } = await supabase.auth.refreshSession({ refresh_token });
+    const { data, error } = await (userSessionClient() ?? supabase).auth.refreshSession({ refresh_token });
     if (error || !data.session) {
       // Never echo the upstream error: it names why the token failed, which
       // helps an attacker distinguish a revoked token from a malformed one.
@@ -736,7 +777,7 @@ export function registerAuthRoutes(app: Express) {
     // Verify the current password by attempting a sign-in. This guarantees only
     // the owner of the account can rotate the password — without this check, a
     // stolen access token alone would be enough to take over the account.
-    const { error: verifyErr } = await supabase.auth.signInWithPassword({
+    const { error: verifyErr } = await (userSessionClient() ?? supabase).auth.signInWithPassword({
       email: user.email,
       password: currentPassword,
     });
