@@ -84,8 +84,25 @@ export const TRIAGE_2026_11_27: Triage[] = [
   },
   {
     check: "live-wellness-dashboard-check",
-    verdict: ["flaky", "open"],
+    verdict: ["flaky", "outdated", "open"],
     found: "Its AI Builder assertions depend on what the model chooses: once it built the sleep card over a tracker named Sleep rather than the sleep measurement, once it chose \"latest\" where the check expects \"total\". Looking at the account for it turned up a separate discrepancy: /api/stats counts 9 trackers where /api/trackers lists 1.",
     action: "Not changed (the choices are within what H8 allows the model). The tracker-count discrepancy is recorded in known.ts.",
   },
 ];
+
+// Each of the twelve, rerun against the branch preview (2026-11-27, commits
+// ac26869–b15d5c5) — one at a time, on a clean smoke account. "pass" means the
+// check's own exit status; a note says what had to change first and why.
+export const RERUN_ON_PREVIEW: Record<string, { result: "pass" | "fail"; note: string }> = {
+  "live-assets-liabilities-ui-check": { result: "pass", note: "Passes on the fix." },
+  "live-task-date-and-calendar-check": { result: "pass", note: "Passes with the check driving the redesigned sheet." },
+  "live-autopay-scenarios-check": { result: "pass", note: "Passes with the A7 assertion (a recurring bill's elapsed date is not overdue)." },
+  "live-asset-overview-check": { result: "pass", note: "Passes." },
+  "live-content-workflows-check": { result: "pass", note: "Passes." },
+  "live-artifacts-check": { result: "pass", note: "Passes." },
+  "live-journal-check": { result: "pass", note: "Passes." },
+  "live-dated-owner-check": { result: "pass", note: "First rerun failed at sign-in: the check hard-coded the production address while the API pointed at the preview. It now uses the configured address (as two other checks did not either). Passes." },
+  "live-exec-dashboards-check": { result: "pass", note: "First rerun failed in 7 s on \"this looks like Lunch from today — log it again?\": the chat-variations check had been stopped at the runner's cap and left ~25 expenses behind. The runner now wipes the test account after a check it stops. Passes on a clean account." },
+  "live-entry-edit-and-series-edit-check": { result: "pass", note: "First rerun failed for the same leftover reason: a \"Running\" tracker left behind took the run the check logs to a new tracker by name (recorded as an open question in known.ts). Passes on a clean account." },
+  "live-wellness-dashboard-check": { result: "pass", note: "One assertion was outdated: it expected the saved 90-day default after a reload, but since QA 2026-11-24 (H4) the range picked on the tabs rides in the address and a reload keeps it. The check now requires both: the reload keeps the picked range, and the tab opened with no range shows the saved default. Passes." },
+};

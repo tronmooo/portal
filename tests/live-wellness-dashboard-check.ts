@@ -242,7 +242,18 @@ async function main() {
     check((await page.locator('[data-testid="wellness-grid"] [data-card="w:rowing-count"]').count()) === 1, "the hand-built card is on Overview, where it was built");
     await page.reload();
     await T("wellness-grid").waitFor({ timeout: 45000 });
-    check((await T("wellness-dashboard").getAttribute("data-range")) === "90d", "after a reload the tab opens on the saved 90-day range");
+    // H4 (owner, QA 2026-11-24, later than this check): the range picked on
+    // the tabs rides in the address, so a reload KEEPS it — it was 30 days
+    // here. The saved default is what the tab opens on when the address names
+    // none. The old line asked for 90 days after the reload, which is the
+    // behaviour that rule replaced ("7D, reload, back on 30D").
+    const picked = new URL(page.url()).hash.match(/range=(\w+)/)?.[1] ?? null;
+    check(picked === "30d", `the address carries the range picked on the tabs (${picked})`);
+    check((await T("wellness-dashboard").getAttribute("data-range")) === "30d", "a reload keeps the range that was picked");
+    await page.goto(`${UI_BASE}/#/`);
+    await page.goto(`${UI_BASE}/#/wellness`);
+    await T("wellness-grid").waitFor({ timeout: 45000 });
+    check((await T("wellness-dashboard").getAttribute("data-range")) === "90d", "opened with no range in the address, the tab shows the saved 90-day default");
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     check(overflow <= 1, `the page does not scroll sideways on a phone (${overflow}px)`);

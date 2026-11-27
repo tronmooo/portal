@@ -10,7 +10,7 @@ import path from "path";
 import { ROOT } from "./workflow-inventory";
 import { buildMatrix, stateOf } from "./gen-integrity-map";
 import { KNOWN } from "../tests/integrity/known";
-import { TRIAGE_2026_11_27 } from "../tests/integrity/triage";
+import { TRIAGE_2026_11_27, RERUN_ON_PREVIEW } from "../tests/integrity/triage";
 import type { ScenarioResult, Finding } from "../tests/integrity/framework";
 
 const arg = (n: string) => { const i = process.argv.indexOf(n); return i >= 0 ? process.argv[i + 1] : undefined; };
@@ -102,9 +102,9 @@ out(`## The ${TRIAGE_2026_11_27.length} live checks that were red on production,
 out();
 out("Each was investigated on its own. *defect* = a product bug, fixed on the branch and guarded; *outdated* = the assertion contradicted a later owner rule or a redesign and was brought in line with it (never loosened to pass); *flaky* = did not reproduce; *runner* = caused by the check runner itself; *open* = real behaviour, left for a product decision.");
 out();
-out("| Check | Verdict | What was found | What was done |");
-out("|---|---|---|---|");
-for (const t of TRIAGE_2026_11_27) out(`| \`${t.check}\` | ${t.verdict.join(" + ")} | ${esc(t.found)} | ${esc(t.action)} |`);
+out("| Check | Verdict | What was found | What was done | Rerun on the branch preview |");
+out("|---|---|---|---|---|");
+for (const t of TRIAGE_2026_11_27) out(`| \`${t.check}\` | ${t.verdict.join(" + ")} | ${esc(t.found)} | ${esc(t.action)} | ${RERUN_ON_PREVIEW[t.check] ? `**${RERUN_ON_PREVIEW[t.check].result}** — ${esc(RERUN_ON_PREVIEW[t.check].note)}` : "not rerun"} |`);
 out();
 
 // ── failures ────────────────────────────────────────────────────────────────

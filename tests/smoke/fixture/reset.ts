@@ -11,6 +11,9 @@ export async function reset(): Promise<void> {
   const entityEndpoints = [
     "/expenses", "/obligations", "/events", "/tasks", "/trackers",
     "/documents", "/habits", "/journal", "/artifacts", "/goals", "/incomes",
+    // what chat was told to remember: a leftover made "remember X" an update
+    // instead of a new memory, and the chat check counts new ones (2026-11-27)
+    "/memories",
   ];
   for (const path of entityEndpoints) {
     const r = await api<any[]>("GET", path);
