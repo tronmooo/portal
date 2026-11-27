@@ -117,10 +117,25 @@ describe("a scenario cannot pass on a success answer alone", () => {
     const run = read("tests/integrity/run.ts");
     expect(run).toMatch(/acquireGateLock\(preferenceLockIo\(/);
     const files = ["tests/integrity/framework.ts", "tests/integrity/run.ts", ...fs.readdirSync(path.join(ROOT, "tests/integrity/scenarios")).map((f) => `tests/integrity/scenarios/${f}`)];
+    // One file may call fetch() directly: the account scenarios, which sign up
+    // and act as OTHER, throwaway accounts and must see a 429 unhandled (the
+    // sign-in limiter is one of the things they test). That is safe only
+    // because they can never reach a deployed app — held below.
+    const ISOLATED_ONLY_FILE = "tests/integrity/scenarios/accounts.ts";
     for (const f of files) {
+      if (f === ISOLATED_ONLY_FILE) continue;
       const bare = read(f).split("\n").filter((l) => /(^|[^\w.])fetch\(/.test(l) && !/^\s*(\/\/|\*)/.test(l));
       expect(bare, `${f} makes no bare fetch() call`).toEqual([]);
     }
+    const accounts = read(ISOLATED_ONLY_FILE);
+    const defs = accounts.split(/\nscenario\(\{/).slice(1);
+    expect(defs.length).toBeGreaterThan(0);
+    for (const d of defs) expect(d.slice(0, 700), `every scenario in ${ISOLATED_ONLY_FILE} is isolatedOnly`).toMatch(/isolatedOnly: true/);
+    // …and the framework runs an isolatedOnly scenario only when the app AND
+    // the database under test are both on this machine.
+    const fw = read("tests/integrity/framework.ts");
+    expect(fw).toMatch(/IS_ISOLATED = process\.env\.INTEGRITY_ISOLATED === "1" && LOCAL\.test\(API_BASE\) && LOCAL\.test\(SB_URL\)/);
+    expect(fw).toMatch(/if \(def\.isolatedOnly && !IS_ISOLATED\) \{ results\.push\(/);
     // the one deliberate exception: a request that has to be cut off mid-flight
     expect(read("tests/integrity/scenarios/hardening.ts").match(/globalThis\.fetch\(/g)?.length).toBe(1);
     // the other account is only ever asked for THIS account's rows

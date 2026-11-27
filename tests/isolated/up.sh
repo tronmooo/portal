@@ -13,18 +13,25 @@ docker compose up -d db
 until [ "$(docker inspect -f '{{.State.Health.Status}}' isolated-db-1 2>/dev/null)" = "healthy" ]; do sleep 2; done
 # the image creates these roles; this run's password lets auth and REST sign in
 until docker exec isolated-db-1 psql -U supabase_admin -d postgres -q -v ON_ERROR_STOP=1 \
-  -c "alter user authenticator with password '$ISOLATED_DB_PASSWORD'; alter user supabase_auth_admin with password '$ISOLATED_DB_PASSWORD';" >/dev/null 2>&1; do sleep 2; done
-docker compose up -d auth rest
+  -c "alter user authenticator with password '$ISOLATED_DB_PASSWORD'; alter user supabase_auth_admin with password '$ISOLATED_DB_PASSWORD'; alter user supabase_storage_admin with password '$ISOLATED_DB_PASSWORD';" >/dev/null 2>&1; do sleep 2; done
+docker compose up -d mail auth rest
 for _ in $(seq 1 60); do curl -s -o /dev/null --noproxy '*' -f http://127.0.0.1:54323/health && break; sleep 2; done
 if [ "$(docker exec isolated-db-1 psql -U supabase_admin -d postgres -Atc "select count(*) from pg_tables where schemaname='public'")" = "0" ]; then
   echo "applying schema.sql"; ./apply-schema.sh
 fi
 docker restart isolated-rest-1 >/dev/null   # pick up the schema
-if ! curl -s -o /dev/null --noproxy '*' http://127.0.0.1:54321/auth/v1/health; then
-  nohup node gateway.mjs > .run/gateway.log 2>&1 &
-  echo $! > .run/gateway.pid
-  for _ in $(seq 1 20); do curl -s -o /dev/null --noproxy '*' -f http://127.0.0.1:54321/auth/v1/health && break; sleep 1; done
-fi
+docker compose up -d storage
+for _ in $(seq 1 60); do curl -s -o /dev/null --noproxy '*' -f http://127.0.0.1:54326/status && break; sleep 2; done
+# the two buckets the app uses (private, as in production)
+for b in documents profile-photos; do
+  curl -s --noproxy '*' -o /dev/null -X POST http://127.0.0.1:54326/bucket \
+    -H "apikey: $ISOLATED_SERVICE_KEY" -H "Authorization: Bearer $ISOLATED_SERVICE_KEY" -H "Content-Type: application/json" \
+    -d "{\"id\":\"$b\",\"name\":\"$b\",\"public\":false}"
+done
+[ -f .run/gateway.pid ] && kill "$(cat .run/gateway.pid)" 2>/dev/null || true
+nohup node gateway.mjs > .run/gateway.log 2>&1 &
+echo $! > .run/gateway.pid
+for _ in $(seq 1 20); do curl -s -o /dev/null --noproxy '*' -f http://127.0.0.1:54321/auth/v1/health && break; sleep 1; done
 # The two test accounts, with the ids and sign-ins the fixtures already use
 # (tests/smoke/fixture/account.ts; the second is only ever REFUSED things).
 user() {
@@ -45,5 +52,8 @@ SMOKE_API_BASE=http://127.0.0.1:5199/api
 SMOKE_UI_BASE=http://127.0.0.1:5199
 WRITE_RATE_LIMIT_PER_MIN=100000
 INTEGRITY_NO_AI=1
+INTEGRITY_ISOLATED=1
+ISOLATED_SERVICE_KEY=$ISOLATED_SERVICE_KEY
+ISOLATED_MAIL_API=http://127.0.0.1:54325
 ENV
 echo "isolated stack is up. App + test environment: tests/isolated/.run/app.env"

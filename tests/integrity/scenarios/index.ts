@@ -6,3 +6,4 @@ import "./chat";
 import "./browser";
 import "./sweep";
 import "./chat-sweep";
+import "./accounts";

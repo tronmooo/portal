@@ -83,6 +83,11 @@ export interface ScenarioDef {
   browser?: boolean;
   /** Spends model calls; skipped with --no-chat. */
   chat?: boolean;
+  /**
+   * Creates and destroys WHOLE ACCOUNTS, or floods the server: only ever run
+   * against the isolated stack (tests/isolated), never a deployed app.
+   */
+  isolatedOnly?: boolean;
   run: (ctx: Ctx) => Promise<void>;
 }
 
@@ -104,6 +109,14 @@ export function mulberry32(seed: number): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+/**
+ * True only when BOTH the app and the database under test are on this machine
+ * (tests/isolated). Account-destroying scenarios refuse to run otherwise — a
+ * mis-set flag alone can never point them at a deployed app.
+ */
+const LOCAL = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/;
+export const IS_ISOLATED = process.env.INTEGRITY_ISOLATED === "1" && LOCAL.test(API_BASE) && LOCAL.test(SB_URL);
 
 export const laToday = (d = new Date()) => d.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
 
@@ -202,6 +215,7 @@ export async function runScenarios(opts: RunOptions): Promise<{ results: Scenari
     };
     if (opts.only && !opts.only.test(def.id)) continue;
     if (def.chat && !opts.chat) { results.push({ ...base, skippedWhy: "--no-chat" }); continue; }
+    if (def.isolatedOnly && !IS_ISOLATED) { results.push({ ...base, skippedWhy: "needs the isolated stack (tests/isolated/up.sh)" }); continue; }
     if (def.browser && !opts.ui) { results.push({ ...base, skippedWhy: opts.browser ? "browser unavailable" : "--no-browser" }); continue; }
 
     const rng = mulberry32(opts.seed + n * 7919);

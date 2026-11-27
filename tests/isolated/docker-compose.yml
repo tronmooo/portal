@@ -38,11 +38,22 @@ services:
       GOTRUE_RATE_LIMIT_EMAIL_SENT: 100000
       GOTRUE_RATE_LIMIT_TOKEN_REFRESH: 100000
       GOTRUE_RATE_LIMIT_VERIFY: 100000
-      GOTRUE_SMTP_HOST: localhost
-      GOTRUE_SMTP_PORT: 2500
+      GOTRUE_SMTP_HOST: mail
+      GOTRUE_SMTP_PORT: 1025
       GOTRUE_SMTP_ADMIN_EMAIL: admin@example.test
+      GOTRUE_SMTP_MAX_FREQUENCY: 1s
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
     depends_on:
       db: { condition: service_healthy }
+      mail: { condition: service_started }
+  # Catches every e-mail auth sends (the password-reset link) so a test can
+  # read it; nothing is delivered anywhere.
+  mail:
+    image: axllent/mailpit:latest
+    ports: ["54325:8025"]
   rest:
     image: postgrest/postgrest:v12.2.12
     ports: ["54324:3000"]
@@ -54,3 +65,24 @@ services:
       PGRST_DB_USE_LEGACY_GUCS: "false"
     depends_on:
       db: { condition: service_healthy }
+  # File storage (documents, profile photos), on a local volume.
+  storage:
+    image: supabase/storage-api:v1.101.0
+    ports: ["54326:5000"]
+    environment:
+      ANON_KEY: ${ISOLATED_ANON_KEY}
+      SERVICE_KEY: ${ISOLATED_SERVICE_KEY}
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: ${ISOLATED_JWT_SECRET}
+      AUTH_JWT_SECRET: ${ISOLATED_JWT_SECRET}
+      DATABASE_URL: postgres://supabase_storage_admin:${ISOLATED_DB_PASSWORD}@db:5432/postgres
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: isolated
+      REGION: local
+      GLOBAL_S3_BUCKET: isolated
+      ENABLE_IMAGE_TRANSFORMATION: "false"
+    depends_on:
+      db: { condition: service_healthy }
+      rest: { condition: service_started }

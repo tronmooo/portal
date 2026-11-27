@@ -11,6 +11,8 @@ fixtures, and automated cleanup."
 | database | `supabase/postgres` (Postgres 17) | empty, then given `schema.sql` |
 | auth | `supabase/gotrue` | sign-up, sign-in, password reset, account deletion |
 | REST | `postgrest/postgrest` | what the app's storage layer and the integrity run's database checks read |
+| storage | `supabase/storage-api` | uploaded files, on a local volume (the two buckets the app uses) |
+| mail | `axllent/mailpit` | catches what auth sends (the password-reset link) so a test can read it; nothing is delivered |
 | gateway | `gateway.mjs` | the one address a Supabase client is given |
 
 and creates the two test accounts the fixtures already use (same ids and
@@ -41,8 +43,14 @@ request (`.github/workflows/integrity-isolated.yml`).
   migration adds; CI fails if the isolated schema lacks any of it. After a
   new migration is applied to production, regenerate `schema.sql`.
 - **Not in the stack:** the AI provider (chat scenarios need its key; they run
-  against the deployed app with the smoke account), file storage (uploads),
-  bank connections, e-mail delivery (sign-ups are confirmed automatically).
+  against the deployed app with the smoke account — AI routes answer 503
+  `AI_UNAVAILABLE` here) and bank connections.
+- **Only here:** the scenarios in `tests/integrity/scenarios/accounts.ts`
+  (sign-up, password change and reset through the e-mailed link, wiping an
+  account, export / import between two accounts, what no session or another
+  account can reach, the sign-in limiter, load). They create and destroy whole
+  accounts, so the framework runs them only when the app AND the database are
+  both on this machine (`IS_ISOLATED`), never against a deployed app.
 
 ## Regenerating `schema.sql`
 
