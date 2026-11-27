@@ -1665,6 +1665,40 @@ line with that rule and says so in place; anything else stays red.
 `scripts/run-live-checks.ts` frees the gate lock after stopping a check (a
 killed holder used to fail the next check too).
 
+**I14. A transaction is never a duplicate because of what it says.** (Owner,
+2026-11-27: "Identical expenses must be allowed, just like identical loan
+payments… Prevent technical duplicates through idempotency keys, request
+identifiers, and retry protection.") An expense or an income is never refused,
+questioned or folded because its amount, description or date matches another:
+`findPossibleDuplicates` scores nothing for `TRANSACTION_ENTITY_TYPES`
+(`shared/duplicate-guard.ts`), and neither create route answers
+`POSSIBLE_DUPLICATE`. The only duplicate is the same REQUEST twice: the app
+sends one `Idempotency-Key` per submission (`client/src/lib/submission-key.ts`:
+the same key while the first is in the air or ended with no answer, a new key
+once the server answered), the row's id is derived from that key
+(`server/idempotent-id.ts`) so the database refuses the twin, and chat's replay
+is the run and action ledgers. Events and tasks keep their content check. Never
+bring back an amount/date/description comparison for money that moved.
+*Guards:* `tests/identical-transactions-allowed.test.ts`, `tests/duplicate-guard.test.ts`.
+**I15. The tracker the person named is the tracker.** (Owner, 2026-11-27.)
+"Log to a new tracker called X" creates or uses X, even when the activity has a
+canonical tracker (`explicitNewTrackerName`, `shared/tracker-intent.ts`); simply
+logging an activity uses the existing one as before. A confirmation names the
+tracker the entry is IN, read from the tool result (`__loggedTo`), and
+`create_tracker` never reports an existing tracker as created.
+*Guard:* `tests/tracker-named-by-user.test.ts`.
+**I16. What chat confirms is what was stored.** A goal asked for under an
+existing title with a different target is a question, never the old goal handed
+back as "Created" (`shared/goal-duplicate.ts`). A report withdrawn in the same
+message ("I meditated again… no wait, I only did it once") changes nothing and
+removes nothing (`shared/chat-retraction.ts`). A weekday named on that weekday
+is TODAY unless "next" or the rest of the message says otherwise
+(`parseQuickWhen`, and the dated prompt line). This month's budgets are in
+chat's context (`budgetsContextLine`); a reply that argues with the system's
+retry instruction is never shown (`isRetryBackTalk`).
+*Guards:* `tests/goal-same-title-different-target.test.ts`,
+`tests/chat-retraction.test.ts`, `tests/chat-context-version.test.ts`.
+
 ## Data and credentials
 
 - This repository is **public**. Never commit a password, token or real

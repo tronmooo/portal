@@ -122,15 +122,27 @@ describe("stop and ask — never guess", () => {
 });
 
 describe("Rule 35 at the write path (duplicate guard)", () => {
-  it("the same expense written again moments later is the same row; __allowDuplicate makes a second one", async () => {
+  // CHANGED 2026-11-27. This test used to require that the same expense
+  // written again moments later was THE SAME ROW unless the caller passed
+  // __allowDuplicate. The owner ruled that out: "Identical expenses must be
+  // allowed… Do not prevent a transaction simply because its amount, merchant,
+  // or date matches another transaction. Prevent technical duplicates through
+  // idempotency keys, request identifiers, and retry protection."
+  it("an identical expense written again is a second expense; the same REQUEST is the same row", async () => {
     const a = await s.createExpense({ amount: 12, category: "food", description: "Lunch", date: "2026-09-22" } as any);
-    const b = await s.createExpense({ amount: 12, category: "food", description: "Lunch!", date: "2026-09-22" } as any);
-    expect(b.id).toBe(a.id);
-    expect(await s.getExpenses()).toHaveLength(1);
-    const c = await s.createExpense({ amount: 12, category: "food", description: "Lunch", date: "2026-09-22", __allowDuplicate: true } as any);
-    expect(c.id).not.toBe(a.id);
-    expect((c as any).__allowDuplicate).toBeUndefined();
+    const b = await s.createExpense({ amount: 12, category: "food", description: "Lunch", date: "2026-09-22" } as any);
+    expect(b.id).not.toBe(a.id);
     expect(await s.getExpenses()).toHaveLength(2);
+    // a request key: the retry of one submission is that submission's row
+    const k1 = await s.createExpense({ amount: 12, category: "food", description: "Lunch", date: "2026-09-22", __requestId: "sub-aaaaaaaa" } as any);
+    const k2 = await s.createExpense({ amount: 12, category: "food", description: "Lunch", date: "2026-09-22", __requestId: "sub-aaaaaaaa" } as any);
+    expect(k2.id).toBe(k1.id);
+    expect((k1 as any).__requestId).toBeUndefined();
+    expect(await s.getExpenses()).toHaveLength(3);
+    // another key is another expense, however alike
+    const k3 = await s.createExpense({ amount: 12, category: "food", description: "Lunch", date: "2026-09-22", __requestId: "sub-bbbbbbbb" } as any);
+    expect(k3.id).not.toBe(k1.id);
+    expect(await s.getExpenses()).toHaveLength(4);
   });
 
   it("a different person's identical lunch is a second row", async () => {

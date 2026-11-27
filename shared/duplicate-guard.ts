@@ -3,20 +3,28 @@
 // Rule 35 — the universal duplicate guard that runs before every CREATE.
 //
 // Every create surface used to carry its own ad-hoc check (a 2-minute window
-// here, a 30-second lock there, a name-only match somewhere else), and the
-// ones that had none (income) logged the same paycheck twice. This is the one
-// scorer they share. It is pure: the caller fetches the plausible existing
-// rows (same owner / date / amount — or all rows for a small table) and the
-// guard says how sure it is that the candidate already exists:
+// here, a 30-second lock there, a name-only match somewhere else). This is the
+// one scorer they share. It is pure: the caller fetches the plausible existing
+// rows and the guard says how sure it is that the candidate already exists:
 //
 //   high   — the same operation stamp (requestId / operationId) already landed,
-//            or same owner + same date + same amount + same normalized
-//            name/description. Reuse the existing row (idempotent create).
-//   medium — same owner + amount + date but a different description, or the
-//            same normalized name and amount for the same owner created within
-//            the recent window (default 2 minutes) with no day to tell them
-//            apart. A different amount is a different purchase. ASK.
+//            or — for a record that is NOT a transaction — same owner + same
+//            date + same normalized name. Reuse the existing row.
+//   medium — a same-named, same-day event at another clock time, or the same
+//            name created within the recent window with no day to tell them
+//            apart. ASK.
 //   low    — nothing of the sort. Create.
+//
+// A TRANSACTION IS NEVER A DUPLICATE BECAUSE OF WHAT IT SAYS (owner,
+// 2026-11-27: "Identical expenses must be allowed, just like identical loan
+// payments. A person can legitimately purchase two items for the same price on
+// the same day. Do not prevent a transaction simply because its amount,
+// merchant, or date matches another transaction."). For an expense or an
+// income the only duplicate is a TECHNICAL one — the same request arriving
+// twice: the same operation stamp here, the request's idempotency key at the
+// storage layer (server/idempotent-id.ts) and the chat's operation ledger.
+// The amount / date / description tiers that used to hold a second $18
+// purchase back as "log it again?" are gone for those two types.
 //
 // Precedents this generalizes: shared/obligation-windows findDuplicatePaycheck
 // (pure, source + day + amount) and the confidence ladder in
@@ -65,6 +73,10 @@ export interface DuplicateGuardOptions {
 }
 
 export const DEFAULT_RECENT_WINDOW_MS = 2 * 60 * 1000;
+
+/** Money that moved: identical ones are legitimate, so content never matches. */
+export const TRANSACTION_ENTITY_TYPES: ReadonlySet<string> = new Set(["expense", "income"]);
+export const isTransactionType = (entityType: unknown): boolean => TRANSACTION_ENTITY_TYPES.has(String(entityType ?? ""));
 
 /** Names normalized like shared/ai-tool-routing createNameKey ("My Rent!" → "rent"). */
 export function normalizeDuplicateName(s: unknown): string {
@@ -167,6 +179,9 @@ export function findPossibleDuplicates(
       matches.push({ id, score: 1, reasons: ["same_request"] });
       continue;
     }
+
+    // A transaction is a duplicate only of its own request (see the header).
+    if (isTransactionType(candidate.entityType)) continue;
 
     const rawRowOwners = ownersOf(row);
     const rowOwners = rawRowOwners.length === 0 && selfId ? [selfId] : rawRowOwners;

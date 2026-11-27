@@ -249,6 +249,8 @@ import { recordProfileEdit } from "./profile-history";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { stampSalvageProvenance } from "@shared/asset-salvage";
 import { goalRequestDiffers, goalConflictQuestion } from "@shared/goal-duplicate";
+import { explicitNewTrackerName, isTheNamedTracker } from "@shared/tracker-intent";
+import { retractsOwnClaim, RETRACTION_REPLY } from "@shared/chat-retraction";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
 import { paymentReceiptLine, paymentNotRecordedLine, composePaymentReply } from "@shared/payment-receipt";
@@ -6054,6 +6056,9 @@ export function buildSystemPromptBlocks(context: string, selfProfileId?: string,
     `Current date/time: ${now.toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz })} (${tzLabel}).`,
     `Today is ${now.toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })}. Today's date is ${now.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz })}.`,
     (() => { const ref: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(now.getTime() + i * 86400000); ref.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz }) + ' = ' + d.toLocaleDateString('en-CA', { timeZone: tz })); } return 'Reference: ' + ref.join(', '); })(),
+    // Owner, 2026-11-27: "Friday on a Friday should mean today unless the
+    // user specifies next Friday or otherwise indicates a future date."
+    `A WEEKDAY NAMED ON THAT WEEKDAY IS TODAY: if today is ${now.toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })} and the user says "${now.toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })}" with nothing else, use TODAY's date. Use the one a week later only when they say "next ${now.toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })}", "a week from today", or the rest of the message makes today impossible (it moves something already scheduled for a later day, or the time named has already passed). Any other weekday name means its next occurrence after today.`,
     ``,
     `EXISTING DATA (this is fresh from the database — use it for every answer):`,
     context,
@@ -9348,8 +9353,22 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // canonical Walking tracker — never separate trackers. Keep the raw
       // name only when the user already has a custom tracker under it and
       // no canonical tracker exists (don't strand their data).
+      // THE PERSON'S OWN NAME WINS (owner, 2026-11-27): "If the user requests
+      // a new tracker with a specific name, create that tracker. If the user
+      // simply logs an activity, use the appropriate existing tracker." When
+      // the message names a new tracker and this call is the log for it —
+      // the model passed that name, or the canonical name the activity folds
+      // to — the entry goes to a tracker of THAT name (found, else created);
+      // the activity is still recognised for pace / steps / calories.
+      const askedTrackerName = explicitNewTrackerName((input as any).__userMessage);
+      const canonOfAsked = askedTrackerName ? resolveCanonicalActivity(askedTrackerName) : null;
+      const honorsAskedName = !!askedTrackerName && (
+        isTheNamedTracker(input.trackerName, askedTrackerName)
+        || (!!canonOfAsked && canonOfAsked.trackerName.toLowerCase() === String(input.trackerName || "").toLowerCase())
+      );
+      if (honorsAskedName) input.trackerName = askedTrackerName;
       const canonActivity = resolveCanonicalActivity(input.trackerName || "");
-      if (canonActivity && canonActivity.trackerName.toLowerCase() !== String(input.trackerName || "").toLowerCase()) {
+      if (!honorsAskedName && canonActivity && canonActivity.trackerName.toLowerCase() !== String(input.trackerName || "").toLowerCase()) {
         const rawHasTracker = trackers.some(t => trackerNamesMatch(t.name, input.trackerName));
         const canonHasTracker = trackers.some(t => trackerNamesMatch(t.name, canonActivity.trackerName));
         if (!rawHasTracker || canonHasTracker) {
@@ -9504,6 +9523,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const isNutritionSearch = nutritionAliases.some(a => trackerName.includes(a));
       let nameMatches = trackers.filter(t => {
         const tn = t.name.toLowerCase();
+        // A tracker the person named is matched by THAT name only: no
+        // "contains", identity or alias match may hand the entry to another.
+        if (honorsAskedName) return isTheNamedTracker(t.name, askedTrackerName);
         // Exact or whole-word contains match. NEVER raw-substring: char-level
         // .includes() let a "Weighted Pull-Ups" tracker capture a "weight" log
         // (and vice versa via trackerNamesMatch) — the 2026-08-02 report of
@@ -9527,7 +9549,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // nothing, fall back to the subject named INSIDE the entry and reuse the
       // tracker it identity-matches. Restricted to subject-naming fields and a
       // strong identity match, so it can never hijack an unrelated tracker.
-      if (nameMatches.length === 0) {
+      if (nameMatches.length === 0 && !honorsAskedName) {
         const vals = (input.values || {}) as Record<string, any>;
         for (const k of ["drug", "medication", "supplement", "name", "item"]) {
           const sv = vals[k];
@@ -9686,6 +9708,14 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           if ((e.profileId || null) !== (targetProfileId || null)) return false;
           const existingNums = Object.entries(e.values).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
           const newNums = Object.entries(entryValues).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
+          // A plain "did it" log (no figure on either side): the same thing
+          // said twice within two minutes is one entry ("I meditated today",
+          // twice, made two rows), as long as what words it does carry agree.
+          if (existingNums.length === 0 && newNums.length === 0) {
+            const words = (v: Record<string, any>) => Object.entries(v || {}).filter(([k, x]) => !k.startsWith("_") && typeof x === "string").map(([k, x]) => `${k}=${String(x).trim().toLowerCase()}`).sort();
+            const a = words(e.values), b = words(entryValues);
+            return b.every((w) => a.includes(w));
+          }
           if (existingNums.length === 0 || newNums.length === 0) return false;
           // Two DIFFERENT foods with the same numbers are two entries (one
           // food = one entry): the item named is part of what makes a log
@@ -9808,6 +9838,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           const note = summarizeEnrichment(entryEnrichment);
           if (note) (entry as any).estimateNote = `Derived/estimated (tell the user estimates are estimates): ${note}`;
         }
+        // Where it actually went — the confirmation names THIS, never the
+        // name the model asked for.
+        if (entry) (entry as any).__loggedTo = { id: tracker.id, name: tracker.name };
         return entry;
       }
       // ─── EXPENSE GUARD (2026-06-10, user report) ─────────────────────
@@ -9976,6 +10009,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         // Surface what was auto-created so callers (bulk path, chat UI) can
         // report "created a new X tracker" honestly.
         if (entry) (entry as any).__createdTracker = { id: newTracker.id, name: newTracker.name };
+        if (entry) (entry as any).__loggedTo = { id: newTracker.id, name: newTracker.name };
         // The first food ever logged creates the Nutrition tracker on this
         // path — it is as specific as any later one.
         await attachEnrichmentCandidate(entry, newTracker, input);
@@ -10094,7 +10128,19 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if (lp.length === 0) return true; // unowned tracker = global match
         return ctTargetId ? lp.includes(ctTargetId) : true;
       });
-      if (dupTracker) return dupTracker;
+      if (dupTracker) {
+        const askedNew = explicitNewTrackerName((input as any).__userMessage);
+        const sameName = String(dupTracker.name || "").trim().toLowerCase() === String(input.name || "").trim().toLowerCase();
+        // The person named a new tracker and the match is a DIFFERENT tracker
+        // that merely means the same thing: their name wins — create it.
+        const createAskedName = !sameName && isTheNamedTracker(input.name, askedNew) && !wantsNutrition;
+        if (!createAskedName) {
+          // Never report an existing tracker as created, or under the name asked for.
+          return { ...dupTracker, deduped: true, message: sameName
+            ? `A tracker named "${dupTracker.name}" already exists — nothing new was created.`
+            : `No new tracker was created: "${input.name}" is the existing tracker "${dupTracker.name}". Tell the user it is called "${dupTracker.name}".` };
+        }
+      }
 
       // PR S: AI-driven shape inference at create time. When the AI didn't
       // supply fields (or supplied only the placeholder single-value), apply
@@ -11455,28 +11501,14 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // behavior if for some reason the header was missing.
       const userTz = aiUserTimezone();
       const expenseDate = String(input.date || new Date().toLocaleDateString('en-CA', { timeZone: userTz })).slice(0, 10);
-      // Rule 35 — the universal duplicate guard (shared/duplicate-guard)
-      // replaces the old 2-minute window here. The owner the row WILL get is
-      // the named one, else the active profile, else self — the same rule the
-      // storage layer applies — so two people's identical lunches stay two
-      // expenses. high → the existing row (say so); medium → ask; low → log.
-      if (input.confirmDuplicate !== true) {
-        const allExpenses = await storage.getExpenses();
-        const expProfiles = await storage.getProfiles();
-        const expOwner = expenseLinkedProfiles[0] || aiDefaultOwner(expProfiles)?.id;
-        const verdict = findPossibleDuplicates(
-          { entityType: "expense", ownerIds: expOwner ? [expOwner] : [], date: expenseDate, amount: parsedAmount, description: input.description || "", selfProfileId: expProfiles.find(p => p.type === "self")?.id ?? null },
-          allExpenses,
-        );
-        const dupExpense = verdict.tier === "low" ? undefined : allExpenses.find(e => e.id === verdict.matches[0]?.id);
-        if (dupExpense && verdict.tier === "high") {
-          logger.info("ai", `Skipped duplicate expense: $${dupExpense.amount} ${dupExpense.description}`);
-          return { ...dupExpense, deduped: true, message: `An identical expense already exists ($${dupExpense.amount} ${dupExpense.description} on ${String(dupExpense.date || "").slice(0, 10)}) — I didn't log it twice. If the user really means a second one, call create_expense again with confirmDuplicate: true.` };
-        }
-        if (dupExpense) {
-          return { needsConfirmation: true, possibleDuplicate: { id: dupExpense.id, description: dupExpense.description, amount: dupExpense.amount, date: dupExpense.date }, error: duplicateQuestion(dupExpense) };
-        }
-      }
+      // No content check (owner, 2026-11-27): "Identical expenses must be
+      // allowed… Do not prevent a transaction simply because its amount,
+      // merchant, or date matches another." A second $18 purchase on the
+      // same day is a second expense. What IS prevented is the technical
+      // repeat: the same chat request replayed is answered from the run
+      // ledger (ai_chat_runs, by its Idempotency-Key), and the same tool
+      // call re-issued in a later round of one turn carries the same
+      // operation id and is answered from the action ledger.
       // P0.3a: validate with the shared insert schema before writing.
       const expensePayload = validateAiPayload(insertExpenseSchema, {
         amount: parsedAmount,
@@ -14666,25 +14698,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         ...(incomeProfileId ? { linkedProfiles: [incomeProfileId] } : {}),
       }, "income");
       if (!incomePayload.ok) return { error: incomePayload.error };
-      // Rule 35: log_income had no duplicate guard at all — the same paycheck
-      // said twice was logged twice. Shared guard: high → the existing row,
-      // medium → ask, low → log.
-      if (input.confirmDuplicate !== true) {
-        const incomes = await storage.getIncomes();
-        const incProfiles = await storage.getProfiles();
-        const incOwner = incomeProfileId || aiDefaultOwner(incProfiles)?.id;
-        const verdict = findPossibleDuplicates(
-          { entityType: "income", ownerIds: incOwner ? [incOwner] : [], date: incomePayload.data.date || null, amount: incomePayload.data.amount, description: incomePayload.data.description, selfProfileId: incProfiles.find(p => p.type === "self")?.id ?? null },
-          incomes,
-        );
-        const dupIncome = verdict.tier === "low" ? undefined : incomes.find(i => i.id === verdict.matches[0]?.id);
-        if (dupIncome && verdict.tier === "high") {
-          return { ...dupIncome, income: dupIncome, deduped: true, message: `This income is already logged ($${dupIncome.amount} ${dupIncome.description}${dupIncome.date ? ` on ${String(dupIncome.date).slice(0, 10)}` : ""}) — I didn't log it twice. If the user really means a second payment, call log_income again with confirmDuplicate: true.` };
-        }
-        if (dupIncome) {
-          return { needsConfirmation: true, possibleDuplicate: { id: dupIncome.id, description: dupIncome.description, amount: dupIncome.amount, date: dupIncome.date }, error: duplicateQuestion(dupIncome) };
-        }
-      }
+      // Identical incomes are legitimate (owner, 2026-11-27) — the same rule
+      // as create_expense above: only the same request twice is a duplicate.
       const created = await storage.createIncome(input.confirmDuplicate === true ? { ...incomePayload.data, __allowDuplicate: true } as any : incomePayload.data);
       if (incomeProfileId) {
         await storage.linkProfileTo(incomeProfileId, "income", created.id).catch(() => { /* non-fatal */ });
@@ -16958,6 +16973,15 @@ async function processMessageInner(userMessage: string, conversationHistory: Arr
     };
   }
 
+  // ── A REPORT WITHDRAWN IN THE SAME MESSAGE ──────────────────────────────
+  // "I meditated again... no wait, I only did it once" asks for nothing: it
+  // is answered here, with no model call, no write and no removal
+  // (shared/chat-retraction.ts; owner, 2026-11-27: "Undo must reverse only
+  // the intended action" — the model used to remove the day's one check-in).
+  if (!options?.capture && retractsOwnClaim(userMessage)) {
+    return { reply: RETRACTION_REPLY, actions: [], results: [] };
+  }
+
   // ── JOURNAL / NOTE BUTTON ───────────────────────────────────────────────
   // Deterministic: the button named the object, the message is its text.
   if (options?.capture) {
@@ -18976,7 +19000,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                 toolInput: Object.fromEntries(Object.entries(inp).filter(([k]) => !k.startsWith("__") || k === "__userMessage").map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])),
               } : {}),
               entityId: isSuccess ? (entityId || undefined) : undefined,
-              trackerName: inp.trackerName ? String(inp.trackerName) : undefined,
+              // The tracker the entry is IN (read from the result), not the
+              // name the model asked for: "Logged Jog QQ7Z…" was said of an
+              // entry that sat in Running.
+              trackerName: (isSuccess && typeof (result as any)?.__loggedTo?.name === "string" && (result as any).__loggedTo.name) || (inp.trackerName ? String(inp.trackerName) : undefined),
               createdTracker: isSuccess && (result as any)?.__createdTracker?.id ? (result as any).__createdTracker : undefined,
               turnId,
               sourceMessageId,

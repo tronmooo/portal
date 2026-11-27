@@ -217,8 +217,16 @@ export function makeFakeStorage(db: FakeDb) {
     },
 
     getExpenses: async () => db.expenses,
+    // As the real storages: the request's key names the row (the same key is
+    // the same expense, answered with the first row); the control keys are
+    // never stored.
     createExpense: async (data: any) => {
-      const row = { id: id("exp"), createdAt: new Date().toISOString(), ...data };
+      const { __requestId, __operationId, __allowDuplicate, ...rest } = data;
+      const key = __requestId || __operationId;
+      const rid = key ? `exp-key-${key}` : id("exp");
+      const first = key ? db.expenses.find(e => e.id === rid) : undefined;
+      if (first) return { ...first, __replayed: true };
+      const row = { id: rid, createdAt: new Date().toISOString(), ...rest };
       db.expenses.push(row);
       return row;
     },
@@ -235,7 +243,12 @@ export function makeFakeStorage(db: FakeDb) {
 
     getIncomes: async () => db.incomes,
     createIncome: async (data: any) => {
-      const row = { id: id("inc"), ...data };
+      const { __requestId, __operationId, __allowDuplicate, ...rest } = data;
+      const key = __requestId || __operationId;
+      const rid = key ? `inc-key-${key}` : id("inc");
+      const first = key ? db.incomes.find(i => i.id === rid) : undefined;
+      if (first) return { ...first, __replayed: true };
+      const row = { id: rid, ...rest };
       db.incomes.push(row);
       return row;
     },

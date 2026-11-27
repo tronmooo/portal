@@ -49,6 +49,7 @@ export const requestStorageContext = new AsyncLocalStorage<IStorage>();
 import { journalStorageCall, isJournaledStorageMethod } from "./write-journal";
 import { resolveOwnerForNewRecord, isOwnerQuestion, OwnerRequiredError } from "@shared/owner-resolution";
 import { findPossibleDuplicates, takeDuplicateControls, DEFAULT_RECENT_WINDOW_MS } from "@shared/duplicate-guard";
+import { idempotentId } from "./idempotent-id";
 import { assertWriteCandidate } from "@shared/write-validation";
 import { getActiveProfileIds } from "./active-scope-context";
 import { assertMutationAllowed } from "./mutation-scope";
@@ -1629,11 +1630,12 @@ export class MemStorage implements IStorage {
     const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
     const linkedProfiles = this.resolveOwnersAndValidate("expense", data as any);
     const date = data.date || new Date().toISOString();
-    if (!dupCtl.allowDuplicate) {
-      const twin = this.reuseRecentDuplicate("expense", { ...data, date, linkedProfiles }, Array.from(this.expenses.values()), dupCtl);
-      if (twin) return twin as Expense;
-    }
-    const expense: Expense = { id: randomUUID(), ...data, category: canonicalExpenseCategory(data.category), linkedProfiles, tags: data.tags || [], date, createdAt: new Date().toISOString() };
+    // Identical expenses are legitimate; only the same request twice is a
+    // duplicate (owner, 2026-11-27) — see createExpense in supabase-storage.
+    const requestKey = dupCtl.requestId || dupCtl.operationId;
+    const keyedId = requestKey ? idempotentId("memory", "expense", requestKey) : null;
+    if (keyedId && this.expenses.has(keyedId)) return Object.assign(this.expenses.get(keyedId)!, { __replayed: true });
+    const expense: Expense = { id: keyedId ?? randomUUID(), ...data, category: canonicalExpenseCategory(data.category), linkedProfiles, tags: data.tags || [], date, createdAt: new Date().toISOString() };
     this.expenses.set(expense.id, expense);
     this.logActivity("expense", `${data.description} - $${data.amount}${data.vendor ? ` at ${data.vendor}` : ""}`);
     return expense;
@@ -3022,11 +3024,10 @@ export class MemStorage implements IStorage {
   async createIncome(data: InsertIncome): Promise<Income> {
     const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
     const linkedProfiles = this.resolveOwnersAndValidate("income", data as any);
-    if (!dupCtl.allowDuplicate) {
-      const twin = this.reuseRecentDuplicate("income", { ...data, linkedProfiles }, Array.from(this.incomes.values()), dupCtl);
-      if (twin) return twin as Income;
-    }
-    const income: Income = { ...data, linkedProfiles, frequency: canonicalIncomeFrequency((data as any).frequency) ?? ((data as any).frequency || "monthly"), id: randomUUID(), createdAt: new Date().toISOString() } as Income;
+    const requestKey = dupCtl.requestId || dupCtl.operationId;
+    const keyedId = requestKey ? idempotentId("memory", "income", requestKey) : null;
+    if (keyedId && this.incomes.has(keyedId)) return Object.assign(this.incomes.get(keyedId)!, { __replayed: true });
+    const income: Income = { ...data, linkedProfiles, frequency: canonicalIncomeFrequency((data as any).frequency) ?? ((data as any).frequency || "monthly"), id: keyedId ?? randomUUID(), createdAt: new Date().toISOString() } as Income;
     this.incomes.set(income.id, income);
     return income;
   }

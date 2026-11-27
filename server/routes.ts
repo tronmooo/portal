@@ -1592,7 +1592,7 @@ export async function registerRoutes(
     // on every request (see client/src/lib/queryClient.ts); the Capacitor shell
     // talks to this API cross-origin, so they must be allowed through preflight
     // or those requests fail before the handler ever runs.
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-Timezone, X-Active-Profile-Ids, X-Data-Version");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-Timezone, X-Active-Profile-Ids, X-Data-Version, Idempotency-Key");
     // The client READS X-Data-Version off write responses to build its
     // read-your-writes token; without this it is invisible to cross-origin
     // callers (the Capacitor shell) and those writes silently lose the barrier.
@@ -7778,32 +7778,22 @@ Rules:
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     // Only the payment pipeline may mark an expense as a bill payment (D282).
     if (Array.isArray((parsed.data as any).tags)) (parsed.data as any).tags = await stripDanglingPaymentTags(storage, (parsed.data as any).tags);
-    // Rule 35: a possible duplicate is a question (409 POSSIBLE_DUPLICATE)
-    // until the caller answers it with allowDuplicate (or skipDupCheck).
-    // The owner the row will get (named, else self under "Everyone") is
-    // part of the identity. An uncertain near-match that the shared
-    // duplicate guard lets through is still created with a warning
-    // (shared/domain/dedup) so the client can say so.
-    let expenseDupWarning: string | null = null;
-    const skipExpenseDupCheck = allowDuplicateExpense || req.body.skipDupCheck === true;
-    if (!skipExpenseDupCheck) {
-      const explicitOwners = Array.isArray(parsed.data.linkedProfiles) ? parsed.data.linkedProfiles.filter(Boolean) : [];
-      const selfProfileId = (await storage.getSelfProfile())?.id ?? null;
-      const existingExpenses = await storage.getExpenses();
-      const verdict = findPossibleDuplicates(
-        { entityType: "expense", ownerIds: explicitOwners, selfProfileId, date: parsed.data.date || getUserToday(getTimezone(req)), amount: parsed.data.amount, description: parsed.data.description },
-        existingExpenses,
-      );
-      const match = verdict.tier === "low" ? undefined : existingExpenses.find(e => e.id === verdict.matches[0]?.id);
-      if (match) return res.status(409).json({ error: duplicateQuestion(match), code: "POSSIBLE_DUPLICATE", tier: verdict.tier, match });
-      const dup = findDuplicate(dedupRecordFromExpense(parsed.data), existingExpenses.filter((e: any) => !e.deletedAt).map(dedupRecordFromExpense));
-      if (dup.confidence === "high") return res.status(409).json({ error: `An expense "${dup.match!.record.name}" for that amount already exists on that day`, code: "POSSIBLE_DUPLICATE", tier: "high", existingId: dup.match!.record.id, duplicate: true });
-      expenseDupWarning = dup.warning;
-    }
-    const newExpense = await storage.createExpense(skipExpenseDupCheck ? { ...parsed.data, __allowDuplicate: true } as any : parsed.data);
+    // An expense is never refused, or held back as a question, because its
+    // amount, description or date matches another (owner, 2026-11-27:
+    // "Identical expenses must be allowed… Prevent technical duplicates
+    // through idempotency keys, request identifiers, and retry protection").
+    // The request's key names the submission: the same key is the same
+    // expense (a double tap, a retry after a timeout) and answers with the
+    // first row; a different key, or none, is always a new expense.
+    const expenseDupWarning: string | null = null;
+    const expenseKey = idempotencyKeyOf(req);
+    const newExpense = await storage.createExpense(expenseKey ? { ...parsed.data, __requestId: expenseKey } as any : parsed.data);
+    const expenseReplayed = (newExpense as any).__replayed === true;
+    delete (newExpense as any).__replayed;
     const uid_e1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`expenses:${uid_e1}`); bustCache(`stats:${uid_e1}`);
     // Tell the caller when their text was altered — never change it silently.
+    if (expenseReplayed) return res.status(200).json({ ...newExpense, replayed: true });
     res.status(201).json(expenseSanitized ? { ...newExpense, warning: SANITIZE_NOTICE } : expenseDupWarning ? { ...newExpense, warning: expenseDupWarning } : newExpense);
   }));
   app.patch("/api/expenses/:id", asyncHandler(async (req, res) => {
@@ -11752,21 +11742,11 @@ No emojis. No prose outside the JSON.`,
     // a non-array linkedProfiles or a junk date reached storage and 500'd.
     const parsed = insertIncomeSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    // Rule 35: POST /api/incomes had no duplicate guard at all. A possible
-    // duplicate is a question (409 POSSIBLE_DUPLICATE) until the caller
-    // answers it with allowDuplicate.
-    if (!allowDuplicateIncome) {
-      const explicitOwners = Array.isArray(parsed.data.linkedProfiles) ? parsed.data.linkedProfiles.filter(Boolean) : [];
-      const selfProfileId = (await storage.getSelfProfile())?.id ?? null;
-      const existingIncomes = await storage.getIncomes();
-      const verdict = findPossibleDuplicates(
-        { entityType: "income", ownerIds: explicitOwners, selfProfileId, date: parsed.data.date || null, amount: parsed.data.amount, description: parsed.data.description },
-        existingIncomes,
-      );
-      const match = verdict.tier === "low" ? undefined : existingIncomes.find(i => i.id === verdict.matches[0]?.id);
-      if (match) return res.status(409).json({ error: duplicateQuestion(match), code: "POSSIBLE_DUPLICATE", tier: verdict.tier, match });
-    }
-    const income = await storage.createIncome(allowDuplicateIncome ? { ...parsed.data, __allowDuplicate: true } as any : parsed.data);
+    // Identical incomes are legitimate (owner, 2026-11-27); only the same
+    // request twice is a duplicate — see POST /api/expenses.
+    const incomeKey = idempotencyKeyOf(req);
+    const income = await storage.createIncome(incomeKey ? { ...parsed.data, __requestId: incomeKey } as any : parsed.data);
+    if ((income as any).__replayed === true) { delete (income as any).__replayed; return res.status(200).json({ ...income, replayed: true }); }
     bustIncomeCaches(uid);
     res.status(201).json(income);
   }));

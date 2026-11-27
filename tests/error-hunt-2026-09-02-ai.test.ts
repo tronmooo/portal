@@ -187,8 +187,13 @@ describe("D63: two people's identical spends are two expenses", () => {
     const b = await executeTool("create_expense", { amount: 20, description: "lunch", category: "food", date: "2026-09-02" }, "u1");
     expect(b.deduped).toBeUndefined();
     expect(db.expenses).toHaveLength(2);
+    // CHANGED 2026-11-27: the third call used to come back `deduped` (same
+    // amount, description and day as the second). Owner: "Identical expenses
+    // must be allowed… A person can legitimately purchase two items for the
+    // same price on the same day." It is a third expense.
     const c = await executeTool("create_expense", { amount: 20, description: "lunch", category: "food", date: "2026-09-02" }, "u1");
-    expect(c.deduped).toBe(true);
+    expect(c.deduped).toBeUndefined();
+    expect(db.expenses).toHaveLength(3);
   });
 });
 

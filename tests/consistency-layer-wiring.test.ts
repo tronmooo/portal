@@ -46,9 +46,17 @@ describe("wiring: one rule, one place", () => {
     const routes = read("server/routes.ts");
     expect(routes).toMatch(/req\.body\.type = resolveProfileTypeForCreate\(req\.body\.name, req\.body\.type\)/);
   });
-  it("expenses, events and tasks run duplicate detection before insert", () => {
+  // CHANGED 2026-11-27: this used to require a content duplicate check on the
+  // expense route too. The owner ruled that an expense must never be held back
+  // because its amount, merchant or date matches another ("Identical expenses
+  // must be allowed… Prevent technical duplicates through idempotency keys");
+  // the expense and income routes now pass the request's key instead, and the
+  // events and tasks checks are unchanged.
+  it("events and tasks run duplicate detection before insert; an expense is keyed by its request", () => {
     const routes = read("server/routes.ts");
-    expect(routes).toMatch(/findDuplicate\(dedupRecordFromExpense\(parsed\.data\)/);
+    expect(routes).not.toMatch(/findDuplicate\(dedupRecordFromExpense\(parsed\.data\)/);
+    expect(routes).toMatch(/createExpense\(expenseKey \? \{ \.\.\.parsed\.data, __requestId: expenseKey \}/);
+    expect(routes).toMatch(/createIncome\(incomeKey \? \{ \.\.\.parsed\.data, __requestId: incomeKey \}/);
     expect(routes).toMatch(/findDuplicate\(dedupRecordFromEvent\(parsed\.data\)/);
     expect(routes).toMatch(/findDuplicate\(dedupRecordFromTask\(parsed\.data\)/);
   });

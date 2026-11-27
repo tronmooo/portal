@@ -197,6 +197,7 @@ import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../sha
 import { shareForParty, shareForParties, validateOwnership, roundPct, type OwnershipLink, scaleSharesTo100 } from "../shared/ownership-model";
 import { resolveOwnerForNewRecord, isOwnerQuestion, OwnerRequiredError } from "../shared/owner-resolution";
 import { findPossibleDuplicates, takeDuplicateControls, DEFAULT_RECENT_WINDOW_MS } from "../shared/duplicate-guard";
+import { idempotentId } from "./idempotent-id";
 import { assertWriteCandidate } from "../shared/write-validation";
 import { getActiveProfileIds } from "./active-scope-context";
 
@@ -4414,15 +4415,19 @@ export class SupabaseStorage implements IStorage {
   async createExpense(data: InsertExpense): Promise<Expense> {
     if (typeof data.amount !== 'number' || data.amount <= 0) throw new Error("Expense amount must be a positive number");
     const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
-    const id = randomUUID();
+    // A transaction is never a duplicate because of what it says (owner,
+    // 2026-11-27); only the SAME REQUEST twice is. A request that carries a
+    // key gets its id from the key, so the database refuses the twin
+    // (server/idempotent-id.ts); with no key every create is a new row.
+    const requestKey = dupCtl.requestId || dupCtl.operationId;
+    const id = requestKey ? idempotentId(this.userId, "expense", requestKey) : randomUUID();
     const now = new Date().toISOString();
     // Rule 6/34: owner = explicit → the single active profile → self (never
     // a guess); every owner must exist. See resolveOwnersAndValidate.
     const linkedProfiles = await this.resolveOwnersAndValidate("expense", data as any);
-    // Rule 35: a repeat of a row written moments ago is that row.
-    if (!dupCtl.allowDuplicate) {
-      const twin = await this.reuseRecentDuplicate("expense", { ...data, linkedProfiles }, dupCtl);
-      if (twin) return twin as Expense;
+    if (requestKey) {
+      const first = await this.getExpense(id);
+      if (first) return Object.assign(first, { __replayed: true }) as Expense;
     }
     // Insert with EMPTY linked_profiles — setOwners writes both the JSONB and
     //   the junction in one place. Inserting with the populated array and then
@@ -4439,7 +4444,14 @@ export class SupabaseStorage implements IStorage {
       tags: data.tags || [], date: data.date || getUserToday(this._timezone),
       source: (data as any).source || "manual", created_at: now,
     });
-    if (error) throw error;
+    if (error) {
+      // The same request landed between the look above and this insert.
+      if (requestKey && String((error as any).code) === "23505") {
+        const first = await this.getExpense(id);
+        if (first) return Object.assign(first, { __replayed: true }) as Expense;
+      }
+      throw error;
+    }
     if (linkedProfiles.length > 0) {
       const self = await this.getSelfProfile();
       const selfId = self?.id || linkedProfiles[0];
@@ -4517,16 +4529,19 @@ export class SupabaseStorage implements IStorage {
 
   async createIncome(data: InsertIncome): Promise<Income> {
     const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
-    const id = randomUUID();
+    // As createExpense: identical incomes are legitimate; only the same
+    // request twice is a duplicate, and the database decides it.
+    const requestKey = dupCtl.requestId || dupCtl.operationId;
+    const id = requestKey ? idempotentId(this.userId, "income", requestKey) : randomUUID();
     const now = new Date().toISOString();
     // Rule 6/34: owner = explicit → the single active profile → self (never
     // a guess); every owner must exist. See resolveOwnersAndValidate.
     const linkedProfiles = await this.resolveOwnersAndValidate("income", data as any);
-    // Rule 35: a repeat of a row written moments ago is that row.
-    if (!dupCtl.allowDuplicate) {
-      const twin = await this.reuseRecentDuplicate("income", { ...data, linkedProfiles }, dupCtl);
-      if (twin) return twin as Income;
-    }
+    const replayedIncome = async (): Promise<Income | null> => {
+      const first = (await this.getIncomes()).find((i) => i.id === id);
+      return first ? (Object.assign(first, { __replayed: true }) as Income) : null;
+    };
+    if (requestKey) { const first = await replayedIncome(); if (first) return first; }
     const { error } = await this.supabase.from("incomes").insert({
       id, user_id: this.userId, description: data.description,
       amount: data.amount, category: data.category || "salary",
@@ -4534,7 +4549,10 @@ export class SupabaseStorage implements IStorage {
       linked_profiles: linkedProfiles, tags: data.tags || [],
       source: "manual", created_at: now,
     });
-    if (error) throw error;
+    if (error) {
+      if (requestKey && String((error as any).code) === "23505") { const first = await replayedIncome(); if (first) return first; }
+      throw error;
+    }
     this.logActivity("income", `Created income: ${data.description} $${data.amount}`, "create", id);
     return { id, ...data, amount: data.amount, category: data.category || "salary",
       frequency: data.frequency || "monthly", linkedProfiles,

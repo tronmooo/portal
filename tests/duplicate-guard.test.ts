@@ -1,5 +1,19 @@
 /**
  * Rule 35 — the universal duplicate guard (shared/duplicate-guard.ts).
+ *
+ * CHANGED 2026-11-27 by the owner's ruling: "Identical expenses must be
+ * allowed, just like identical loan payments. A person can legitimately
+ * purchase two items for the same price on the same day. Do not prevent a
+ * transaction simply because its amount, merchant, or date matches another
+ * transaction. Prevent technical duplicates through idempotency keys, request
+ * identifiers, and retry protection."
+ *
+ * The tests below that used to assert "an expense / income with the same
+ * amount + date (+ description) is high / medium" asserted exactly what that
+ * ruling forbids. They now assert the ruling for transactions (only the same
+ * request matches) and keep the scorer's mechanics — owners, snake_case rows,
+ * deleted rows, the recent window — tested on a moneyed record that is NOT a
+ * transaction ("bill"), where the content tiers still apply.
  */
 import { describe, it, expect } from "vitest";
 import { findPossibleDuplicates, takeDuplicateControls, duplicateQuestion, normalizeDuplicateName } from "../shared/duplicate-guard";
@@ -25,7 +39,7 @@ describe("findPossibleDuplicates — tiers", () => {
 
   it("same owner + date + amount + normalized description → high", () => {
     const v = findPossibleDuplicates(
-      { entityType: "expense", ownerIds: [A], date: "2026-09-22", amount: 12.004, description: "my lunch!" },
+      { entityType: "bill", ownerIds: [A], date: "2026-09-22", amount: 12.004, description: "my lunch!" },
       [row({ createdAt: "2026-09-20T00:00:00Z" })], { now: NOW },
     );
     expect(v.tier).toBe("high");
@@ -34,7 +48,7 @@ describe("findPossibleDuplicates — tiers", () => {
 
   it("same owner + amount + date but a different description → medium", () => {
     const v = findPossibleDuplicates(
-      { entityType: "expense", ownerIds: [A], date: "2026-09-22", amount: 12, description: "Parking" },
+      { entityType: "bill", ownerIds: [A], date: "2026-09-22", amount: 12, description: "Parking" },
       [row({})], { now: NOW },
     );
     expect(v.tier).toBe("medium");
@@ -42,7 +56,7 @@ describe("findPossibleDuplicates — tiers", () => {
 
   it("same name + owner moments ago with no day to compare → medium; outside the window → low", () => {
     // An undated income against a dated one: the day cannot disagree.
-    const cand = { entityType: "income", ownerIds: [A], date: null, amount: 12, description: "Lunch" };
+    const cand = { entityType: "bill", ownerIds: [A], date: null, amount: 12, description: "Lunch" };
     expect(findPossibleDuplicates(cand, [row({ createdAt: "2026-09-22T11:59:00Z" })], { now: NOW }).tier).toBe("medium");
     expect(findPossibleDuplicates(cand, [row({ createdAt: "2026-09-22T11:00:00Z" })], { now: NOW }).tier).toBe("low");
   });
@@ -76,13 +90,16 @@ describe("findPossibleDuplicates — tiers", () => {
     const recentGas = row({ id: "g", description: "Gas", amount: 42, date: "2026-09-21", createdAt: "2026-09-22T11:59:00Z" });
     expect(findPossibleDuplicates({ entityType: "expense", ownerIds: [A], date: "2026-09-21", amount: 37, description: "Gas" }, [recentGas], { now: NOW }).tier).toBe("low");
     expect(findPossibleDuplicates({ entityType: "income", ownerIds: [A], date: null, amount: 140, description: "Gas" }, [recentGas], { now: NOW }).tier).toBe("low");
-    // The same amount moments ago is still the same thing said twice.
-    expect(findPossibleDuplicates({ entityType: "expense", ownerIds: [A], date: "2026-09-21", amount: 42, description: "Gas" }, [recentGas], { now: NOW }).tier).toBe("high");
+    // For a record that is not a transaction, the same amount moments ago is
+    // still the same thing said twice…
+    expect(findPossibleDuplicates({ entityType: "bill", ownerIds: [A], date: "2026-09-21", amount: 42, description: "Gas" }, [recentGas], { now: NOW }).tier).toBe("high");
+    // …but an EXPENSE is not (owner, 2026-11-27): two $42 fill-ups are two expenses.
+    expect(findPossibleDuplicates({ entityType: "expense", ownerIds: [A], date: "2026-09-21", amount: 42, description: "Gas" }, [recentGas], { now: NOW }).tier).toBe("low");
   });
 
   it("reads snake_case rows (linked_profiles / created_at) the way it reads camelCase ones", () => {
     const v = findPossibleDuplicates(
-      { entityType: "income", ownerIds: [A], date: "2026-09-22", amount: 1000, description: "Paycheck" },
+      { entityType: "bill", ownerIds: [A], date: "2026-09-22", amount: 1000, description: "Paycheck" },
       [{ id: "i", amount: 1000, description: "paycheck", date: "2026-09-22", linked_profiles: [A], created_at: "2026-09-01T00:00:00Z" }], { now: NOW },
     );
     expect(v.tier).toBe("high");
@@ -102,7 +119,7 @@ describe("findPossibleDuplicates — tiers", () => {
 
   it("soft-deleted rows never match; matches are sorted best first", () => {
     const v = findPossibleDuplicates(
-      { entityType: "expense", ownerIds: [A], date: "2026-09-22", amount: 12, description: "Lunch" },
+      { entityType: "bill", ownerIds: [A], date: "2026-09-22", amount: 12, description: "Lunch" },
       [row({ id: "gone", deletedAt: "2026-09-22T00:00:00Z" }), row({ id: "diff", description: "Other" }), row({ id: "exact" })], { now: NOW },
     );
     expect(v.matches.map(m => m.id)).toEqual(["exact", "diff"]);
@@ -129,7 +146,7 @@ describe("helpers", () => {
 describe("selfProfileId — unowned rows are the primary user's", () => {
   const unowned = { id: "u", amount: 20, description: "lunch", date: "2026-09-02", linkedProfiles: [], createdAt: "2026-09-02T00:00:00Z" };
   it("an unowned candidate matches an unowned row as self's when selfProfileId is given", () => {
-    const cand = { entityType: "expense", ownerIds: [], date: "2026-09-02", amount: 20, description: "lunch", selfProfileId: "self-1" };
+    const cand = { entityType: "bill", ownerIds: [], date: "2026-09-02", amount: 20, description: "lunch", selfProfileId: "self-1" };
     expect(findPossibleDuplicates(cand, [unowned], { now: NOW }).tier).toBe("high");
     expect(findPossibleDuplicates({ ...cand, ownerIds: ["self-1"] }, [unowned], { now: NOW }).tier).toBe("high");
   });
@@ -138,7 +155,30 @@ describe("selfProfileId — unowned rows are the primary user's", () => {
     expect(findPossibleDuplicates(cand, [unowned], { now: NOW }).tier).toBe("low");
   });
   it("without selfProfileId an unowned row only matches an unowned candidate (storage retry semantics)", () => {
-    expect(findPossibleDuplicates({ entityType: "expense", ownerIds: ["self-1"], date: "2026-09-02", amount: 20, description: "lunch" }, [unowned], { now: NOW }).tier).toBe("low");
-    expect(findPossibleDuplicates({ entityType: "expense", ownerIds: [], date: "2026-09-02", amount: 20, description: "lunch" }, [unowned], { now: NOW }).tier).toBe("high");
+    expect(findPossibleDuplicates({ entityType: "bill", ownerIds: ["self-1"], date: "2026-09-02", amount: 20, description: "lunch" }, [unowned], { now: NOW }).tier).toBe("low");
+    expect(findPossibleDuplicates({ entityType: "bill", ownerIds: [], date: "2026-09-02", amount: 20, description: "lunch" }, [unowned], { now: NOW }).tier).toBe("high");
   });
+});
+
+// Owner, 2026-11-27 — the ruling itself.
+describe("a transaction is never a duplicate because of what it says", () => {
+  const same = { ownerIds: [A], date: "2026-09-22", amount: 12, description: "Lunch" };
+  for (const entityType of ["expense", "income"]) {
+    it(`${entityType}: same owner + date + amount + description → low (create it)`, () => {
+      const v = findPossibleDuplicates({ entityType, ...same }, [row({}), row({ id: "y" })], { now: NOW });
+      expect(v.tier).toBe("low");
+      expect(v.matches).toEqual([]);
+    });
+    it(`${entityType}: same amount + date, another description → low`, () => {
+      expect(findPossibleDuplicates({ entityType, ...same, description: "Parking" }, [row({})], { now: NOW }).tier).toBe("low");
+    });
+    it(`${entityType}: the same thing said moments ago → low`, () => {
+      expect(findPossibleDuplicates({ entityType, ...same, date: null }, [row({ createdAt: "2026-09-22T11:59:59Z" })], { now: NOW }).tier).toBe("low");
+    });
+    it(`${entityType}: the SAME REQUEST is still the same row`, () => {
+      const v = findPossibleDuplicates({ entityType, ...same, requestId: "req-9" }, [row({ id: "first", request_id: "req-9" }), row({ id: "other" })], { now: NOW });
+      expect(v.tier).toBe("high");
+      expect(v.matches.map((m) => m.id)).toEqual(["first"]);
+    });
+  }
 });

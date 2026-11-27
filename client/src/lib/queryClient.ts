@@ -1,3 +1,4 @@
+import { beginSubmission, isKeyedSubmission, SUBMISSION_KEY_HEADER } from "./submission-key";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { decodeSessionUserId, selectHydratableEntries } from "./cache-isolation";
 import { bootstrapSeedEntries, projectBootstrapShell } from "./bootstrap-seed-keys";
@@ -168,6 +169,7 @@ export async function apiRequest(
   if (isWrite) syncLog("mutation", `start ${method.toUpperCase()} ${logPath}`);
   // A read that started before this write is answered may hold pre-write data (lib/write-clock.ts).
   if (isWrite) writeStarted();
+  const submission = isKeyedSubmission(method, url) ? beginSubmission(method, url, data) : null;
   try {
     // Document file GETs may 302 to a cross-origin storage CDN. fetch re-sends
     // request headers to the redirect target, and custom headers would force a
@@ -178,12 +180,18 @@ export async function apiRequest(
       ? {}
       : { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader(), ...dataVersionHeader() };
     if (data) headers["Content-Type"] = "application/json";
+    // A transaction's create carries the key of its submission, so a double
+    // tap or a retry after a timeout is the SAME expense and a deliberate
+    // second Add is a new one (lib/submission-key.ts).
+    if (submission) headers[SUBMISSION_KEY_HEADER] = submission.key;
     const res = await fetch(`${API_BASE}${url}`, {
       method,
       headers,
       body: data ? JSON.stringify(data) : undefined,
       signal: controller.signal,
     });
+    // The server answered (saved or refused): this submission is over.
+    submission?.settle(true);
     try { await throwIfResNotOk(res); } catch (e: any) {
       if (isWrite) syncLog("mutation", `failure ${method.toUpperCase()} ${logPath}`, { status: res.status });
       throw e;
@@ -230,6 +238,9 @@ export async function apiRequest(
     throw err;
   } finally {
     clearTimeout(timeout);
+    // No answer (offline, timed out): unknown whether it was saved, so a
+    // retry of the same submission must go out under the same key.
+    submission?.settle(false);
     if (isWrite) writeSettled();
   }
 }

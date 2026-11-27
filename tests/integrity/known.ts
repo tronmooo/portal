@@ -15,12 +15,6 @@ export interface Known {
 
 export const KNOWN: Known[] = [
   {
-    kind: "question",
-    title: "OPEN — chat: \"log to a NEW tracker called X\" goes into an existing tracker for that activity, and the reply names X",
-    detail: "With a \"Running\" tracker already on the account, \"Log to a new tracker called 'Jog QQ7Z': I ran 1.25 miles in 14 minutes\" added the run to Running and answered \"Logged Jog QQ7Z running, 1.25 mi…\"; no tracker named Jog QQ7Z exists. With no Running tracker the same sentence creates the named one. Folding an activity into its canonical tracker is deliberate (Rule 11), but the person asked for a new one by name and the reply reads as if they got it. Not changed: which wins (the name asked for, or one tracker per activity) is the owner's call; the reply should at least name the tracker the entry went to.",
-    evidence: "tests/live-entry-edit-and-series-edit-check.ts on the preview, 2026-11-27; reproduced directly (the chat answer carried no tool results)",
-  },
-  {
     kind: "discrepancy",
     title: "Chat sometimes asks before a delete the person asked for directly",
     detail: "The chat's instructions say a direct \"delete X\" counts as confirmation. About one delete in six still came back as \"…Shall I go ahead?\" (a tracker entry, a budget). Nothing is lost and a \"yes\" completes it; the chat scenarios answer once and hold the result to the same database check.",
@@ -31,12 +25,6 @@ export const KNOWN: Known[] = [
     title: "OPEN — chat: a budget for a category outside the fixed list is filed somewhere different each time",
     detail: "\"Set a budget of $90 for gifts\" was saved under Shopping; \"raise my gifts budget to $120\" then made a General budget of $120; \"delete my gifts budget\" deleted General. The budget tools tell the model the category MUST be one of fourteen names, so for anything else it picks one, and not the same one twice — and a delete then acts on the guess, which could remove a real General budget. The API itself keeps an unknown name as its own budget. Not changed: whether an unlisted category should be refused, asked about, mapped by a fixed table or allowed as its own budget is a product decision.",
     evidence: "chat.money-records, preview a4f09e3, 2026-11-27 (replies recorded in test-results); server/ai-engine.ts set_budget / delete_budget",
-  },
-  {
-    kind: "question",
-    title: "OPEN — the duplicate guard asks before saving a second same-priced purchase on the same day",
-    detail: "Rule 35 (documented and tested): same owner + same amount + same day with a DIFFERENT description is a possible duplicate, so the second is not saved until confirmed. In chat that means \"$18 on a movie ticket\" after \"$18 pizza\" is refused (\"the server flagged an unexpected conflict\"), and a message listing several purchases loses the ones whose amounts match something already logged that day (\"$5 coffee, $12 lunch, $40 gas, $8 parking\" saved two of four). Not changed: it is a deliberate rule; whether different descriptions should still ask is the owner's call.",
-    evidence: "tests/live-chat-variations-check.ts on production, 2026-11-27 (7 of its 16 failures); reproduced directly; shared/duplicate-guard.ts",
   },
   {
     kind: "discrepancy",

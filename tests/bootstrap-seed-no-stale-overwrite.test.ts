@@ -148,6 +148,8 @@ describe("every seeding call site passes when its request started, and apiReques
   it("apiRequest marks every write's start and end", () => {
     const src = read("client/src/lib/queryClient.ts");
     expect(src).toMatch(/if \(isWrite\) writeStarted\(\);/);
-    expect(src).toMatch(/finally \{\s*clearTimeout\(timeout\);\s*if \(isWrite\) writeSettled\(\);/);
+    // (the submission key's settle sits between the two since 2026-11-27;
+    // what this guards is unchanged: the clock is released in `finally`)
+    expect(src).toMatch(/finally \{\s*clearTimeout\(timeout\);[\s\S]{0,400}?if \(isWrite\) writeSettled\(\);/);
   });
 });

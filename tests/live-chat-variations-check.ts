@@ -175,7 +175,15 @@ const replySays = (...patterns: RegExp[]) => (c: Ctx): string => {
 
 const TOMORROW = dayIn(1);
 const YESTERDAY = dayIn(-1);
-const FRIDAY = nextWeekday(5);
+/** Today when today is that weekday, else its next occurrence. */
+const thisOrNextWeekday = (dow: number): string =>
+  new Date(new Date().toLocaleString("en-US", { timeZone: TZ })).getDay() === dow ? TODAY : nextWeekday(dow);
+// CHANGED 2026-11-27. A bare "Friday" used to be expected a week out when the
+// check ran on a Friday (nextWeekday never returns today). The owner ruled:
+// "Friday on a Friday should mean today unless the user specifies next Friday
+// or otherwise indicates a future date." So a bare weekday is today on that
+// weekday; "next Friday" stays the Friday after today (its own case below).
+const FRIDAY = thisOrNextWeekday(5);
 const TUESDAY = nextWeekday(2);
 
 const CASES: Case[] = [
@@ -414,6 +422,8 @@ const CASES: Case[] = [
     return (e[0].linkedProfiles || []).includes(pet.id) ? "" : `the appointment is not Biscuit's (owners: ${JSON.stringify(e[0].linkedProfiles)})`;
   } },
 
+  { group: "dates", say: "book a dentist check-up next Friday at 3pm", expect: oneEvent(["dentist"], nextWeekday(5), "15:00") },
+
   // ── Changing your mind ────────────────────────────────────────────────────
   { group: "corrections", say: "coffee with Dana on Thursday at 10am", then: "no wait, make it Friday", expect: (c) => {
     const e = [...c.now.events, ...c.now.tasks].filter((x) => has(x.title, "dana"));
@@ -575,8 +585,14 @@ const CASES: Case[] = [
     if (t.length !== 1) return `expected ONE bonsai task, got ${t.length}`;
     return day(t[0].dueDate) === TOMORROW && String(t[0].dueTime || "").slice(0, 5) === "07:00" ? "" : `it is due ${day(t[0].dueDate) || "no date"} ${t[0].dueTime || ""}, expected ${TOMORROW} 07:00`;
   } },
+  // CORRECTED 2026-11-27 (the check's own bug, not a product rule): this
+  // counted every "gift" expense on the account, and an earlier case of this
+  // same run ("I got Sarah a birthday gift for $35") leaves one — so a correct
+  // correction (one row, $40 → $45) was reported as "got 2 (45, 35)". The
+  // requirement is unchanged and now judged on the rows THIS case made:
+  // exactly one new gift expense, reading 45.
   { group: "turns", say: "spent $40 on a birthday gift", then: "oops, it was $45", expect: (c) => {
-    const e = c.now.expenses.filter((x) => has(x.description, "gift"));
+    const e = c.made.expenses.filter((x) => has(x.description, "gift"));
     if (e.length !== 1) return `expected ONE gift expense after the correction, got ${e.length} (${e.map((x) => x.amount).join(", ")})`;
     return money(e[0].amount, 45) ? "" : `the expense reads ${e[0].amount}, expected 45`;
   } },
@@ -640,8 +656,12 @@ const CASES: Case[] = [
     if (e.length === 0) return "";
     return /\?/.test(c.reply) ? "" : `the haircut is still there and the reply did not ask: ${c.reply.slice(0, 120)}`;
   } },
+  // CORRECTED 2026-11-27 (the check's own bug): "oil" also matched the task
+  // "oil the hinges" an earlier case of this run adds, so one moved oil change
+  // was reported as two. Judged on the rows this case made; the requirement
+  // (ONE oil change, a week later) is unchanged.
   { group: "moves", say: "oil change on Wednesday at 10am", then: "push it back a week", expect: (c) => {
-    const e = [...c.now.events, ...c.now.tasks].filter((x) => has(x.title, "oil"));
+    const e = [...c.made.events, ...c.made.tasks].filter((x) => has(x.title, "oil"));
     if (e.length !== 1) return `expected ONE oil change, got ${e.length}`;
     const d = new Date(`${nextWeekday(3)}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 7);
     const want = d.toISOString().slice(0, 10);
