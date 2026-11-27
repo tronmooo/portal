@@ -996,7 +996,7 @@ scenario({
       const one = ctx.check("db", made.length === 1 && made[0].title === title && Number(made[0].target) === 200 && made[0].unit === "pages" && made[0].deadline === deadline && (Number(made[0].current) || 0) === 0 && made[0].status === "active",
         L("one goal row: the title, 200 pages, the deadline, nothing done yet, active (a double press of Create)"), `${made.length} rows ${JSON.stringify(made.map((g: any) => [g.title, g.target, g.unit, g.deadline, g.current, g.status]))}`);
       if (!one && made.length > 1) {
-        tell(s, { severity: "bug", title: "A double click on Create in the goal form makes two goals", detail: `#/goals → "Add Goal" → title, target 200, unit, deadline → double-click "Create": ${made.length} identical goal rows are stored (POST /api/goals twice). The button is disabled only while a request is pending, and the form stays open until the first answer, so the second click of a double click is sent too. The task, event, expense and habit forms each store one. (A double tap on the phone stored one in this run.)` });
+        tell(s, { severity: "bug", title: "A double click on Create in the goal form makes two goals", detail: `#/goals → "Add Goal" → title, target 200, unit, deadline → double-click "Create": ${made.length} identical goal rows are stored (POST /api/goals twice). The form stays open until the first answer comes back and the second click of a double click arrives before the button is disabled, so it is sent too. The task, event, expense and habit forms each store one. (A double tap on the phone stored one in this run.)` });
         // go on with one goal: the extra rows are removed through the API and the list is read again
         ctx.step(L(`removed ${made.length - 1} duplicate goal row(s) through the API to go on`));
         for (const g of made.slice(1)) await ctx.api("DELETE", `/goals/${g.id}`);
@@ -1080,4 +1080,226 @@ scenario({
   },
 });
 
-void listOf; void must; void listedDates; void prefRow;
+// ════════════════════════════════════════════════════════════════════════════
+// The dashboard's own controls: Customize (a draft) and dismissing an alert
+// ════════════════════════════════════════════════════════════════════════════
+const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const DEFAULT_EXEC_PREFS = JSON.stringify({ v: 2, active: "main", dashboards: [{ id: "main", name: "Main", quiet: true, hidden: [], order: [], sizes: {} }], widgets: [] });
+/** A drag as the surface does it: the mouse held down, or a finger on the glass. */
+async function drag(s: any, from: { x: number; y: number }, to: { x: number; y: number }) {
+  const steps = 12;
+  const at = (i: number) => ({ x: Math.round(from.x + ((to.x - from.x) * i) / steps), y: Math.round(from.y + ((to.y - from.y) * i) / steps) });
+  if (s.surface === "phone") {
+    const cdp = await s.page.context().newCDPSession(s.page);
+    try {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from.x, y: from.y }] });
+      for (let i = 1; i <= steps; i++) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [at(i)] }); await sleep(40); }
+      await sleep(120);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } finally { await cdp.detach().catch(() => undefined); }
+  } else {
+    await s.page.mouse.move(from.x, from.y);
+    await s.page.mouse.down();
+    for (let i = 1; i <= steps; i++) { await s.page.mouse.move(at(i).x, at(i).y); await sleep(40); }
+    await sleep(120);
+    await s.page.mouse.up();
+  }
+}
+/** Where an element is once it has stopped moving (a sheet slides in; a list scrolls). */
+const centre = async (s: any, sel: string, scroll = true) => {
+  const el = s.page.locator(sel).locator("visible=true").first();
+  if (scroll) await el.scrollIntoViewIfNeeded().catch(() => undefined);
+  let b = await el.boundingBox();
+  for (let i = 0; i < 15; i++) {
+    await sleep(150);
+    const again = await el.boundingBox();
+    if (b && again && Math.abs(again.y - b.y) < 0.5 && Math.abs(again.x - b.x) < 0.5) { b = again; break; }
+    b = again;
+  }
+  if (!b) throw new Error(`not on screen: ${sel}`);
+  return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2), top: Math.round(b.y), bottom: Math.round(b.y + b.height) };
+};
+/** The active dashboard's layout out of the stored preference row. */
+const storedLayout = (rowValue: unknown): { hidden: string[]; order: string[]; quiet: boolean | null } => {
+  try {
+    const v = JSON.parse(String(rowValue ?? ""));
+    const d = Array.isArray(v?.dashboards) ? (v.dashboards.find((x: any) => x?.id === v.active) ?? v.dashboards[0]) : v;
+    return { hidden: Array.isArray(d?.hidden) ? d.hidden.map(String) : [], order: Array.isArray(d?.order) ? d.order.map(String) : [], quiet: typeof d?.quiet === "boolean" ? d.quiet : null };
+  } catch { return { hidden: [], order: [], quiet: null }; }
+};
+const dismissedIds = (rowValue: unknown): string[] => { try { const v = JSON.parse(String(rowValue ?? "[]")); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
+
+scenario({
+  id: "ui-planning.dashboard",
+  title: "The dashboard's controls (mouse and touch): Customize is a draft until Save, a hidden card is named not lost, and a dismissed alert stays dismissed in every shape",
+  area: "Browser · planning",
+  browser: true,
+  covers: ["dashboard.edit.ui", "dashboard.cancel.ui", "dashboard.restore.ui"],
+  requires: ["action", "db", "derived", "screen"],
+  run: async (ctx) => {
+    const tell = finder(ctx);
+    const original = await prefRow(ctx, "exec_card_prefs");
+    const baseline = original?.value != null && String(original.value) !== "" ? String(original.value) : DEFAULT_EXEC_PREFS;
+    ctx.cleanup(() => ctx.api("PUT", "/preferences/exec_card_prefs", { value: baseline }));
+    const openBell = async (s: any) => { if (!(await s.page.locator(t("panel-notifications")).locator("visible=true").count())) await s.press(t("button-notification-bell")); await s.page.waitForSelector(t("panel-notifications"), { timeout: 10000 }); };
+    const closeBell = async (s: any) => { if (await s.page.locator(t("panel-notifications")).locator("visible=true").count()) { await s.page.keyboard.press("Escape"); await hidden(s, t("panel-notifications"), 4000); } };
+
+    for (const s of surfaces(ctx)) {
+      const L = (x: string) => `[${s.surface}] ${x}`;
+      // Setup (not under test): the layout back at its starting point, one open
+      // task so the Tasks card has something to show, two documents about to expire.
+      must(await ctx.api("PUT", "/preferences/exec_card_prefs", { value: baseline }), "reset layout");
+      const task = must(await ctx.api("POST", "/tasks", { title: `${ctx.tag} ${s.surface} renew passport`, dueDate: O.addDays(ctx.today, 2) }), "task");
+      ctx.cleanup(() => ctx.api("DELETE", `/tasks/${task.id}`));
+      const mkDoc = async (name: string, days: number) => {
+        const d = must(await ctx.api("POST", "/documents", { name, type: "lease", mimeType: "image/png", fileData: PNG_1PX, extractedData: { expirationDate: O.addDays(ctx.today, days) } }), "document");
+        ctx.cleanup(() => ctx.api("POST", `/documents/${d.id}/purge`).then(() => ctx.api("DELETE", `/documents/${d.id}`)));
+        return d;
+      };
+      const docA = await mkDoc(`${ctx.tag} ${s.surface} Lease`, 9);
+      const docB = await mkDoc(`${ctx.tag} ${s.surface} Permit`, 7);
+      ctx.cleanup(async () => {
+        const ids = dismissedIds((await prefRow(ctx, "dismissed_notifications"))?.value).filter((x) => x.includes(docA.id) || x.includes(docB.id));
+        if (ids.length) await ctx.api("POST", "/notifications/restore", { ids });
+      });
+      await s.page.reload();
+      await s.page.waitForSelector(t("page-dashboard"), { timeout: 30000 }).catch(async () => { await goto(s, "/dashboard", "page-dashboard"); });
+      await goto(s, "/dashboard", "page-dashboard");
+      await s.page.waitForSelector(t("exec-card-attention"), { timeout: 30000 });
+      const reloads = countReloads(s);
+      const pref = async () => String((await prefRow(ctx, "exec_card_prefs"))?.value ?? "");
+      const start = await pref();
+      const openCustomize = async () => {
+        await s.press(t("btn-dashboard-menu"));
+        await s.press(t("btn-customize"));
+        await s.page.waitForSelector(t("exec-customize-list"), { timeout: 10000 });
+      };
+      const rowOrder = (): Promise<string[]> => s.page.evaluate(() => [...document.querySelectorAll('[data-testid="exec-customize-list"] > li')].map((n) => (n.getAttribute("data-testid") || "").replace("exec-customize-row-", "")));
+      // the order the cards are DRAWN in (the grid places them with CSS order): top to bottom, then left to right
+      const cardOrder = (): Promise<string[]> => s.page.evaluate(() => [...document.querySelectorAll('[data-testid^="exec-card-"]')]
+        .filter((n) => /^exec-card-[a-z]+$/.test(n.getAttribute("data-testid") || "") && !/^exec-card-(count|subtitle)$/.test(n.getAttribute("data-testid") || "") && (n as HTMLElement).getBoundingClientRect().width > 0)
+        .map((n) => ({ id: (n.getAttribute("data-testid") || "").slice(10), r: (n as HTMLElement).getBoundingClientRect() }))
+        .sort((a, b) => (Math.abs(a.r.top - b.r.top) > 8 ? a.r.top - b.r.top : a.r.left - b.r.left)).map((x) => x.id));
+      ctx.check("screen", await visible(s, t("exec-card-tasks"), 15000), L("before: the Tasks card is on the dashboard (it has an open task)"));
+
+      // ── Customize: opening writes nothing; Cancel drops the draft ──
+      ctx.step(L(`on the dashboard ⋮ → Customize; switch "Show Tasks" off; press Cancel`));
+      await openCustomize();
+      await sleep(800);
+      ctx.check("db", (await pref()) === start, L("opening Customize writes nothing (Rule 3)"));
+      await s.press(t("exec-customize-show-tasks"));
+      ctx.check("screen", await until(async () => (await s.page.locator(t("exec-customize-show-tasks")).first().getAttribute("aria-checked")) === "false", 4000), L("the switch turns off in the draft"));
+      await s.press(t("exec-customize-cancel"));
+      await hidden(s, t("exec-customize-list"), 6000);
+      await sleep(1200);
+      ctx.check("db", (await pref()) === start, L("Cancel writes nothing: the stored layout is as it was"));
+      ctx.check("screen", await visible(s, t("exec-card-tasks"), 4000), L("and the Tasks card is still on the dashboard"));
+
+      // ── Customize: hide a card, reorder by dragging, Save ──
+      ctx.step(L(`⋮ → Customize again; switch "Show Tasks" off; drag Money's handle above Needs Attention; press Save Changes`));
+      await openCustomize();
+      ctx.check("screen", (await s.page.locator(t("exec-customize-show-tasks")).first().getAttribute("aria-checked")) === "true", L("reopened, the cancelled draft is gone (Tasks is on again)"));
+      await s.press(t("exec-customize-show-tasks"));
+      const handle = await centre(s, t("exec-customize-drag-money"));
+      const target = await centre(s, t("exec-customize-row-attention"), false);
+      await drag(s, { x: handle.x, y: handle.y }, { x: handle.x, y: target.top + 4 });
+      const dragged = await until(async () => { const o = await rowOrder(); return o.indexOf("money") >= 0 && o.indexOf("money") < o.indexOf("attention"); }, 4000);
+      const canDrag = ctx.check("screen", dragged, L(`dragging the handle (${s.surface === "phone" ? "a finger" : "the mouse"}) moves Money above Needs Attention in the list`), `the list reads ${(await rowOrder()).join(", ")}`);
+      if (!canDrag) {
+        tell(s, { severity: "bug", title: "A card cannot be reordered by dragging its handle in Customize", detail: `${s.surface}: pressed the Money row's handle and dragged it to the top of the Needs Attention row; the list still read ${(await rowOrder()).join(", ")}` });
+        // the handle also answers the arrow keys: go on with those so Save has an order to store
+        ctx.step(L("the drag did not move the row; used the handle's arrow keys instead"));
+        const h = s.page.locator(t("exec-customize-drag-money")).first();
+        for (let i = 0; i < 4; i++) { await h.focus(); await s.page.keyboard.press("ArrowUp"); await sleep(120); }
+      }
+      await s.press(t("exec-customize-save"));
+      const saved = await until(async () => { const l = storedLayout(await pref()); return l.hidden.includes("tasks"); }, 10000);
+      const layout = storedLayout(await pref());
+      ctx.check("action", saved, L("Save Changes stored the layout"));
+      ctx.check("db", layout.hidden.includes("tasks") && layout.order.indexOf("money") >= 0 && layout.order.indexOf("attention") >= 0 && layout.order.indexOf("money") < layout.order.indexOf("attention"),
+        L("the one preference row holds it: Tasks hidden, Money ordered before Needs Attention"), JSON.stringify(layout));
+      ctx.check("db", (await ctx.db.count("preferences", "key=eq.exec_card_prefs")) === 1, L("and it is ONE row"));
+      await hidden(s, t("exec-customize-list"), 8000);
+      ctx.check("screen", await hidden(s, t("exec-card-tasks"), 8000), L("the Tasks card leaves the dashboard without a reload"));
+      ctx.check("screen", await visible(s, t("exec-hidden-tasks"), 8000), L("and is named under the grid (hidden never reads as missing)"));
+      const orderOk = await until(async () => { const o = await cardOrder(); return o.indexOf("money") >= 0 && o.indexOf("money") < o.indexOf("attention"); }, 8000);
+      ctx.check("derived", orderOk, L("the cards are drawn in the stored order: Money before Needs Attention"), (await cardOrder()).join(", "));
+      const task0 = await ctx.db.row("tasks", task.id);
+      ctx.check("db", !!task0 && task0.deleted_at == null && task0.status === "todo", L("hiding the card touched no task"));
+      await s.press(t("exec-hidden-tasks"));
+      ctx.check("screen", await seen(s, `${ctx.tag} ${s.surface} renew passport`, 8000, t("executive-briefing")), L("a tap on its name opens the hidden card in place, with the task in it"));
+      await goto(s, "/tasks", "page-tasks");
+      await goto(s, "/dashboard", "page-dashboard");
+      await s.page.waitForSelector(t("exec-card-attention"), { timeout: 20000 });
+      ctx.check("screen", (await visible(s, t("exec-hidden-tasks"), 8000)) && !(await s.page.locator(t("exec-card-tasks")).locator("visible=true").count()), L("after leaving and coming back (in-app) the layout is the saved one"));
+
+      // ── Dismiss an alert from Needs Attention ──
+      const rowA = `[data-testid^="exec-item-doc:document:${docA.id}:"]`, rowB = `[data-testid^="exec-item-doc:document:${docB.id}:"]`;
+      const bellA = `[data-testid^="notification-item-"][data-testid*="${docA.id}"]`, bellB = `[data-testid^="notification-item-"][data-testid*="${docB.id}"]`;
+      const dismissedRow = async () => dismissedIds((await prefRow(ctx, "dismissed_notifications"))?.value);
+      const both = (await visible(s, rowA, 15000)) && (await visible(s, rowB, 5000));
+      ctx.check("screen", both, L("Needs Attention lists both expiring documents (made elsewhere, shown without a reload)"));
+      const count0 = await numberIn(s, t("exec-card-count-attention"));
+      await openBell(s);
+      ctx.check("screen", (await visible(s, bellA, 8000)) && (await visible(s, bellB, 4000)), L("and the bell has a notice for each"));
+      await closeBell(s);
+      ctx.step(L(`on Needs Attention press the X on "${ctx.tag} ${s.surface} Lease"`));
+      await s.press(`[data-testid^="exec-dismiss-doc:document:${docA.id}:"]`);
+      const afterA = await (async () => { await until(async () => (await dismissedRow()).some((x) => x.includes(docA.id)), 10000); return dismissedRow(); })();
+      ctx.check("action", afterA.some((x) => x.includes(docA.id)), L("the X dismissed the alert"));
+      ctx.check("db", afterA.filter((x) => x.includes(docA.id)).length === 1 && !afterA.some((x) => x.includes(docB.id)), L("the server's dismissed list holds that alert's id once, and not the other document's"), JSON.stringify(afterA));
+      ctx.check("screen", await hidden(s, rowA, 8000), L("the row leaves Needs Attention"));
+      ctx.check("derived", await until(async () => (await numberIn(s, t("exec-card-count-attention"))) === count0 - 1, 8000), L(`the card's count falls by one (${count0} → ${count0 - 1})`), `reads ${await numberIn(s, t("exec-card-count-attention"))}`);
+      await openBell(s);
+      const twinGone = await hidden(s, bellA, 8000);
+      const oneId = ctx.check("screen", twinGone, L("its twin in the bell is gone too, without a reload (one alert, one id)"));
+      if (!oneId) tell(s, { severity: "sync", title: "An expiring document dismissed on Needs Attention is still in the bell", detail: "Rule 8: a dated alert has one id whatever shape it takes; the bell kept its notice after the dashboard row was dismissed" });
+      ctx.check("screen", await visible(s, bellB, 4000), L("the other document's notice is still there"));
+
+      // ── Dismiss the other from the bell ──
+      ctx.step(L(`in the bell press Dismiss on "${ctx.tag} ${s.surface} Permit"`));
+      await s.press(`[data-testid^="button-dismiss-"][data-testid*="${docB.id}"]`);
+      await until(async () => (await dismissedRow()).some((x) => x.includes(docB.id)), 10000);
+      const afterB = await dismissedRow();
+      ctx.check("db", afterB.some((x) => x.includes(docB.id)) && afterB.some((x) => x.includes(docA.id)), L("the dismissed list now holds both"), JSON.stringify(afterB));
+      ctx.check("screen", await hidden(s, bellB, 8000), L("the notice leaves the bell"));
+      await closeBell(s);
+      const rowGone = await hidden(s, rowB, 8000);
+      const sameStore = ctx.check("screen", rowGone, L("and its row leaves Needs Attention without a reload"));
+      if (!sameStore) tell(s, { severity: "sync", title: "An alert dismissed in the bell is still listed on Needs Attention", detail: "the dashboard row stayed after the bell's Dismiss stored the id (Rule 8)" });
+      ctx.check("derived", await until(async () => (await numberIn(s, t("exec-card-count-attention"))) === count0 - 2 || (count0 - 2 === 0 && !(await s.page.locator(t("exec-card-count-attention")).locator("visible=true").count())), 8000), L(`the card's count is ${count0 - 2}`), `reads ${await numberIn(s, t("exec-card-count-attention"))}`);
+      await goto(s, "/tasks", "page-tasks");
+      await goto(s, "/dashboard", "page-dashboard");
+      await s.page.waitForSelector(t("exec-card-attention"), { timeout: 20000 });
+      await sleep(1500);
+      ctx.check("screen", !(await s.page.locator(`${rowA}, ${rowB}`).locator("visible=true").count()), L("after leaving and coming back (in-app) both stay dismissed"));
+
+      // ── Every dismissed alert can be restored ──
+      ctx.step(L(`on Needs Attention open the filters; under Dismissed press Restore on the Lease`));
+      await s.press(t("attention-filters-toggle"));
+      const restore = `[data-testid^="dismissed-alert-restore-"][data-testid*="${docA.id}"]`;
+      const listed = await visible(s, restore, 10000);
+      ctx.check("screen", listed, L("the dismissed alert is listed with a Restore"), (await wordsOf(s, t("dismissed-alerts"))).slice(0, 200));
+      if (listed) {
+        await s.press(restore);
+        await until(async () => !(await dismissedRow()).some((x) => x.includes(docA.id)), 10000);
+        const afterR = await dismissedRow();
+        ctx.check("db", !afterR.some((x) => x.includes(docA.id)) && afterR.some((x) => x.includes(docB.id)), L("its id is out of the dismissed list; the other stays dismissed"), JSON.stringify(afterR));
+        ctx.check("screen", await visible(s, rowA, 10000), L("its row is back on Needs Attention without a reload"));
+        await openBell(s);
+        ctx.check("screen", (await visible(s, bellA, 8000)) && !(await s.page.locator(bellB).locator("visible=true").count()), L("and back in the bell (the other is not)"));
+        await closeBell(s);
+      }
+      const n = reloads();
+      // Persistence (a reload on purpose): the layout and the dismissal are the server's, not the page's.
+      await s.page.reload();
+      await s.page.waitForSelector(t("exec-card-attention"), { timeout: 30000 });
+      await sleep(2000);
+      ctx.check("screen", (await visible(s, t("exec-hidden-tasks"), 10000)) && !(await s.page.locator(t("exec-card-tasks")).locator("visible=true").count()), L("after a reload the saved layout is still the layout"));
+      ctx.check("screen", !(await s.page.locator(rowB).locator("visible=true").count()), L("after a reload the dismissed alert is still dismissed"));
+      await closing(ctx, s, L, n);
+    }
+  },
+});
+
+void listOf; void listedDates;

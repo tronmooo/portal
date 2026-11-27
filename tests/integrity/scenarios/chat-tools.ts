@@ -380,6 +380,9 @@ scenario({
       const ok = ctx.check("db", json(theirs) === "[40]", "an owner row gives the partner 40%", json(rows.map((r: any) => [r.party_profile_id === robin.id ? "partner" : "me?", r.ownership_percentage, r.role])));
       const refused = /couldn.t|could not|didn.t go through|unable|wasn.t able/i.test(t.reply);
       report(ctx, ok, "bug", refused ? "Chat cannot add a co-owner with a share to an asset that already has an owner (it says so, and nothing is saved)" : "Chat: a co-owner's 40% share is not what the owner rows hold", t, json(rows.map((r: any) => [r.party_profile_id === robin.id ? "partner" : r.party_profile_id === ctx.self.id ? "me" : r.party_profile_id, r.ownership_percentage, r.role])), refused ? "the tool's own example (\"add my wife as co-owner of the house\"); shares over 100% are refused by the database, and the tool does not make room" : "I16");
+      const mine = rows.filter((r: any) => r.party_profile_id === ctx.self.id).reduce((n: number, r: any) => n + Number(r.ownership_percentage), 0);
+      const okMine = ctx.check("db", !ok || mine === 60, "and the other 60% is still the account holder's (the shares add up to 100%)", json(rows.map((r: any) => [r.party_profile_id === robin.id ? "partner" : r.party_profile_id === ctx.self.id ? "me" : r.party_profile_id, r.ownership_percentage])));
+      report(ctx, okMine, "bug", "Chat: adding a co-owner at 40% dropped the account holder's own share", t, json(rows.map((r: any) => [r.party_profile_id === robin.id ? "partner" : r.party_profile_id === ctx.self.id ? "me" : r.party_profile_id, r.ownership_percentage])), "I16, Rule 9");
       ctx.near("derived", (await snapshot(ctx, [robin.id])).totalAssetValue, O.netWorth([{ value: v, sharePct: 40 }], []).assets, "the partner's assets are 40% of its stored value");
       ctx.near("derived", (await snapshot(ctx)).totalAssetValue, sA.totalAssetValue, "the household total did not change when it was shared");
     });
