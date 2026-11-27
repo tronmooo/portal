@@ -68,6 +68,22 @@ export async function fetchWithRateLimitRetry(
   }
 }
 
+// What the app's own client does (client/src/lib/queryClient.ts): it sends
+// back the newest data version the server has told it, so a read made right
+// after a write is never answered from another server instance's pre-write
+// cache. Without it a gate was "another device" to itself and could read ~2 s
+// behind its own write — checks failed on rows they had just created
+// (2026-11-27: "the chat did not log the run" for a run it had logged).
+// Only for the smoke account's own token: another account has other versions.
+const seenVersions: Record<string, number> = {};
+function noteVersions(raw: unknown): void {
+  for (const part of String(raw ?? "").split(",")) {
+    const [k, v] = part.split(":");
+    const n = Number(v);
+    if (k && Number.isFinite(n) && n > (seenVersions[k] ?? 0)) seenVersions[k] = n;
+  }
+}
+
 export async function api<T = any>(
   method: string,
   path: string,
@@ -75,17 +91,25 @@ export async function api<T = any>(
   opts: { token?: string } = {},
 ): Promise<ApiResponse<T>> {
   const token = opts.token ?? (await getSmokeToken());
+  const own = !opts.token;
+  const seen = Object.entries(seenVersions).map(([k, v]) => `${k}:${v}`).join(",");
   const { response: r, ms } = await fetchWithRateLimitRetry(`${API_BASE}${path}`, {
     method,
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
+      ...(own && seen ? { "X-Data-Version": seen } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await r.text();
   let parsed: any = text;
   try { parsed = JSON.parse(text); } catch { /* leave as string */ }
+  if (own) {
+    noteVersions(r.headers?.get?.("x-data-version"));
+    noteVersions(r.headers?.get?.("x-server-data-version"));
+    if (parsed && typeof parsed === "object" && typeof parsed.dataVersion === "string") noteVersions(parsed.dataVersion);
+  }
   return { status: r.status, ok: r.ok, data: parsed, headers: r.headers, ms };
 }
 

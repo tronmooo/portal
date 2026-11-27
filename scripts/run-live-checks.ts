@@ -19,6 +19,10 @@ const results: Array<{ name: string; ok: boolean; seconds: number; tail: string 
 const started = Date.now();
 const save = () => { fs.mkdirSync(path.dirname(outFile), { recursive: true }); fs.writeFileSync(outFile, JSON.stringify(results, null, 2)); };
 
+// A check that is long by design, not stuck: its own cap. The chat-variations
+// check sends ~90 chat messages at the server's 20-a-minute limit.
+const LONG_CHECK_MINUTES: Record<string, number> = { "live-chat-variations-check": 40 };
+
 async function freeGateLock(): Promise<void> {
   const { api } = await import("../tests/smoke/fixture/api");
   const { GATE_LOCK_KEY } = await import("../tests/smoke/fixture/gate-lock");
@@ -32,16 +36,25 @@ function runOne(file: string): Promise<{ ok: boolean; tail: string }> {
     let buf = "";
     const add = (d: Buffer) => { buf = (buf + d.toString()).slice(-6000); };
     child.stdout.on("data", add); child.stderr.on("data", add);
-    const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { child.kill("SIGKILL"); } }, eachMs);
+    const capMs = Math.max(eachMs, (LONG_CHECK_MINUTES[file.replace(/\.ts$/, "")] ?? 0) * 60_000);
+    const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { child.kill("SIGKILL"); } }, capMs);
     child.on("close", async (code, signal) => {
       clearTimeout(timer);
       // A check stopped at the cap still HOLDS the smoke account's gate lock
       // (for up to its 10-minute expiry): the next check then waits on it and
       // is stopped too — one slow check failed its neighbours (2026-11-27).
       // The runner killed the holder, so the runner frees the lock.
-      if (signal) await freeGateLock().catch(() => undefined);
+      // It also leaves its half-made records behind (2026-11-27: ~25 expenses
+      // and a "Running" tracker from the chat check; the next three checks
+      // failed on "this looks like a duplicate" and on a tracker they expected
+      // to create). The smoke account's clean state is empty — the contract
+      // suite starts from the same wipe — so the runner restores it.
+      if (signal) {
+        await freeGateLock().catch(() => undefined);
+        await (await import("../tests/smoke/fixture/reset")).reset().catch((e) => console.log(`  (could not wipe the smoke account after the stop: ${String(e).slice(0, 120)})`));
+      }
       const fails = buf.split("\n").filter((l) => /^\s*(FAIL|✗|x )\b/.test(l)).slice(0, 3).join(" · ");
-      resolve({ ok: code === 0, tail: signal ? `stopped after ${eachMs / 60_000} minutes` : fails || buf.trim().split("\n").slice(-2).join(" · ") });
+      resolve({ ok: code === 0, tail: signal ? `stopped after ${capMs / 60_000} minutes` : fails || buf.trim().split("\n").slice(-2).join(" · ") });
     });
   });
 }

@@ -7,7 +7,7 @@
 // clean slate and never collides with seeded people.
 import { createRequire } from "node:module";
 import { api, getSmokeToken, fetchWithRateLimitRetry } from "./smoke/fixture/api";
-import { API_BASE } from "./smoke/fixture/account";
+import { API_BASE, UI_BASE } from "./smoke/fixture/account";
 import { acquireGateLock, preferenceLockIo } from "./smoke/fixture/gate-lock";
 import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 
@@ -94,7 +94,7 @@ async function main() {
     // 5. The real chat page: the optional card, and No writes nothing.
     const browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 430, height: 1100 } });
-    await page.goto("https://portol.me");
+    await page.goto(UI_BASE);
     const email = page.locator('[data-testid="input-signin-email"]');
     if (!(await email.isVisible({ timeout: 8000 }).catch(() => false))) {
       await page.getByRole("button", { name: /sign in|log in|get started/i }).first().click({ timeout: 15000 }).catch(() => undefined);
@@ -105,7 +105,7 @@ async function main() {
     await page.fill('[data-testid="input-signin-password"]', LIVE_PASSWORD);
     await page.click('[data-testid="button-signin"]');
     await page.waitForSelector('[data-testid="page-dashboard"]', { timeout: 30000 });
-    await page.goto("https://portol.me/#/chat");
+    await page.goto(`${UI_BASE}/#/chat`);
     const input = page.locator('[data-testid="input-chat"]');
     await input.waitFor({ timeout: 30000 });
     await input.fill(`${PAT}'s birthday is October 2`);

@@ -16,6 +16,18 @@ export interface Known {
 export const KNOWN: Known[] = [
   {
     kind: "question",
+    title: "OPEN — chat: \"log to a NEW tracker called X\" goes into an existing tracker for that activity, and the reply names X",
+    detail: "With a \"Running\" tracker already on the account, \"Log to a new tracker called 'Jog QQ7Z': I ran 1.25 miles in 14 minutes\" added the run to Running and answered \"Logged Jog QQ7Z running, 1.25 mi…\"; no tracker named Jog QQ7Z exists. With no Running tracker the same sentence creates the named one. Folding an activity into its canonical tracker is deliberate (Rule 11), but the person asked for a new one by name and the reply reads as if they got it. Not changed: which wins (the name asked for, or one tracker per activity) is the owner's call; the reply should at least name the tracker the entry went to.",
+    evidence: "tests/live-entry-edit-and-series-edit-check.ts on the preview, 2026-11-27; reproduced directly (the chat answer carried no tool results)",
+  },
+  {
+    kind: "discrepancy",
+    title: "Chat sometimes asks before a delete the person asked for directly",
+    detail: "The chat's instructions say a direct \"delete X\" counts as confirmation. About one delete in six still came back as \"…Shall I go ahead?\" (a tracker entry, a budget). Nothing is lost and a \"yes\" completes it; the chat scenarios answer once and hold the result to the same database check.",
+    evidence: "chat.habits-goals-trackers and chat.money-records, preview 143d076, 2026-11-27 (replies recorded in test-results)",
+  },
+  {
+    kind: "question",
     title: "OPEN — chat: a budget for a category outside the fixed list is filed somewhere different each time",
     detail: "\"Set a budget of $90 for gifts\" was saved under Shopping; \"raise my gifts budget to $120\" then made a General budget of $120; \"delete my gifts budget\" deleted General. The budget tools tell the model the category MUST be one of fourteen names, so for anything else it picks one, and not the same one twice — and a delete then acts on the guess, which could remove a real General budget. The API itself keeps an unknown name as its own budget. Not changed: whether an unlisted category should be refused, asked about, mapped by a fixed table or allowed as its own budget is a product decision.",
     evidence: "chat.money-records, preview a4f09e3, 2026-11-27 (replies recorded in test-results); server/ai-engine.ts set_budget / delete_budget",

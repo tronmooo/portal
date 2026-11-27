@@ -7,6 +7,8 @@
 // History: 2026-11-21, iPhone "scroll to the bottom and it won't scroll back
 // up" — see client/src/index.css (iOS scroll chaining) and
 // client/src/components/PullToRefresh.tsx.
+// The app under test: production by default, a preview when SMOKE_UI_BASE names one.
+import { UI_BASE } from "./smoke/fixture/account";
 import { createRequire } from "module";
 import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 
@@ -39,7 +41,7 @@ const BODY = `(() => ({ pe: document.body.style.pointerEvents, locked: document.
   const page = await ctx.newPage();
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e).slice(0, 120)));
-  await page.goto("https://portol.me");
+  await page.goto(UI_BASE);
   await page.locator('[data-testid="input-signin-email"]').fill(LIVE_EMAIL);
   await page.fill('[data-testid="input-signin-password"]', LIVE_PASSWORD);
   await page.keyboard.press("Enter");

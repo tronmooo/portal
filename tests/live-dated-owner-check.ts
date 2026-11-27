@@ -4,6 +4,8 @@
 // profile — the exact shape of the 2026-11-11 report), reads the real
 // Recurring page in a browser, then deletes the events.
 //   npx tsx tests/live-dated-owner-check.ts
+// The app under test: production by default, a preview when SMOKE_UI_BASE names one.
+import { UI_BASE } from "./smoke/fixture/account";
 import { createRequire } from "node:module";
 import { api, expectOk } from "./smoke/fixture/api";
 import { acquireGateLock, preferenceLockIo } from "./smoke/fixture/gate-lock";
@@ -37,7 +39,7 @@ async function main() {
 
     const browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 430, height: 1400 } });
-    await page.goto("https://portol.me");
+    await page.goto(UI_BASE);
     const email = page.locator('[data-testid="input-signin-email"]');
     if (!(await email.isVisible({ timeout: 8000 }).catch(() => false))) {
       // The landing page leads to the form.
@@ -49,7 +51,7 @@ async function main() {
     await page.fill('[data-testid="input-signin-password"]', LIVE_PASSWORD);
     await page.click('[data-testid="button-signin"]');
     await page.waitForSelector('[data-testid="page-dashboard"]', { timeout: 30000 });
-    await page.goto("https://portol.me/#/calendar");
+    await page.goto(`${UI_BASE}/#/calendar`);
     await page.click('[data-testid="calendar-tab-recurring"]', { timeout: 20000 });
     for (const id of created) {
       const card = page.locator(`[data-testid="rule-card-event:${id}"]`);
