@@ -619,6 +619,7 @@ export default defineConfig({
       'tests/integrity-run-fixes-2026-11-27.test.ts',
       'tests/bootstrap-seed-no-stale-overwrite.test.ts',
       'tests/payment-idempotency-keys.test.ts',
+      'tests/goal-same-title-different-target.test.ts',
       'tests/deleted-bill-keeps-history.test.ts',
       'tests/server-versions.test.ts',
       'tests/memory-key.test.ts',

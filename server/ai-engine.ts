@@ -248,6 +248,7 @@ import { expenseAttributionName, thingNamedInSpend } from "@shared/expense-attri
 import { recordProfileEdit } from "./profile-history";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { stampSalvageProvenance } from "@shared/asset-salvage";
+import { goalRequestDiffers, goalConflictQuestion } from "@shared/goal-duplicate";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
 import { paymentReceiptLine, paymentNotRecordedLine, composePaymentReply } from "@shared/payment-receipt";
@@ -13108,8 +13109,16 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const allGoals = await storage.getGoals();
       const dupGoal = allGoals.find(g => g.title.toLowerCase() === (input.title || "").toLowerCase() && g.status === "active");
       if (dupGoal) {
+        // The same goal again is a duplicate and says so. A different target
+        // or deadline under the same title is NOT a success: nothing was
+        // stored, so the person is asked (shared/goal-duplicate.ts).
+        const differs = goalRequestDiffers(dupGoal as any, { target: input.target, deadline: input.deadline });
+        if (differs.length > 0) {
+          logger.info("ai", `Goal "${dupGoal.title}" exists with a different ${differs.join(" and ")} — asking instead of answering with the old goal`);
+          return { needsConfirmation: true, existingGoal: { id: dupGoal.id, title: dupGoal.title, target: (dupGoal as any).target, deadline: (dupGoal as any).deadline }, error: goalConflictQuestion(dupGoal as any, { target: input.target, deadline: input.deadline }) };
+        }
         logger.info("ai", `Skipped duplicate goal: "${dupGoal.title}"`);
-        return dupGoal;
+        return { ...dupGoal, deduped: true, message: `A goal named "${dupGoal.title}" with that target already exists — I didn't create a second one.` };
       }
       // Resolve tracker name to ID
       let trackerId = input.trackerId;
