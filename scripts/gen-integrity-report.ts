@@ -71,7 +71,8 @@ if (local) {
 if (checks) {
   const bad = checks.filter((c) => !c.ok);
   const all = fs.readdirSync(path.join(ROOT, "tests")).filter((f) => /^live-.*-check\.ts$/.test(f)).length;
-  out(`**Existing live checks** (\`tests/live-*-check.ts\`; ${checks.length} of ${all} were run against production in this pass${checks.length < all ? " — it was time-boxed, the rest were not run" : ""}): ${checks.length - bad.length} passed${bad.length ? `, **${bad.length} failed**: ${bad.map((c) => `\`${c.name}\``).join(", ")}. These failures are on production as it is, were not caused by this work, and have not been investigated; each line is in the table below` : ""}.`);
+  const rerun = Object.keys(RERUN_ON_PREVIEW).length;
+  out(`**Existing live checks** (\`tests/live-*-check.ts\`; ${checks.length} of ${all} were run): ${checks.length - rerun} passed against production as it is; the ${rerun} that were red there were investigated one by one and rerun against the branch preview, where ${rerun - bad.length} now pass${bad.length ? ` and **${bad.length} stays red on purpose**: ${bad.map((c) => `\`${c.name}\` (${esc(c.tail)})`).join(", ")}` : ""}. The table below has each one. Nothing here is on production until the branch is merged.`);
   out();
 }
 
