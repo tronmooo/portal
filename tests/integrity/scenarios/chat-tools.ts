@@ -39,15 +39,18 @@ async function chat(ctx: Ctx, message: string, history: Msg[] = []): Promise<Tur
 // (a delete may ask and then add what would be lost).
 const ASKS_TO_PROCEED = /(shall i|should i|do you want me to|want me to|would you like me to|can you confirm|please confirm|are you sure|confirm)[^?]{0,200}\?\s*$|\bare you sure\b[^?]{0,200}\?|\b(please|can you) confirm\b|\bconfirm and i.ll\b|\breply\s+["“']?yes\b/i;
 /** A message, with ONE "yes" when the chat asks before acting (Rule 8): that
- *  is an answer, not a refusal, and the outcome is held to the same check. */
+ *  is an answer, not a refusal, and the outcome is held to the same check.
+ *  The yes is to what was ASKED FOR and nothing else: a reply that offers a
+ *  different action ("I can't mark it read — dismiss it instead?") must not be
+ *  taken as agreed to. */
 async function say(ctx: Ctx, message: string): Promise<Turn> {
   const first = await chat(ctx, message);
   if (!ASKS_TO_PROCEED.test(first.reply)) return first;
   ctx.step("chat asked before acting; answered yes");
-  const second = await chat(ctx, "Yes, go ahead.", [{ role: "user", content: message }, { role: "assistant", content: first.reply }]);
+  const second = await chat(ctx, "Yes, go ahead — do what I asked, and nothing else.", [{ role: "user", content: message }, { role: "assistant", content: first.reply }]);
   return { said: message, reply: second.reply, tools: [...first.tools, ...second.tools], data: second.data, asked: first.reply };
 }
-const yes = (ctx: Ctx, first: Turn, words = "Yes, go ahead.") => chat(ctx, words, [{ role: "user", content: first.said }, { role: "assistant", content: first.reply }]);
+const yes = (ctx: Ctx, first: Turn, words = "Yes, go ahead — do what I asked, and nothing else.") => chat(ctx, words, [{ role: "user", content: first.said }, { role: "assistant", content: first.reply }]);
 
 /** Everything made since the scenario began, whatever the model called it. */
 function sweepAfter(ctx: Ctx): void {
@@ -672,7 +675,8 @@ scenario({
       const t = await say(ctx, `Mark the "Roofer ${T}" notification as read.`);
       const rows = await custom();
       const ok = ctx.check("db", rows.length === 1 && rows[0].read_at != null && rows[0].dismissed_at == null, "the notification row is read — and not dismissed", json(rows.map((r: any) => [r.read_at, r.dismissed_at])));
-      report(ctx, ok, "bug", "Chat: a notification it says it marked read is not read in its row", t, json(rows.map((r: any) => [r.read_at, r.dismissed_at])), "I16");
+      const done = /\b(marked|done)\b/i.test(t.reply) && !/isn.t possible|not possible|can.t|cannot|couldn.t|unable/i.test(t.reply);
+      report(ctx, ok, done ? "bug" : "discrepancy", done ? "Chat: a notification it says it marked read is not read in its row" : "Chat declines to mark a notification it created as read", t, `[read_at, dismissed_at] = ${json(rows.map((r: any) => [r.read_at, r.dismissed_at]))}`, "I16; mark_notifications_read covers every user-created notification");
       ctx.check("db", (await ctx.db.count("user_notifications", `read_at=is.null&title=not.ilike.*${T}*`)) === others0, "no other notification was marked read");
       ctx.check("derived", (await bell()).filter((n: any) => json(n, 2000).includes(`Roofer ${T}`)).length === 1, "a read notification is still in the bell (read is not dismissed)");
     });
@@ -846,7 +850,7 @@ scenario({
       const row = await ctx.db.row("tasks", task.id);
       const edges = await ctx.db.rows("entity_links", `or=(source_id.eq.${task.id},target_id.eq.${task.id})`).catch(() => [] as any[]);
       const ok = ctx.check("db", (row?.linked_profiles || []).includes(kin.id), "the task row is filed under that person", json({ linked: row?.linked_profiles, edges: edges.length }));
-      report(ctx, ok, "bug", "Chat: a task it says it linked to a person is not filed under them", t, json({ linked: row?.linked_profiles, edges }), "Rule 9, I16");
+      report(ctx, ok, "discrepancy", "Chat: a task \"linked\" to a person through link_entities is not filed under them (through update_task it is)", t, `task.linked_profiles=${json(row?.linked_profiles)} (the person is ${kin.id}); entity_links rows touching the task: ${json(edges.map((e: any) => [e.source_type, e.source_id === kin.id ? "person" : e.source_id === task.id ? "task" : e.source_id, e.target_type, e.target_id === kin.id ? "person" : e.target_id === task.id ? "task" : e.target_id, e.relationship]))}`, "Rule 9 (ownership has one writer), I16");
       ctx.check("db", row?.title === `Call plumber ${T}` && row.due_date === O.addDays(ctx.today, 6) && row.status === "todo", "the task itself (title, date, status) is untouched");
       ctx.same("db", moved(c0, await census(ctx, ["tasks", "profiles", "events"])), {}, "no task, profile or event was created");
       const scoped = listOf(must(await ctx.api("GET", `/tasks?profileIds=${kin.id}`), "tasks for the person"));

@@ -4,7 +4,7 @@
 // row straight from the database, the figure that depends on it against the
 // oracle, and the OTHER screens that show it, reached inside the app without a
 // page reload.
-import { scenario, listOf, must, type Ctx } from "../framework";
+import { scenario, must, type Ctx } from "../framework";
 import * as O from "../oracle";
 
 const t = (id: string) => `[data-testid="${id}"]`;
@@ -170,9 +170,6 @@ const closeDetail = async (s: any) => {
   if (await s.page.locator(t("cal-close")).locator("visible=true").count()) await s.press(t("cal-close")).catch(() => undefined);
   await hidden(s, t("calendar-item-detail"), 5000);
 };
-/** The dates the open detail lists as coming up (its own rows, in order). */
-const listedDates = (s: any, list: string): Promise<string[]> =>
-  s.page.evaluate((sel: string) => [...document.querySelectorAll(`${sel} [data-testid^="cal-occ-"]`)].map((n) => (n.getAttribute("data-testid") || "").slice(8)), t(list));
 /** Open the "+ event" form on either layout. */
 async function openEventForm(s: any) {
   if (await s.page.locator(t("btn-add-event-cal")).locator("visible=true").count()) await s.press(t("btn-add-event-cal"));
@@ -344,6 +341,7 @@ scenario({
   covers: ["event.create.ui", "event.reschedule.ui", "event.cancel.ui", "event.complete.ui", "event.archive.ui"],
   requires: ["action", "db", "derived", "screen"],
   run: async (ctx) => {
+    const tell = finder(ctx);
     for (const s of surfaces(ctx)) {
       const L = (x: string) => `[${s.surface}] ${x}`;
       const title = `${ctx.tag} ${s.surface} choir`;
@@ -415,7 +413,7 @@ scenario({
         L(`the skip is a mark on the row (rd:skip:${skipDay}); its date, rule and end are untouched (O1)`), JSON.stringify([skipped?.date, skipped?.recurrence, skipped?.recurrence_end, tagsOf(skipped)]));
       list = await scheduledDates(s, weekly(b, [skipDay]));
       const laterStay = ctx.check("derived", list.ok, L(`the list steps over ${skipDay} and keeps every later week`), `listed ${list.got.slice(0, 6).join(", ")}… wanted ${weekly(b, [skipDay]).slice(0, 6).join(", ")}…`);
-      if (!laterStay) ctx.finding({ severity: "bug", title: "Skipping one date of a weekly event changes other dates", detail: `${s.surface}: after skipping ${skipDay} the detail listed ${list.got.slice(0, 8).join(", ")}` });
+      if (!laterStay) tell(s, { severity: "bug", title: "Skipping one date of a weekly event changes other dates", detail: `after skipping ${skipDay} the detail listed ${list.got.slice(0, 8).join(", ")}` });
 
       // ── Move ONE date ──
       ctx.step(L(`press ${moveFrom}, "Change date", choose ${moveTo}, "Change date"`));
@@ -428,7 +426,7 @@ scenario({
       const afterMove = await waitRow(ctx, "events", id, (r) => tagsOf(r).includes(`rd:skip:${moveFrom}`));
       const kept = ctx.check("db", afterMove?.date === b && afterMove?.recurrence === "weekly" && afterMove?.recurrence_end == null && tagsOf(afterMove).includes(`rd:skip:${skipDay}`) && tagsOf(afterMove).includes(`rd:skip:${moveFrom}`),
         L(`moving one date leaves the series anchored on ${b} (its slot ${moveFrom} is marked, the earlier skip is kept)`), JSON.stringify([afterMove?.date, afterMove?.recurrence, tagsOf(afterMove)]));
-      if (!kept && afterMove?.date !== b) ctx.finding({ severity: "bug", title: "Moving one occurrence of a weekly event re-anchors the series", detail: `${s.surface}: series date became ${afterMove?.date} (was ${b}) — O2` });
+      if (!kept && afterMove?.date !== b) tell(s, { severity: "bug", title: "Moving one occurrence of a weekly event re-anchors the series", detail: `series date became ${afterMove?.date} (was ${b}) — O2` });
       ctx.check("db", others.length === 1 && others[0].date === moveTo && (others[0].recurrence || "none") === "none",
         L(`and that one occurrence is stored once, on ${moveTo}, not repeating`), JSON.stringify(others.map((r: any) => [r.date, r.recurrence])));
       list = await scheduledDates(s, weekly(b, [skipDay, moveFrom]));
@@ -507,7 +505,7 @@ scenario({
       }
       const canResume = ctx.check("screen", resumeOffered, L("a paused series can be resumed from a screen (the card says \"resume to schedule dates\")"), where.join(" · ").slice(0, 700));
       if (!canResume) {
-        ctx.finding({ severity: "bug", title: "A paused series cannot be resumed from any screen", detail: `${s.surface}: Calendar → a date → More → Edit series → Advanced → "Pause series" stores rd:paused and takes every date off the Calendar. Recurring & Important then lists it as "Paused — resume to schedule dates", but that card's menu has no Resume, and its "Open details" and "Edit" do nothing for a paused series (no sheet opens), so the editor cannot be reached either (the only component with a Resume item, RecurringDatesManager, is not mounted). The pause toast says "until you resume it". Looked in: ${where.join(" · ").slice(0, 500)}` });
+        tell(s, { severity: "bug", title: "A paused series cannot be resumed from any screen", detail: `Calendar → a date → More → Edit series → Advanced → "Pause series" stores rd:paused and takes every date off the Calendar. Recurring & Important then lists it as "Paused — resume to schedule dates", but that card's menu has no Resume, and its "Open details" and "Edit" do nothing for a paused series (no sheet opens), so the editor cannot be reached either (the only component with a Resume item, RecurringDatesManager, is not mounted). The pause toast says "until you resume it". Looked in: ${where.join(" · ").slice(0, 500)}` });
         ctx.step(L("no Resume control found; resumed it through the API to go on (POST /events/:id/series-flag {flag:\"paused\",on:false})"));
         must(await ctx.api("POST", `/events/${id}/series-flag`, { flag: "paused", on: false }), "resume");
       }
@@ -540,11 +538,12 @@ scenario({
           await s.press(t("cal-action-deleteFuture"));
           await sleep(900);
           await s.press(t("cal-action-deleteFuture")).catch(() => undefined);
-          const r = await waitRow(ctx, "events", id, (x) => !x || x.deleted_at != null || !!x.recurrence_end, 6000);
+          let toast = "";
+          await until(async () => { toast = (await s.page.locator("li").filter({ hasText: /couldn.t complete that/i }).last().innerText().catch(() => "")).replace(/\s+/g, " "); return toast !== ""; }, 4000, 200);
+          const r = await waitRow(ctx, "events", id, (x) => !x || x.deleted_at != null || !!x.recurrence_end, 5000);
           endedEarly = !r || r.deleted_at != null || !!r.recurrence_end;
-          const toast = (await s.page.locator("li[data-state='open'], [role='status']").allInnerTexts().catch(() => [] as string[])).join(" ").replace(/\s+/g, " ");
           const works = ctx.check("action", endedEarly, L(`"End series", offered while the next date is the series' first, ends it`), `the row is unchanged (recurrence_end ${JSON.stringify(r?.recurrence_end)}); the screen said: ${toast.slice(0, 220)}`);
-          if (!works) ctx.finding({ severity: "bug", title: "\"End series\" is offered on a series that has not started, and always fails", detail: `${s.surface}: a weekly event whose first date (${b}) is still ahead. Detail → View All → Options → "End series — Stops before ${shortDate(b)}" → tap again: PATCH /api/events/:id {recurrenceEnd: ${O.addDays(b, -1)}} answers 400 "A repeating event cannot stop before its first occurrence" and a red toast "Couldn't complete that". Nothing is stored. The control is on the screen for an action that cannot apply (O4); the same is offered in the More menu. Screen said: ${toast.slice(0, 200)}` });
+          if (!works) tell(s, { severity: "bug", title: "\"End series\" is offered on a series that has not started, and always fails", detail: `A weekly event whose first date (${b}) is still ahead. Detail → View All → Options → "End series — Stops before ${shortDate(b)}" → tap again: PATCH /api/events/:id {recurrenceEnd: ${O.addDays(b, -1)}} answers 400 "A repeating event cannot stop before its first occurrence" and a red toast "Couldn't complete that". Nothing is stored. The control is on the screen for an action that cannot apply (O4); the same is offered in the More menu. Screen said: ${toast.slice(0, 200)}` });
         }
         await closeDetail(s);
 
@@ -1162,10 +1161,17 @@ scenario({
         const ids = dismissedIds((await prefRow(ctx, "dismissed_notifications"))?.value).filter((x) => x.includes(docA.id) || x.includes(docB.id));
         if (ids.length) await ctx.api("POST", "/notifications/restore", { ids });
       });
-      await s.page.reload();
-      await s.page.waitForSelector(t("page-dashboard"), { timeout: 30000 }).catch(async () => { await goto(s, "/dashboard", "page-dashboard"); });
+      // Reached inside the app (the page asks the server where the account is on
+      // every navigation); a layout another surface saved may take a poll to arrive.
+      await goto(s, "/tasks", "page-tasks");
       await goto(s, "/dashboard", "page-dashboard");
       await s.page.waitForSelector(t("exec-card-attention"), { timeout: 30000 });
+      if (!(await visible(s, t("exec-card-tasks"), 20000))) {
+        await goto(s, "/tasks", "page-tasks");
+        await sleep(1500);
+        await goto(s, "/dashboard", "page-dashboard");
+        await visible(s, t("exec-card-tasks"), 45000);
+      }
       const reloads = countReloads(s);
       const pref = async () => String((await prefRow(ctx, "exec_card_prefs"))?.value ?? "");
       const start = await pref();
@@ -1297,9 +1303,32 @@ scenario({
       await sleep(2000);
       ctx.check("screen", (await visible(s, t("exec-hidden-tasks"), 10000)) && !(await s.page.locator(t("exec-card-tasks")).locator("visible=true").count()), L("after a reload the saved layout is still the layout"));
       ctx.check("screen", !(await s.page.locator(rowB).locator("visible=true").count()), L("after a reload the dismissed alert is still dismissed"));
+
+      // A reload restores the page's saved snapshot first. A record made on
+      // another device since then must still appear (Rule 7: "a saved snapshot
+      // is a first paint, not the truth").
+      const late = `${ctx.tag} ${s.surface} made before a reload`;
+      const lateTask = must(await ctx.api("POST", "/tasks", { title: late, dueDate: O.addDays(ctx.today, 1) }), "task made elsewhere");
+      ctx.cleanup(() => ctx.api("DELETE", `/tasks/${lateTask.id}`));
+      ctx.step(L(`a task is made on another device ("${late}"); the dashboard, loaded a few seconds ago, is reloaded`));
+      await s.page.reload();
+      await s.page.waitForSelector(t("exec-card-attention"), { timeout: 30000 });
+      const openTasksCard = async () => { if (await s.page.locator(t("exec-hidden-tasks")).locator("visible=true").count()) await s.press(t("exec-hidden-tasks")).catch(() => undefined); };
+      const t0 = Date.now();
+      const shown = await until(async () => { await openTasksCard(); return (await wordsOf(s, t("executive-briefing"))).includes(late) || (await wordsOf(s, t("exec-kpi-next"))).includes(late); }, 20000, 700);
+      ctx.step(L(shown ? `the dashboard named it ${Date.now() - t0} ms after the reload` : "20 s after the reload the dashboard had not named it"));
+      let afterNav = shown;
+      if (!shown) {
+        await goto(s, "/tasks", "page-tasks");
+        const onTasks = await visible(s, t(`card-task-${lateTask.id}`), 10000);
+        await goto(s, "/dashboard", "page-dashboard");
+        afterNav = await until(async () => { await openTasksCard(); return (await wordsOf(s, t("executive-briefing"))).includes(late); }, 8000, 700);
+        ctx.step(L(`the Tasks page ${onTasks ? "listed" : "did not list"} it; back on the dashboard (in-app) it was ${afterNav ? "there" : "still missing"}`));
+      }
+      const fresh = ctx.check("screen", shown, L("after a reload the dashboard shows a task made on another device a moment before"), `not named within 20 s${afterNav ? "; it appeared after opening Tasks and coming back" : "; still missing after opening Tasks (which listed it) and coming back"}`);
+      if (!fresh) tell(s, { severity: "sync", title: "After a reload the dashboard misses a record made on another device, and in-app navigation does not bring it", detail: `Load the dashboard; within about three minutes create a task from another device (POST /api/tasks); reload the page. The reload restores the saved query cache and sends no /api/dashboard-bootstrap and no /api/tasks (seen in the network log; most likely the restored bootstrap still counts as fresh, so the launch prefetch skips it): the Tasks card, Next Important, Timeline and the "Tasks due" tile keep the pre-write lists. Opening #/tasks fetches and lists the task; going back to the dashboard still does not show it${afterNav ? " (in this run it did appear after that)" : ""} — most likely because the version watch takes its baseline from the first answer after the reload, which already carries the write, so nothing is seen to "rise". Rule 7 says the restored lists are re-seeded by the bootstrap refetch; here there is none. Measured on the isolated stack, 3 of 3 reloads.` });
       await closing(ctx, s, L, n);
     }
   },
 });
 
-void listOf; void listedDates;
