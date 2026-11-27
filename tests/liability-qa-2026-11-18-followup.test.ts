@@ -35,7 +35,8 @@ describe("deleting a liability", () => {
     const page = src("client/src/pages/liability-detail.tsx");
     const at = page.indexOf("const deleteProfileMutation");
     expect(at).toBeGreaterThan(-1);
-    const del = page.slice(at, at + 900);
+    // the whole mutation, however long its success message is
+    const del = page.slice(at, page.indexOf("\n  });", at));
     expect(del).toContain('navigate("/linked?tab=liabilities")');
     expect(del).not.toContain('navigate("/profiles")');
   });

@@ -47,6 +47,15 @@ export interface AmortizationResult {
   monthlyPayment: number;
   /** True when the payment does not cover the interest, so no payoff exists. */
   neverAmortizes?: boolean;
+  /**
+   * True when the projection stopped at its horizon (SAFETY_MAX_PERIODS, 50
+   * years) with a balance still owing. `payoffDate` / `payoffMonths` are then
+   * the HORIZON, not a payoff: a 0% loan of $342,200 paying $135 a month was
+   * shown as paid off in 600 months when it takes 2,535 (integrity run,
+   * 2026-11-27). Three states, never confused: a calculated payoff, a loan
+   * that never amortizes, and one whose payoff lies beyond what is projected.
+   */
+  beyondHorizon?: boolean;
 }
 
 const SAFETY_MAX_PERIODS = 600; // 50 years — prevent runaways
@@ -162,9 +171,11 @@ export function buildAmortization(terms: LiabilityTerms): AmortizationResult {
 
   const last = rows[rows.length - 1];
   const totalPaid = rows.reduce((s, r) => s + r.payment, 0);
+  const beyondHorizon = !neverAmortizes && rows.length >= SAFETY_MAX_PERIODS && remaining > 0.005;
 
   return {
     neverAmortizes,
+    beyondHorizon,
     rows,
     totalInterest: cumulativeInterest,
     totalPaid,
@@ -241,6 +252,8 @@ export interface LiabilitySummary {
   totalRemainingInterest: number;
   /** Payment does not cover interest — no payoff date exists. */
   neverAmortizes?: boolean;
+  /** The payoff lies beyond the 50-year projection: `payoffDate` / `remainingMonths` are the horizon, not a payoff. */
+  beyondHorizon?: boolean;
 }
 
 export function summarizeLiability(params: {
@@ -272,5 +285,6 @@ export function summarizeLiability(params: {
     payoffDate: amo.payoffDate,
     totalRemainingInterest: amo.totalInterest,
     neverAmortizes: amo.neverAmortizes,
+    beyondHorizon: amo.beyondHorizon,
   };
 }

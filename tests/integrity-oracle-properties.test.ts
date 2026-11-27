@@ -130,19 +130,29 @@ describe("a loan's payoff outlook (shared/liability-calc buildAmortization)", ()
       const payment = Math.max(25, Math.ceil(minPay * g.pick([1.3, 2, 4, 9]) / 5) * 5 + g.int(0, 40) * 5);
       const want = O.payoff(balance, apr, payment);
       const got = buildAmortization({ currentBalance: balance, annualInterestRate: apr / 100, monthlyPayment: payment, firstPaymentDate: "2027-01-15" } as any);
-      // The app stops projecting at 50 years (600 rows). A loan that takes longer
-      // is reported with payoffMonths 600 and a balance still left on its last row
-      // — a known discrepancy (docs/INTEGRITY_REPORT.md), left out here.
-      const beyondHorizon = balance / Math.max(1, payment - minPay) > 590;
-      if (beyondHorizon) continue;
+      // The app projects 50 years (600 rows). Past that it must SAY so
+      // (beyondHorizon), never report the horizon as a payoff.
+      if (want && want.months > 600) { if (!got.beyondHorizon || got.neverAmortizes) bad.push(`${balance} at ${apr}% paying ${payment}: takes ${want.months} months, but the app reports a payoff in ${got.payoffMonths}`); continue; }
+      if (want && got.beyondHorizon) { bad.push(`${balance} at ${apr}% paying ${payment}: pays off in ${want.months} months, but the app says it is beyond the horizon`); continue; }
       if (!want) { if (!got.neverAmortizes) bad.push(`${balance} at ${apr}% paying ${payment}: oracle says it never pays off, app says ${got.payoffMonths} months`); continue; }
-      if (want.months > 600) continue;
       const monthsOk = Math.abs(got.payoffMonths - want.months) <= 0;
       const interestOk = Math.abs(got.totalInterest - want.totalInterest) <= Math.max(0.05, want.months * 0.006);
       if (!monthsOk || !interestOk) bad.push(`${balance} at ${apr}% paying ${payment}: app ${got.payoffMonths} mo / ${got.totalInterest}, oracle ${want.months} mo / ${want.totalInterest}`);
       if (got.rows.length && Math.abs(got.rows[got.rows.length - 1].remainingBalance) > 0.01) bad.push(`${balance} at ${apr}%: the last row leaves ${got.rows[got.rows.length - 1].remainingBalance}`);
     }
     expect(bad.slice(0, 8), `${bad.length} of 300 disagree`).toEqual([]);
+  });
+
+  it("a loan that takes more than 50 years is beyond the horizon — not paid off in 600 months, and not 'never'", () => {
+    const got = buildAmortization({ currentBalance: 342_200, annualInterestRate: 0, monthlyPayment: 135, firstPaymentDate: "2027-01-15" } as any);
+    expect(O.payoff(342_200, 0, 135)?.months ?? Infinity).toBeGreaterThan(600); // 2,535 by hand
+    expect(got.beyondHorizon).toBe(true);
+    expect(got.neverAmortizes).toBeFalsy();
+    expect(got.rows[got.rows.length - 1].remainingBalance).toBeGreaterThan(0);
+    // one that just fits is a payoff
+    const fits = buildAmortization({ currentBalance: 60_000, annualInterestRate: 0, monthlyPayment: 100, firstPaymentDate: "2027-01-15" } as any);
+    expect(fits.beyondHorizon).toBeFalsy();
+    expect(fits.payoffMonths).toBe(600);
   });
 
   it("a payment that does not cover the interest never pays off", () => {

@@ -55,6 +55,14 @@ import { registerRecordDetailRoutes } from "./record-details-routes";
 import { registerWorkspaceRoutes, WORKSPACE_AI_PATHS } from "./workspace-routes";
 import { forgetVersions, keepVersionBeforeWrite, readRecordText } from "./content-versions";
 import { writeFromStoredRow } from "./stored-row-write";
+import { paymentExpensesOf, withDeletedSourceTag } from "@shared/deleted-source";
+
+/** `Idempotency-Key` header, or `idempotencyKey` in the body: 8–100 visible characters. */
+function idempotencyKeyOf(req: { headers: Record<string, any>; body?: any }): string | null {
+  const raw = req.headers["idempotency-key"] ?? req.body?.idempotencyKey;
+  const key = typeof raw === "string" ? raw.trim() : "";
+  return /^[\x21-\x7e]{8,100}$/.test(key) ? key : null;
+}
 import { appendDetailSearchHits } from "./record-details";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
@@ -5917,6 +5925,13 @@ ${JSON.stringify(ctx, null, 2)}`;
     if (deletable.status === "rejected") {
       return res.status(400).json({ error: deletable.error });
     }
+    // A bill's or debt's recorded payments are spending history: they stay,
+    // each marked with the name it was paid to, unless the person explicitly
+    // asks for the history to go too (shared/deleted-source.ts).
+    const deleteHistory = req.query.deleteHistory === "1" || req.query.deleteHistory === "true";
+    const paidExpenses = isLiabilityLikeProfile(existing)
+      ? paymentExpensesOf(await storage.getExpenses(), existing.id)
+      : [];
     const ok = await storage.deleteProfile(req.params.id);
     bustCache(`profiles:${uid_p3}`); bustCache(`stats:${uid_p3}`); bustCache(`profile-detail:${uid_p3}:`); bustCache(`cashflow:${uid_p3}`);
     if (!ok) {
@@ -5925,7 +5940,17 @@ ${JSON.stringify(ctx, null, 2)}`;
       // misleading success toast while orphan rows linger.
       return res.status(500).json({ error: "This profile couldn't be fully deleted, so it was kept (nothing is left pointing at a missing profile). Please try again." });
     }
-    res.json({ success: true });
+    let keptPayments = 0, deletedPayments = 0;
+    for (const e of paidExpenses) {
+      try {
+        if (deleteHistory) { if (await storage.deleteExpense(e.id)) deletedPayments++; }
+        else if (await storage.updateExpense(e.id, { tags: withDeletedSourceTag(e.tags, existing.name) } as any)) keptPayments++;
+      } catch (err: any) {
+        log.warn(`[profile-delete] payment history of ${existing.id}: ${err?.message || err}`);
+      }
+    }
+    if (paidExpenses.length) { bustCache(`expenses:${uid_p3}`); bustCache(`enhanced:${uid_p3}`); }
+    res.json({ success: true, keptPayments, deletedPayments });
   }));
 
   // ---- Profile Link / Unlink ----
@@ -12587,10 +12612,14 @@ No emojis. No prose outside the JSON.`,
       paymentType: d.paymentType && d.paymentType !== "standard" ? d.paymentType : null,
       method: d.sourceAccount ?? null,
       notes: d.notes ?? null,
+      // The form's own name for this payment (header or body). Same key = the
+      // same payment; a different key is a different payment even for the same
+      // money in the same minute (owner decision, 2026-11-27).
+      idempotencyKey: idempotencyKeyOf(req),
       source: "route",
     }, getTimezone(req));
     if (!result.ok) return res.status(result.reason === "payment_failed" ? 500 : 404).json({ error: "Payment failed" });
-    res.json(result.payment);
+    res.json(result.deduped ? { ...result.payment, deduped: true } : result.payment);
   }));
   app.patch("/api/liability-payments/:id", asyncHandler(async (req, res) => {
     const body = (req.body && typeof req.body === "object" && !Array.isArray(req.body)) ? req.body : null;

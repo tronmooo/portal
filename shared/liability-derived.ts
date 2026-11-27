@@ -81,7 +81,7 @@ export function deriveLiabilityMetrics(
   // The schedule starts at the temporal engine's next due — the same day the
   // header chip shows — never at the loan's origin.
   const summary = loanPayoff(f, todayISO, { extraPerPeriod: opts.extraPerPeriod, nextDueISO: nextDue.nextOccurrence });
-  const hasSchedule = balance > 0 && summary.monthlyPayment > 0 && !summary.neverAmortizes && summary.remainingMonths > 0;
+  const hasSchedule = balance > 0 && summary.monthlyPayment > 0 && !summary.neverAmortizes && !summary.beyondHorizon && summary.remainingMonths > 0;
   const storedTerm = loanStoredTermMonths(f, todayISO);
   const monthsRemaining = balance <= 0 ? 0 : hasSchedule ? summary.remainingMonths : storedTerm > 0 ? storedTerm : null;
   const linked = opts.linkedAssetValue;

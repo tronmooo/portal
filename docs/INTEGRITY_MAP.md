@@ -15,7 +15,7 @@ evidence there is that the door works — and it separates a test that *names* a
 - 122 data type × operation rows have at least one door.
 - API and AI Chat: 203 doors. **92** are verified by an integrity scenario (the action, the stored row and the dependent figures); **106** more are named by an existing test (evidence, not proof — see docs/WORKFLOW_MATRIX.md); **5** have no test at all.
 - Screens: 97 operations are offered by a screen; **4** are driven by an integrity browser scenario (desktop mouse and phone touch). The rest are covered per screen by the live browser checks listed in docs/WORKFLOW_MATRIX.md, not by a database-verified scenario.
-- 38 integrity scenarios; 5 drive a browser, 4 drive AI Chat.
+- 39 integrity scenarios; 5 drive a browser, 4 drive AI Chat.
 
 ## Dependency map
 
@@ -744,7 +744,7 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 | Loan / card payment | complete | screen | t10 (live) | t2 (live) |
 | Bill / recurring obligation (and Auto Pay) | create | screen | **V** `money.net-worth` `money.bill-cycle` `hardening.date-edges` | t5 (live) |
 | Bill / recurring obligation (and Auto Pay) | edit | screen | t28 (live) | t3 (live) |
-| Bill / recurring obligation (and Auto Pay) | delete | screen | **V** `money.bill-cycle` | t1 (live) |
+| Bill / recurring obligation (and Auto Pay) | delete | screen | **V** `money.bill-cycle` `money.deleted-bill-history` | t1 (live) |
 | Bill / recurring obligation (and Auto Pay) | reschedule | screen | t1 | — |
 | Bill / recurring obligation (and Auto Pay) | cancel | screen | **V** `money.bill-cycle` | — |
 | Bill / recurring obligation (and Auto Pay) | complete | screen | **V** `money.bill-cycle` `money.autopay` `hardening.repeated-requests` | t6 (live) |
@@ -769,8 +769,8 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 | Connected bank data & statement import | cancel | screen | t1 (live) | — |
 | Connected bank data & statement import | complete | screen | **none** | — |
 | Expense | create | **V** `browser.expense-form` | **V** `money.budget` `hardening.refused-input-writes-nothing` `hardening.unusual-text-round-trips` `hardening.interrupted-request` `hardening.date-edges` | **V** `chat.create-edit-delete` |
-| Expense | edit | screen | **V** `money.budget` `hardening.failed-edit-is-atomic` `hardening.simultaneous-edits` | **V** `chat.create-edit-delete` |
-| Expense | delete | screen | **V** `money.budget` `hardening.repeated-requests` | **V** `chat.create-edit-delete` |
+| Expense | edit | screen | **V** `money.budget` `money.deleted-bill-history` `hardening.failed-edit-is-atomic` `hardening.simultaneous-edits` | **V** `chat.create-edit-delete` |
+| Expense | delete | screen | **V** `money.budget` `money.deleted-bill-history` `hardening.repeated-requests` | **V** `chat.create-edit-delete` |
 | Expense | restore | — | **V** `money.budget` | — |
 | Expense | transfer | — | **V** `assets.nested-and-costs` | — |
 | Expense | cancel | — | — | **V** `chat.cancelled-and-questions-write-nothing` |
@@ -899,6 +899,7 @@ Loan / card payment · delete; Loan / card payment · complete; Bill / recurring
 | `money.bill-cycle` — A recurring bill: next date, pay, undo, skip — the series keeps its schedule | Bills & Auto Pay | action + db + derived | bill.create.api, bill.pay.api, bill.unpay.api, bill.skip.api, bill.pause.api, bill.delete.api |
 | `money.autopay` — Auto Pay records nothing before the due day, and one payment on it | Bills & Auto Pay | action + db + derived | bill.autopay.api |
 | `money.budget` — Budget progress equals the month's spending in its category | Budgets & spending | action + db + derived | expense.create.api, expense.edit.api, expense.delete.api, expense.restore.api, budget.create.api, budget.edit.api, budget.delete.api |
+| `money.deleted-bill-history` — Deleting a bill keeps the money already paid, named for the bill; the history goes only when asked | Bills & Auto Pay | action + db + derived | bill.delete.api, expense.edit.api, expense.delete.api |
 | `records.task-lifecycle` — A task: create, edit one field, complete, delete, restore — list, calendar and counts agree | Tasks | action + db + derived | task.create.api, task.edit.api, task.complete.api, task.delete.api, task.restore.api |
 | `records.task-recurring` — A repeating task: skipping one date keeps every later date; completing rolls to the next scheduled date | Tasks | action + db + derived | task.reschedule.api, task.skip.api, task.complete.api |
 | `records.event-series` — Repeating events across month ends, a leap day and the year boundary | Calendar | action + db + derived | event.create.api, event.edit.api, event.skip.api, event.reschedule.api, event.delete.api |

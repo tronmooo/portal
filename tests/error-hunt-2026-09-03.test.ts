@@ -3140,7 +3140,8 @@ describe("D262 never-amortizing loan is labelled in the detail page", async () =
   });
   it("the page shows the flag instead of $0.00 in both places", () => {
     const src = readFileSync(new URL("../client/src/pages/liability-detail.tsx", import.meta.url), "utf8");
-    expect(src).toContain('summary.neverAmortizes ? "Never pays off at this payment" : fmtUSD(summary.totalRemainingInterest)');
+    // (2026-11-27: a third state sits between the two — a payoff beyond the 50-year projection.)
+    expect(src).toContain('summary.neverAmortizes ? "Never pays off at this payment" : summary.beyondHorizon ? "Not paid off within 50 years at this payment" : fmtUSD(summary.totalRemainingInterest)');
     expect(src).toContain("amortization.neverAmortizes");
   });
 });

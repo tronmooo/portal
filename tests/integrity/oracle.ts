@@ -127,7 +127,7 @@ export function payoff(balance: number, aprPct: number, payment: number): { mont
     if (left > 0 && left < payment / 2) p = b;
     b -= p;
     totalInterest += i;
-    if (++months > 1200) return null;
+    if (++months > 100_000) return null;
   }
   return { months, totalInterest: cents(totalInterest) };
 }

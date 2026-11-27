@@ -274,6 +274,11 @@ const BILL_FREQUENCIES = ["weekly", "biweekly", "monthly", "yearly"];
 //     (current_balance, monthly_payment, interest_rate, loan_term_months,
 //      start_date, original_balance, extra_payment)
 //   * legacy nested paths (fields.loan.*, fields.finance.*)
+/** A fresh idempotency key for one payment. */
+function newPaymentKey(): string {
+  try { return crypto.randomUUID(); } catch { return `pay-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`; }
+}
+
 function readTerms(profile: LiabilityProfileLike) {
   const f = profile.fields || {};
   const loan = f.loan || {};
@@ -728,15 +733,26 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     setEditingBill(true);
   };
 
+  // Deleting stops what is scheduled; the payments already recorded are history
+  // and go only when the person ticks this.
+  const [deleteHistoryToo, setDeleteHistoryToo] = useState(false);
   const deleteProfileMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("DELETE", `/api/profiles/${profile.id}`);
+      const res = await apiRequest("DELETE", `/api/profiles/${profile.id}${deleteHistoryToo ? "?deleteHistory=1" : ""}`);
+      return res.json().catch(() => ({}));
     },
-    onSuccess: () => {
+    onSuccess: (out: any) => {
       queryClient.setQueryData(["/api/profiles"], (old: any[]) =>
         old?.filter((p: any) => p.id !== profile.id) || []
       );
-      toast({ title: "Profile deleted", description: "All linked data has been removed" });
+      // Say what happened to the money already recorded (owner, 2026-11-27).
+      const kept = Number(out?.keptPayments) || 0, gone = Number(out?.deletedPayments) || 0;
+      toast({
+        title: `"${profile.name}" deleted`,
+        description: gone ? `Its ${gone} recorded payment${gone === 1 ? "" : "s"} left your spending history too.`
+          : kept ? `Its ${kept} recorded payment${kept === 1 ? " stays" : "s stay"} in your spending history, marked as paid to "${profile.name}".`
+          : "Nothing further is scheduled for it.",
+      });
       invalidateDomains("liabilities", "events", "expenses");
       // Back where the liability was listed — `/profiles` is the Info tab.
       navigate("/linked?tab=liabilities");
@@ -1058,6 +1074,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       }),
   });
 
+  // The name of the payment being made (L5): kept across a double press and a
+  // retry, replaced once the payment is recorded.
+  const paymentKeyRef = useRef(newPaymentKey());
   const recordPaymentMutation = useMutation({
     mutationFn: async (input: {
       amount: number;
@@ -1069,15 +1088,20 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       // (single source of truth). We send only the raw payment; the server
       // computes the rest from the liability's balance + APR and updates the
       // profile balance atomically. See POST /api/liabilities/:id/payments.
+      // One key per payment the person makes: a double press or a retried
+      // request repeats the key (one payment); the next payment gets a new
+      // one, so two equal payments a moment apart are two payments.
       const res = await apiRequest("POST", `/api/liabilities/${profile.id}/payments`, {
         paymentDate: input.paymentDate,
         amount: input.amount,
         notes: input.notes || null,
         ...(input.paymentType ? { paymentType: input.paymentType } : {}),
+        idempotencyKey: paymentKeyRef.current,
       });
       return res.json();
     },
     onSuccess: () => {
+      paymentKeyRef.current = newPaymentKey();
       toast({ title: "Payment recorded" });
       setPaymentDialog((s) => ({ ...s, open: false }));
     },
@@ -1299,9 +1323,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   // When the balance reaches zero, from THIS page's one amortization. Empty
   // when there is nothing honest to say (no rate or payment: the engine would
   // assume 360 months).
-  const canProject = amortize && payoffMissing.length === 0 && !summary.neverAmortizes && summary.remainingMonths > 0;
+  const canProject = amortize && payoffMissing.length === 0 && !summary.neverAmortizes && !summary.beyondHorizon && summary.remainingMonths > 0;
   const payoffText = paidOff ? "Paid off"
     : amortize && payoffMissing.length === 0 && summary.neverAmortizes ? "Never at this payment"
+    : amortize && payoffMissing.length === 0 && summary.beyondHorizon ? "Over 50 years at this payment"
     : canProject ? fmtDate(summary.payoffDate) : "";
   const profileNotes = String((profile as any).notes || "");
 
@@ -1902,6 +1927,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   <div className="text-xs text-muted-foreground">
                     {amortization.neverAmortizes
                       ? "the payment does not cover the monthly interest — the balance never falls"
+                      : amortization.beyondHorizon
+                      ? `the first ${amortization.rows.length} payments (50 years) — at this payment the balance is not paid off within them`
                       : <>{amortization.rows.length} period{amortization.rows.length === 1 ? "" : "s"} · total interest {fmtUSD(amortization.totalInterest)}</>}
                   </div>
                 </CardHeader>
@@ -1957,7 +1984,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm">
                   <Row label="Remaining interest"
-                    value={summary.neverAmortizes ? "Never pays off at this payment" : fmtUSD(summary.totalRemainingInterest)} />
+                    value={summary.neverAmortizes ? "Never pays off at this payment" : summary.beyondHorizon ? "Not paid off within 50 years at this payment" : fmtUSD(summary.totalRemainingInterest)} />
                   <Row label="Interest paid (history)"
                     value={fmtUSD(interestPaidToDate)} />
                   <Row label="Total payments made"
@@ -2208,8 +2235,19 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete "{profile.name}"?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete this liability and all its data. This action cannot be undone.
+              This deletes the liability and everything scheduled for it. Payments already recorded stay in your
+              spending history, marked as paid to "{profile.name}". This cannot be undone.
             </AlertDialogDescription>
+            <label className="flex items-start gap-2 text-sm text-left pt-1 cursor-pointer" data-testid="label-delete-history">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={deleteHistoryToo}
+                onChange={(e) => setDeleteHistoryToo(e.target.checked)}
+                data-testid="checkbox-delete-history"
+              />
+              <span>Also delete its recorded payments from my spending history</span>
+            </label>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel data-testid="button-cancel-delete-profile">Cancel</AlertDialogCancel>

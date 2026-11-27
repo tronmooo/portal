@@ -595,11 +595,21 @@ export interface PayBillInput {
    * or a document went through.
    */
   verification?: PaymentVerification | null;
+  /**
+   * The caller's name for THIS payment (a UUID minted when the form opened, or
+   * one per chat turn). Owner decision 2026-11-27: "Two identical payments
+   * could be legitimate. Use unique transaction IDs and idempotency keys …
+   * instead of comparing payment amounts and timestamps." With a key, the same
+   * key is the same payment (answered with the first row) and a different key
+   * is ALWAYS a different payment, however alike the money and the minute.
+   * Without one (an older client) the amount-and-time fold below still applies.
+   */
+  idempotencyKey?: string | null;
   source: PayBillSource;
 }
 
 export interface PayBillStep {
-  step: "ledger" | "series_state" | "account" | "expense" | "reminder_tasks";
+  step: "ledger" | "series_state" | "account" | "expense" | "reminder_tasks" | "idempotency_key";
   ok: boolean;
   error?: string;
 }
@@ -850,6 +860,37 @@ async function findPaymentWithRetry(storage: IStorage, liabilityId: string, paym
   return paymentId ? { id: paymentId } : null;
 }
 
+export const PAYMENT_KEYS_FIELD = "_paymentKeys";
+export const PAYMENT_KEYS_KEPT = 40;
+
+/**
+ * Record `key → paymentId` on the liability unless the key is already held.
+ * Answers the payment id that holds the key afterwards. `force` hands a key
+ * whose payment never landed to the retry.
+ */
+export async function claimPaymentKey(storage: IStorage, liabilityId: string, key: string, paymentId: string, force = false): Promise<string | null> {
+  const next = (fields: Record<string, any> | null | undefined): Record<string, any> | null => {
+    const held = fields && typeof fields[PAYMENT_KEYS_FIELD] === "object" && fields[PAYMENT_KEYS_FIELD] ? fields[PAYMENT_KEYS_FIELD] as Record<string, any> : {};
+    if (held[key]?.id && !force) return null;
+    const merged = { ...held, [key]: { id: paymentId, at: new Date().toISOString() } };
+    const kept = Object.entries(merged).sort((a: any, b: any) => String(b[1]?.at).localeCompare(String(a[1]?.at))).slice(0, PAYMENT_KEYS_KEPT);
+    return Object.fromEntries(kept);
+  };
+  const read = (p: any) => (p?.fields?.[PAYMENT_KEYS_FIELD]?.[key]?.id as string | undefined) ?? null;
+  const mutate = (storage as any).mutateProfileFields as ((id: string, fn: (fresh: any) => any) => Promise<any>) | undefined;
+  if (typeof mutate === "function") {
+    const after = await mutate.call(storage, liabilityId, (fresh: any) => {
+      const keys = next(fresh?.fields);
+      return keys ? { fields: { [PAYMENT_KEYS_FIELD]: keys } } : null;
+    });
+    return read(after);
+  }
+  const fresh: any = await storage.getProfile(liabilityId);
+  const keys = next(fresh?.fields);
+  if (!keys) return read(fresh);
+  return read(await storage.updateProfile(liabilityId, { fields: { [PAYMENT_KEYS_FIELD]: keys } } as any));
+}
+
 /** The later of two YYYY-MM-DD days, ignoring anything unparseable. */
 function laterDay(a: unknown, b: string): string {
   const prev = typeof a === "string" && /^\d{4}-\d{2}-\d{2}/.test(a) ? a.slice(0, 10) : "";
@@ -943,7 +984,10 @@ export async function payBillOccurrence(
   // folding those answered every one with the first row while the balance
   // moved once (D270). Stamps written before this change carry no date and
   // fold on money and time alone, as before.
+  const keyed = typeof input.idempotencyKey === "string" && input.idempotencyKey.trim().length >= 8
+    ? input.idempotencyKey.trim().slice(0, 100) : null;
   const sameTap = (stamp: any) => {
+    if (keyed) return false; // the key decides what is a repeat (below)
     const ageMs = stamp && typeof stamp.postedAt === "string" ? Date.now() - Date.parse(stamp.postedAt) : NaN;
     const stampDate = stamp && typeof stamp.paymentDate === "string" ? stamp.paymentDate.slice(0, 10) : "";
     const sameDay = !stampDate || stampDate === String(paymentDate || "").slice(0, 10);
@@ -970,7 +1014,7 @@ export async function payBillOccurrence(
     const sameDay = !stampDate || stampDate === String(paymentDate || "").slice(0, 10);
     return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < windowMs && Math.abs(Number(stamp.amount) - amount) < 0.005 && sameDay;
   };
-  const chatRepeat = (stamp: any) => input.source === "ai" && sameMoneyWithin(stamp, 60_000);
+  const chatRepeat = (stamp: any) => !keyed && input.source === "ai" && sameMoneyWithin(stamp, 60_000);
   // A one-tap "Mark paid" (no amount of its own) repeated on a settled
   // occurrence is the same tap a minute later, not a second payment; only a
   // payment that names its amount can be one.
@@ -1008,6 +1052,29 @@ export async function payBillOccurrence(
   // already being paid; the loser sees 0 rows and answers with the winner's
   // payment. Storages without the CAS (tests, in-memory) keep the old order.
   const paymentId = randomUUID();
+  // ── 0b. the idempotency key is claimed before any money moves ───────────
+  // Stored on the liability itself (`_paymentKeys`, the most recent few), written
+  // compare-and-set: of two requests carrying one key, exactly one proceeds
+  // and the other answers with its payment. A key whose payment never landed
+  // (the request died) is taken over by the retry.
+  if (keyed) {
+    const holder = await claimPaymentKey(storage, liabilityId, keyed, paymentId);
+    if (holder && holder !== paymentId) {
+      const payments = await storage.getLiabilityPayments(liabilityId).catch(() => [] as any[]);
+      let winner = payments.find((p: any) => p.id === holder) ?? null;
+      for (let i = 0; i < 6 && !winner; i++) {
+        await new Promise((r) => setTimeout(r, 300));
+        winner = (await storage.getLiabilityPayments(liabilityId).catch(() => [] as any[])).find((p: any) => p.id === holder) ?? null;
+      }
+      if (winner) {
+        return {
+          ok: true, deduped: true, payment: winner, liability, occurrenceDate, amount: winner.amount ?? amount, recurring,
+          dueDateAdvanced: false, nextDueDate: null, accountAdjusted: false, expenseId: null, steps: [{ step: "idempotency_key", ok: true }],
+        };
+      }
+      await claimPaymentKey(storage, liabilityId, keyed, paymentId, true);
+    }
+  }
   // Assumed vs confirmed lives on the occurrence stamp, beside the id of the
   // one ledger row this payment is (shared/autopay). `partial` and
   // `expectedAmount` belong to a previous record of this occurrence, so a

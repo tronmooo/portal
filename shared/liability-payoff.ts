@@ -55,7 +55,7 @@ export function payoffSeries(
   opts: { startBalance: number; todayISO?: string; maxPoints?: number },
 ): PayoffPoint[] {
   const rows = amo.rows;
-  if (rows.length === 0 || amo.neverAmortizes) return [];
+  if (rows.length === 0 || amo.neverAmortizes || amo.beyondHorizon) return [];
   const start: PayoffPoint = {
     date: opts.todayISO ?? rows[0].dueDate,
     paymentNumber: 0,
@@ -94,7 +94,7 @@ export interface PrincipalInterestSplit {
 
 /** Of everything still to be paid, how much retires principal and how much is interest. */
 export function principalInterestSplit(amo: AmortizationResult): PrincipalInterestSplit | null {
-  if (amo.rows.length === 0 || amo.neverAmortizes) return null;
+  if (amo.rows.length === 0 || amo.neverAmortizes || amo.beyondHorizon) return null;
   const principal = amo.rows.reduce((s, r) => s + r.principal + r.extraPrincipal, 0);
   const interest = amo.totalInterest;
   const total = principal + interest;

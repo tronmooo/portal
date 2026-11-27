@@ -16,9 +16,9 @@ export interface Known {
 export const KNOWN: Known[] = [
   {
     kind: "sync",
-    title: "OPEN, NOT FIXED — a task ticked done on Tasks sometimes stays open on the dashboard",
-    detail: "The row is stored as done, but the dashboard opened right after by in-app navigation keeps the task under Tasks \"Remaining\", Timeline and Next Important for more than ten seconds (until the page is left or reloaded). Intermittent: 1 of 3 repeat runs on production and 1 run on the preview, desktop each time. A local write invalidates with refetchType \"active\" (client/src/lib/cache-bus.ts), so the cause is not the sibling-tab rule; it has not been established. Breaks \"Done means gone\" (Rule 8). The scenario keeps failing when it happens.",
-    evidence: "browser.task-form (screenshot test-results/integrity/screenshots/browser.task-form-desktop.png); rerun: npx tsx tests/integrity/run.ts --only browser.task-form",
+    title: "Another device's reads can be up to about two seconds behind a write",
+    detail: "The server's response cache is keyed by a data version each instance memoizes for ~2 s. The device that made the write carries the new version in its next requests and always reads fresh (0 stale of 384 reads, production, 2026-11-27). A different device, which has no such token, can be answered from the pre-write cache for up to ~2 s (17 of 64 dashboard-bootstrap reads immediately after a write).",
+    evidence: "production probe, 2026-11-27 (server/routes.ts VERSION_MEMO_MS)",
   },
   {
     kind: "sync",
@@ -27,28 +27,10 @@ export const KNOWN: Known[] = [
     evidence: "browser.written-elsewhere (records whether navigation alone showed the task); client/src/lib/queryClient.ts",
   },
   {
-    kind: "discrepancy",
-    title: "A loan that takes more than 50 years to repay is shown as paid off in 600 months",
-    detail: "buildAmortization stops at 600 rows. A loan still owing after that (0% with a very small payment) reports payoffMonths 600 and a payoff date, with a balance left on its last row, instead of saying no payoff is in view.",
-    evidence: "tests/integrity-oracle-properties.test.ts (beyond-horizon cases are left out of the comparison); shared/liability-calc.ts SAFETY_MAX_PERIODS",
-  },
-  {
-    kind: "question",
-    title: "A bill's recorded payments stay in spending after the bill is deleted",
-    detail: "Deleting a paid bill or loan deletes its payment rows but keeps the expense each payment logged (linked to the payer, tagged liability:<id> / payment:<id> for rows that no longer exist). Money that was spent stays spent, which is defensible — but the expense can no longer be traced to, or reversed from, the bill.",
-    evidence: "integrity run cleanup (expenses named \"<bill> — <date>\" outlive the bill); money.bill-cycle",
-  },
-  {
     kind: "gap",
     title: "An emptied version history leaves an empty preferences row",
     detail: "Deleting a note, journal entry or document empties its versions (the text is gone) but the row versions:<kind>:<id> stays with the value \"[]\". No text is kept; one small row per deleted record is.",
     evidence: "records.journal-notes; server/content-versions.ts forgetVersions",
-  },
-  {
-    kind: "question",
-    title: "The same loan payment sent twice within a minute is folded into one",
-    detail: "POST /api/liabilities/:id/payments answers the second identical request (same amount, same day, seconds apart) with the first payment: a double-submit guard. Two genuinely separate equal payments made within that window would be recorded as one; a different amount, or a later moment, is its own payment.",
-    evidence: "money.loan-payments (\"the identical request sent again adds no second payment\")",
   },
   {
     kind: "gap",

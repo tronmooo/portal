@@ -1101,7 +1101,7 @@ export default function FinancePage() {
         // own page shows. Reading the stored contract term here said "67 mo
         // left" against the page's "64 mo" for the same loan (F-12).
         const payoff = loanPayoff(f, localTodayISO());
-        const months = payoff.monthlyPayment > 0 && !payoff.neverAmortizes ? payoff.remainingMonths : loanStoredTermMonths(f);
+        const months = payoff.monthlyPayment > 0 && !payoff.neverAmortizes && !payoff.beyondHorizon ? payoff.remainingMonths : loanStoredTermMonths(f);
         const payment = payoff.monthlyPayment;
         return { id: p.id, name: p.name as string, balance, rate, months, payment };
       })

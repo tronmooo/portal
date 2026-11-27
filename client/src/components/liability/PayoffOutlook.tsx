@@ -90,13 +90,16 @@ export function PayoffOutlook({ summary, amortization, todayISO, missing }: Payo
 
   if (summary.currentBalance <= 0) return null;
 
-  if (amortization.neverAmortizes || series.length < 2 || !split) {
+  if (amortization.neverAmortizes || amortization.beyondHorizon || series.length < 2 || !split) {
     return (
       <section {...scope} data-testid="payoff-outlook">
         <div className="bubble p-3.5" data-testid="payoff-outlook-never">
           <CoverageNote>
-            At {cents(summary.monthlyPayment)} a month the payment doesn't cover the interest, so the balance never
-            falls. Raise the payment to see a payoff date.
+            {amortization.beyondHorizon && !amortization.neverAmortizes
+              ? <>At {cents(summary.monthlyPayment)} a month this is not paid off within 50 years, which is as far as the
+                projection goes. Raise the payment to see a payoff date.</>
+              : <>At {cents(summary.monthlyPayment)} a month the payment doesn't cover the interest, so the balance never
+                falls. Raise the payment to see a payoff date.</>}
           </CoverageNote>
         </div>
       </section>

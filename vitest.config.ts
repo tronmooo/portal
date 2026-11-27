@@ -618,6 +618,8 @@ export default defineConfig({
       'tests/integrity-oracle-properties.test.ts',
       'tests/integrity-run-fixes-2026-11-27.test.ts',
       'tests/bootstrap-seed-no-stale-overwrite.test.ts',
+      'tests/payment-idempotency-keys.test.ts',
+      'tests/deleted-bill-keeps-history.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

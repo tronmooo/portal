@@ -147,6 +147,22 @@ scenario({
     ctx.check("db", (await ctx.db.count("liability_payments", `liability_profile_id=eq.${loan.id}`)) === 1, `the identical request sent again (answer ${twin.status}) adds no second payment`);
     ctx.near("db", (await ctx.db.row("profiles", loan.id))?.fields?.balance, want1.newBalance, "and does not move the balance twice");
 
+    // named payments (idempotency keys): the same key is the same payment…
+    const keyA = `${ctx.tag}-key-A`, keyB = `${ctx.tag}-key-B`;
+    const balBefore = (await ctx.db.row("profiles", loan.id)).fields.balance;
+    const k1 = must(await ctx.api("POST", `/liabilities/${loan.id}/payments`, { amount: 40, paymentDate: ctx.today, idempotencyKey: keyA }), "keyed payment");
+    const k1again = must(await ctx.api("POST", `/liabilities/${loan.id}/payments`, { amount: 40, paymentDate: ctx.today, idempotencyKey: keyA }), "same key again");
+    ctx.check("action", k1again.id === k1.id, "the same key answers with the same payment");
+    ctx.check("db", (await ctx.db.count("liability_payments", `liability_profile_id=eq.${loan.id}`)) === 2, "the same key twice is one more ledger row, not two");
+    // …and a different key is another payment, though the money and the minute are the same
+    const k2 = must(await ctx.api("POST", `/liabilities/${loan.id}/payments`, { amount: 40, paymentDate: ctx.today, idempotencyKey: keyB }), "second keyed payment");
+    const okKeys = ctx.check("db", k2.id !== k1.id && (await ctx.db.count("liability_payments", `liability_profile_id=eq.${loan.id}`)) === 3, "an identical payment under a different key is its own ledger row");
+    if (!okKeys) ctx.finding({ severity: "bug", title: "Two identical loan payments with different idempotency keys are folded into one", detail: `second answered ${k2.id}, first ${k1.id}` });
+    ctx.near("db", (await ctx.db.row("profiles", loan.id)).fields.balance, O.cents(balBefore - 80), "the balance fell by both (interest already charged this month)");
+    for (const p of [k2, k1]) must(await ctx.api("DELETE", `/liability-payments/${p.id}`), "reverse keyed payment");
+    ctx.near("db", (await ctx.db.row("profiles", loan.id)).fields.balance, balBefore, "reversing both restores the balance");
+    ctx.check("db", !JSON.stringify(listOf(must(await ctx.api("GET", `/profiles/${loan.id}/overview`), "overview").sections ?? [])).includes("_paymentKeys"), "the keys are not shown among the debt's details");
+
     const amount2 = amount + 25;
     const want2 = O.splitPayment(want1.newBalance, apr, amount2, { interestAlreadyCharged: true });
     const p2 = must(await ctx.api("POST", `/liabilities/${loan.id}/payments`, { amount: amount2, paymentDate: ctx.today }), "pay again");
@@ -420,5 +436,43 @@ scenario({
     bud = await read();
     ctx.near("action", bud?.amount, limit + 25, "the budget's limit after the edit");
     ctx.near("derived", await spentNow(), O.cents(wantSpent + 10), "the edit left the category's spending alone");
+  },
+});
+
+scenario({
+  id: "money.deleted-bill-history",
+  title: "Deleting a bill keeps the money already paid, named for the bill; the history goes only when asked",
+  area: "Bills & Auto Pay",
+  covers: ["bill.delete.api", "expense.edit.api", "expense.delete.api"],
+  requires: ["action", "db", "derived"],
+  run: async (ctx) => {
+    const mk = async (name: string, amount: number) => mkProfile(ctx, { type: "liability", type_key: "utility", name, fields: { amount, frequency: "monthly", dueDate: ctx.today } });
+    const kept = await mk(`${ctx.tag} Kept Water`, 31.25);
+    const wiped = await mk(`${ctx.tag} Wiped Gas`, 18.5);
+    const snap0 = await snapshot(ctx);
+    for (const b of [kept, wiped]) must(await ctx.api("POST", `/liabilities/${b.id}/occurrences/${ctx.today}/pay`, {}), "pay");
+    const snapPaid = await snapshot(ctx);
+    ctx.near("derived", O.cents(snapPaid.totalMonthlySpend - snap0.totalMonthlySpend), 49.75, "both payments are in this month's spending");
+    const expOf = (id: string) => ctx.db.rows("expenses", `tags=cs.${encodeURIComponent(JSON.stringify([`liability:${id}`]))}`);
+    const before = (await expOf(kept.id))[0];
+    ctx.check("db", !!before && Number(before.amount) === 31.25, "the kept bill's payment has its expense row");
+
+    const d1 = await ctx.api("DELETE", `/profiles/${kept.id}`);
+    ctx.check("action", d1.ok && d1.data?.keptPayments === 1 && d1.data?.deletedPayments === 0, "deleting the bill reports one payment kept", JSON.stringify(d1.data));
+    const after = (await expOf(kept.id))[0];
+    const okKept = ctx.check("db", !!after && after.deleted_at == null && Number(after.amount) === 31.25 && after.date === before.date && after.category === before.category,
+      "its expense row is still live, same amount, day and category", JSON.stringify(after).slice(0, 240));
+    ctx.check("db", (after?.tags || []).includes(`from-deleted:${ctx.tag} Kept Water`), "and now names the bill it was paid to", JSON.stringify(after?.tags));
+    if (!okKept) ctx.finding({ severity: "bug", title: "Deleting a bill removed or changed money already recorded", detail: JSON.stringify(after).slice(0, 200) });
+    const snapKept = await snapshot(ctx);
+    ctx.near("derived", snapKept.totalMonthlySpend, snapPaid.totalMonthlySpend, "this month's spending did not change when the bill was deleted");
+    ctx.check("derived", !(snapKept.billsTimeline?.upcoming || []).some((r: any) => r.billId === kept.id), "nothing further is scheduled for it");
+
+    const d2 = await ctx.api("DELETE", `/profiles/${wiped.id}?deleteHistory=1`);
+    ctx.check("action", d2.ok && d2.data?.deletedPayments === 1, "deleting with the history reports one payment deleted", JSON.stringify(d2.data));
+    const gone = (await expOf(wiped.id))[0];
+    ctx.check("db", !gone || gone.deleted_at != null, "its expense row is deleted");
+    const snapWiped = await snapshot(ctx);
+    ctx.near("derived", O.cents(snapKept.totalMonthlySpend - snapWiped.totalMonthlySpend), 18.5, "this month's spending fell by exactly that payment");
   },
 });
