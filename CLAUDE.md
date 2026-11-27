@@ -1607,6 +1607,64 @@ rule needs the type: handed bare `fields`, a `loan`-typed profile's balance was
 counted as an asset AND a debt in the server's finance snapshot while
 `computeNetWorth` (which passes the profile) counted it once (2026-11-27).
 
+**I8. A payload copied into caches it does not own yields to anything newer.**
+`seedDashboardCaches` (`client/src/lib/bootstrap-seed.ts`) takes the moment its
+request STARTED: a list written after that is left alone, and when a write was
+acknowledged — or is still in the air — after that moment
+(`readMayPredateWrite`, `client/src/lib/write-clock.ts`, kept by `apiRequest`)
+the whole payload is suspect: lists that hold data keep it, what had to be
+seeded for a first paint is marked stale, and the bootstrap is read again.
+(2026-11-27, about one run in three on production: a task ticked done stayed
+under "1 Remaining", Timeline and Next Important — a bootstrap that began
+before the tick landed after it and stamped every list fresh for three
+minutes.) Anything new that copies one response into several query keys asks
+the write clock first.
+*Guard:* `tests/bootstrap-seed-no-stale-overwrite.test.ts`.
+**I9. Every device learns of a write.** Every GET answers with the account's
+per-domain version map (`X-Server-Data-Version`); `GET /api/data-version` is
+the cheapest way to ask. `observeServerVersions`
+(`client/src/lib/server-versions.ts`) turns "a counter rose that this tab did
+not raise" into the domains to read again; a write's own token is checked the
+same way against the domains its manifest names. `VersionWatch` (`App.tsx`)
+asks on every in-app navigation (`hashchange`), on return to the tab and twice
+a minute. A list nobody else wrote is still trusted for three minutes — do not
+"fix" staleness by shortening `staleTime` or turning focus refetch back on.
+(2026-11-27: a payment recorded elsewhere left a reopened loan's header on the
+old balance until a reload.) Measured on production: with the writer's token
+the server is coherent (0 stale of 384 reads); a device without it can be
+~2 s behind (`VERSION_MEMO_MS`).
+*Guard:* `tests/server-versions.test.ts`. *Live:* `browser.written-elsewhere`.
+**I10. A payment is named by its key.** `POST /api/liabilities/:id/payments`
+takes an idempotency key (`Idempotency-Key` header or `idempotencyKey`; the
+payment dialog mints one per payment). The same key is the same payment; a
+different key is ALWAYS another payment, however alike the money and the
+minute (owner, 2026-11-27: "Two identical payments could be legitimate").
+The key is claimed compare-and-set on the liability (`_paymentKeys`,
+`claimPaymentKey`, `server/liability-payments.ts`) before any money moves.
+Without a key (an older client, chat) the amount-and-time fold still applies.
+A new door that records a payment a person can repeat sends a key.
+*Guard:* `tests/payment-idempotency-keys.test.ts`.
+**I11. Deleting a bill or a debt keeps the money already paid.** The expenses
+its payments recorded stay, each tagged `from-deleted:<name>`
+(`shared/deleted-source.ts`), unless the person ticks "Also delete its
+recorded payments" (`DELETE /api/profiles/:id?deleteHistory=1`). The dialog
+says what stays. Never cascade-delete payment expenses by default.
+*Guard:* `tests/deleted-bill-keeps-history.test.ts`.
+**I12. Three payoff states, never confused.** A calculated payoff; a loan that
+never amortizes (`neverAmortizes`); and one whose payoff lies beyond the
+50-year projection (`beyondHorizon`, `shared/liability-calc.ts`) — every
+reader of the first two handles the third with its own words. (A 0% loan
+taking 2,535 months was shown as paid off in 600.)
+*Guard:* `tests/integrity-oracle-properties.test.ts`.
+**I13. A door is verified when its scenario PASSED.** `docs/INTEGRITY_MAP.md`
+marks `V` only for a scenario that passed in the last recorded run and `S` for
+one that is written but has not; never count a door as verified because a
+scenario names it. When triaging a red live check: a product defect is fixed
+and guarded; an assertion that contradicts a LATER owner rule is brought in
+line with that rule and says so in place; anything else stays red.
+`scripts/run-live-checks.ts` frees the gate lock after stopping a check (a
+killed holder used to fail the next check too).
+
 ## Data and credentials
 
 - This repository is **public**. Never commit a password, token or real

@@ -19,6 +19,12 @@ const results: Array<{ name: string; ok: boolean; seconds: number; tail: string 
 const started = Date.now();
 const save = () => { fs.mkdirSync(path.dirname(outFile), { recursive: true }); fs.writeFileSync(outFile, JSON.stringify(results, null, 2)); };
 
+async function freeGateLock(): Promise<void> {
+  const { api } = await import("../tests/smoke/fixture/api");
+  const { GATE_LOCK_KEY } = await import("../tests/smoke/fixture/gate-lock");
+  await api("PUT", `/preferences/${GATE_LOCK_KEY}`, { value: "" });
+}
+
 function runOne(file: string): Promise<{ ok: boolean; tail: string }> {
   return new Promise((resolve) => {
     // its own process group, so a timeout stops the check itself and not only the launcher
@@ -27,8 +33,13 @@ function runOne(file: string): Promise<{ ok: boolean; tail: string }> {
     const add = (d: Buffer) => { buf = (buf + d.toString()).slice(-6000); };
     child.stdout.on("data", add); child.stderr.on("data", add);
     const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { child.kill("SIGKILL"); } }, eachMs);
-    child.on("close", (code, signal) => {
+    child.on("close", async (code, signal) => {
       clearTimeout(timer);
+      // A check stopped at the cap still HOLDS the smoke account's gate lock
+      // (for up to its 10-minute expiry): the next check then waits on it and
+      // is stopped too — one slow check failed its neighbours (2026-11-27).
+      // The runner killed the holder, so the runner frees the lock.
+      if (signal) await freeGateLock().catch(() => undefined);
       const fails = buf.split("\n").filter((l) => /^\s*(FAIL|✗|x )\b/.test(l)).slice(0, 3).join(" · ");
       resolve({ ok: code === 0, tail: signal ? `stopped after ${eachMs / 60_000} minutes` : fails || buf.trim().split("\n").slice(-2).join(" · ") });
     });

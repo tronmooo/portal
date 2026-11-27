@@ -15,16 +15,22 @@ export interface Known {
 
 export const KNOWN: Known[] = [
   {
+    kind: "discrepancy",
+    title: "The dashboard's tracker count includes trackers the tracker list does not show",
+    detail: "GET /api/stats counted 9 trackers for the smoke account while GET /api/trackers listed 1: eight live finance-shaped trackers (\"Regression Probe finance …\", from May) are counted but not listed. Two answers to \"how many trackers\" (Rule 1). Not changed: which of the two is intended is the owner's call.",
+    evidence: "production, 2026-11-27 (database rows vs /api/trackers vs /api/stats.totalTrackers)",
+  },
+  {
+    kind: "sync",
+    title: "Another device learns of a write on its next navigation, its return to the tab, or within 30 seconds — not instantly",
+    detail: "There is no push channel. Every read carries the account's version map and the app asks for it on each in-app navigation, on return to the tab and twice a minute (lib/server-versions.ts); a domain another device moved is then read again. A screen that is simply left open can therefore show the old value for up to ~30 s.",
+    evidence: "browser.written-elsewhere (measures both); client/src/App.tsx VersionWatch",
+  },
+  {
     kind: "sync",
     title: "Another device's reads can be up to about two seconds behind a write",
     detail: "The server's response cache is keyed by a data version each instance memoizes for ~2 s. The device that made the write carries the new version in its next requests and always reads fresh (0 stale of 384 reads, production, 2026-11-27). A different device, which has no such token, can be answered from the pre-write cache for up to ~2 s (17 of 64 dashboard-bootstrap reads immediately after a write).",
     evidence: "production probe, 2026-11-27 (server/routes.ts VERSION_MEMO_MS)",
-  },
-  {
-    kind: "sync",
-    title: "A record written on another device is not shown by in-app navigation for up to 3 minutes",
-    detail: "Lists are trusted for 3 minutes inside one sitting (staleTime) and only the five aggregate payloads refetch on a real resume (15 s away). Nothing tells an open tab that another DEVICE, or the Auto Pay cron, wrote. A reload shows it at once. Deliberate (it ended the 2026-07 refetch storm); the cost is a short window in which two devices disagree.",
-    evidence: "browser.written-elsewhere (records whether navigation alone showed the task); client/src/lib/queryClient.ts",
   },
   {
     kind: "gap",

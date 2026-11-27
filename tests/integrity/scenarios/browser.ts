@@ -133,41 +133,78 @@ scenario({
 
 scenario({
   id: "browser.written-elsewhere",
-  title: "A record written on another device: a reload shows it at once (the saved snapshot never hides it)",
+  title: "A record written on another device appears here without a reload, and a reload never hides it",
   area: "Browser",
   browser: true,
-  covers: ["task.create.api", "task.delete.api"],
+  covers: ["task.create.api", "task.delete.api", "liabilityPayment.create.api"],
   requires: ["action", "db", "screen"],
   run: async (ctx) => {
+    for (const s of surfaces(ctx)) {
+      const L = (x: string) => `[${s.surface}] ${x}`;
+      await goto(s, "/tasks", "page-tasks");
+      await goto(s, "/dashboard", "page-dashboard");
+      await sleep(1500); // every list this session has is now fresh in its cache
+      let reloads = 0;
+      const onLoad = () => { reloads++; };
+      s.page.on("load", onLoad);
+
+      // another device adds a task…
+      const task = must(await ctx.api("POST", "/tasks", { title: `${ctx.tag} ${s.surface} written elsewhere`, dueDate: O.addDays(ctx.today, 2) }), "task");
+      ctx.cleanup(() => ctx.api("DELETE", `/tasks/${task.id}`));
+      ctx.check("action", true, L("a task was created outside the open page"));
+      ctx.check("db", (await ctx.db.row("tasks", task.id)) !== null, L("its row exists"));
+      // …and opening Tasks from inside the app shows it (the app asks the server
+      // where the account is on every navigation: lib/server-versions.ts)
+      const t0 = Date.now();
+      await goto(s, "/tasks", "page-tasks");
+      const shown = await s.page.locator(t(`card-task-${task.id}`)).first().waitFor({ timeout: 12000 }).then(() => true).catch(() => false);
+      ctx.step(L(`in-app navigation ${shown ? `showed the task after ${Date.now() - t0} ms` : "did not show the task within 12 s"}`));
+      const ok = ctx.check("screen", shown, L("opening Tasks (in-app, no reload) shows the task made on another device"));
+      if (!ok) ctx.finding({ severity: "sync", title: "A record made on another device is not shown by in-app navigation", detail: `${s.surface}: the Tasks list kept its cached rows for 12 s after navigating to it` });
+
+      // without navigating at all: the open screen catches up on its own (twice a minute)
+      must(await ctx.api("PATCH", `/tasks/${task.id}`, { title: `${ctx.tag} ${s.surface} renamed elsewhere` }), "rename elsewhere");
+      const t1 = Date.now();
+      const renamed = await s.page.getByText(`${ctx.tag} ${s.surface} renamed elsewhere`).first().waitFor({ timeout: 45000 }).then(() => true).catch(() => false);
+      ctx.step(L(`the open list ${renamed ? `showed the new title after ${Math.round((Date.now() - t1) / 1000)} s` : "never showed the new title in 45 s"}`));
+      const ok2 = ctx.check("screen", renamed, L("a change made elsewhere reaches the screen that is already open, within 45 s"));
+      if (!ok2) ctx.finding({ severity: "sync", title: "A change made on another device never reaches a screen that stays open", detail: `${s.surface}: 45 s on the Tasks list without the renamed title` });
+
+      // deleted elsewhere
+      must(await ctx.api("DELETE", `/tasks/${task.id}`), "delete elsewhere");
+      await goto(s, "/dashboard", "page-dashboard");
+      await goto(s, "/tasks", "page-tasks");
+      let still = true;
+      for (let i = 0; i < 24 && still; i++) { still = await s.page.locator(t(`card-task-${task.id}`)).first().isVisible().catch(() => false); if (still) await sleep(500); }
+      ctx.check("screen", !still, L("after it is deleted elsewhere, opening Tasks again no longer lists it"));
+      ctx.check("screen", reloads === 0, L("none of this reloaded the page"), `${reloads} reload(s)`);
+      s.page.off("load", onLoad);
+
+      // a reload restores the saved snapshot first — it must not be taken for the truth (Rule 7)
+      const second = must(await ctx.api("POST", "/tasks", { title: `${ctx.tag} ${s.surface} before a reload` }), "task");
+      ctx.cleanup(() => ctx.api("DELETE", `/tasks/${second.id}`));
+      await s.page.reload();
+      await s.page.waitForSelector(t("page-tasks"), { timeout: 30000 });
+      const afterReload = await s.page.locator(t(`card-task-${second.id}`)).first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
+      ctx.check("screen", afterReload, L("after a reload a task made elsewhere is listed"));
+      s.problems();
+    }
+
+    // The reported case: a payment recorded elsewhere while a loan's page is closed.
     const s = ctx.ui!.desktop;
-    await goto(s, "/tasks", "page-tasks");
+    const loan = must(await ctx.api("POST", "/profiles", { type: "liability", type_key: "personal_loan", name: `${ctx.tag} Elsewhere Loan`, fields: { balance: 9000, monthlyPayment: 200, dueDay: 6, interestRate: 0, _interestRateUnit: "percent" } }), "loan");
+    ctx.cleanup(() => ctx.api("DELETE", `/profiles/${loan.id}?deleteHistory=1`));
+    await goto(s, `/profiles/${loan.id}`, "");
+    const header = async () => (await s.page.locator("body").innerText()).replace(/\s+/g, " ");
+    await s.page.getByText("$9,000").first().waitFor({ timeout: 20000 }).catch(() => undefined);
+    ctx.check("screen", (await header()).includes("$9,000"), "the loan's page shows its balance, $9,000");
     await goto(s, "/dashboard", "page-dashboard");
-    const task = must(await ctx.api("POST", "/tasks", { title: `${ctx.tag} written elsewhere`, dueDate: O.addDays(ctx.today, 2) }), "task");
-    ctx.cleanup(() => ctx.api("DELETE", `/tasks/${task.id}`));
-    ctx.check("action", true, "a task was created outside the open page");
-    ctx.check("db", (await ctx.db.row("tasks", task.id)) !== null, "its row exists");
-    // Inside one sitting the app trusts a list for three minutes (staleTime) and
-    // refreshes on a real resume, not on every navigation. Whether navigation
-    // alone shows the task is recorded, not required.
-    await goto(s, "/tasks", "page-tasks");
-    const atOnce = await s.page.locator(t(`card-task-${task.id}`)).first().waitFor({ timeout: 5000 }).then(() => true).catch(() => false);
-    ctx.step(`in-app navigation alone ${atOnce ? "showed" : "did not show"} the task made elsewhere`);
-    if (!atOnce) ctx.finding({ severity: "gap", title: "A record made on another device is not shown by in-app navigation for up to 3 minutes", detail: "lists are trusted for 3 minutes inside one sitting (staleTime, client/src/lib/queryClient.ts) and only the five aggregate payloads refetch on resume; nothing tells an open tab that another DEVICE wrote. A reload shows it. By design; recorded so the limit is known." });
-    // A reload restores the saved snapshot first — it must not be taken for the truth (Rule 7).
-    await s.page.reload();
-    await s.page.waitForSelector(t("page-tasks"), { timeout: 30000 });
-    const shown = await s.page.locator(t(`card-task-${task.id}`)).first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
-    const ok = ctx.check("screen", shown, "after a reload the task made elsewhere is listed");
-    if (!ok) ctx.finding({ severity: "sync", title: "A reload restores a saved list without the record another device added", detail: "the Tasks list after reload lacks a task that exists on the server" });
-    must(await ctx.api("DELETE", `/tasks/${task.id}`), "delete elsewhere");
-    await s.page.reload();
-    await s.page.waitForSelector(t("page-tasks"), { timeout: 30000 });
-    await s.page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => undefined);
-    await sleep(1500);
-    const still = await s.page.locator(t(`card-task-${task.id}`)).first().isVisible().catch(() => false);
-    const ok2 = ctx.check("screen", !still, "after it is deleted elsewhere, a reload no longer lists it");
-    if (!ok2) ctx.finding({ severity: "sync", title: "A reload restores a task another device deleted", detail: "the saved snapshot's row stayed on screen after the refetch" });
-    s.problems();
+    must(await ctx.api("POST", `/liabilities/${loan.id}/payments`, { amount: 1500, paymentDate: ctx.today, paymentType: "extra_principal", idempotencyKey: `${ctx.tag}-elsewhere` }), "pay elsewhere");
+    ctx.near("db", (await ctx.db.row("profiles", loan.id)).fields.balance, 7500, "the stored balance after a payment made elsewhere");
+    await goto(s, `/profiles/${loan.id}`, "");
+    const current = await s.page.getByText("$7,500").first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
+    const ok3 = ctx.check("screen", current, "reopening the loan (in-app, no reload) shows the new balance, $7,500");
+    if (!ok3) ctx.finding({ severity: "sync", title: "A payment recorded on another device leaves a reopened loan on its old balance", detail: `header still read ${((await header()).match(/\$[0-9,]+(\.\d\d)?/) || ["?"])[0]} 15 s after reopening` });
   },
 });
 
