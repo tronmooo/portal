@@ -38,19 +38,22 @@ async function chat(ctx: Ctx, message: string, history: Msg[] = []): Promise<Tur
 // A question that closes the reply, or "are you sure … ?" / "please confirm" anywhere in it
 // (a delete may ask and then add what would be lost).
 const ASKS_TO_PROCEED = /(shall i|should i|do you want me to|want me to|would you like me to|can you confirm|please confirm|are you sure|confirm)[^?]{0,200}\?\s*$|\bare you sure\b[^?]{0,200}\?|\b(please|can you) confirm\b|\bconfirm and i.ll\b|\breply\s+["“']?yes\b/i;
-/** A message, with ONE "yes" when the chat asks before acting (Rule 8): that
- *  is an answer, not a refusal, and the outcome is held to the same check.
- *  The yes is to what was ASKED FOR and nothing else: a reply that offers a
- *  different action ("I can't mark it read — dismiss it instead?") must not be
- *  taken as agreed to. */
-async function say(ctx: Ctx, message: string): Promise<Turn> {
+/** A request that removes or reverses something, with ONE plain "yes" when the
+ *  chat asks before acting (Rule 8): that is an answer, not a refusal, and the
+ *  outcome is held to the same check. Only such requests are answered for: a
+ *  reply to anything else that offers a DIFFERENT action ("I can't mark it
+ *  read — dismiss it instead?") must not be taken as agreed to (it once was,
+ *  and the run dismissed a notification nobody asked to dismiss). */
+async function sayYes(ctx: Ctx, message: string): Promise<Turn> {
   const first = await chat(ctx, message);
   if (!ASKS_TO_PROCEED.test(first.reply)) return first;
   ctx.step("chat asked before acting; answered yes");
-  const second = await chat(ctx, "Yes, go ahead — do what I asked, and nothing else.", [{ role: "user", content: message }, { role: "assistant", content: first.reply }]);
+  const second = await chat(ctx, "Yes, go ahead.", [{ role: "user", content: message }, { role: "assistant", content: first.reply }]);
   return { said: message, reply: second.reply, tools: [...first.tools, ...second.tools], data: second.data, asked: first.reply };
 }
-const yes = (ctx: Ctx, first: Turn, words = "Yes, go ahead — do what I asked, and nothing else.") => chat(ctx, words, [{ role: "user", content: first.said }, { role: "assistant", content: first.reply }]);
+/** Any other message: said once, and judged by what that one message did. */
+const say = (ctx: Ctx, message: string) => chat(ctx, message);
+const yes = (ctx: Ctx, first: Turn, words = "Yes, go ahead.") => chat(ctx, words, [{ role: "user", content: first.said }, { role: "assistant", content: first.reply }]);
 
 /** Everything made since the scenario began, whatever the model called it. */
 function sweepAfter(ctx: Ctx): void {
@@ -121,7 +124,7 @@ scenario({
       ctx.near("db", await balance(), first.newBalance, "setup: a $300 payment left the balance (12,000 less 240 principal)");
       ctx.near("db", Number((await ledger())[0]?.interest_portion), first.interest, "setup: and carried the month's interest");
       await settle();
-      const t = await say(ctx, `Delete the payment I recorded today on my "${loan.name}" — it was a mistake.`);
+      const t = await sayYes(ctx, `Delete the payment I recorded today on my "${loan.name}" — it was a mistake.`);
       const rows = await ledger();
       const ok = ctx.check("db", rows.length === 0, "the ledger row is gone", json(rows.map((p: any) => p.amount)));
       const okBal = ctx.near("derived", await balance(), 12000, "the balance is back to what it was before the payment");
@@ -146,7 +149,7 @@ scenario({
       const sB = await snapshot(ctx);
       ctx.check("derived", close(sB.totalLiabilities, sA.totalLiabilities) && close(sB.totalAssetValue, sA.totalAssetValue), "a link is not a second debt or a second asset: both totals are unchanged", `${sA.totalLiabilities}→${sB.totalLiabilities}, ${sA.totalAssetValue}→${sB.totalAssetValue}`);
 
-      t = await say(ctx, `Remove the "${camper.name}" from my "${loan.name}" — it is no longer collateral for that loan.`);
+      t = await sayYes(ctx, `Remove the "${camper.name}" from my "${loan.name}" — it is no longer collateral for that loan.`);
       rows = await links();
       ok = ctx.check("db", rows.length === 0, "the link row is gone", json(rows));
       report(ctx, ok, "bug", "Chat: detaching an asset from a debt left the link in place", t, json(rows), "I16");
@@ -177,7 +180,7 @@ scenario({
       const b = await balance();
       const sA = await snapshot(ctx);
       const c0 = await census(ctx, ["tasks", "events", "trackers", "documents", "artifacts"]);
-      const t = await say(ctx, `Delete my "${loan.name}" debt.`);
+      const t = await sayYes(ctx, `Delete my "${loan.name}" debt.`);
       const row = await ctx.db.row("profiles", loan.id);
       const ok = ctx.check("db", gone(row), "the debt's row is deleted", json({ deleted_at: row?.deleted_at }));
       report(ctx, ok, "bug", "Chat: asked to delete a debt (and told yes), the debt is still there", t, json({ deleted_at: row?.deleted_at }), "I16");
@@ -328,7 +331,7 @@ scenario({
     await part(ctx, "delete_profile (an asset)", async () => {
       const v = await value();
       const sA = await snapshot(ctx);
-      const t = await say(ctx, `Delete my "${name}" asset profile.`);
+      const t = await sayYes(ctx, `Delete my "${name}" asset profile.`);
       const row = await ctx.db.row("profiles", assetId);
       const ok = ctx.check("db", gone(row), "the asset's row is deleted", json({ deleted_at: row?.deleted_at }));
       report(ctx, ok, "bug", "Chat: asked to delete an asset (and told yes), the asset is still there", t, json({ deleted_at: row?.deleted_at }), "I16");
@@ -343,7 +346,7 @@ scenario({
       const sA = await snapshot(ctx);
       const c0 = await census(ctx, ["expenses", "incomes", "tasks", "events"]);
       await settle();
-      const t = await say(ctx, `Delete my "Stash ${T}" account.`);
+      const t = await sayYes(ctx, `Delete my "Stash ${T}" account.`);
       const row = await ctx.db.row("profiles", acctId);
       const ok = ctx.check("db", gone(row), "the account's row is deleted", json({ type: row?.type, deleted_at: row?.deleted_at }));
       report(ctx, ok, "bug", "Chat: asked to delete an account (and told yes), the account is still there", t, json({ deleted_at: row?.deleted_at }), "I16");
@@ -377,7 +380,7 @@ scenario({
     await part(ctx, "link_asset_owner", async () => {
       const v = await value();
       const sA = await snapshot(ctx);
-      const t = await say(ctx, `Add "${robin.name}" as a co-owner of my "${name}" with a 40% share.`);
+      const t = await sayYes(ctx, `Add "${robin.name}" as a co-owner of my "${name}" with a 40% share.`);
       const rows = await ctx.db.rows("asset_party_links", `asset_profile_id=eq.${assetId}`);
       const theirs = rows.filter((r: any) => r.party_profile_id === robin.id).map((r: any) => Number(r.ownership_percentage));
       const ok = ctx.check("db", json(theirs) === "[40]", "an owner row gives the partner 40%", json(rows.map((r: any) => [r.party_profile_id === robin.id ? "partner" : "me?", r.ownership_percentage, r.role])));
@@ -647,10 +650,10 @@ scenario({
 // ─────────────────────────────────────────────────────────────────────────────
 scenario({
   id: "chat-tools.dashboard",
-  title: "Chat: notifications made, read and dismissed; mutes, the dashboard's sections and scope; a memory corrected",
+  title: "Chat: a notification made and dismissed, an alert dismissed; mutes and the dashboard's sections; a memory corrected",
   area: "AI Chat",
   chat: true,
-  covers: ["dashboard.create.chat", "dashboard.complete.chat", "dashboard.cancel.chat", "dashboard.edit.chat", "memory.edit.chat"],
+  covers: ["dashboard.create.chat", "dashboard.cancel.chat", "dashboard.edit.chat", "memory.edit.chat"],
   requires: ["action", "db", "derived"],
   run: async (ctx) => {
     sweepAfter(ctx);
@@ -670,21 +673,10 @@ scenario({
       ctx.check("derived", (await bell()).filter((n: any) => json(n, 2000).includes(`Roofer ${T}`)).length === 1, "the bell lists it once");
     });
 
-    await part(ctx, "mark_notifications_read", async () => {
-      const others0 = await ctx.db.count("user_notifications", `read_at=is.null&title=not.ilike.*${T}*`);
-      const t = await say(ctx, `Mark the "Roofer ${T}" notification as read.`);
-      const rows = await custom();
-      const ok = ctx.check("db", rows.length === 1 && rows[0].read_at != null && rows[0].dismissed_at == null, "the notification row is read — and not dismissed", json(rows.map((r: any) => [r.read_at, r.dismissed_at])));
-      const done = /\b(marked|done)\b/i.test(t.reply) && !/isn.t possible|not possible|can.t|cannot|couldn.t|unable/i.test(t.reply);
-      report(ctx, ok, done ? "bug" : "discrepancy", done ? "Chat: a notification it says it marked read is not read in its row" : "Chat declines to mark a notification it created as read", t, `[read_at, dismissed_at] = ${json(rows.map((r: any) => [r.read_at, r.dismissed_at]))}`, "I16; mark_notifications_read covers every user-created notification");
-      ctx.check("db", (await ctx.db.count("user_notifications", `read_at=is.null&title=not.ilike.*${T}*`)) === others0, "no other notification was marked read");
-      ctx.check("derived", (await bell()).filter((n: any) => json(n, 2000).includes(`Roofer ${T}`)).length === 1, "a read notification is still in the bell (read is not dismissed)");
-    });
-
     await part(ctx, "dismiss_notifications (a notification, then a dated alert)", async () => {
       const dismissed0 = await pref(ctx, "dismissed_notifications");
       const others0 = await ctx.db.count("user_notifications", `dismissed_at=is.null&title=not.ilike.*${T}*`);
-      let t = await say(ctx, `Dismiss the "Roofer ${T}" notification.`);
+      let t = await sayYes(ctx, `Dismiss the "Roofer ${T}" notification.`);
       const rows = await custom();
       let ok = ctx.check("db", rows.length === 1 && rows[0].dismissed_at != null, "the notification row is dismissed", json(rows.map((r: any) => [r.read_at, r.dismissed_at])));
       report(ctx, ok, "bug", "Chat: a notification it says it dismissed is not dismissed in its row", t, json(rows.map((r: any) => r.dismissed_at)), "Rule 8, I16");
@@ -703,7 +695,7 @@ scenario({
       const list = (raw: string | null) => { try { const v = JSON.parse(raw || "[]"); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
       const before = list(await pref(ctx, "dismissed_notifications"));
       await settle();
-      t = await say(ctx, `Dismiss the "Lease ${T}" expiry alert from my notifications.`);
+      t = await sayYes(ctx, `Dismiss the "Lease ${T}" expiry alert from my notifications.`);
       const after = list(await pref(ctx, "dismissed_notifications"));
       const added = after.filter((id) => !before.includes(id));
       ok = ctx.check("db", json(added) === json([String(alerts[0].id)]) && before.every((id) => after.includes(id)), "the dismissed list gained exactly that alert's id and kept what it had", json({ added, alert: alerts[0].id }));
@@ -767,6 +759,40 @@ scenario({
       report(ctx, ok, "bug", "Chat: a corrected memory is not the same row with the new value", t, json(all.map((x: any) => [x.key, x.value])), "I16");
       ctx.check("derived", json(must(await ctx.api("GET", `/memories/recall?q=${encodeURIComponent(key)}`), "recall"), 20000).includes("9912"), "recalling it gives the corrected value");
     });
+    ctx.check("action", true, "chat answered each message");
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+scenario({
+  id: "chat-tools.notification-read",
+  title: "Chat: a notification marked read is read in its row — and still in the bell",
+  area: "AI Chat",
+  chat: true,
+  covers: ["dashboard.complete.chat"],
+  requires: ["action", "db", "derived"],
+  run: async (ctx) => {
+    sweepAfter(ctx);
+    const T = ctx.tag;
+    const bell = async () => listOf(must(await ctx.api("GET", "/notifications"), "notifications"));
+    const custom = () => ctx.db.rows("user_notifications", `title=ilike.*${encodeURIComponent(T)}*`);
+    ctx.cleanup(async () => { const rows = await custom().catch(() => []); if (rows.length) await ctx.api("POST", "/notifications/dismiss", { ids: rows.map((r: any) => `custom:${r.id}`) }); });
+    ctx.cleanup(async () => { if ((await custom().catch(() => [])).some((r: any) => r.dismissed_at == null)) await chat(ctx, `Dismiss the "Roofer ${T}" notification.`); });
+    // there is no door but chat that makes a bell entry
+    await say(ctx, `Create an urgent notification titled "Roofer ${T}" that says the roofer comes Friday.`);
+    if ((await custom()).length !== 1) throw new Error(`setup through chat: expected one "Roofer ${T}" notification, found ${(await custom()).length}`);
+
+    await part(ctx, "mark_notifications_read", async () => {
+      const others0 = await ctx.db.count("user_notifications", `read_at=is.null&title=not.ilike.*${T}*`);
+      const t = await say(ctx, `Mark the "Roofer ${T}" notification as read.`);
+      const rows = await custom();
+      const ok = ctx.check("db", rows.length === 1 && rows[0].read_at != null && rows[0].dismissed_at == null, "the notification row is read — and not dismissed", json(rows.map((r: any) => [r.read_at, r.dismissed_at])));
+      const done = /\b(marked|done)\b/i.test(t.reply) && !/isn.t possible|not possible|can.t|cannot|couldn.t|unable/i.test(t.reply);
+      report(ctx, ok, done ? "bug" : "discrepancy", done ? "Chat: a notification it says it marked read is not read in its row" : "Chat declines to mark a notification it created as read", t, `[read_at, dismissed_at] = ${json(rows.map((r: any) => [r.read_at, r.dismissed_at]))}`, "I16; mark_notifications_read covers every user-created notification");
+      ctx.check("db", (await ctx.db.count("user_notifications", `read_at=is.null&title=not.ilike.*${T}*`)) === others0, "no other notification was marked read");
+      ctx.check("derived", (await bell()).filter((n: any) => json(n, 2000).includes(`Roofer ${T}`)).length === 1, "a read notification is still in the bell (read is not dismissed)");
+    });
+
     ctx.check("action", true, "chat answered each message");
   },
 });
@@ -897,7 +923,7 @@ scenario({
     await part(ctx, "repair_relations", async () => {
       const c0 = await census(ctx);
       const kin0 = json(await ctx.db.row("profiles", kin.id), 4000);
-      const t = await say(ctx, "Repair my data — fix any broken ownership links.");
+      const t = await sayYes(ctx, "Repair my data — fix any broken ownership links.");
       ctx.same("db", moved(c0, await census(ctx)), {}, "a repair creates and deletes nothing (thirteen tables)");
       ctx.check("db", json(await ctx.db.row("profiles", kin.id), 4000) === kin0, "a correctly owned profile is left exactly as it was");
       const claimed = Number((t.reply.match(/(\d+)\s+of\s+\d+/) || [])[1] ?? NaN);
@@ -934,7 +960,7 @@ scenario({
       ctx.cleanup(() => ctx.api("DELETE", `/tasks/${task.id}`));
       const people0 = await livePeople();
       await settle();
-      const t = await say(ctx, `Delete the profile "${kin.name}".`);
+      const t = await sayYes(ctx, `Delete the profile "${kin.name}".`);
       const row = await ctx.db.row("profiles", kin.id);
       const ok = ctx.check("db", gone(row), "the person's row is deleted", json({ deleted_at: row?.deleted_at }));
       report(ctx, ok, "bug", "Chat: asked to delete a person (and told yes), the profile is still there", t, json({ deleted_at: row?.deleted_at }), "I16");
@@ -953,7 +979,7 @@ scenario({
       await say(ctx, `Create a custom domain called "${dn}" for tracking wine bottles.`);
       const made = await domains();
       if (made.length !== 1) throw new Error(`setup through chat: expected one "${dn}" domain, found ${made.length}`);
-      const t = await say(ctx, `Delete the "${dn}" domain.`);
+      const t = await sayYes(ctx, `Delete the "${dn}" domain.`);
       const left = (await domains()).filter((d: any) => d.deleted_at == null);
       const ok = ctx.check("db", left.length === 0 && (await ctx.db.count("domains", "id=not.is.null&deleted_at=is.null").catch(() => ctx.db.count("domains", "id=not.is.null"))) <= n0, "the domain's row is gone, and no other domain with it", json(left.map((d: any) => d.name)));
       report(ctx, ok, "bug", "Chat: asked to delete a custom domain (and told yes), the domain is still there", t, json(left.map((d: any) => d.name)), "I16");
@@ -1046,7 +1072,7 @@ scenario({
       for (const e of [...a0, ...b0]) ctx.cleanup(() => ctx.api("DELETE", `/expenses/${e.id}`));
       if (a0.length !== 1 || b0.length !== 1) throw new Error(`setup through chat: expected one expense each, found ${a0.length} and ${b0.length}`);
       const c0 = await census(ctx, ["tasks", "events", "profiles", "incomes"]);
-      let t = await say(ctx, "Undo my last action.");
+      let t = await sayYes(ctx, "Undo my last action.");
       let a = await live(`First ${T}`), b = await live(`Second ${T}`);
       let ok = ctx.check("db", b.length === 0 && a.length === 1 && a[0].id === a0[0].id && close(a[0].amount, 11.11), "only the LAST action is reversed: the second expense is gone, the first is untouched", json({ first: a.map((e: any) => e.amount), second: b.map((e: any) => e.amount) }));
       report(ctx, ok, "bug", "Chat: \"undo my last action\" did not reverse exactly the last action", t, json({ first: a.map((e: any) => e.amount), second: b.map((e: any) => e.amount) }), "I16");
@@ -1056,7 +1082,7 @@ scenario({
       await say(ctx, `Change the "First ${T}" expense to $15.`);
       a = await live(`First ${T}`);
       if (!(a.length === 1 && close(a[0].amount, 15))) throw new Error(`setup through chat: the expense should read 15, got ${json(a.map((e: any) => e.amount))}`);
-      t = await say(ctx, "Undo that.");
+      t = await sayYes(ctx, "Undo that.");
       a = await live(`First ${T}`); b = await live(`Second ${T}`);
       ok = ctx.check("db", a.length === 1 && a[0].id === a0[0].id && close(a[0].amount, 11.11) && b.length === 0, "an edit is undone to the value it had (11.11), on the same row; the earlier undo is not itself undone", json({ first: a.map((e: any) => e.amount), second: b.length }));
       report(ctx, ok, "bug", "Chat: undoing an edit did not put the previous value back", t, json({ first: a.map((e: any) => e.amount), second: b.length }), "I16");
