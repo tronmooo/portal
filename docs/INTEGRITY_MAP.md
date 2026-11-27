@@ -13,8 +13,9 @@ evidence there is that the door works — and it separates a test that *names* a
 
 - 25 data types, 10 operations, 3 doors (the app's screens, the API, AI Chat).
 - 122 data type × operation rows have at least one door.
-- API and AI Chat: 203 doors. **158** are verified by an integrity scenario (the action, the stored row and the dependent figures); **40** more are named by an existing test (evidence, not proof — see docs/WORKFLOW_MATRIX.md); **5** have no test at all.
-- Screens: 97 operations are offered by a screen; **4** are driven by an integrity browser scenario (desktop mouse and phone touch). The rest are covered per screen by the live browser checks listed in docs/WORKFLOW_MATRIX.md, not by a database-verified scenario.
+- API and AI Chat: 203 doors. **96** are verified: a scenario covering them PASSED in the last recorded run (the action, the stored row and the dependent figures). **62** have a scenario that has not passed yet (failed, or not run). **40** more are only named by an existing test (evidence, not proof — see docs/WORKFLOW_MATRIX.md); **5** have no test at all.
+- Runs counted: ? @ ? (2026-11-27 05:09 UTC); portol.me @ 374c77a (2026-11-27 05:25 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ d8f34bd (2026-11-27 05:38 UTC); portol.me @ 374c77a (2026-11-27 05:39 UTC); portol.me @ 374c77a (2026-11-27 05:40 UTC); portol.me @ 374c77a (2026-11-27 05:40 UTC).
+- Screens: 97 operations are offered by a screen; **2** are driven by an integrity browser scenario that passed (desktop mouse and phone touch). The rest are covered per screen by the live browser checks listed in docs/WORKFLOW_MATRIX.md, not by a database-verified scenario.
 - 49 integrity scenarios; 5 drive a browser, 7 drive AI Chat.
 
 ## Dependency map
@@ -731,128 +732,129 @@ evidence there is that the door works — and it separates a test that *names* a
 
 ## Coverage matrix
 
-`V` = verified by the named integrity scenario (the action, the stored row and the dependent figures were checked).
+`V` = verified: the named integrity scenario PASSED in the last recorded run (the action, the stored row and the dependent figures were checked).
+`S` = a scenario is written for it but has not passed (failed, or not run yet) — not verified.
 `tN` = named by N existing tests (`(live)` = at least one runs against the deployed app). `screen` = a screen calls it;
 its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door with no test. `—` = no such door.
 
 | Data type | Operation | Screens | API | AI Chat |
 |---|---|---|---|---|
 | Loan / card payment | create | — | **V** `money.loan-payments` `hardening.interrupted-request` | **V** `chat.debt` |
-| Loan / card payment | edit | — | **V** `sweep.payment-edit-and-status` | t2 (live) |
+| Loan / card payment | edit | — | **S** `sweep.payment-edit-and-status` | t2 (live) |
 | Loan / card payment | delete | screen | **V** `money.loan-payments` | t3 (live) |
-| Loan / card payment | cancel | — | **V** `sweep.payment-edit-and-status` | **V** `chat.money-records` |
-| Loan / card payment | complete | screen | **V** `money.loan-payments` `sweep.payment-edit-and-status` | t2 (live) |
-| Bill / recurring obligation (and Auto Pay) | create | screen | **V** `money.net-worth` `money.bill-cycle` `hardening.date-edges` | **V** `chat.money-records` |
-| Bill / recurring obligation (and Auto Pay) | edit | screen | **V** `money.autopay` `sweep.bill-edit-and-move` | **V** `chat.money-records` |
-| Bill / recurring obligation (and Auto Pay) | delete | screen | **V** `money.bill-cycle` `money.deleted-bill-history` | **V** `chat.money-records` |
-| Bill / recurring obligation (and Auto Pay) | reschedule | screen | **V** `sweep.bill-edit-and-move` | — |
+| Loan / card payment | cancel | — | **S** `sweep.payment-edit-and-status` | **S** `chat.money-records` |
+| Loan / card payment | complete | screen | **V** `money.loan-payments` | t2 (live) |
+| Bill / recurring obligation (and Auto Pay) | create | screen | **V** `money.net-worth` `money.bill-cycle` `hardening.date-edges` | **S** `chat.money-records` |
+| Bill / recurring obligation (and Auto Pay) | edit | screen | **V** `money.autopay` | **S** `chat.money-records` |
+| Bill / recurring obligation (and Auto Pay) | delete | screen | **V** `money.bill-cycle` | **S** `chat.money-records` |
+| Bill / recurring obligation (and Auto Pay) | reschedule | screen | **S** `sweep.bill-edit-and-move` | — |
 | Bill / recurring obligation (and Auto Pay) | cancel | screen | **V** `money.bill-cycle` | — |
-| Bill / recurring obligation (and Auto Pay) | complete | screen | **V** `money.bill-cycle` `money.autopay` `hardening.repeated-requests` | **V** `chat.money-records` |
+| Bill / recurring obligation (and Auto Pay) | complete | screen | **V** `money.bill-cycle` `money.autopay` `hardening.repeated-requests` | **S** `chat.money-records` |
 | Debt (loan, card, mortgage) | create | screen | **V** `money.net-worth` `money.legacy-loan-counted-once` `money.payoff-schedule` | **V** `chat.debt` |
-| Debt (loan, card, mortgage) | edit | screen | **V** `money.loan-payments` | **V** `chat.money-records` |
+| Debt (loan, card, mortgage) | edit | screen | **V** `money.loan-payments` | **S** `chat.money-records` |
 | Debt (loan, card, mortgage) | delete | screen | **V** `money.loan-payments` | t3 (live) |
 | Debt (loan, card, mortgage) | reschedule | — | t1 | — |
-| Debt (loan, card, mortgage) | transfer | screen | **V** `assets.shared-ownership` `sweep.ownership-links` | t2 (live) |
-| Debt (loan, card, mortgage) | cancel | screen | **V** `sweep.ownership-links` | t2 (live) |
+| Debt (loan, card, mortgage) | transfer | screen | **V** `assets.shared-ownership` | t2 (live) |
+| Debt (loan, card, mortgage) | cancel | screen | **S** `sweep.ownership-links` | t2 (live) |
 | Asset (owned thing) and its lifecycle | create | screen | **V** `money.net-worth` `hardening.refused-input-writes-nothing` `assets.lifecycle` | t15 (live) |
 | Asset (owned thing) and its lifecycle | edit | screen | **V** `money.net-worth` `hardening.failed-edit-is-atomic` `hardening.simultaneous-edits` `hardening.interrupted-request` `assets.lifecycle` | t1 (live) |
 | Asset (owned thing) and its lifecycle | delete | screen | **V** `money.net-worth` | t3 (live) |
-| Asset (owned thing) and its lifecycle | transfer | screen | **V** `assets.nested-and-costs` `assets.shared-ownership` `sweep.ownership-links` | t3 (live) |
-| Asset (owned thing) and its lifecycle | cancel | screen | **V** `sweep.ownership-links` | — |
-| Financial account (cash, card, brokerage) | create | screen | **V** `money.net-worth` | **V** `chat.money-records` |
-| Financial account (cash, card, brokerage) | edit | screen | **V** `money.net-worth` | **V** `chat.money-records` |
+| Asset (owned thing) and its lifecycle | transfer | screen | **V** `assets.nested-and-costs` `assets.shared-ownership` | t3 (live) |
+| Asset (owned thing) and its lifecycle | cancel | screen | **S** `sweep.ownership-links` | — |
+| Financial account (cash, card, brokerage) | create | screen | **V** `money.net-worth` | **S** `chat.money-records` |
+| Financial account (cash, card, brokerage) | edit | screen | **V** `money.net-worth` | **S** `chat.money-records` |
 | Financial account (cash, card, brokerage) | delete | screen | **V** `money.net-worth` | t3 (live) |
-| Connected bank data & statement import | create | screen | **V** `sweep.statement-import` | — |
+| Connected bank data & statement import | create | screen | **S** `sweep.statement-import` | — |
 | Connected bank data & statement import | edit | screen | **none** | t4 (live) |
 | Connected bank data & statement import | archive | screen | **none** | — |
 | Connected bank data & statement import | transfer | — | **none** | — |
-| Connected bank data & statement import | cancel | screen | **V** `sweep.statement-import` | — |
+| Connected bank data & statement import | cancel | screen | **S** `sweep.statement-import` | — |
 | Connected bank data & statement import | complete | screen | **none** | — |
 | Expense | create | **V** `browser.expense-form` | **V** `money.budget` `hardening.refused-input-writes-nothing` `hardening.unusual-text-round-trips` `hardening.interrupted-request` `hardening.date-edges` | **V** `chat.create-edit-delete` |
-| Expense | edit | screen | **V** `money.budget` `money.deleted-bill-history` `hardening.failed-edit-is-atomic` `hardening.simultaneous-edits` | **V** `chat.create-edit-delete` |
-| Expense | delete | screen | **V** `money.budget` `money.deleted-bill-history` `hardening.repeated-requests` | **V** `chat.create-edit-delete` |
+| Expense | edit | screen | **V** `money.budget` `hardening.failed-edit-is-atomic` `hardening.simultaneous-edits` | **V** `chat.create-edit-delete` |
+| Expense | delete | screen | **V** `money.budget` `hardening.repeated-requests` | **V** `chat.create-edit-delete` |
 | Expense | restore | — | **V** `money.budget` | — |
 | Expense | transfer | — | **V** `assets.nested-and-costs` | — |
 | Expense | cancel | — | — | **V** `chat.cancelled-and-questions-write-nothing` |
-| Income, paychecks and cash flow | create | screen | **V** `hardening.refused-input-writes-nothing` `sweep.income-and-budget-copy` | **V** `chat.money-records` |
-| Income, paychecks and cash flow | edit | screen | **V** `sweep.income-and-budget-copy` | **V** `chat.money-records` |
-| Income, paychecks and cash flow | delete | screen | **V** `sweep.income-and-budget-copy` | **V** `chat.money-records` |
-| Income, paychecks and cash flow | complete | screen | **V** `sweep.income-and-budget-copy` | t3 (live) |
-| Budget | create | screen | **V** `money.budget` | **V** `chat.money-records` |
-| Budget | edit | screen | **V** `money.budget` | **V** `chat.money-records` |
-| Budget | delete | screen | **V** `money.budget` | **V** `chat.money-records` |
-| Budget | duplicate | screen | **V** `sweep.income-and-budget-copy` | t5 (live) |
-| Task | create | **V** `browser.task-form` `browser.offline` | **V** `records.task-lifecycle` `hardening.refused-input-writes-nothing` `hardening.unusual-text-round-trips` `hardening.date-edges` `browser.written-elsewhere` | **V** `chat.create-edit-delete` |
-| Task | edit | screen | **V** `records.task-lifecycle` `hardening.failed-edit-is-atomic` `hardening.simultaneous-edits` | **V** `chat.notes-artifacts-tasks` |
-| Task | delete | **V** `browser.task-form` | **V** `records.task-lifecycle` `browser.written-elsewhere` | **V** `chat.notes-artifacts-tasks` |
-| Task | restore | screen | **V** `records.task-lifecycle` | **V** `chat.notes-artifacts-tasks` |
+| Income, paychecks and cash flow | create | screen | **V** `hardening.refused-input-writes-nothing` | **S** `chat.money-records` |
+| Income, paychecks and cash flow | edit | screen | **S** `sweep.income-and-budget-copy` | **S** `chat.money-records` |
+| Income, paychecks and cash flow | delete | screen | **S** `sweep.income-and-budget-copy` | **S** `chat.money-records` |
+| Income, paychecks and cash flow | complete | screen | **S** `sweep.income-and-budget-copy` | t3 (live) |
+| Budget | create | screen | **V** `money.budget` | **S** `chat.money-records` |
+| Budget | edit | screen | **V** `money.budget` | **S** `chat.money-records` |
+| Budget | delete | screen | **V** `money.budget` | **S** `chat.money-records` |
+| Budget | duplicate | screen | **S** `sweep.income-and-budget-copy` | t5 (live) |
+| Task | create | **V** `browser.offline` | **V** `records.task-lifecycle` `hardening.refused-input-writes-nothing` `hardening.unusual-text-round-trips` `hardening.date-edges` `browser.written-elsewhere` | **V** `chat.create-edit-delete` |
+| Task | edit | screen | **V** `records.task-lifecycle` `hardening.failed-edit-is-atomic` `hardening.simultaneous-edits` | **S** `chat.notes-artifacts-tasks` |
+| Task | delete | **S** `browser.task-form` | **V** `records.task-lifecycle` `browser.written-elsewhere` | **S** `chat.notes-artifacts-tasks` |
+| Task | restore | screen | **V** `records.task-lifecycle` | **S** `chat.notes-artifacts-tasks` |
 | Task | reschedule | screen | **V** `records.task-recurring` | — |
 | Task | transfer | — | **V** `assets.person-cascade` | — |
 | Task | cancel | — | **V** `records.task-recurring` | — |
-| Task | complete | **V** `browser.task-form` | **V** `records.task-lifecycle` `records.task-recurring` | **V** `chat.create-edit-delete` |
+| Task | complete | **S** `browser.task-form` | **V** `records.task-lifecycle` `records.task-recurring` | **V** `chat.create-edit-delete` |
 | Calendar event | create | screen | **V** `records.event-series` `hardening.refused-input-writes-nothing` | **V** `chat.create-edit-delete` `chat.names-journal-foods` |
-| Calendar event | edit | screen | **V** `records.event-series` `hardening.failed-edit-is-atomic` | **V** `chat.notes-artifacts-tasks` |
+| Calendar event | edit | screen | **V** `records.event-series` `hardening.failed-edit-is-atomic` | **S** `chat.notes-artifacts-tasks` |
 | Calendar event | delete | screen | **V** `records.event-series` | **V** `chat.create-edit-delete` |
-| Calendar event | archive | screen | **V** `sweep.series-pause-and-renames` | — |
+| Calendar event | archive | screen | **S** `sweep.series-pause-and-renames` | — |
 | Calendar event | reschedule | screen | **V** `records.event-series` | **V** `chat.create-edit-delete` |
 | Calendar event | cancel | — | **V** `records.event-series` | — |
 | Calendar event | complete | — | — | t3 (live) |
-| Habit and check-ins | create | screen | **V** `records.habit` `hardening.refused-input-writes-nothing` | **V** `chat.habits-goals-trackers` |
-| Habit and check-ins | edit | screen | **V** `sweep.series-pause-and-renames` | **V** `chat.habits-goals-trackers` |
-| Habit and check-ins | delete | screen | **V** `records.habit` | **V** `chat.habits-goals-trackers` |
-| Habit and check-ins | restore | screen | **V** `records.habit` | **V** `chat.habits-goals-trackers` |
-| Habit and check-ins | cancel | screen | **V** `records.habit` | **V** `chat.habits-goals-trackers` |
-| Habit and check-ins | complete | screen | **V** `records.habit` `hardening.repeated-requests` | **V** `chat.habits-goals-trackers` |
-| Goal | create | screen | **V** `records.goal` `hardening.refused-input-writes-nothing` | **V** `chat.habits-goals-trackers` |
-| Goal | edit | screen | **V** `records.goal` | **V** `chat.habits-goals-trackers` |
-| Goal | delete | screen | **V** `records.goal` | **V** `chat.habits-goals-trackers` |
+| Habit and check-ins | create | screen | **V** `records.habit` `hardening.refused-input-writes-nothing` | **S** `chat.habits-goals-trackers` |
+| Habit and check-ins | edit | screen | **S** `sweep.series-pause-and-renames` | **S** `chat.habits-goals-trackers` |
+| Habit and check-ins | delete | screen | **V** `records.habit` | **S** `chat.habits-goals-trackers` |
+| Habit and check-ins | restore | screen | **V** `records.habit` | **S** `chat.habits-goals-trackers` |
+| Habit and check-ins | cancel | screen | **V** `records.habit` | **S** `chat.habits-goals-trackers` |
+| Habit and check-ins | complete | screen | **V** `records.habit` `hardening.repeated-requests` | **S** `chat.habits-goals-trackers` |
+| Goal | create | screen | **V** `records.goal` `hardening.refused-input-writes-nothing` | **S** `chat.habits-goals-trackers` |
+| Goal | edit | screen | **V** `records.goal` | **S** `chat.habits-goals-trackers` |
+| Goal | delete | screen | **V** `records.goal` | **S** `chat.habits-goals-trackers` |
 | Goal | restore | — | **V** `records.goal` | — |
-| Tracker entry (a logged reading) | create | screen | **V** `records.tracker` | **V** `chat.names-journal-foods` `chat.habits-goals-trackers` |
-| Tracker entry (a logged reading) | edit | screen | **V** `records.tracker` | **V** `chat.habits-goals-trackers` |
-| Tracker entry (a logged reading) | delete | screen | **V** `records.tracker` | **V** `chat.habits-goals-trackers` |
+| Tracker entry (a logged reading) | create | screen | **V** `records.tracker` | **V** `chat.names-journal-foods` |
+| Tracker entry (a logged reading) | edit | screen | **V** `records.tracker` | **S** `chat.habits-goals-trackers` |
+| Tracker entry (a logged reading) | delete | screen | **V** `records.tracker` | **S** `chat.habits-goals-trackers` |
 | Tracker entry (a logged reading) | reschedule | — | — | t3 (live) |
 | Tracker entry (a logged reading) | cancel | — | — | t3 (live) |
-| Tracker | create | screen | **V** `records.tracker` | **V** `chat.habits-goals-trackers` |
-| Tracker | edit | screen | **V** `sweep.series-pause-and-renames` | t1 (live) |
-| Tracker | delete | screen | **V** `records.tracker` | **V** `chat.habits-goals-trackers` |
+| Tracker | create | screen | **V** `records.tracker` | **S** `chat.habits-goals-trackers` |
+| Tracker | edit | screen | **S** `sweep.series-pause-and-renames` | t1 (live) |
+| Tracker | delete | screen | **V** `records.tracker` | **S** `chat.habits-goals-trackers` |
 | Document (uploaded file) | create | screen | **V** `records.document-alerts` | t3 (live) |
 | Document (uploaded file) | edit | screen | **V** `records.document-alerts` | t4 (live) |
 | Document (uploaded file) | delete | screen | **V** `records.document-alerts` | — |
 | Document (uploaded file) | restore | — | **V** `records.document-alerts` | — |
 | Document (uploaded file) | archive | — | **V** `records.document-alerts` | — |
 | Document (uploaded file) | transfer | — | — | t2 (live) |
-| Note | create | screen | **V** `records.journal-notes` `hardening.refused-input-writes-nothing` `hardening.unusual-text-round-trips` | **V** `chat.notes-artifacts-tasks` |
-| Note | edit | screen | **V** `records.journal-notes` `hardening.simultaneous-edits` | **V** `chat.notes-artifacts-tasks` |
-| Note | delete | screen | **V** `records.journal-notes` | **V** `chat.notes-artifacts-tasks` |
+| Note | create | screen | **V** `records.journal-notes` `hardening.refused-input-writes-nothing` `hardening.unusual-text-round-trips` | **S** `chat.notes-artifacts-tasks` |
+| Note | edit | screen | **V** `records.journal-notes` `hardening.simultaneous-edits` | **S** `chat.notes-artifacts-tasks` |
+| Note | delete | screen | **V** `records.journal-notes` | **S** `chat.notes-artifacts-tasks` |
 | Note | restore | — | **V** `records.journal-notes` | — |
 | Journal entry | create | screen | **V** `records.journal-notes` `hardening.unusual-text-round-trips` | **V** `chat.names-journal-foods` |
-| Journal entry | edit | screen | **V** `records.journal-notes` | **V** `chat.notes-artifacts-tasks` |
-| Journal entry | delete | screen | **V** `records.journal-notes` | **V** `chat.notes-artifacts-tasks` |
-| Artifact (checklist, report, document, sheet) | create | screen | **V** `records.artifact` | **V** `chat.notes-artifacts-tasks` |
+| Journal entry | edit | screen | **V** `records.journal-notes` | **S** `chat.notes-artifacts-tasks` |
+| Journal entry | delete | screen | **V** `records.journal-notes` | **S** `chat.notes-artifacts-tasks` |
+| Artifact (checklist, report, document, sheet) | create | screen | **V** `records.artifact` | **S** `chat.notes-artifacts-tasks` |
 | Artifact (checklist, report, document, sheet) | edit | screen | **V** `records.artifact` | t2 (live) |
-| Artifact (checklist, report, document, sheet) | delete | screen | **V** `records.artifact` | **V** `chat.notes-artifacts-tasks` |
+| Artifact (checklist, report, document, sheet) | delete | screen | **V** `records.artifact` | **S** `chat.notes-artifacts-tasks` |
 | Artifact (checklist, report, document, sheet) | restore | screen | **V** `records.journal-notes` | — |
 | Artifact (checklist, report, document, sheet) | duplicate | screen | **V** `records.artifact` | t3 (live) |
 | Artifact (checklist, report, document, sheet) | transfer | screen | **V** `records.artifact` `hardening.repeated-requests` | — |
 | Artifact (checklist, report, document, sheet) | cancel | screen | **V** `records.artifact` | — |
-| Artifact (checklist, report, document, sheet) | complete | screen | **V** `records.artifact` | **V** `chat.notes-artifacts-tasks` |
+| Artifact (checklist, report, document, sheet) | complete | screen | **V** `records.artifact` | **S** `chat.notes-artifacts-tasks` |
 | Characteristic (record detail) | create | screen | **V** `records.details` | — |
 | Characteristic (record detail) | edit | screen | **V** `records.details` | t3 (live) |
 | Characteristic (record detail) | delete | screen | **V** `records.details` | — |
 | Dashboards, alerts and preferences | create | — | — | t3 (live) |
-| Dashboards, alerts and preferences | edit | screen | **V** `sweep.memory-preferences-links` | t4 (live) |
+| Dashboards, alerts and preferences | edit | screen | **S** `sweep.memory-preferences-links` | t4 (live) |
 | Dashboards, alerts and preferences | restore | — | **V** `records.document-alerts` | — |
 | Dashboards, alerts and preferences | cancel | screen | **V** `records.document-alerts` | t3 (live) |
 | Dashboards, alerts and preferences | complete | screen | **none** | t3 (live) |
-| AI memory | create | — | **V** `sweep.memory-preferences-links` | **V** `chat.notes-artifacts-tasks` |
-| AI memory | edit | screen | **V** `sweep.memory-preferences-links` | t3 (live) |
-| AI memory | delete | screen | **V** `sweep.memory-preferences-links` | **V** `chat.notes-artifacts-tasks` |
+| AI memory | create | — | **S** `sweep.memory-preferences-links` | **S** `chat.notes-artifacts-tasks` |
+| AI memory | edit | screen | **S** `sweep.memory-preferences-links` | t3 (live) |
+| AI memory | delete | screen | **S** `sweep.memory-preferences-links` | **S** `chat.notes-artifacts-tasks` |
 | AI memory | cancel | screen | t2 | — |
 | Person, pet or provider profile | create | screen | **V** `assets.shared-ownership` | **V** `chat.names-journal-foods` |
-| Person, pet or provider profile | edit | screen | **V** `sweep.memory-preferences-links` | t15 (live) |
+| Person, pet or provider profile | edit | screen | **S** `sweep.memory-preferences-links` | t15 (live) |
 | Person, pet or provider profile | delete | screen | **V** `assets.shared-ownership` `assets.person-cascade` | t5 (live) |
-| Person, pet or provider profile | transfer | screen | **V** `sweep.memory-preferences-links` | t5 (live) |
-| Person, pet or provider profile | cancel | — | **V** `sweep.memory-preferences-links` | — |
+| Person, pet or provider profile | transfer | screen | **S** `sweep.memory-preferences-links` | t5 (live) |
+| Person, pet or provider profile | cancel | — | **S** `sweep.memory-preferences-links` | — |
 | AI chat & search | create | screen | t29 (live) | — |
 | AI chat & search | edit | — | — | t5 (live) |
 | AI chat & search | cancel | — | — | t6 (live) |
@@ -884,9 +886,9 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 
 Loan / card payment · edit · Chat; Loan / card payment · delete · Chat; Loan / card payment · complete · Chat; Debt (loan, card, mortgage) · delete · Chat; Debt (loan, card, mortgage) · reschedule · API; Debt (loan, card, mortgage) · transfer · Chat; Debt (loan, card, mortgage) · cancel · Chat; Asset (owned thing) and its lifecycle · create · Chat; Asset (owned thing) and its lifecycle · edit · Chat; Asset (owned thing) and its lifecycle · delete · Chat; Asset (owned thing) and its lifecycle · transfer · Chat; Financial account (cash, card, brokerage) · delete · Chat; Connected bank data & statement import · edit · Chat; Income, paychecks and cash flow · complete · Chat; Budget · duplicate · Chat; Calendar event · complete · Chat; Tracker entry (a logged reading) · reschedule · Chat; Tracker entry (a logged reading) · cancel · Chat; Tracker · edit · Chat; Document (uploaded file) · create · Chat; Document (uploaded file) · edit · Chat; Document (uploaded file) · transfer · Chat; Artifact (checklist, report, document, sheet) · edit · Chat; Artifact (checklist, report, document, sheet) · duplicate · Chat; Characteristic (record detail) · edit · Chat; Dashboards, alerts and preferences · create · Chat; Dashboards, alerts and preferences · edit · Chat; Dashboards, alerts and preferences · cancel · Chat; Dashboards, alerts and preferences · complete · Chat; AI memory · edit · Chat; AI memory · cancel · API; Person, pet or provider profile · edit · Chat; Person, pet or provider profile · delete · Chat; Person, pet or provider profile · transfer · Chat; AI chat & search · create · API; AI chat & search · edit · Chat; AI chat & search · cancel · Chat; AI chat & search · complete · API; Account, sign-in, export / import · create · API; Account, sign-in, export / import · archive · API.
 
-### Operations a screen offers that no integrity browser scenario drives (93)
+### Operations a screen offers that no integrity browser scenario drives (94)
 
-Loan / card payment · delete; Loan / card payment · complete; Bill / recurring obligation (and Auto Pay) · create; Bill / recurring obligation (and Auto Pay) · edit; Bill / recurring obligation (and Auto Pay) · delete; Bill / recurring obligation (and Auto Pay) · reschedule; Bill / recurring obligation (and Auto Pay) · cancel; Bill / recurring obligation (and Auto Pay) · complete; Debt (loan, card, mortgage) · create; Debt (loan, card, mortgage) · edit; Debt (loan, card, mortgage) · delete; Debt (loan, card, mortgage) · transfer; Debt (loan, card, mortgage) · cancel; Asset (owned thing) and its lifecycle · create; Asset (owned thing) and its lifecycle · edit; Asset (owned thing) and its lifecycle · delete; Asset (owned thing) and its lifecycle · transfer; Asset (owned thing) and its lifecycle · cancel; Financial account (cash, card, brokerage) · create; Financial account (cash, card, brokerage) · edit; Financial account (cash, card, brokerage) · delete; Connected bank data & statement import · create; Connected bank data & statement import · edit; Connected bank data & statement import · archive; Connected bank data & statement import · cancel; Connected bank data & statement import · complete; Expense · edit; Expense · delete; Income, paychecks and cash flow · create; Income, paychecks and cash flow · edit; Income, paychecks and cash flow · delete; Income, paychecks and cash flow · complete; Budget · create; Budget · edit; Budget · delete; Budget · duplicate; Task · edit; Task · restore; Task · reschedule; Calendar event · create; Calendar event · edit; Calendar event · delete; Calendar event · archive; Calendar event · reschedule; Habit and check-ins · create; Habit and check-ins · edit; Habit and check-ins · delete; Habit and check-ins · restore; Habit and check-ins · cancel; Habit and check-ins · complete; Goal · create; Goal · edit; Goal · delete; Tracker entry (a logged reading) · create; Tracker entry (a logged reading) · edit; Tracker entry (a logged reading) · delete; Tracker · create; Tracker · edit; Tracker · delete; Document (uploaded file) · create; Document (uploaded file) · edit; Document (uploaded file) · delete; Note · create; Note · edit; Note · delete; Journal entry · create; Journal entry · edit; Journal entry · delete; Artifact (checklist, report, document, sheet) · create; Artifact (checklist, report, document, sheet) · edit; Artifact (checklist, report, document, sheet) · delete; Artifact (checklist, report, document, sheet) · restore; Artifact (checklist, report, document, sheet) · duplicate; Artifact (checklist, report, document, sheet) · transfer; Artifact (checklist, report, document, sheet) · cancel; Artifact (checklist, report, document, sheet) · complete; Characteristic (record detail) · create; Characteristic (record detail) · edit; Characteristic (record detail) · delete; Dashboards, alerts and preferences · edit; Dashboards, alerts and preferences · cancel; Dashboards, alerts and preferences · complete; AI memory · edit; AI memory · delete; AI memory · cancel; Person, pet or provider profile · create; Person, pet or provider profile · edit; Person, pet or provider profile · delete; Person, pet or provider profile · transfer; AI chat & search · create; AI chat & search · complete; Account, sign-in, export / import · create; Account, sign-in, export / import · archive.
+Loan / card payment · delete; Loan / card payment · complete; Bill / recurring obligation (and Auto Pay) · create; Bill / recurring obligation (and Auto Pay) · edit; Bill / recurring obligation (and Auto Pay) · delete; Bill / recurring obligation (and Auto Pay) · reschedule; Bill / recurring obligation (and Auto Pay) · cancel; Bill / recurring obligation (and Auto Pay) · complete; Debt (loan, card, mortgage) · create; Debt (loan, card, mortgage) · edit; Debt (loan, card, mortgage) · delete; Debt (loan, card, mortgage) · transfer; Debt (loan, card, mortgage) · cancel; Asset (owned thing) and its lifecycle · create; Asset (owned thing) and its lifecycle · edit; Asset (owned thing) and its lifecycle · delete; Asset (owned thing) and its lifecycle · transfer; Asset (owned thing) and its lifecycle · cancel; Financial account (cash, card, brokerage) · create; Financial account (cash, card, brokerage) · edit; Financial account (cash, card, brokerage) · delete; Connected bank data & statement import · create; Connected bank data & statement import · edit; Connected bank data & statement import · archive; Connected bank data & statement import · cancel; Connected bank data & statement import · complete; Expense · edit; Expense · delete; Income, paychecks and cash flow · create; Income, paychecks and cash flow · edit; Income, paychecks and cash flow · delete; Income, paychecks and cash flow · complete; Budget · create; Budget · edit; Budget · delete; Budget · duplicate; Task · edit; Task · delete; Task · restore; Task · reschedule; Calendar event · create; Calendar event · edit; Calendar event · delete; Calendar event · archive; Calendar event · reschedule; Habit and check-ins · create; Habit and check-ins · edit; Habit and check-ins · delete; Habit and check-ins · restore; Habit and check-ins · cancel; Habit and check-ins · complete; Goal · create; Goal · edit; Goal · delete; Tracker entry (a logged reading) · create; Tracker entry (a logged reading) · edit; Tracker entry (a logged reading) · delete; Tracker · create; Tracker · edit; Tracker · delete; Document (uploaded file) · create; Document (uploaded file) · edit; Document (uploaded file) · delete; Note · create; Note · edit; Note · delete; Journal entry · create; Journal entry · edit; Journal entry · delete; Artifact (checklist, report, document, sheet) · create; Artifact (checklist, report, document, sheet) · edit; Artifact (checklist, report, document, sheet) · delete; Artifact (checklist, report, document, sheet) · restore; Artifact (checklist, report, document, sheet) · duplicate; Artifact (checklist, report, document, sheet) · transfer; Artifact (checklist, report, document, sheet) · cancel; Artifact (checklist, report, document, sheet) · complete; Characteristic (record detail) · create; Characteristic (record detail) · edit; Characteristic (record detail) · delete; Dashboards, alerts and preferences · edit; Dashboards, alerts and preferences · cancel; Dashboards, alerts and preferences · complete; AI memory · edit; AI memory · delete; AI memory · cancel; Person, pet or provider profile · create; Person, pet or provider profile · edit; Person, pet or provider profile · delete; Person, pet or provider profile · transfer; AI chat & search · create; AI chat & search · complete; Account, sign-in, export / import · create; Account, sign-in, export / import · archive.
 
 ## Scenarios
 

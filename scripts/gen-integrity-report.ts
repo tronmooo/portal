@@ -201,10 +201,13 @@ if (checks) {
 out("## Untested workflows and remaining coverage gaps");
 out();
 const noTest = rows.flatMap((r) => (["api", "chat"] as const).filter((d) => stateOf(r[d]) === "untested").map((d) => `${r.label} · ${r.op} · ${d === "api" ? "API" : "AI Chat"} (${r[d].doors.map((x) => `\`${x}\``).join(", ")})`));
+const pendingDoors = rows.flatMap((r) => (["ui", "api", "chat"] as const).filter((d) => stateOf(r[d]) === "pending").map((d) => `${r.label} · ${r.op} · ${d === "api" ? "API" : d === "chat" ? "Chat" : "Screen"} (${r[d].pending.map((x) => `\`${x}\``).join(" ")})`));
 const named = rows.flatMap((r) => (["api", "chat"] as const).filter((d) => stateOf(r[d]) === "tested").map((d) => `${r.label} · ${r.op} · ${d === "api" ? "API" : "Chat"}`));
 const ui = rows.filter((r) => r.ui.doors.length && !r.ui.verifiedBy.length);
 const verified = rows.flatMap((r) => (["ui", "api", "chat"] as const).filter((d) => stateOf(r[d]) === "verified")).length;
-out(`Of the doors in the coverage matrix, **${verified}** are verified by an integrity scenario.`);
+out(`Of the doors in the coverage matrix, **${verified}** are verified by an integrity scenario that passed in the last recorded run.`);
+out();
+out(`**A scenario exists but did not pass in the last run (${pendingDoors.length}):** ${pendingDoors.join("; ") || "none"}.`);
 out();
 out(`**No test of any kind (${noTest.length}):**`);
 out();

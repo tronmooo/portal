@@ -18,19 +18,38 @@ import "../tests/integrity/scenarios/index";
 export interface Cell {
   /** the door exists */
   doors: string[];
-  /** integrity scenarios that verify it with database + derived evidence */
+  /** integrity scenarios that verify it with database + derived evidence — and PASSED in the last run */
   verifiedBy: string[];
+  /** scenarios written for it that did not pass in the last run (failed, or not run yet) */
+  pending: string[];
   /** other tests that name it */
   tests: Coverage;
 }
 export interface MatrixRow { entity: string; label: string; op: Operation; ui: Cell; api: Cell; chat: Cell }
 
-const empty = (): Cell => ({ doors: [], verifiedBy: [], tests: { local: [], contract: [], live: [] } });
+const empty = (): Cell => ({ doors: [], verifiedBy: [], pending: [], tests: { local: [], contract: [], live: [] } });
 const merge = (into: Coverage, from: Coverage) => { for (const k of ["local", "contract", "live"] as const) for (const f of from[k]) if (!into[k].includes(f)) into[k].push(f); };
+
+/** How each scenario ended in the last recorded runs (later files win). A door
+ *  is "verified" only by a scenario that PASSED — writing a scenario proves nothing. */
+export function lastRunStatus(): { status: Map<string, string>; runs: Array<{ file: string; at: string; target: string; sha: string }> } {
+  const status = new Map<string, string>();
+  const runs: Array<{ file: string; at: string; target: string; sha: string }> = [];
+  const dir = path.join(ROOT, "test-results");
+  if (!fs.existsSync(dir)) return { status, runs };
+  const files = fs.readdirSync(dir).filter((d) => d.startsWith("integrity")).map((d) => path.join(dir, d, "results.json")).filter((f) => fs.existsSync(f))
+    .map((f) => ({ f, j: JSON.parse(fs.readFileSync(f, "utf8")) })).sort((a, b) => String(a.j.at).localeCompare(String(b.j.at)));
+  for (const { f, j } of files) {
+    runs.push({ file: path.relative(ROOT, f), at: j.at, target: j.target ?? "", sha: j.sha ?? "" });
+    for (const r of j.results || []) if (r.status !== "skipped") status.set(r.id, r.status);
+  }
+  return { status, runs };
+}
 
 export function buildMatrix() {
   const inv = buildInventory(TOOL_DEFINITIONS.map((t: any) => t.name));
   const scenarios = allScenarios();
+  const { status } = lastRunStatus();
   const rows = new Map<string, MatrixRow>();
   const row = (entity: string, op: Operation) => {
     const k = `${entity}.${op}`;
@@ -83,16 +102,18 @@ export function buildMatrix() {
       if (c === "cross-cutting") { (crossCutting[key] ??= []).push(s.id); continue; }
       const m = row(c.entity, c.op);
       const cell = m[c.door as Door];
-      if (!cell.verifiedBy.includes(s.id)) cell.verifiedBy.push(s.id);
+      const list = status.get(s.id) === "pass" ? cell.verifiedBy : cell.pending;
+      if (!list.includes(s.id)) list.push(s.id);
     }
   }
   const order = (r: MatrixRow) => MODEL.findIndex((m) => m.key === r.entity) * 100 + OPERATIONS.indexOf(r.op);
   return { inv, scenarios, rows: [...rows.values()].sort((a, b) => order(a) - order(b)), crossCutting };
 }
 
-export type CellState = "verified" | "tested" | "untested" | "none";
+export type CellState = "verified" | "pending" | "tested" | "untested" | "none";
 export const stateOf = (c: Cell): CellState =>
-  c.verifiedBy.length ? "verified" : !c.doors.length ? "none" : c.tests.local.length + c.tests.contract.length + c.tests.live.length ? "tested" : "untested";
+  c.verifiedBy.length ? "verified" : c.pending.length ? "pending"
+    : !c.doors.length ? "none" : c.tests.local.length + c.tests.contract.length + c.tests.live.length ? "tested" : "untested";
 
 function render(): string {
   const { inv, scenarios, rows, crossCutting } = buildMatrix();
@@ -102,6 +123,7 @@ function render(): string {
     const st = stateOf(c);
     if (st === "none") return "—";
     if (st === "verified") return `**V** ${c.verifiedBy.map((v) => `\`${v}\``).join(" ")}`;
+    if (st === "pending") return `**S** ${c.pending.map((v) => `\`${v}\``).join(" ")}`;
     if (door === "ui") return c.doors.length ? "screen" : "—";
     const n = c.tests.local.length + c.tests.contract.length + c.tests.live.length;
     return st === "tested" ? `t${n}${c.tests.contract.length + c.tests.live.length ? " (live)" : ""}` : "**none**";
@@ -120,13 +142,15 @@ function render(): string {
   out();
   const doorCells = rows.flatMap((r) => (["api", "chat"] as const).map((d) => stateOf(r[d])));
   const count = (s: CellState) => doorCells.filter((c) => c === s).length;
-  const uiRows = rows.filter((r) => r.ui.doors.length || r.ui.verifiedBy.length);
+  const uiRows = rows.filter((r) => r.ui.doors.length || r.ui.verifiedBy.length || r.ui.pending.length);
   out("## Summary");
   out();
   out(`- ${MODEL.filter((m) => !m.system).length} data types, ${OPERATIONS.length} operations, 3 doors (the app's screens, the API, AI Chat).`);
   out(`- ${rows.length} data type × operation rows have at least one door.`);
-  out(`- API and AI Chat: ${count("verified") + count("tested") + count("untested")} doors. **${count("verified")}** are verified by an integrity scenario (the action, the stored row and the dependent figures); **${count("tested")}** more are named by an existing test (evidence, not proof — see docs/WORKFLOW_MATRIX.md); **${count("untested")}** have no test at all.`);
-  out(`- Screens: ${uiRows.length} operations are offered by a screen; **${uiRows.filter((r) => r.ui.verifiedBy.length).length}** are driven by an integrity browser scenario (desktop mouse and phone touch). The rest are covered per screen by the live browser checks listed in docs/WORKFLOW_MATRIX.md, not by a database-verified scenario.`);
+  const { runs } = lastRunStatus();
+  out(`- API and AI Chat: ${count("verified") + count("pending") + count("tested") + count("untested")} doors. **${count("verified")}** are verified: a scenario covering them PASSED in the last recorded run (the action, the stored row and the dependent figures). **${count("pending")}** have a scenario that has not passed yet (failed, or not run). **${count("tested")}** more are only named by an existing test (evidence, not proof — see docs/WORKFLOW_MATRIX.md); **${count("untested")}** have no test at all.`);
+  out(`- Runs counted: ${runs.length ? runs.map((r) => `${r.target || "?"} @ ${r.sha || "?"} (${String(r.at).slice(0, 16).replace("T", " ")} UTC)`).join("; ") : "none recorded on this machine — every scenario shows as S until `npm run integrity` has run"}.`);
+  out(`- Screens: ${uiRows.length} operations are offered by a screen; **${uiRows.filter((r) => r.ui.verifiedBy.length).length}** are driven by an integrity browser scenario that passed (desktop mouse and phone touch). The rest are covered per screen by the live browser checks listed in docs/WORKFLOW_MATRIX.md, not by a database-verified scenario.`);
   out(`- ${scenarios.length} integrity scenarios; ${scenarios.filter((s) => s.browser).length} drive a browser, ${scenarios.filter((s) => s.chat).length} drive AI Chat.`);
   out();
   out("## Dependency map");
@@ -162,7 +186,8 @@ function render(): string {
   out();
   out("## Coverage matrix");
   out();
-  out("`V` = verified by the named integrity scenario (the action, the stored row and the dependent figures were checked).");
+  out("`V` = verified: the named integrity scenario PASSED in the last recorded run (the action, the stored row and the dependent figures were checked).");
+  out("`S` = a scenario is written for it but has not passed (failed, or not run yet) — not verified.");
   out("`tN` = named by N existing tests (`(live)` = at least one runs against the deployed app). `screen` = a screen calls it;");
   out("its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door with no test. `—` = no such door.");
   out();
