@@ -7,12 +7,19 @@
  *
  * Account provisioned 2026-05-28 via /api/auth/signup.
  */
-export const SMOKE_EMAIL = "portol-smoke@aol.com";
+// On the ISOLATED stack only (tests/isolated: the database address is this
+// machine), a run may use one of that stack's own worker accounts instead, so
+// several runs can work side by side without sharing data or a gate lock.
+// Against any real project these variables are ignored: the account is always
+// the dedicated smoke account.
+const ON_LOCAL_STACK = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(process.env.SMOKE_SB_URL || "");
+const WORKER = ON_LOCAL_STACK && /^[1-9]$/.test(process.env.ISOLATED_WORKER || "") ? process.env.ISOLATED_WORKER! : "";
+export const SMOKE_EMAIL = WORKER ? `worker${WORKER}@isolated.test` : "portol-smoke@aol.com";
 // Overridable so the password can be rotated without a code change (set
 // SMOKE_PASSWORD in CI secrets); the literal remains only as the fallback for
 // the dedicated, data-free smoke account.
 export const SMOKE_PASSWORD = process.env.SMOKE_PASSWORD || "Smoke-Test-2026!";
-export const SMOKE_USER_ID = "229685c4-8dcb-4349-8448-57fc38e6e3d2";
+export const SMOKE_USER_ID = WORKER ? `00000000-0000-4000-8000-00000000010${WORKER}` : "229685c4-8dcb-4349-8448-57fc38e6e3d2";
 
 // API base — overridable so the same suite can hit local dev or production.
 export const API_BASE = process.env.SMOKE_API_BASE || "https://portol.me/api";

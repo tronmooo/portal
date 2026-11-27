@@ -41,6 +41,8 @@ user() {
 }
 user 229685c4-8dcb-4349-8448-57fc38e6e3d2 "${SMOKE_EMAIL:-portol-smoke@aol.com}" "${SMOKE_PASSWORD:-Smoke-Test-2026!}"
 user 7d0c2f6e-3b1a-4c58-9e47-1f2a3b4c5d6e "${INTEGRITY_OTHER_EMAIL:-testfix2026@aol.com}" "${INTEGRITY_OTHER_PASSWORD:-Testtest1!}"
+# Worker accounts, so several runs can go side by side (ISOLATED_WORKER=1..9).
+for i in 1 2 3 4 5 6 7 8 9; do user "00000000-0000-4000-8000-00000000010$i" "worker$i@isolated.test" "${SMOKE_PASSWORD:-Smoke-Test-2026!}"; done
 cat > .run/app.env <<ENV
 VITE_SUPABASE_URL=http://127.0.0.1:54321
 VITE_SUPABASE_ANON_KEY=$ISOLATED_ANON_KEY
