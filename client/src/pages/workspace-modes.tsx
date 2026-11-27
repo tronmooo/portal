@@ -8,7 +8,9 @@
 //    Save. Generating writes nothing (W5). A template or an imported file
 //    goes through the same review.
 import { useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Copy, Download, Layers, Loader2, Pin, PinOff, Plus, Sparkles, Upload, Wand2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Copy, Download, Flag, GripVertical, Layers, Library, Loader2, Pin, PinOff, Plus, Search, Sparkles, Upload, Wand2 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useDragReorder } from "@/components/modes/useDragReorder";
 import { apiRequest } from "@/lib/queryClient";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { useToast } from "@/hooks/use-toast";
@@ -29,7 +31,107 @@ export const MODE_IDEAS = [
   "An AI that analyzes my fitness and nutrition",
 ];
 
-type Tab = "mine" | "create";
+type Tab = "mine" | "library" | "create";
+
+interface LibraryCard { id: string; name: string; tagline: string; icon: AiMode["icon"]; color: AiMode["color"]; tabs: string[]; installs: number; publishedAt: string; mine: boolean }
+
+/** The public library: browse, search, install a copy (to review), report; unpublish your own (two taps). */
+function LibraryTab({ onInstall }: { onInstall: (mode: AiMode) => void }) {
+  const { toast } = useToast();
+  const { confirm, isArmed } = useConfirmArm();
+  const qc = useQueryClient();
+  const [q, setQ] = useState("");
+  const [term, setTerm] = useState("");
+  const [sort, setSort] = useState<"popular" | "new">("popular");
+  const [mine, setMine] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const key = ["/api/workspace/modes/library", term, sort, mine ? "mine" : "all"];
+  const lib = useQuery<LibraryCard[]>({
+    queryKey: key,
+    queryFn: async () => {
+      const r = await apiRequest("GET", `/api/workspace/modes/library?q=${encodeURIComponent(term)}&sort=${sort}${mine ? "&mine=1" : ""}`);
+      const j = await r.json();
+      if (!j || !Array.isArray(j.items)) throw new Error("Unexpected response");
+      return j.items;
+    },
+    staleTime: 60_000,
+  });
+  const act = async (id: string, fn: () => Promise<void>, fail: string) => {
+    setBusy(id);
+    try { await fn(); } catch (err) { toast({ title: fail, description: aiErrorText(err), variant: "destructive" }); } finally { setBusy(null); }
+  };
+  return (
+    <div className="space-y-3" data-testid="modes-library">
+      <p className="text-[12px] text-muted-foreground">Modes other people built and shared. Installing gives you your own copy to review and change before it's saved; it reads only what you allow, and never anyone else's data.</p>
+      <form className="flex gap-1.5" onSubmit={(e) => { e.preventDefault(); setTerm(q.trim()); }}>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search modes" aria-label="Search the mode library"
+          className="ws-title flex-1 min-w-0 h-9 rounded-full border border-border bg-background px-3 text-sm outline-none" data-testid="modes-library-search" />
+        <button type="submit" aria-label="Search" className="h-9 w-9 rounded-full border border-border flex items-center justify-center"><Search className="h-4 w-4" /></button>
+      </form>
+      <div className="flex gap-1.5 flex-wrap">
+        {(["popular", "new"] as const).map((s) => (
+          <button key={s} type="button" aria-pressed={!mine && sort === s} onClick={() => { setMine(false); setSort(s); }}
+            className={`h-7 px-3 rounded-full text-xs ${!mine && sort === s ? "bg-foreground text-background font-semibold" : "border border-border text-muted-foreground"}`}>{s === "popular" ? "Popular" : "Newest"}</button>
+        ))}
+        <button type="button" aria-pressed={mine} onClick={() => setMine(true)}
+          className={`h-7 px-3 rounded-full text-xs ${mine ? "bg-foreground text-background font-semibold" : "border border-border text-muted-foreground"}`} data-testid="modes-library-mine">Published by me</button>
+      </div>
+      {term && <p className="text-[11px] text-muted-foreground">Showing modes matching “{term}”. <button type="button" className="underline" onClick={() => { setQ(""); setTerm(""); }}>Show all</button></p>}
+      {lib.isError && lib.data === undefined ? (
+        <div role="alert" className="text-sm" data-testid="modes-library-error">
+          <p className="text-destructive">{aiErrorText(lib.error)}</p>
+          <button type="button" className="underline text-xs mt-1" onClick={() => void lib.refetch()}>Retry</button>
+        </div>
+      ) : !lib.data ? <p className="text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</p>
+        : lib.data.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="modes-library-empty">
+            {mine ? "You haven't published a mode. Open one of yours → Settings → Publish to library." : term ? "No published mode matches that." : "Nothing has been published yet. Be the first: open one of your modes → Settings → Publish to library."}
+          </p>
+        ) : (
+          <ul className="space-y-2" data-testid="modes-library-list">
+            {lib.data.map((c) => (
+              <li key={c.id} className="bubble p-3" data-testid={`library-card-${c.id}`}>
+                <div className="flex items-start gap-3">
+                  <ModeGlyph icon={c.icon} color={c.color} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold truncate">{c.name}{c.mine && <span className="ml-1.5 text-[11px] font-semibold rounded-full px-1.5 py-0.5 bg-primary/15 text-primary">Yours</span>}</p>
+                    {c.tagline && <p className="text-[12px] text-muted-foreground line-clamp-2">{c.tagline}</p>}
+                    <p className="text-[11px] text-muted-foreground mt-0.5">{c.tabs.join(" · ")} · {c.installs} install{c.installs === 1 ? "" : "s"}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5 mt-2 pl-12">
+                  <button type="button" disabled={busy !== null} onClick={() => void act(c.id, async () => {
+                    const j = await apiRequest("POST", `/api/workspace/modes/library/${c.id}/install`).then((r) => r.json());
+                    const mode = j?.mode ? sanitizeAiMode(j.mode, { keepJournal: false }) : null;
+                    if (!mode) throw new Error("That mode couldn't be read.");
+                    onInstall(mode);
+                  }, "Couldn't install it")}
+                    className="h-7 px-3 rounded-full bg-primary text-primary-foreground text-[11px] font-semibold" data-testid={`library-install-${c.id}`}>{busy === c.id ? "…" : "Install a copy"}</button>
+                  {c.mine ? (
+                    <button type="button" disabled={busy !== null} onClick={() => confirm(`unpub:${c.id}`, () => void act(c.id, async () => {
+                      await apiRequest("DELETE", `/api/workspace/modes/library/${c.id}`);
+                      await qc.invalidateQueries({ queryKey: ["/api/workspace/modes/library"] });
+                    }, "Couldn't unpublish it"))}
+                      className={`h-7 px-3 rounded-full text-[11px] ${isArmed(`unpub:${c.id}`) ? "bg-destructive text-destructive-foreground" : "border border-border text-muted-foreground"}`} data-testid={`library-unpublish-${c.id}`}>
+                      {isArmed(`unpub:${c.id}`) ? "Tap again to unpublish" : "Unpublish"}
+                    </button>
+                  ) : (
+                    <button type="button" disabled={busy !== null} onClick={() => confirm(`report:${c.id}`, () => void act(c.id, async () => {
+                      await apiRequest("POST", `/api/workspace/modes/library/${c.id}/report`);
+                      toast({ title: "Thanks — reported", description: "A mode reported by several people is taken out of the library." });
+                    }, "Couldn't report it"))}
+                      className={`h-7 px-3 rounded-full text-[11px] flex items-center gap-1 ${isArmed(`report:${c.id}`) ? "bg-destructive text-destructive-foreground" : "border border-border text-muted-foreground"}`} data-testid={`library-report-${c.id}`}>
+                      <Flag className="h-3 w-3" /> {isArmed(`report:${c.id}`) ? "Tap again to report" : "Report"}
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+    </div>
+  );
+}
 
 const swap = (ids: string[], i: number, j: number) => { const out = ids.slice(); [out[i], out[j]] = [out[j], out[i]]; return out; };
 
@@ -108,6 +210,8 @@ export default function ModesWorkspacePage() {
 
   const modes = m.modes ?? [];
   const full = modes.length >= MAX_MODES;
+  const drag = useDragReorder(modes.map((x) => x.id), (ids) => void act("order", () => m.reorder(ids), "Couldn't move it"));
+  const shown = drag.order.map((id) => modes.find((x) => x.id === id)!).filter(Boolean);
 
   return (
     <ModeFrame
@@ -117,6 +221,7 @@ export default function ModesWorkspacePage() {
       sub="Your own AI workspaces"
       tabs={<WorkspaceTabs label="AI Modes" active={tab} onPick={(t) => setTab(t)} tabs={[
         { id: "mine", label: "Your AI Modes", badge: m.modes ? modes.length : null },
+        { id: "library", label: "Library", icon: Library },
         { id: "create", label: "Create Mode", icon: Sparkles },
       ]} />}
     >
@@ -136,9 +241,12 @@ export default function ModesWorkspacePage() {
                     </div>
                   ) : (
                     <ul className="space-y-2" data-testid="modes-list">
-                      {modes.map((mode, i) => (
-                        <li key={mode.id} className="bubble p-3" data-testid={`mode-row-${mode.id}`}>
+                      {shown.map((mode, i) => (
+                        <li key={mode.id} ref={drag.itemRef(mode.id)} className={`bubble p-3 ${drag.dragging === mode.id ? "ring-2 ring-primary" : ""}`} data-testid={`mode-row-${mode.id}`}>
                           <div className="flex items-start gap-3">
+                            <span {...drag.handleProps(mode.id)} className="h-9 w-5 -ml-1 flex items-center justify-center text-muted-foreground shrink-0" data-testid={`mode-drag-${mode.id}`}>
+                              <GripVertical className="h-4 w-4" />
+                            </span>
                             <button type="button" onClick={() => hashNavigate(modeRoute(mode.id))} className="flex items-start gap-3 flex-1 min-w-0 text-left" data-testid={`mode-open-${mode.id}`}>
                               <ModeGlyph icon={mode.icon} color={mode.color} />
                               <span className="min-w-0">
@@ -194,6 +302,8 @@ export default function ModesWorkspacePage() {
               )
           )}
 
+          {tab === "library" && <LibraryTab onInstall={(mode) => { setDraft({ mode, suggestJournal: false, by: "library" }); setTab("create"); }} />}
+
           {tab === "create" && !draft && (
             <>
               <section className="bubble p-4 space-y-3" data-testid="mode-builder">
@@ -246,7 +356,7 @@ export default function ModesWorkspacePage() {
                   <p className="text-base font-bold truncate">{draft.mode.name || "Untitled mode"}</p>
                   <p className="text-[12px] text-muted-foreground">{draft.mode.tagline}</p>
                   <p className="text-[11px] text-muted-foreground mt-1">
-                    {draft.by === "ai" ? "Designed by the AI from what you described." : "Built from a template that fits what you described."} Nothing is saved until you press Save. Change anything below.
+                    {draft.by === "ai" ? "Designed by the AI from what you described." : draft.by === "library" ? "A copy of a mode someone published. It reads only what you switch on below." : "Built from a template that fits what you described."} Nothing is saved until you press Save. Change anything below.
                   </p>
                   <div className="flex flex-wrap gap-1 mt-2" aria-label="Tabs">
                     {draft.mode.tabs.map((t) => <span key={t.id} className="text-[11px] rounded-full border border-border px-2 py-0.5">{t.title}</span>)}

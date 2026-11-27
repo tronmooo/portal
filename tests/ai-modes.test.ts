@@ -190,3 +190,90 @@ describe("describeModeChanges", () => {
     expect(describeModeChanges(a, b)).toEqual(["Name: Coach → Coach 2", "Can now read: Money"]);
   });
 });
+
+// ── Graphs, log forms, reminders and check-ins (owner, 2026-11-27, second round) ──
+import { checkinDue, groundModeGraphs, parseModeDigest, reminderTask, reminderTaskTag } from "../shared/ai-modes";
+import { notificationRoute } from "../client/src/lib/notification-route";
+
+describe("graphs and log forms are approved parts too", () => {
+  it("a charts tab keeps valid graphs only; a log tab always has a tracker with fields", () => {
+    const m = sanitizeAiMode(base({ tabs: [
+      { title: "Trends", kind: "charts", range: "90d", graphs: [
+        { title: "Sleep", kind: "metric", source: { kind: "metric", key: "sleep_hours" }, display: "line" },
+        { title: "Bogus", kind: "metric", source: { kind: "sql", key: "drop table" } },
+      ] },
+      { title: "Study", kind: "log", tracker: { name: "Study sessions", fields: [{ key: "minutes", label: "Minutes", type: "number" }, { label: "<b>Notes</b>", type: "html" }] } },
+      { title: "Empty log", kind: "log" },
+      { title: "Chat", kind: "chat" },
+    ] }), { now: NOW })!;
+    const charts = m.tabs.find((t) => t.kind === "charts")!;
+    expect(charts.range).toBe("90d");
+    expect(charts.graphs!.map((g) => g.title)).toEqual(["Sleep"]);
+    const log = m.tabs.find((t) => t.title === "Study")!;
+    expect(log.tracker!.fields.map((f) => f.type)).toEqual(["number", "number"]); // an unknown type is a number field, never markup
+    expect(m.tabs.find((t) => t.title === "Empty log")!.tracker!.fields).toEqual([{ key: "value", label: "Value", type: "number" }]);
+  });
+
+  it("a graph over a tracker the person lacks is dropped — unless the mode's own Log tab creates it", () => {
+    const m = sanitizeAiMode(base({ tabs: [
+      { title: "Graphs", kind: "charts", graphs: [
+        { title: "Runs", kind: "metric", source: { kind: "tracker", key: "running" }, display: "bar" },
+        { title: "Ghost", kind: "metric", source: { kind: "tracker", key: "Unicorn rides" }, display: "bar" },
+        { title: "Study", kind: "metric", source: { kind: "tracker", key: "Study sessions", field: "minutes" }, display: "bar" },
+      ] },
+      { title: "Log", kind: "log", tracker: { name: "Study sessions", fields: [{ key: "minutes", label: "Minutes" }] } },
+    ] }), { now: NOW })!;
+    const grounded = groundModeGraphs(m, [{ id: "t1", name: "Running", fields: [{ name: "miles", type: "number" }], entries: [] }]);
+    const graphs = grounded.tabs.find((t) => t.kind === "charts")!.graphs!;
+    expect(graphs.map((g) => g.title)).toEqual(["Runs", "Study"]);
+    expect(graphs[0].source).toMatchObject({ kind: "tracker", key: "Running" }); // the real name, written back
+  });
+});
+
+describe("reminders and check-ins", () => {
+  it("a reminder becomes a recurring task tagged to its mode; bad times are dropped", () => {
+    const m = sanitizeAiMode(base({ reminders: [{ title: "Weigh in", freq: "weekly", time: "07:30" }, { title: "Late", freq: "hourly", time: "25:00" }, { title: "x" }] }), { now: NOW })!;
+    expect(m.reminders).toEqual([{ id: "weigh-in", title: "Weigh in", freq: "weekly", time: "07:30" }, { id: "late", title: "Late", freq: "weekly" }]);
+    expect(reminderTask(m, m.reminders[0], "2026-11-27")).toEqual({
+      title: "Weigh in", dueDate: "2026-11-27", dueTime: "07:30", priority: "low", tags: ["recur:weekly", reminderTaskTag("coach", "weigh-in")],
+    });
+  });
+
+  it("a check-in must name an Analysis tab of the mode; at most two", () => {
+    const m = sanitizeAiMode(base({
+      tabs: [{ title: "Patterns", kind: "insights", focus: "x" }, { title: "Growth", kind: "insights", focus: "y" }, { title: "Week", kind: "insights", focus: "z" }, { title: "Chat", kind: "chat" }],
+      checkins: [{ tabId: "patterns", freq: "daily" }, { tabId: "chat", freq: "daily" }, { tabId: "nope" }, { tabId: "growth" }, { tabId: "week" }],
+    }), { now: NOW })!;
+    expect(m.checkins).toEqual([
+      { id: "checkin-patterns", tabId: "patterns", freq: "daily", enabled: true },
+      { id: "checkin-growth", tabId: "growth", freq: "weekly", enabled: true },
+    ]);
+  });
+
+  it("due: never run, or 20 hours (daily) / six and a half days (weekly) since the last run", () => {
+    const now = new Date("2026-11-27T13:00:00Z");
+    const daily = { id: "c", tabId: "t", freq: "daily" as const, enabled: true };
+    const weekly = { ...daily, freq: "weekly" as const };
+    expect(checkinDue(daily, null, now)).toBe(true);
+    expect(checkinDue(daily, "2026-11-26T13:30:00Z", now)).toBe(true);
+    expect(checkinDue(daily, "2026-11-27T01:00:00Z", now)).toBe(false);
+    expect(checkinDue(weekly, "2026-11-22T13:00:00Z", now)).toBe(false);
+    expect(checkinDue(weekly, "2026-11-20T13:00:00Z", now)).toBe(true);
+    expect(checkinDue({ ...daily, enabled: false }, null, now)).toBe(false);
+  });
+
+  it("the digest row is read defensively, and keeps only grounded items", () => {
+    const d = parseModeDigest(JSON.stringify({ runs: {
+      patterns: { at: "2026-11-27T13:00:00Z", read: ["tasks"], items: [{ title: "A", detail: "B", sources: ["tasks"] }, { title: "C", detail: "D", sources: ["journal"] }] },
+      broken: { at: "not a date", items: [] },
+    } }));
+    expect(Object.keys(d.runs)).toEqual(["patterns"]);
+    expect(d.runs.patterns.items.map((i) => i.title)).toEqual(["A"]);
+    expect(parseModeDigest("{bad")).toEqual({ runs: {} });
+  });
+
+  it("a check-in's notification opens its mode", () => {
+    expect(notificationRoute({ entityType: "ai_mode", entityId: "fitness-coach" })).toBe("/workspace/mode/fitness-coach");
+    expect(notificationRoute({ entityType: "ai_mode", entityId: "../x" })).not.toContain("..");
+  });
+});

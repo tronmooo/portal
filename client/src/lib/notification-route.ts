@@ -30,6 +30,8 @@ const TYPE_ENTITY: Record<string, string> = {
 };
 
 export function notificationRoute(n: RoutableNotification): string {
+  // A custom AI Mode's check-in opens that mode (shared/ai-modes.ts).
+  if (n.entityType === "ai_mode" && n.entityId && /^[a-z0-9][a-z0-9-]{0,39}$/.test(n.entityId)) return `/workspace/mode/${n.entityId}`;
   const entityType = normalizeEntityType(n.entityType);
   if (entityType && n.entityId) return routeForEntity(entityType, n.entityId);
   const byType = normalizeEntityType(TYPE_ENTITY[String(n.type || "")]);

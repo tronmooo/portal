@@ -103,6 +103,7 @@ export default defineConfig({
       'tests/ai-modes-routes.test.ts',
       'tests/ai-modes-intel.test.ts',
       'tests/ai-modes.dom.test.tsx',
+      'tests/ai-mode-library.test.ts',
       'tests/word-workspace.dom.test.tsx',
       'tests/chat-journal-read.test.ts',
       'tests/tracker-card-calories.dom.test.tsx',

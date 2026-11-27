@@ -94,6 +94,33 @@ export function registerWorkspaceRoutes(app: Express, rateLimit: Limiter): void 
     try { res.json({ modes: await (await modes()).readModes() }); }
     catch (err: any) { console.error("[ai-modes]", err?.message || err); res.status(500).json({ error: "Couldn't load your AI modes." }); }
   });
+  // ── The library: modes people published (server/ai-mode-library.ts) ──────
+  const library = () => import("./ai-mode-library");
+  const libSafe = (fn: (req: Request, uid: string) => Promise<any>, status = 200) => async (req: Request, res: Response) => {
+    const uid = String((req as any).userId || "");
+    if (!uid) return res.status(401).json({ error: "Sign in to use the mode library." });
+    try {
+      const out = await fn(req, uid);
+      if (out && out.ok === false) return res.status(out.status).json({ error: out.error });
+      const { ok: _ok, ...body } = out;
+      res.status(status).json(body);
+    } catch (err: any) {
+      console.error("[ai-mode-library]", err?.message || err);
+      res.status(500).json({ error: "Couldn't reach the mode library." });
+    }
+  };
+  app.get("/api/workspace/modes/library", libSafe(async (req, uid) => (await library()).listLibrary(uid, {
+    q: String(req.query.q || ""), sort: String(req.query.sort || ""), mine: req.query.mine === "1",
+  })));
+  app.post("/api/workspace/modes/library", libSafe(async (req, uid) => (await library()).publishMode(uid, str(req.body?.modeId, 40)), 201));
+  app.delete("/api/workspace/modes/library/:id", libSafe(async (req, uid) => (await library()).unpublishMode(uid, String(req.params.id))));
+  app.post("/api/workspace/modes/library/:id/install", libSafe(async (req) => (await library()).installMode(String(req.params.id))));
+  app.post("/api/workspace/modes/library/:id/report", libSafe(async (req, uid) => (await library()).reportMode(uid, String(req.params.id))));
+
+  app.get("/api/workspace/modes/:id/digest", async (req, res) => {
+    try { res.json(await (await modes()).readDigest(String(req.params.id))); }
+    catch (err: any) { console.error("[ai-modes]", err?.message || err); res.status(500).json({ error: "Couldn't load this mode's check-ins." }); }
+  });
   app.post("/api/workspace/modes", modeSafe(async (req) => (await modes()).createMode(req.body?.mode), 201));
   app.post("/api/workspace/modes/order", modeSafe(async (req) => (await modes()).orderModes(req.body?.ids)));
   app.patch("/api/workspace/modes/:id", modeSafe(async (req) => (await modes()).updateMode(String(req.params.id), req.body?.patch)));

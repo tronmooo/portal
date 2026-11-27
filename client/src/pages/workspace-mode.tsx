@@ -25,10 +25,22 @@ import { ExecWidgetBody } from "@/components/dashboard/ExecWidgetBody";
 import { ModeFrame } from "@/components/modes/ModeFrame";
 import { ModeGlyph, modeHsl } from "@/components/modes/ModeIcon";
 import { ModeEditor } from "@/components/modes/ModeEditor";
+import { ChartsTab, LogTab, RemindersPanel } from "@/components/modes/ModeParts";
+import { useQuery } from "@tanstack/react-query";
 import {
-  MODE_SOURCE_LABELS, describeModeChanges, exportModeTemplate, modeMemoryApp, sanitizeAiMode,
-  type AiMode, type ModeInsight, type ModeTab,
+  MODE_SOURCE_LABELS, describeModeChanges, exportModeTemplate, modeMemoryApp, parseModeDigest, sanitizeAiMode,
+  type AiMode, type ModeDigest, type ModeInsight, type ModeTab,
 } from "@shared/ai-modes";
+
+/** What the mode's scheduled check-ins found (its own row; the cron writes it). */
+function useDigest(modeId: string) {
+  return useQuery<ModeDigest>({
+    queryKey: [`/api/workspace/modes/${modeId}/digest`],
+    queryFn: async () => parseModeDigest(await apiRequest("GET", `/api/workspace/modes/${modeId}/digest`).then((r) => r.json())),
+    staleTime: 5 * 60_000,
+  });
+}
+const when = (iso: string) => new Date(iso).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 import type { ExecWidget } from "@shared/exec-widgets";
 
 const SETTINGS = "__settings";
@@ -53,6 +65,9 @@ function Cards({ widgets, mode }: { widgets: ExecWidget[]; mode: AiMode }) {
 }
 
 function InsightsTab({ mode, tab }: { mode: AiMode; tab: ModeTab }) {
+  const digest = useDigest(mode.id);
+  const checkin = mode.checkins.find((c) => c.tabId === tab.id && c.enabled);
+  const lastRun = digest.data?.runs[tab.id];
   const [state, setState] = useState<{ items: ModeInsight[]; read: string[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +92,23 @@ function InsightsTab({ mode, tab }: { mode: AiMode; tab: ModeTab }) {
           {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Looking at your records…</> : <><Sparkles className="h-4 w-4" /> {state ? "Look again" : "Analyze"}</>}
         </button>
       </div>
+      {checkin && (
+        <p className="text-[11px] text-muted-foreground mt-2" data-testid={`mode-checkin-note-${tab.id}`}>
+          Runs on its own {checkin.freq === "daily" ? "every day" : "every week"}; you get a notification when it has something.
+          {lastRun ? ` Last check-in: ${when(lastRun.at)}.` : " It hasn't run yet."}
+        </p>
+      )}
+      {!state && lastRun && lastRun.items.length > 0 && (
+        <ul className="space-y-2 mt-3" data-testid={`mode-checkin-items-${tab.id}`}>
+          {lastRun.items.map((it, i) => (
+            <li key={i} className="bubble p-3">
+              <p className="text-sm font-semibold">{it.title}</p>
+              <p className="text-[13px] mt-1 whitespace-pre-wrap">{it.detail}</p>
+              <p className="text-[11px] text-muted-foreground mt-1.5">From: {it.sources.map((s) => MODE_SOURCE_LABELS[s]?.label ?? s).join(", ")} · check-in of {when(lastRun.at)}</p>
+            </li>
+          ))}
+        </ul>
+      )}
       {error && <div role="alert" className="text-xs rounded-lg border border-destructive/40 bg-destructive/10 px-2.5 py-2 mt-3" data-testid={`mode-insights-error-${tab.id}`}>{error} <button type="button" className="underline ml-1" onClick={() => void run()}>Try again</button></div>}
       {state && (
         state.items.length === 0 ? (
@@ -98,8 +130,10 @@ function InsightsTab({ mode, tab }: { mode: AiMode; tab: ModeTab }) {
   );
 }
 
-function OverviewTab({ mode, tab, onPrompt, onSettings }: { mode: AiMode; tab: ModeTab; onPrompt: (text: string) => void; onSettings: () => void }) {
+function OverviewTab({ mode, tab, onPrompt, onSettings, onTab }: { mode: AiMode; tab: ModeTab; onPrompt: (text: string) => void; onSettings: () => void; onTab: (id: string) => void }) {
   const hsl = modeHsl(mode.color);
+  const digest = useDigest(mode.id);
+  const latest = Object.entries(digest.data?.runs ?? {}).filter(([, r]) => r.items.length > 0).sort((a, b) => b[1].at.localeCompare(a[1].at))[0];
   return (
     <TabPage testId={`mode-overview-${tab.id}`}>
       <div className="rounded-2xl p-4 border" style={{ background: `linear-gradient(135deg, hsl(${hsl} / 0.18), transparent)`, borderColor: `hsl(${hsl} / 0.35)` }}>
@@ -128,8 +162,55 @@ function OverviewTab({ mode, tab, onPrompt, onSettings }: { mode: AiMode; tab: M
           </div>
         </section>
       )}
+      {latest && (
+        <section className="mt-4 bubble p-3" data-testid="mode-noticed">
+          <p className="micro-label text-muted-foreground">What I've noticed · {when(latest[1].at)}</p>
+          <p className="text-sm font-semibold mt-1">{latest[1].items[0].title}</p>
+          <p className="text-[13px] mt-0.5 line-clamp-3">{latest[1].items[0].detail}</p>
+          <button type="button" className="text-xs underline mt-1.5" onClick={() => onTab(latest[0])}>See the whole check-in</button>
+        </section>
+      )}
       {(tab.widgets ?? []).length > 0 && <section className="mt-4"><Cards widgets={tab.widgets ?? []} mode={mode} /></section>}
+      <RemindersPanel mode={mode} />
     </TabPage>
+  );
+}
+
+/** Share the mode's SETUP to the public library — shown in full first, then one more tap. */
+function PublishButton({ mode }: { mode: AiMode }) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const shared = exportModeTemplate(mode) as { mode: AiMode };
+  const publish = async () => {
+    setBusy(true);
+    try {
+      await apiRequest("POST", "/api/workspace/modes/library", { modeId: mode.id });
+      setOpen(false);
+      toast({ title: "Published to the mode library", description: "Anyone can install a copy. Unpublish it any time from AI Modes → Library." });
+    } catch (err) { toast({ title: "Couldn't publish it", description: aiErrorText(err), variant: "destructive" }); }
+    finally { setBusy(false); }
+  };
+  if (!open) {
+    return <button type="button" onClick={() => setOpen(true)} className="h-8 px-3 rounded-full border border-border text-xs flex items-center gap-1" data-testid="mode-publish"><Sparkles className="h-3.5 w-3.5" /> Publish to library</button>;
+  }
+  return (
+    <div className="w-full rounded-xl border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="mode-publish-review">
+      <p className="font-semibold">Publish “{mode.name}” to the public library?</p>
+      <p className="text-[12px] text-muted-foreground mt-1">Anyone using Portol can see and install a copy of this setup. Your name, conversations, memories, records and journal are never shared. Read what will be shared — the instructions are your own words:</p>
+      <dl className="text-[12px] mt-2 space-y-1">
+        <div><dt className="inline font-semibold">Tagline: </dt><dd className="inline">{shared.mode.tagline || "—"}</dd></div>
+        <div><dt className="inline font-semibold">Personality: </dt><dd className="inline">{shared.mode.personality || "—"}</dd></div>
+        <div><dt className="font-semibold">Instructions:</dt><dd className="whitespace-pre-wrap" data-testid="mode-publish-instructions">{shared.mode.instructions || "—"}</dd></div>
+        <div><dt className="inline font-semibold">Tabs: </dt><dd className="inline">{shared.mode.tabs.map((t) => t.title).join(", ")}</dd></div>
+      </dl>
+      <div className="flex gap-2 mt-3">
+        <button type="button" onClick={() => setOpen(false)} className="h-8 px-3 rounded-full border border-border text-xs">Cancel</button>
+        <button type="button" onClick={() => void publish()} disabled={busy} className="h-8 px-3 rounded-full bg-primary text-primary-foreground text-xs font-semibold disabled:opacity-50" data-testid="mode-publish-confirm">
+          {busy ? "Publishing…" : "Publish"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -221,6 +302,7 @@ function SettingsTab({ mode, draft, setDraft, saving, onSave, onUndo, onDeleted 
           const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${mode.id}.portol-mode.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
         }} className="h-8 px-3 rounded-full border border-border text-xs flex items-center gap-1" title="The mode's setup only — no conversations, memories or records">
           <Download className="h-3.5 w-3.5" /> Export template</button>
+        <PublishButton mode={mode} />
         <button type="button" onClick={() => confirm("delete", () => void m.remove(mode.id).then(onDeleted).catch((err) => toast({ title: "Couldn't delete it", description: aiErrorText(err), variant: "destructive" })))}
           className={`h-8 px-3 rounded-full text-xs ${isArmed("delete") ? "bg-destructive text-destructive-foreground" : "border border-border text-muted-foreground"}`} data-testid="mode-settings-delete">
           {isArmed("delete") ? "Tap again: delete this mode and its conversation" : "Delete mode"}
@@ -325,7 +407,9 @@ export default function ModeWorkspacePage({ params }: { params?: { id?: string }
                 }}
               />
             ) : t.kind === "insights" ? <InsightsTab mode={mode} tab={t} />
-              : t.kind === "overview" ? <OverviewTab mode={mode} tab={t} onSettings={() => pick(SETTINGS)}
+              : t.kind === "charts" ? <ChartsTab tab={t} />
+              : t.kind === "log" && t.tracker ? <LogTab tab={t} />
+              : t.kind === "overview" ? <OverviewTab mode={mode} tab={t} onSettings={() => pick(SETTINGS)} onTab={pick}
                   onPrompt={(text) => { if (chatTab) { pick(chatTab.id); setSendNow({ text, key: Date.now() }); } }} />
               : <TabPage testId={`mode-widgets-${t.id}`}><Cards widgets={t.widgets ?? []} mode={mode} /></TabPage>}
           </div>

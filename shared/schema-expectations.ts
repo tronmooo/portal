@@ -42,6 +42,8 @@ export const EXPECTED_COLUMNS: ExpectedColumn[] = [
 export const EXPECTED_TABLES: ExpectedTable[] = [
   { table: "ai_action_log", migration: "20260711_ai_action_log.sql" },
   { table: "ai_bulk_plans", migration: "20260711_ai_bulk_plans.sql" },
+  { table: "ai_mode_library", migration: "20261127_ai_mode_library.sql" },
+  { table: "ai_mode_library_reports", migration: "20261127_ai_mode_library.sql" },
   { table: "ai_chat_runs", migration: "20260922_ai_operation_ids_and_chat_runs.sql" },
   { table: "asset_party_links", migration: "005_relationships_module.sql" },
   { table: "auth_rate_limits", migration: "20261115_auth_rate_limits.sql" },

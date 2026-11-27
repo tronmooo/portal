@@ -2631,6 +2631,52 @@ export async function registerRoutes(
       res.status(500).json({ error: "Cron failed" });
     }
   });
+  // ---- Cron: AI Mode check-ins (shared/ai-modes.ts ModeCheckin) ----
+  // A check-in is one of a custom mode's Analysis tabs, run on the person's
+  // schedule. Only users whose `ai_modes` row exists are visited; each runs
+  // at most three due check-ins, inside a time budget, under their own
+  // storage. A run writes only the mode's digest row and one notification.
+  // Served by the AI function (vercel.json rewrite), which has the time for
+  // model calls.
+  const cronModeCheckins: any = asyncHandler(async (req: any, res: any) => {
+    if (!cronAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+    try {
+      const { createClient } = await import("@supabase/supabase-js");
+      const url = process.env.VITE_SUPABASE_URL;
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!url || !key) throw new Error("Supabase admin env vars missing");
+      const admin = createClient(url, key);
+      const { data: rows, error } = await (admin as any).from("preferences").select("user_id,value").eq("key", "ai_modes").limit(2000);
+      if (error) throw error;
+      const { createScopedStorage, requestStorageContext } = await import("./storage");
+      const { runDueCheckins } = await import("./ai-modes");
+      const { parseAiModes } = await import("@shared/ai-modes");
+      const deadline = Date.now() + 240_000;
+      let users = 0, ran = 0, failed = 0;
+      for (const row of (rows || []) as Array<{ user_id: string; value: string }>) {
+        if (Date.now() > deadline) break;
+        if (!parseAiModes(row.value).some((m) => m.checkins.some((c) => c.enabled))) continue;
+        users++;
+        const scoped = createScopedStorage(row.user_id);
+        await new Promise<void>((resolve) => {
+          requestStorageContext.run(scoped, async () => {
+            try {
+              const out = await runDueCheckins({ deadline });
+              ran += out.ran; failed += out.failed;
+              if (out.ran > 0) await afterCronWrites(row.user_id);
+            } catch (err: any) { log.error("[Cron Mode Check-ins] user", err?.message || err); failed++; }
+            resolve();
+          });
+        });
+      }
+      res.json({ users, ran, failed });
+    } catch (err: any) {
+      log.error("[Cron Mode Check-ins]", err?.message || err);
+      res.status(500).json({ error: "Cron failed" });
+    }
+  });
+  app.get("/api/cron/mode-checkins", cronModeCheckins);
+  app.post("/api/cron/mode-checkins", cronModeCheckins);
   app.get("/api/cron/snapshot-net-worth", cronSnapshotNetWorth);
   app.post("/api/cron/snapshot-net-worth", cronSnapshotNetWorth);
 
@@ -11874,7 +11920,7 @@ No emojis. No prose outside the JSON.`,
       const key = req.params.key;
       // `details:` rows and the detail catalog are written only through
       // /api/details/*, which validates each value against its definition.
-      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_", "details:", "detail_definitions", "versions:", "ai_memory:", "ai_modes"];
+      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_", "details:", "detail_definitions", "versions:", "ai_memory:", "ai_modes", "ai_mode_digest:"];
       const PREF_KEY_DENYLIST = new Set([
         "gcal_refresh_token", "gcal_access_token",
         "onboarding_completed", "ai_digest", "admin_override",

@@ -4,13 +4,25 @@
 // it with one route call, and the server passes it through `sanitizeAiMode`.
 // Removing a tab, a card or a suggested conversation takes two taps (Rule 8).
 import { useState } from "react";
-import { ArrowDown, ArrowUp, Brain, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, Brain, GripVertical, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { useDragReorder } from "./useDragReorder";
+import { describeWellnessWidget, sanitizeWellnessWidget, type SeriesRef } from "@shared/wellness-widgets";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { describeWidget, inferWidgetFromText, newWidgetId } from "@shared/exec-widgets";
 import {
-  MAX_MODE_PROMPTS, MAX_MODE_TABS, MAX_TAB_WIDGETS, MODE_COLOR_NAMES, MODE_ICONS, MODE_SOURCES, MODE_SOURCE_LABELS, MODE_TAB_KINDS, MODE_TAB_KIND_LABELS,
-  type AiMode, type ModeSource, type ModeTab, type ModeTabKind,
+  MAX_LOG_FIELDS, MAX_MODE_CHECKINS, MAX_MODE_PROMPTS, MAX_MODE_REMINDERS, MAX_MODE_TABS, MAX_TAB_GRAPHS, MAX_TAB_WIDGETS, REMINDER_FREQS, MODE_COLOR_NAMES, MODE_ICONS, MODE_SOURCES, MODE_SOURCE_LABELS, MODE_TAB_KINDS, MODE_TAB_KIND_LABELS,
+  type AiMode, type ModeCheckin, type ModeReminder, type ModeSource, type ModeTab, type ModeTabKind,
 } from "@shared/ai-modes";
+
+const GRAPH_SOURCES: Array<{ key: string; label: string; ref: SeriesRef; calc: "average" | "total" | "count" | "latest" }> = [
+  { key: "sleep", label: "Sleep", ref: { kind: "metric", key: "sleep_hours" }, calc: "average" },
+  { key: "steps", label: "Steps", ref: { kind: "metric", key: "steps" }, calc: "total" },
+  { key: "weight", label: "Weight", ref: { kind: "metric", key: "weight" }, calc: "latest" },
+  { key: "hr", label: "Heart rate", ref: { kind: "metric", key: "heart_rate" }, calc: "average" },
+  { key: "workouts", label: "Workouts", ref: { kind: "workouts" }, calc: "count" },
+  { key: "mood", label: "Mood (journal)", ref: { kind: "mood" }, calc: "average" },
+  { key: "tracker", label: "One of my trackers…", ref: { kind: "tracker", key: "" }, calc: "average" },
+];
 import { MODE_ICON_COMPONENTS, modeHsl } from "./ModeIcon";
 
 const field = "ws-title w-full min-w-0 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary/60";
@@ -61,6 +73,37 @@ export function ModeEditor({ value, onChange, suggestJournal }: { value: AiMode;
   const { confirm, isArmed } = useConfirmArm();
   const [cardText, setCardText] = useState<Record<string, string>>({});
   const [newPrompt, setNewPrompt] = useState("");
+  const [graphPick, setGraphPick] = useState<Record<string, { source: string; tracker: string; field: string; display: "line" | "bar" }>>({});
+  const [newField, setNewField] = useState<Record<string, string>>({});
+  const [newReminder, setNewReminder] = useState("");
+  // Drag the non-chat tabs; Chat stays last.
+  const chatTab = value.tabs.find((t) => t.kind === "chat");
+  const movable = value.tabs.filter((t) => t.kind !== "chat");
+  const drag = useDragReorder(movable.map((t) => t.id), (ids) => {
+    const byId = new Map(value.tabs.map((t) => [t.id, t]));
+    onChange({ ...value, tabs: [...ids.map((id) => byId.get(id)!).filter(Boolean), ...(chatTab ? [chatTab] : [])] });
+  });
+  const shownTabs = [...drag.order.map((id) => movable.find((t) => t.id === id)!).filter(Boolean), ...(chatTab ? [chatTab] : [])];
+  const addGraph = (t: ModeTab) => {
+    const pick = graphPick[t.id] ?? { source: "sleep", tracker: "", field: "", display: "line" as const };
+    const src = GRAPH_SOURCES.find((g) => g.key === pick.source) ?? GRAPH_SOURCES[0];
+    const ref: SeriesRef = src.key === "tracker" ? { kind: "tracker", key: pick.tracker.trim(), ...(pick.field.trim() ? { field: pick.field.trim() } : {}) } : src.ref;
+    if (ref.kind === "tracker" && !ref.key) return;
+    const title = src.key === "tracker" ? `${pick.tracker.trim()}${pick.field.trim() ? ` · ${pick.field.trim()}` : ""}` : src.label;
+    const graphs = t.graphs ?? [];
+    const g = sanitizeWellnessWidget({ title, kind: "metric", source: ref, calc: src.key === "tracker" && !pick.field.trim() ? "count" : src.calc, display: pick.display, by: "manual" }, `g${Date.now().toString(36)}`);
+    if (!g || graphs.length >= MAX_TAB_GRAPHS) return;
+    patchTab(t.id, { graphs: [...graphs, g] });
+  };
+  const setReminders = (reminders: ModeReminder[]) => set({ reminders });
+  const checkinFor = (tabId: string) => value.checkins.find((c) => c.tabId === tabId);
+  const setCheckin = (tabId: string, freq: "off" | "daily" | "weekly") => {
+    const rest = value.checkins.filter((c) => c.tabId !== tabId);
+    if (freq === "off") return set({ checkins: rest });
+    if (rest.length >= MAX_MODE_CHECKINS) return;
+    const c: ModeCheckin = { id: `checkin-${tabId}`, tabId, freq, enabled: true };
+    set({ checkins: [...rest, c] });
+  };
   const set = (patch: Partial<AiMode>) => onChange({ ...value, ...patch });
   const setTabs = (tabs: ModeTab[]) => set({ tabs });
   const patchTab = (id: string, patch: Partial<ModeTab>) => setTabs(value.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -83,6 +126,8 @@ export function ModeEditor({ value, onChange, suggestJournal }: { value: AiMode;
     const next: ModeTab = { id: t.id, title: t.title, kind };
     if (kind === "insights") next.focus = t.focus ?? "";
     if (kind === "widgets" || kind === "overview") next.widgets = t.widgets ?? [];
+    if (kind === "charts") { next.graphs = t.graphs ?? []; next.range = t.range ?? "30d"; }
+    if (kind === "log") next.tracker = t.tracker ?? { name: t.title, fields: [{ key: "value", label: "Value", type: "number" }] };
     setTabs(value.tabs.map((x) => (x.id === t.id ? next : x)));
   };
   const addCard = (t: ModeTab) => {
@@ -163,12 +208,18 @@ export function ModeEditor({ value, onChange, suggestJournal }: { value: AiMode;
         <p className="text-sm font-semibold mb-1">Tabs · {value.tabs.length}</p>
         <p className="text-[11px] text-muted-foreground mb-2">Five by default, up to {MAX_MODE_TABS}. Chat is always there.</p>
         <ol className="space-y-2" data-testid="mode-tabs-editor">
-          {value.tabs.map((t, i) => (
-            <li key={t.id} className="rounded-xl border border-border p-2.5 space-y-2" data-testid={`mode-tab-edit-${t.id}`}>
+          {shownTabs.map((t) => { const i = value.tabs.findIndex((x) => x.id === t.id); return (
+            <li key={t.id} ref={t.kind === "chat" ? undefined : drag.itemRef(t.id)}
+              className={`rounded-xl border p-2.5 space-y-2 ${drag.dragging === t.id ? "border-primary bg-primary/5" : "border-border"}`} data-testid={`mode-tab-edit-${t.id}`}>
               <div className="flex items-center gap-1.5">
+                {t.kind !== "chat" && (
+                  <span {...drag.handleProps(t.id)} className="h-8 w-6 flex items-center justify-center text-muted-foreground shrink-0" data-testid={`mode-tab-drag-${t.id}`}>
+                    <GripVertical className="h-4 w-4" />
+                  </span>
+                )}
                 <input value={t.title} maxLength={24} onChange={(e) => patchTab(t.id, { title: e.target.value })} aria-label="Tab title" className={`${field} flex-1`} />
-                <button type="button" aria-label="Move up" disabled={i === 0} onClick={() => move(i, -1)} className="h-8 w-8 rounded-lg border border-border flex items-center justify-center disabled:opacity-30"><ArrowUp className="h-3.5 w-3.5" /></button>
-                <button type="button" aria-label="Move down" disabled={i === value.tabs.length - 1} onClick={() => move(i, 1)} className="h-8 w-8 rounded-lg border border-border flex items-center justify-center disabled:opacity-30"><ArrowDown className="h-3.5 w-3.5" /></button>
+                <button type="button" aria-label="Move up" disabled={i === 0 || t.kind === "chat"} onClick={() => move(i, -1)} className="h-8 w-8 rounded-lg border border-border flex items-center justify-center disabled:opacity-30"><ArrowUp className="h-3.5 w-3.5" /></button>
+                <button type="button" aria-label="Move down" disabled={t.kind === "chat" || i >= value.tabs.length - 2} onClick={() => move(i, 1)} className="h-8 w-8 rounded-lg border border-border flex items-center justify-center disabled:opacity-30"><ArrowDown className="h-3.5 w-3.5" /></button>
                 {t.kind !== "chat" && (
                   <button type="button" onClick={() => confirm(`tab:${t.id}`, () => setTabs(value.tabs.filter((x) => x.id !== t.id)))}
                     aria-label={isArmed(`tab:${t.id}`) ? "Tap again to remove this tab" : "Remove this tab"}
@@ -210,13 +261,123 @@ export function ModeEditor({ value, onChange, suggestJournal }: { value: AiMode;
                   )}
                 </div>
               )}
+              {t.kind === "charts" && (
+                <div className="space-y-1.5">
+                  {(t.graphs ?? []).map((g) => (
+                    <div key={g.id} className="flex items-start gap-2 text-[12px]">
+                      <span className="flex-1 min-w-0"><span className="font-semibold">{g.title}</span> — <span className="text-muted-foreground">{describeWellnessWidget(g)}</span></span>
+                      <button type="button" onClick={() => confirm(`graph:${t.id}:${g.id}`, () => patchTab(t.id, { graphs: (t.graphs ?? []).filter((x) => x.id !== g.id) }))}
+                        className={`h-6 px-2 rounded-full text-[11px] shrink-0 ${isArmed(`graph:${t.id}:${g.id}`) ? "bg-destructive text-destructive-foreground" : "border border-border text-muted-foreground"}`}>
+                        {isArmed(`graph:${t.id}:${g.id}`) ? "Tap again" : "Remove"}
+                      </button>
+                    </div>
+                  ))}
+                  {(t.graphs ?? []).length < MAX_TAB_GRAPHS && (() => {
+                    const pick = graphPick[t.id] ?? { source: "sleep", tracker: "", field: "", display: "line" as const };
+                    const setPick = (p: Partial<typeof pick>) => setGraphPick((m) => ({ ...m, [t.id]: { ...pick, ...p } }));
+                    return (
+                      <div className="flex flex-wrap gap-1.5" data-testid={`mode-graph-add-${t.id}`}>
+                        <select value={pick.source} onChange={(e) => setPick({ source: e.target.value })} aria-label="Graph of" className={`${field} flex-1 min-w-[130px]`}>
+                          {GRAPH_SOURCES.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
+                        </select>
+                        {pick.source === "tracker" && (
+                          <>
+                            <input value={pick.tracker} onChange={(e) => setPick({ tracker: e.target.value })} placeholder="Tracker name" aria-label="Tracker name" className={`${field} flex-1 min-w-[110px]`} />
+                            <input value={pick.field} onChange={(e) => setPick({ field: e.target.value })} placeholder="Field (blank = count)" aria-label="Field" className={`${field} flex-1 min-w-[110px]`} />
+                          </>
+                        )}
+                        <select value={pick.display} onChange={(e) => setPick({ display: e.target.value as "line" | "bar" })} aria-label="Drawn as" className={`${field} w-24`}>
+                          <option value="line">Line</option><option value="bar">Bars</option>
+                        </select>
+                        <button type="button" onClick={() => addGraph(t)} className="h-8 px-2.5 rounded-lg border border-border text-xs font-semibold" data-testid={`mode-graph-add-button-${t.id}`}>Add graph</button>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+              {t.kind === "log" && t.tracker && (
+                <div className="space-y-1.5">
+                  <div className="flex gap-1.5">
+                    <input value={t.tracker.name} maxLength={40} onChange={(e) => patchTab(t.id, { tracker: { ...t.tracker!, name: e.target.value } })} aria-label="Tracker it saves to" placeholder="Tracker name" className={`${field} flex-1`} />
+                    <input value={t.tracker.unit ?? ""} maxLength={12} onChange={(e) => patchTab(t.id, { tracker: { ...t.tracker!, unit: e.target.value || undefined } })} aria-label="Unit" placeholder="Unit" className={`${field} w-20`} />
+                  </div>
+                  {t.tracker.fields.map((f) => (
+                    <div key={f.key} className="flex items-center gap-1.5 text-[12px]">
+                      <span className="flex-1 min-w-0">{f.label} <span className="text-muted-foreground">({f.type === "number" ? "number" : "text"}{f.unit ? `, ${f.unit}` : ""})</span></span>
+                      {t.tracker!.fields.length > 1 && (
+                        <button type="button" onClick={() => patchTab(t.id, { tracker: { ...t.tracker!, fields: t.tracker!.fields.filter((x) => x.key !== f.key) } })}
+                          className="h-6 px-2 rounded-full text-[11px] border border-border text-muted-foreground">Remove</button>
+                      )}
+                    </div>
+                  ))}
+                  {t.tracker.fields.length < MAX_LOG_FIELDS && (
+                    <form className="flex gap-1.5" onSubmit={(e) => {
+                      e.preventDefault();
+                      const raw = (newField[t.id] || "").trim();
+                      if (raw.length < 2) return;
+                      const isText = /\b(note|notes|text|subject|what|where|who|how)\b/i.test(raw);
+                      const key = raw.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 30);
+                      if (!key || t.tracker!.fields.some((x) => x.key === key)) return;
+                      patchTab(t.id, { tracker: { ...t.tracker!, fields: [...t.tracker!.fields, { key, label: raw.slice(0, 30), type: isText ? "text" : "number" }] } });
+                      setNewField((m) => ({ ...m, [t.id]: "" }));
+                    }}>
+                      <input value={newField[t.id] ?? ""} onChange={(e) => setNewField((m) => ({ ...m, [t.id]: e.target.value }))} maxLength={30}
+                        placeholder="Add a field: e.g. Minutes, Notes" aria-label="Add a field" className={`${field} flex-1`} />
+                      <button type="submit" className="h-8 px-2.5 rounded-lg border border-border text-xs font-semibold shrink-0">Add</button>
+                    </form>
+                  )}
+                </div>
+              )}
+              {t.kind === "insights" && (
+                <label className="flex items-center gap-2 text-[12px]">
+                  <span className="text-muted-foreground">Run on its own</span>
+                  <select value={checkinFor(t.id)?.freq ?? "off"} onChange={(e) => setCheckin(t.id, e.target.value as "off" | "daily" | "weekly")}
+                    disabled={!checkinFor(t.id) && value.checkins.length >= MAX_MODE_CHECKINS} className={`${field} w-28`} data-testid={`mode-checkin-${t.id}`}>
+                    <option value="off">Off</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
+                  </select>
+                </label>
+              )}
             </li>
-          ))}
+          ); })}
         </ol>
         {value.tabs.length < MAX_MODE_TABS && (
           <button type="button" onClick={addTab} className="mt-2 h-8 px-3 rounded-full border border-border text-xs font-semibold flex items-center gap-1" data-testid="mode-add-tab">
             <Plus className="h-3.5 w-3.5" /> Add a tab
           </button>
+        )}
+      </section>
+
+      <section data-testid="mode-reminders-editor">
+        <p className="text-sm font-semibold mb-1 flex items-center gap-1.5"><Bell className="h-4 w-4" /> Reminders</p>
+        <p className="text-[11px] text-muted-foreground mb-2">Offered on the mode's Overview. One you turn on there becomes a repeating task with the app's notifications.</p>
+        <ul className="space-y-1.5">
+          {value.reminders.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center gap-1.5">
+              <input value={r.title} maxLength={80} onChange={(e) => setReminders(value.reminders.map((x) => (x.id === r.id ? { ...x, title: e.target.value } : x)))} aria-label="Reminder" className={`${field} flex-1 min-w-[140px]`} />
+              <select value={r.freq} onChange={(e) => setReminders(value.reminders.map((x) => (x.id === r.id ? { ...x, freq: e.target.value as ModeReminder["freq"] } : x)))} aria-label="How often" className={`${field} w-28`}>
+                {REMINDER_FREQS.map((f) => <option key={f} value={f}>{f === "daily" ? "Daily" : f === "weekly" ? "Weekly" : "Monthly"}</option>)}
+              </select>
+              <input type="time" value={r.time ?? ""} onChange={(e) => setReminders(value.reminders.map((x) => (x.id === r.id ? { ...x, time: e.target.value || undefined } : x)))} aria-label="At" className={`${field} w-28`} />
+              <button type="button" onClick={() => confirm(`rem:${r.id}`, () => setReminders(value.reminders.filter((x) => x.id !== r.id)))}
+                className={`h-8 px-2 rounded-lg text-[11px] ${isArmed(`rem:${r.id}`) ? "bg-destructive text-destructive-foreground" : "border border-border text-muted-foreground"}`}>
+                {isArmed(`rem:${r.id}`) ? "Tap again" : "Remove"}
+              </button>
+            </li>
+          ))}
+        </ul>
+        {value.reminders.length < MAX_MODE_REMINDERS && (
+          <form className="flex gap-1.5 mt-1.5" onSubmit={(e) => {
+            e.preventDefault();
+            const title = newReminder.trim();
+            if (title.length < 3) return;
+            let id = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30) || "reminder";
+            for (let n = 2; value.reminders.some((x) => x.id === id); n++) id = `${id.replace(/-\d+$/, "")}-${n}`;
+            setReminders([...value.reminders, { id, title, freq: "weekly" }]);
+            setNewReminder("");
+          }}>
+            <input value={newReminder} onChange={(e) => setNewReminder(e.target.value)} maxLength={80} placeholder="Add a reminder: e.g. Weigh in" aria-label="Add a reminder" className={`${field} flex-1`} data-testid="mode-reminder-new" />
+            <button type="submit" className="h-8 px-2.5 rounded-lg border border-border text-xs font-semibold shrink-0">Add</button>
+          </form>
         )}
       </section>
 

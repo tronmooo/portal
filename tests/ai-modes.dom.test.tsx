@@ -23,11 +23,15 @@ const calls: Call[] = [];
 let modes: AiMode[] = [];
 let listFails = false;
 let answers: Record<string, any> = {};
+let trackers: any[] = [];
+let tasks: any[] = [];
+let library: any[] = [];
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 const navigated: string[] = [];
 vi.mock("@/lib/hashNavigate", () => ({ hashNavigate: (to: string) => { navigated.push(to); } }));
 // The cards read the same lists every screen reads; here they load nothing.
+vi.mock("@/components/wellness/WellnessCustomize", () => ({ WellnessWidgetCardBody: ({ widget, range }: any) => <p data-testid={`graph-body-${widget.id}`}>{widget.source?.kind}:{range}</p> }));
 vi.mock("@/components/dashboard/ExecWidgetBody", () => ({ ExecWidgetBody: ({ widget }: any) => <p data-testid={`card-body-${widget.id}`}>{widget.source}</p> }));
 vi.mock("@/lib/queryClient", () => ({
   BROWSER_TIMEZONE: "America/Los_Angeles",
@@ -43,6 +47,15 @@ vi.mock("@/lib/queryClient", () => ({
       data = { mode: modes.find((m) => m.id === id), modes };
     } else if (method === "DELETE" && url.startsWith("/api/workspace/modes/")) { const id = url.split("/").pop(); modes = modes.filter((m) => m.id !== id); data = { modes }; }
     else if (url.startsWith("/api/workspace/memory/")) data = { memories: [], turns: [], lastTalked: null, remember: true, name: "Sam" };
+    else if (url === "/api/trackers" && method === "GET") data = trackers;
+    else if (url === "/api/trackers" && method === "POST") { const t = { id: `t${trackers.length + 1}`, ...body, entries: [], linkedProfiles: [] }; trackers = [...trackers, t]; data = t; }
+    else if (/^\/api\/trackers\/[^/]+\/entries$/.test(url)) { const t = trackers.find((x) => x.id === url.split("/")[3]); t.entries = [...t.entries, { id: `e${t.entries.length}`, timestamp: new Date().toISOString(), values: body.values }]; data = {}; }
+    else if (url === "/api/profiles/lite") data = [{ id: "self-1", name: "Sam", type: "self" }];
+    else if (url === "/api/tasks" && method === "GET") data = tasks;
+    else if (url === "/api/tasks" && method === "POST") { const t = { id: `task${tasks.length + 1}`, status: "todo", ...body }; tasks = [...tasks, t]; data = t; }
+    else if (url.startsWith("/api/tasks/") && method === "DELETE") { tasks = tasks.filter((t) => t.id !== url.split("/").pop()); data = {}; }
+    else if (/\/digest$/.test(url)) data = { runs: {} };
+    else if (url.startsWith("/api/workspace/modes/library") && method === "GET") data = { items: library };
     return { ok: true, json: async () => data };
   }),
 }));
@@ -58,10 +71,10 @@ function mount(page: React.ReactElement) {
   } } } });
   return render(<QueryClientProvider client={client}>{page}</QueryClientProvider>);
 }
-const writes = () => calls.filter((c) => c.method !== "GET" && !["/api/workspace/modes/generate", "/api/workspace/modes/revise", "/api/workspace/modes/insights", "/api/workspace/modes/chat"].includes(c.url));
+const writes = () => calls.filter((c) => c.method !== "GET" && !["/api/workspace/modes/generate", "/api/workspace/modes/revise", "/api/workspace/modes/insights", "/api/workspace/modes/chat"].includes(c.url) && !c.url.endsWith("/install"));
 const fitness = () => modeFromTemplate(MODE_TEMPLATES.find((t) => t.key === "fitness")!, [], new Date());
 
-beforeEach(() => { calls.length = 0; navigated.length = 0; modes = []; listFails = false; answers = {}; window.location.hash = ""; try { localStorage.clear(); } catch { /* */ } });
+beforeEach(() => { calls.length = 0; navigated.length = 0; modes = []; listFails = false; answers = {}; trackers = []; tasks = []; library = []; window.location.hash = ""; try { localStorage.clear(); } catch { /* */ } });
 afterEach(() => cleanup());
 
 describe("the builder", () => {
@@ -159,5 +172,92 @@ describe("a mode is its own app", () => {
     modes = [];
     mount(<ModeWorkspacePage params={{ id: "gone" }} />);
     expect((await screen.findByTestId("mode-missing")).textContent).toContain("no longer exists");
+  });
+});
+
+describe("graphs, a log form, reminders (second round)", () => {
+  it("a Log tab creates its tracker on a tap, then saves an entry to it", async () => {
+    const learning = modeFromTemplate(MODE_TEMPLATES.find((t) => t.key === "learning")!, [], new Date());
+    modes = [learning];
+    mount(<ModeWorkspacePage params={{ id: "learning-assistant" }} />);
+    fireEvent.click(await screen.findByTestId("workspace-tab-practice"));
+    fireEvent.click(await screen.findByTestId("mode-log-create"));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0]).toMatchObject({ method: "POST", url: "/api/trackers" });
+    expect(writes()[0].body).toMatchObject({ name: "Study sessions", fields: [{ name: "minutes", type: "number", unit: "min", isPrimary: true }, { name: "subject", type: "text" }] });
+    fireEvent.change(await screen.findByTestId("mode-log-field-minutes"), { target: { value: "45" } });
+    fireEvent.change(screen.getByTestId("mode-log-field-subject"), { target: { value: "Spanish" } });
+    fireEvent.click(screen.getByTestId("mode-log-save"));
+    await waitFor(() => expect(writes()).toHaveLength(2));
+    expect(writes()[1]).toEqual({ method: "POST", url: "/api/trackers/t1/entries", body: { values: { minutes: 45, subject: "Spanish" } } });
+  });
+
+  it("opening a Log tab writes nothing; a tracker already there is used, never created twice", async () => {
+    const learning = modeFromTemplate(MODE_TEMPLATES.find((t) => t.key === "learning")!, [], new Date());
+    modes = [learning];
+    trackers = [{ id: "t9", name: "Study sessions", fields: [], entries: [], linkedProfiles: [] }];
+    mount(<ModeWorkspacePage params={{ id: "learning-assistant" }} />);
+    fireEvent.click(await screen.findByTestId("workspace-tab-practice"));
+    await screen.findByTestId("mode-log-form");
+    expect(screen.queryByTestId("mode-log-create")).toBeNull();
+    expect(writes()).toEqual([]);
+  });
+
+  it("a charts tab draws each graph over the picked range", async () => {
+    modes = [fitness()];
+    mount(<ModeWorkspacePage params={{ id: "fitness-coach" }} />);
+    fireEvent.click(await screen.findByTestId("workspace-tab-workouts"));
+    const graphs = await screen.findAllByTestId(/^graph-body-/);
+    expect(graphs.map((g) => g.textContent)).toEqual(["workouts:30d", "metric:30d", "metric:30d"]);
+    fireEvent.click(screen.getByRole("button", { name: "90 days" }));
+    expect(screen.getAllByTestId(/^graph-body-/)[0].textContent).toBe("workouts:90d");
+    expect(writes()).toEqual([]);
+  });
+
+  it("a reminder turned on is a recurring task; off takes two taps and deletes that task", async () => {
+    const coach = modeFromTemplate(MODE_TEMPLATES.find((t) => t.key === "life-coach")!, [], new Date());
+    modes = [coach];
+    mount(<ModeWorkspacePage params={{ id: "life-coach" }} />);
+    const r = coach.reminders[0];
+    fireEvent.click(await screen.findByTestId(`mode-reminder-on-${r.id}`));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0].body).toMatchObject({ title: r.title, tags: ["recur:weekly", `ai-mode:life-coach:${r.id}`] });
+    fireEvent.click(await screen.findByTestId(`mode-reminder-off-${r.id}`));
+    expect(writes()).toHaveLength(1);
+    fireEvent.click(screen.getByTestId(`mode-reminder-off-${r.id}`));
+    await waitFor(() => expect(writes().map((c) => c.method)).toEqual(["POST", "DELETE"]));
+  });
+
+  it("tabs and modes carry a drag handle that keeps its own drag (T1)", async () => {
+    modes = [fitness()];
+    mount(<ModesWorkspacePage />);
+    const handle = await screen.findByTestId("mode-drag-fitness-coach");
+    expect(handle.closest("[data-swipe-ignore]")).not.toBeNull();
+    expect((handle as HTMLElement).style.touchAction).toBe("none");
+  });
+});
+
+describe("the library", () => {
+  it("installing a published mode opens it for review; nothing is saved until Save", async () => {
+    const pub = { ...fitness(), id: "x", name: "Marathon Coach" };
+    library = [{ id: "11111111-1111-4111-8111-111111111111", name: "Marathon Coach", tagline: "", icon: "dumbbell", color: "orange", tabs: ["Progress", "Chat"], installs: 3, publishedAt: "2026-11-27", mine: false }];
+    answers["/api/workspace/modes/library/11111111-1111-4111-8111-111111111111/install"] = { mode: pub };
+    mount(<ModesWorkspacePage />);
+    fireEvent.click(await screen.findByTestId("workspace-tab-library"));
+    fireEvent.click(await screen.findByTestId("library-install-11111111-1111-4111-8111-111111111111"));
+    await screen.findByTestId("mode-review");
+    expect((screen.getByTestId("mode-name") as HTMLInputElement).value).toBe("Marathon Coach");
+    expect(writes()).toEqual([]);
+  });
+
+  it("reporting takes two taps", async () => {
+    library = [{ id: "11111111-1111-4111-8111-111111111111", name: "Odd", tagline: "", icon: "sparkles", color: "violet", tabs: ["Chat"], installs: 0, publishedAt: "2026-11-27", mine: false }];
+    mount(<ModesWorkspacePage />);
+    fireEvent.click(await screen.findByTestId("workspace-tab-library"));
+    const btn = await screen.findByTestId("library-report-11111111-1111-4111-8111-111111111111");
+    fireEvent.click(btn);
+    expect(writes()).toEqual([]);
+    fireEvent.click(btn);
+    await waitFor(() => expect(writes()).toEqual([{ method: "POST", url: "/api/workspace/modes/library/11111111-1111-4111-8111-111111111111/report", body: undefined }]));
   });
 });

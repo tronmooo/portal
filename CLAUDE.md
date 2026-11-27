@@ -1490,10 +1490,13 @@ mocked model), `tests/ai-modes.dom.test.tsx` (the builder and a mode, clicked),
 
 **AM1. A mode is a description, never code or data.** Name, icon and color
 from fixed sets, personality, instructions, what it may read (`MODE_SOURCES`),
-whether it remembers, suggested conversations, and its tabs — each one of
-FOUR approved kinds: `overview`, `widgets` (cards over the person's records:
-`ExecWidget`, drawn by `ExecWidgetBody` from the lists every screen reads —
-Rule 1), `insights` (an analysis on a tap) and `chat` (exactly one, last).
+whether it remembers, suggested conversations, reminders, check-ins, and its
+tabs — each one of SIX approved kinds: `overview`, `widgets` (cards over the
+person's records: `ExecWidget`, drawn by `ExecWidgetBody` from the lists every
+screen reads — Rule 1), `charts` (graphs: `WellnessWidget`s drawn by the
+Wellness widget system over the account holder's trackers — H1, H3, H10),
+`log` (a form that saves an entry to the mode's tracker), `insights` (an
+analysis on a tap) and `chat` (exactly one, last).
 Five tabs by default, at most `MAX_MODE_TABS`. Whatever made it — the model,
 a template, the fixed rules, an imported file, a PATCH — it passes
 `sanitizeAiMode`: an unknown part is DROPPED, never coerced. Add a new kind
@@ -1532,10 +1535,30 @@ opening any tab writes nothing (Rule 3); an analysis is asked for on a tap.
 Settings edits a DRAFT (Save / Undo; the X saves first and warns when it
 can't). A shared template (`exportModeTemplate`) carries the setup only — no
 id, dates, pin, conversation, memories, records or journal switch.
-*Not built (2026-11-27):* a marketplace or publishing modes to others;
-premium modes; graphs, forms or new trackers created by a mode (its cards are
-the Executive list cards); proactive reminders or automations run by a mode;
-reordering tabs by drag (arrows in Settings).
+**AM7. Graphs, logs, reminders and check-ins use what exists.** A graph over
+a tracker the person lacks is dropped unless the mode's own Log tab creates
+it (`groundModeGraphs`; the builder sees tracker names and number fields,
+never a reading — H8). A Log tab's tracker is created only on the person's
+tap, through `POST /api/trackers` (Rule 11 reuses one with the name). A
+reminder turned on IS a recurring task tagged `reminderTaskTag(mode, reminder)`;
+whether it is on is read from the task list (Rule 5); off takes two taps. A
+check-in is one of the mode's Analysis tabs run by the daily cron
+(`/api/cron/mode-checkins`, `runDueCheckins`; at most three per person a run,
+`checkinDue`): it writes only the mode's digest row (`ai_mode_digest:<id>`,
+refused by the generic preferences route) and one notification that opens
+the mode. Nothing a mode runs on its own writes a record the person owns.
+**AM8. The library shares a setup, never a person.** Publishing
+(`server/ai-mode-library.ts`, table `ai_mode_library`, service role only)
+sends `exportModeTemplate` of the STORED mode after the person has read what
+will be shared (instructions included) and tapped Publish. The author id is
+kept to let them unpublish and is never returned (`mine` only). Installing
+returns a proposal reviewed and saved like a generated one (journal off).
+Three reports from different people hide an entry. A missing table is "not
+available yet" (503), never an empty library.
+*Guard:* `tests/ai-mode-library.test.ts`.
+*Not built (2026-11-27):* premium (paid) modes; a mode that creates forms
+other than a tracker log, or a dashboard outside its own tabs; editing an
+installed mode's published original; moderation beyond reports.
 
 ## Artifact rules (one viewer, the whole artifact, sent anywhere)
 

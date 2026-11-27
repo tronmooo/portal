@@ -9,14 +9,14 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 | | Total | No test at all | Not exercised on the deployed app |
 |---|---:|---:|---:|
-| API write routes | 205 | 36 | 81 |
-| API read routes | 115 | 32 | 55 |
+| API write routes | 209 | 39 | 85 |
+| API read routes | 117 | 33 | 57 |
 | Chat tools that write | 111 | 0 | 0 |
 | Chat tools that read | 42 | 0 | 0 |
 
 Screens: 32 pages (51 routes). 5 are opened by no live browser check, 5 by none in a touch (phone) context.
 Write routes no screen calls: 48 (chat-only, script-only or dead).
-Test files read: 661. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 662. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -38,11 +38,11 @@ Test files read: 661. Test files no config runs: 2 (`tests/critical-flows.test.t
 | Wellness dashboard | 1 | 0 | 1 | 1 | 0 | 0 |
 | Executive dashboard & alerts | 3 | 0 | 1 | 10 | 9 | 0 |
 | Documents & artifacts | 20 | 5 | 7 | 7 | 12 | 0 |
-| Workspaces | 26 | 6 | 19 | 4 | 0 | 0 |
+| Workspaces | 30 | 9 | 23 | 6 | 0 | 0 |
 | Journal & notes | 9 | 0 | 3 | 4 | 9 | 0 |
 | Record details | 6 | 0 | 6 | 4 | 3 | 0 |
 | AI chat | 9 | 2 | 4 | 5 | 22 | 0 |
-| System (not a user workflow) | 8 | 5 | 8 | 9 | 0 | 0 |
+| System (not a user workflow) | 9 | 6 | 9 | 10 | 0 | 0 |
 
 ## Screens
 
@@ -145,7 +145,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/profiles/:id/photo` | yes | **0** | 1 |
 | `GET /api/profiles/:id/tree` | yes | **0** | 1 |
 | `POST /api/profiles/:id/unlink` | yes | 2 | 1 |
-| `GET /api/profiles/lite` | yes | 6 | 7 |
+| `GET /api/profiles/lite` | yes | 7 | 7 |
 | `GET /api/relationships/graph/:id` | yes | 1 | **0** |
 | `POST /api/relationships/move-liability` | **no** | **0** | **0** |
 
@@ -374,7 +374,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | API route | A screen calls it | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `GET /api/tasks` | yes | 26 | 15 |
+| `GET /api/tasks` | yes | 27 | 15 |
 | `POST /api/tasks` | yes | 7 | 15 |
 | `DELETE /api/tasks/:id` | yes | 4 | 18 |
 | `GET /api/tasks/:id` | yes | 5 | **0** |
@@ -471,12 +471,12 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `PATCH /api/tracker-entries/:entryId` | yes | 1 | 1 |
 | `POST /api/tracker-entries/:entryId/enrich` | **no** | **0** | **0** |
 | `POST /api/tracker-entries/:entryId/rescale` | yes | **0** | **0** |
-| `GET /api/trackers` | yes | 12 | 22 |
-| `POST /api/trackers` | yes | 2 | 12 |
+| `GET /api/trackers` | yes | 13 | 22 |
+| `POST /api/trackers` | yes | 3 | 12 |
 | `DELETE /api/trackers/:id` | yes | 1 | 13 |
 | `GET /api/trackers/:id` | yes | 1 | 3 |
 | `PATCH /api/trackers/:id` | yes | 1 | 2 |
-| `POST /api/trackers/:id/entries` | yes | 2 | 5 |
+| `POST /api/trackers/:id/entries` | yes | 3 | 5 |
 | `DELETE /api/trackers/:id/entries/:entryId` | yes | **0** | 4 |
 | `PATCH /api/trackers/:id/entries/:entryId` | yes | 2 | 1 |
 | `POST /api/trackers/migrate-to-self` | **no** | 2 | **0** |
@@ -601,10 +601,16 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/workspace/modes` | **no** | 2 | **0** |
 | `DELETE /api/workspace/modes/:id` | **no** | 1 | **0** |
 | `PATCH /api/workspace/modes/:id` | **no** | 2 | **0** |
+| `GET /api/workspace/modes/:id/digest` | yes | **0** | **0** |
 | `POST /api/workspace/modes/:id/duplicate` | **no** | 1 | **0** |
 | `POST /api/workspace/modes/chat` | yes | 1 | **0** |
 | `POST /api/workspace/modes/generate` | yes | 1 | **0** |
 | `POST /api/workspace/modes/insights` | yes | 1 | **0** |
+| `GET /api/workspace/modes/library` | yes | 1 | **0** |
+| `POST /api/workspace/modes/library` | yes | **0** | **0** |
+| `DELETE /api/workspace/modes/library/:id` | yes | **0** | **0** |
+| `POST /api/workspace/modes/library/:id/install` | yes | **0** | **0** |
+| `POST /api/workspace/modes/library/:id/report` | yes | 1 | **0** |
 | `POST /api/workspace/modes/order` | **no** | 1 | **0** |
 | `POST /api/workspace/modes/revise` | yes | 1 | **0** |
 | `POST /api/workspace/notes/assist` | yes | **0** | 1 |
@@ -687,7 +693,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `search` | read | 11 | 8 |
+| `search` | read | 12 | 8 |
 | `get_summary` | read | 2 | 1 |
 | `recall_memory` | read | 2 | 1 |
 | `save_memory` | write | 2 | 1 |
@@ -722,6 +728,8 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `GET /api/cron/fire-due-reminders` | **no** | 1 | **0** |
 | `GET /api/cron/liability-due-scan` | **no** | **0** | **0** |
 | `POST /api/cron/liability-due-scan` | **no** | **0** | **0** |
+| `GET /api/cron/mode-checkins` | **no** | **0** | **0** |
+| `POST /api/cron/mode-checkins` | **no** | **0** | **0** |
 | `GET /api/cron/snapshot-net-worth` | **no** | **0** | **0** |
 | `POST /api/cron/snapshot-net-worth` | **no** | **0** | **0** |
 | `GET /api/cron/weekly-review` | **no** | 1 | **0** |

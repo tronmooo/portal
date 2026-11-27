@@ -28,6 +28,8 @@
 // Pure and deterministic. Pinned by tests/ai-modes.test.ts.
 
 import { inferWidgetFromText, sanitizeWidget, newWidgetId, type ExecWidget } from "./exec-widgets";
+import { groundWellnessWidget, sanitizeWellnessWidget, type WellnessWidget } from "./wellness-widgets";
+import { isWellnessRange, type WellnessRange } from "./wellness-period";
 
 // ── The approved parts ───────────────────────────────────────────────────────
 
@@ -49,11 +51,13 @@ export const MODE_SOURCE_LABELS: Record<ModeSource, { label: string; detail: str
   journal: { label: "Journal", detail: "Your own journal entries. Off unless you turn it on here." },
 };
 
-export const MODE_TAB_KINDS = ["overview", "widgets", "insights", "chat"] as const;
+export const MODE_TAB_KINDS = ["overview", "widgets", "charts", "log", "insights", "chat"] as const;
 export type ModeTabKind = (typeof MODE_TAB_KINDS)[number];
 export const MODE_TAB_KIND_LABELS: Record<ModeTabKind, string> = {
   overview: "Overview — what it's for, suggested conversations, cards",
   widgets: "Cards — lists drawn from your records",
+  charts: "Graphs — your trackers and health readings over time",
+  log: "Log — a form that saves to a tracker",
   insights: "Analysis — the AI looks at your data when you tap",
   chat: "Chat — talk to this mode",
 };
@@ -86,6 +90,38 @@ export const DEFAULT_MODE_TABS = 5;
 export const MAX_TAB_WIDGETS = 6;
 export const MAX_MODE_PROMPTS = 6;
 export const MAX_INSTRUCTIONS = 2000;
+export const MAX_TAB_GRAPHS = 4;
+export const MAX_LOG_FIELDS = 6;
+export const MAX_MODE_REMINDERS = 4;
+export const MAX_MODE_CHECKINS = 2;
+
+/** A tracker a Log tab writes to. Created only when the person taps "Create" (Rule 11: one per name). */
+export interface ModeTrackerSpec {
+  name: string;
+  unit?: string;
+  fields: Array<{ key: string; label: string; type: "number" | "text"; unit?: string }>;
+}
+
+export const REMINDER_FREQS = ["daily", "weekly", "monthly"] as const;
+export type ReminderFreq = (typeof REMINDER_FREQS)[number];
+/**
+ * A reminder the mode offers. Turned on, it is a real recurring TASK (the
+ * app's reminders and notifications already handle those), tagged
+ * `reminderTaskTag(mode, reminder)`; whether it is on is read from the task
+ * list, never stored (Rule 5).
+ */
+export interface ModeReminder { id: string; title: string; freq: ReminderFreq; time?: string }
+
+/**
+ * A check-in the mode runs on its own: one of its Analysis tabs, asked on a
+ * schedule by the server's cron (server/ai-modes.ts `runModeCheckins`). The
+ * answer is kept in the mode's digest row and announced as a notification. It
+ * writes no record the person owns.
+ */
+export interface ModeCheckin { id: string; tabId: string; freq: "daily" | "weekly"; enabled: boolean }
+
+export const reminderTaskTag = (modeId: string, reminderId: string) => `ai-mode:${modeId}:${reminderId}`;
+export const modeDigestKey = (modeId: string) => `ai_mode_digest:${modeId}`;
 
 export interface ModeTab {
   id: string;
@@ -95,6 +131,12 @@ export interface ModeTab {
   widgets?: ExecWidget[];
   /** insights: what to look at when asked ("Compare sleep with workout performance"). */
   focus?: string;
+  /** charts: graphs over the person's trackers and readings (shared/wellness-widgets — one system). */
+  graphs?: WellnessWidget[];
+  /** charts: the time range shown. */
+  range?: WellnessRange;
+  /** log: the tracker its form writes to. */
+  tracker?: ModeTrackerSpec;
 }
 
 export interface AiMode {
@@ -114,6 +156,8 @@ export interface AiMode {
   tabs: ModeTab[];
   /** Suggested conversations. */
   prompts: string[];
+  reminders: ModeReminder[];
+  checkins: ModeCheckin[];
   /** Shown in the AI Modes row on the Chat page. */
   pinned: boolean;
   /** The template it started from, if any. */
@@ -127,8 +171,8 @@ export interface ModeProposal {
   mode: AiMode;
   /** The mode would use the journal; the person decides (WA2). */
   suggestJournal: boolean;
-  /** Who wrote it: the model, or the fixed rules (no model, or no usable answer). */
-  by: "ai" | "rules";
+  /** Who wrote it: the model, the fixed rules (no model, or no usable answer), or someone's published mode. */
+  by: "ai" | "rules" | "library";
 }
 
 // ── Cleaning ─────────────────────────────────────────────────────────────────
@@ -164,11 +208,72 @@ function sanitizeTab(raw: unknown, taken: Set<string>): ModeTab | null {
     }
     tab.widgets = widgets;
   }
+  if (kind === "charts") {
+    const graphs: WellnessWidget[] = [];
+    for (const g of Array.isArray(r.graphs) ? r.graphs : []) {
+      const clean = sanitizeWellnessWidget({ display: "line", ...(g as object) }, `g${graphs.length + 1}`);
+      if (!clean || graphs.some((x) => x.id === clean.id)) continue;
+      graphs.push(clean);
+      if (graphs.length >= MAX_TAB_GRAPHS) break;
+    }
+    tab.graphs = graphs;
+    tab.range = isWellnessRange(r.range) ? r.range : "30d";
+  }
+  if (kind === "log") {
+    const tracker = sanitizeTrackerSpec(r.tracker, title);
+    if (!tracker) return null;
+    tab.tracker = tracker;
+  }
   if (kind === "insights") {
     const focus = clip(r.focus, 300);
     tab.focus = focus || `Look at my records for ${title.toLowerCase()} and tell me what stands out.`;
   }
   return tab;
+}
+
+function sanitizeTrackerSpec(raw: unknown, fallbackName: string): ModeTrackerSpec | null {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const name = clip(r.name, 40) || clip(fallbackName, 40);
+  if (name.length < 2) return null;
+  const fields: ModeTrackerSpec["fields"] = [];
+  for (const f of Array.isArray(r.fields) ? r.fields : []) {
+    const label = clip((f as any)?.label ?? (f as any)?.key, 30);
+    const key = slug(clip((f as any)?.key, 30) || label, 30).replace(/-/g, "_");
+    if (!label || !key || fields.some((x) => x.key === key)) continue;
+    const unit = clip((f as any)?.unit, 12);
+    fields.push({ key, label, type: (f as any)?.type === "text" ? "text" : "number", ...(unit ? { unit } : {}) });
+    if (fields.length >= MAX_LOG_FIELDS) break;
+  }
+  if (fields.length === 0) fields.push({ key: "value", label: "Value", type: "number" });
+  const unit = clip(r.unit, 12);
+  return { name, ...(unit ? { unit } : {}), fields };
+}
+
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+function sanitizeReminders(raw: unknown): ModeReminder[] {
+  const out: ModeReminder[] = [];
+  for (const r of Array.isArray(raw) ? raw : []) {
+    const title = clip((r as any)?.title, 80);
+    if (title.length < 3) continue;
+    const freq = (REMINDER_FREQS as readonly string[]).includes((r as any)?.freq) ? (r as any).freq as ReminderFreq : "weekly";
+    let id = slug(clip((r as any)?.id, 30) || title, 30) || "reminder";
+    for (let n = 2; out.some((x) => x.id === id); n++) id = `${slug(title, 26) || "reminder"}-${n}`;
+    const time = typeof (r as any)?.time === "string" && TIME_RE.test((r as any).time) ? (r as any).time : undefined;
+    out.push({ id, title, freq, ...(time ? { time } : {}) });
+    if (out.length >= MAX_MODE_REMINDERS) break;
+  }
+  return out;
+}
+
+function sanitizeCheckins(raw: unknown, tabs: ModeTab[]): ModeCheckin[] {
+  const out: ModeCheckin[] = [];
+  for (const c of Array.isArray(raw) ? raw : []) {
+    const tab = tabs.find((t) => t.kind === "insights" && t.id === (c as any)?.tabId);
+    if (!tab || out.some((x) => x.tabId === tab.id)) continue;
+    out.push({ id: `checkin-${tab.id}`, tabId: tab.id, freq: (c as any)?.freq === "daily" ? "daily" : "weekly", enabled: (c as any)?.enabled !== false });
+    if (out.length >= MAX_MODE_CHECKINS) break;
+  }
+  return out;
 }
 
 /**
@@ -213,6 +318,8 @@ export function sanitizeAiMode(raw: unknown, opts: { id?: string; now?: Date; ke
     remember: r.remember !== false,
     tabs,
     prompts,
+    reminders: sanitizeReminders(r.reminders),
+    checkins: sanitizeCheckins(r.checkins, tabs),
     pinned: r.pinned === true,
     ...(template ? { template } : {}),
     createdAt: isIso(r.createdAt) ? r.createdAt : nowIso,
@@ -265,7 +372,7 @@ export function duplicateMode(modes: readonly AiMode[], id: string, now: Date): 
 }
 
 /** Fields a PATCH may change. `id`, `createdAt` never change. */
-export const MODE_PATCH_KEYS = ["name", "icon", "color", "tagline", "personality", "instructions", "access", "remember", "tabs", "prompts", "pinned"] as const;
+export const MODE_PATCH_KEYS = ["name", "icon", "color", "tagline", "personality", "instructions", "access", "remember", "tabs", "prompts", "reminders", "checkins", "pinned"] as const;
 
 export function applyModePatch(mode: AiMode, patch: unknown, now: Date): AiMode | null {
   if (!patch || typeof patch !== "object") return null;
@@ -301,15 +408,17 @@ export function importModeTemplate(raw: unknown, existing: readonly AiMode[], no
 
 type W = Omit<ExecWidget, "id">;
 const w = (title: string, source: ExecWidget["source"], extra: Partial<W> = {}): W => ({ title, source, icon: extra.icon ?? "star", limit: 4, ...extra } as W);
-const T = (title: string, kind: ModeTabKind, extra: { widgets?: W[]; focus?: string } = {}) => ({ title, kind, ...extra });
+const T = (title: string, kind: ModeTabKind, extra: { widgets?: W[]; focus?: string; graphs?: Array<Omit<WellnessWidget, "id">>; range?: WellnessRange; tracker?: ModeTrackerSpec } = {}) => ({ title, kind, ...extra });
 
 export interface ModeTemplate {
   key: string;
   /** Words that point at this template. */
   re: RegExp;
   suggestJournal?: boolean;
-  mode: Omit<AiMode, "id" | "pinned" | "createdAt" | "updatedAt" | "remember" | "template" | "tabs"> & {
-    tabs: Array<{ title: string; kind: ModeTabKind; widgets?: W[]; focus?: string }>;
+  mode: Omit<AiMode, "id" | "pinned" | "createdAt" | "updatedAt" | "remember" | "template" | "tabs" | "reminders" | "checkins"> & {
+    tabs: Array<{ title: string; kind: ModeTabKind; widgets?: W[]; focus?: string; graphs?: Array<Omit<WellnessWidget, "id">>; range?: WellnessRange; tracker?: ModeTrackerSpec }>;
+    reminders?: Array<Omit<ModeReminder, "id">>;
+    checkins?: Array<Omit<ModeCheckin, "id" | "enabled">>;
   };
 }
 
@@ -329,6 +438,8 @@ export const MODE_TEMPLATES: readonly ModeTemplate[] = [
         T("Chat", "chat"),
       ],
       prompts: ["Why do I keep repeating the same habits?", "Help me set one goal for this month", "What should I focus on this week?"],
+      reminders: [{ title: "Weekly reflection with my coach", freq: "weekly", time: "18:00" }],
+      checkins: [{ tabId: "patterns", freq: "weekly" }],
     },
   },
   {
@@ -363,6 +474,7 @@ export const MODE_TEMPLATES: readonly ModeTemplate[] = [
         T("Chat", "chat"),
       ],
       prompts: ["Where did most of my money go this month?", "Which bill could I cut?", "How long until I pay off my debts?"],
+      checkins: [{ tabId: "forecasts", freq: "weekly" }],
     },
   },
   {
@@ -374,12 +486,18 @@ export const MODE_TEMPLATES: readonly ModeTemplate[] = [
       access: ["profile", "health", "calendar", "goals"],
       tabs: [
         T("Progress", "insights", { focus: "How has my training changed over the last weeks — volume, consistency and the trend in my numbers?" }),
-        T("Workouts", "widgets", { widgets: [w("Workout trackers", "trackers", { icon: "dumbbell", match: "fitness", limit: 6 })] }),
+        T("Workouts", "charts", { range: "30d", graphs: [
+          { title: "Workouts", icon: "dumbbell", kind: "metric", source: { kind: "workouts" }, calc: "count", display: "bar" },
+          { title: "Steps", icon: "chart", kind: "metric", source: { kind: "metric", key: "steps" }, calc: "total", display: "bar" },
+          { title: "Sleep", icon: "heart", kind: "metric", source: { kind: "metric", key: "sleep_hours" }, calc: "average", display: "line" },
+        ] }),
         T("Recovery", "insights", { focus: "Compare my sleep and rest days with my workout performance. Only say what the days support." }),
         T("Plans", "insights", { focus: "Suggest a training plan for next week that fits my calendar and recent load." }),
         T("Chat", "chat"),
       ],
       prompts: ["Plan my workouts for next week", "Am I training too much?", "How is my progress this month?"],
+      reminders: [{ title: "Log today's workout", freq: "daily", time: "19:00" }],
+      checkins: [{ tabId: "progress", freq: "weekly" }],
     },
   },
   {
@@ -460,7 +578,7 @@ export const MODE_TEMPLATES: readonly ModeTemplate[] = [
       tabs: [
         T("Subjects", "widgets", { widgets: [w("Study notes", "notes", { icon: "note", limit: 6 })] }),
         T("Lessons", "insights", { focus: "From my notes, what have I covered and what should the next lesson be?" }),
-        T("Practice", "insights", { focus: "Write five practice questions on what my notes cover, with answers at the end." }),
+        T("Practice", "log", { tracker: { name: "Study sessions", unit: "min", fields: [{ key: "minutes", label: "Minutes", type: "number", unit: "min" }, { key: "subject", label: "Subject", type: "text" }] } }),
         T("Progress", "widgets", { widgets: [w("Learning goals", "goals", { icon: "target" }), w("Study tasks", "tasks", { icon: "check" })] }),
         T("Chat", "chat"),
       ],
@@ -516,6 +634,7 @@ export const MODE_TEMPLATES: readonly ModeTemplate[] = [
         T("Chat", "chat"),
       ],
       prompts: ["What should I do first today?", "Plan my week", "What have I been putting off?"],
+      reminders: [{ title: "Plan tomorrow", freq: "daily", time: "21:00" }],
     },
   },
 ];
@@ -643,9 +762,14 @@ export const MODE_SCHEMA_PROMPT =
   `  {"title":"…","kind":"overview","widgets":[CARD,…]}  (what it's for, suggested conversations, cards)\n` +
   `  {"title":"…","kind":"widgets","widgets":[CARD,…]}   (lists drawn from the user's records)\n` +
   `  {"title":"…","kind":"insights","focus":"the question the AI answers from the records when the user taps"}\n` +
+  `  {"title":"…","kind":"charts","range":"7d"|"30d"|"90d"|"1y","graphs":[GRAPH,…]}  (graphs over time, at most ${MAX_TAB_GRAPHS})\n` +
+  `  {"title":"…","kind":"log","tracker":{"name":"Tracker name","unit":"optional","fields":[{"key":"minutes","label":"Minutes","type":"number"|"text","unit":"optional"}]}}  (a form that saves an entry to that tracker)\n` +
+  `  GRAPH = {"title":"…","kind":"metric","source":{"kind":"metric","key":one of ["sleep_hours","steps","weight","heart_rate"]} or {"kind":"tracker","key":"<a tracker name>","field":"<number field>"} or {"kind":"workouts"} or {"kind":"mood"},"calc":"average"|"total"|"latest"|"count","display":"line"|"bar"}\n` +
   `  CARD = {"title":"…","source": one of ["profiles","trackers","expenses","bills","events","journal","notes","tasks","goals","habits"], "match":"optional word to filter by", ` +
   `"types":["vehicle"|"pet"|"property"|"person"|"account"|"investment"|… only for profiles], "days": optional number, "limit": 1–8}\n` +
   `"prompts": up to ${MAX_MODE_PROMPTS} suggested first messages, "suggestJournal": true only if reading the user's journal is central to the purpose.\n` +
+  `"reminders": up to ${MAX_MODE_REMINDERS} of {"title":"Log today's workout","freq":"daily"|"weekly"|"monthly","time":"HH:MM optional"} (offered, the user turns them on), ` +
+  `"checkins": up to ${MAX_MODE_CHECKINS} of {"tabId":"<the id of an insights tab, its title in lower-case-with-dashes>","freq":"daily"|"weekly"} (the AI runs that tab on a schedule).\n` +
   `Tab titles are one or two words. Nothing else: no code, no markup, no other keys.`;
 
 /** Pull the first JSON object out of a model answer. */
@@ -682,3 +806,65 @@ export function parseModeInsights(raw: string, sent: readonly ModeSource[]): Mod
 
 /** The memory row's app name for a mode (shared/ai-memory). */
 export const modeMemoryApp = (id: string) => `mode-${id}` as const;
+
+// ── Graphs are grounded in what the person tracks ────────────────────────────
+
+/**
+ * A graph over a tracker the person does not have, and that no Log tab of the
+ * mode will create, is dropped (H8: the AI only chooses from what is
+ * tracked). A graph over one they do have is written back with its real name.
+ * A Log tab's own tracker counts as existing: the graph fills in once
+ * entries are saved.
+ */
+export function groundModeGraphs(mode: AiMode, trackers: readonly any[]): AiMode {
+  const declared = mode.tabs.filter((t) => t.kind === "log" && t.tracker).map((t) => ({ name: t.tracker!.name, fields: t.tracker!.fields.map((f) => ({ name: f.key, type: f.type })), entries: [] }));
+  const known = [...trackers, ...declared];
+  const tabs = mode.tabs.map((t) => {
+    if (t.kind !== "charts" || !t.graphs) return t;
+    const graphs = t.graphs.map((g) => {
+      const usesDeclared = [g.source, g.other].some((r) => r?.kind === "tracker" && declared.some((d) => d.name.toLowerCase() === String(r.key || "").toLowerCase()));
+      return usesDeclared ? g : groundWellnessWidget(g, known);
+    }).filter((g): g is WellnessWidget => !!g);
+    return { ...t, graphs };
+  });
+  return { ...mode, tabs };
+}
+
+// ── Check-ins ────────────────────────────────────────────────────────────────
+
+export interface ModeDigestRun { at: string; items: ModeInsight[]; read: ModeSource[] }
+export interface ModeDigest { runs: Record<string, ModeDigestRun> }
+
+export function parseModeDigest(raw: unknown): ModeDigest {
+  let v: unknown = raw;
+  if (typeof raw === "string") { try { v = JSON.parse(raw); } catch { return { runs: {} }; } }
+  const runs: Record<string, ModeDigestRun> = {};
+  const src = (v && typeof v === "object" && (v as any).runs && typeof (v as any).runs === "object") ? (v as any).runs : {};
+  for (const [tabId, r] of Object.entries(src as Record<string, any>)) {
+    if (!r || !isIso(r.at) || !Array.isArray(r.items)) continue;
+    const read = (Array.isArray(r.read) ? r.read : []).filter(isModeSource) as ModeSource[];
+    const items = parseModeInsights(JSON.stringify({ items: r.items }), read) ?? [];
+    runs[tabId] = { at: r.at, items, read };
+  }
+  return { runs };
+}
+
+const HOUR = 3_600_000;
+/** Is a check-in due? Daily: 20 hours since the last run; weekly: six and a half days. Never run: due. */
+export function checkinDue(c: ModeCheckin, lastAt: string | null | undefined, now: Date): boolean {
+  if (!c.enabled) return false;
+  if (!lastAt || !Number.isFinite(Date.parse(lastAt))) return true;
+  const gap = now.getTime() - Date.parse(lastAt);
+  return gap >= (c.freq === "daily" ? 20 * HOUR : 156 * HOUR);
+}
+
+/** The recurring task a reminder becomes when the person turns it on. */
+export function reminderTask(mode: Pick<AiMode, "id" | "name">, r: ModeReminder, todayISO: string): { title: string; dueDate: string; dueTime?: string; tags: string[]; priority: "low" } {
+  return {
+    title: r.title,
+    dueDate: todayISO,
+    ...(r.time ? { dueTime: r.time } : {}),
+    tags: [`recur:${r.freq}`, reminderTaskTag(mode.id, r.id)],
+    priority: "low",
+  };
+}
