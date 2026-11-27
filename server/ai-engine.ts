@@ -191,7 +191,7 @@ import {
 import { pleasantryReply } from "@shared/chat-pleasantry";
 import { recordsAnOccurrence, whyNotReported } from "@shared/not-reported";
 import { toUserFacingError, stripInternalText } from "@shared/ai-message-kinds";
-import { checkClaims, shouldRetryUnbackedWriteClaim, UNBACKED_WRITE_RETRY_INSTRUCTION, honestFailureReply, groundedSummary, describeMismatch, stripStaleCapabilityClaims, type ExecutedOperation } from "@shared/ai-claim-check";
+import { checkClaims, shouldRetryUnbackedWriteClaim, isRetryBackTalk, UNBACKED_WRITE_RETRY_INSTRUCTION, honestFailureReply, groundedSummary, describeMismatch, stripStaleCapabilityClaims, type ExecutedOperation } from "@shared/ai-claim-check";
 import { recordChatFailure } from "./ai-failure-log";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { parseCaptureTarget, type CaptureKind } from "@shared/capture-target";
@@ -1086,6 +1086,13 @@ export function noteContextVersion(userId: string | undefined, stamp: string): v
   contextVersionStamp.set(userId, stamp);
 }
 
+/** This month's budgets as one context line. A failed read says so. */
+export function budgetsContextLine(budgets: any[] | null | undefined): string {
+  if (!Array.isArray(budgets)) return "Budgets this month: not loaded — call get_budget_summary before saying whether one exists";
+  if (budgets.length === 0) return "Budgets this month: none set (other months are not listed here — use the budget tools for them)";
+  return `Budgets this month (${budgets.length}): ${budgets.slice(0, 30).map((b: any) => `${b.category}: $${b.amount}`).join("; ")} (other months are not listed here)`;
+}
+
 // Per-user context cache — prevents cross-user data leakage (C-2 security fix)
 // Each userId gets its own cache entry with independent TTL.
 const contextCacheMap = new Map<string, ContextCache>();
@@ -1153,6 +1160,9 @@ async function getCachedContextData(userId?: string): Promise<any[]> {
     storage.getGoals(),
     storage.getJournalEntries(), // index 10
     storage.getIncomes().catch(() => [] as any[]), // index 11
+    // index 12: this month's budgets — null when the read failed (a failed
+    // read is "not loaded", never "no budgets"; Rule 7).
+    storage.getBudgets(getUserCurrentMonth((storage as any)._timezone || DEFAULT_TIMEZONE)).catch(() => null),
   ]);
   contextCacheMap.set(cacheKey, { data, timestamp: now, stamp });
   // Evict old entries to prevent memory leak
@@ -17645,7 +17655,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // (agent loop + bulk path), so post-write reads are never stale. A manual UI
   // edit followed by a chat message within the same 5s window on the same warm
   // instance can see a snapshot up to 5s old — an accepted, bounded tradeoff.
-  let [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals, journalEntries, incomes] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
+  let [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals, journalEntries, incomes, monthBudgets] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[] | null];
   incomes = incomes || [];
 
   // P4.5: honor the UI profile filter when the chat route passes it through.
@@ -17808,6 +17818,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       const owner = (i: any) => (i.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name).filter(Boolean).join(",");
       return `Incomes (${incomes.length}; recurring ≈ $${monthly.toFixed(2)}/month): ${rows.map((i: any) => `${i.source || i.description || "income"}: $${i.amount}${i.frequency && i.frequency !== "once" ? `/${i.frequency}` : " one-time"} (${String(i.date || "").slice(0, 10)}${owner(i) ? `, ${owner(i)}` : ""})`).join("; ")}`;
     })(),
+    // Budgets were never in the context, so the model judged "you have no
+    // education budget" from a list that could not have shown one and refused
+    // to delete a budget it had set a minute earlier (integrity run,
+    // 2026-11-27, about one delete in four).
+    budgetsContextLine(monthBudgets),
     // The bell, as the user sees it: the same computed list the notification
     // endpoint serves, already minus dismissed ids and muted categories. With
     // no such line the model answered "do I have any notifications?" from the
@@ -18401,6 +18416,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           messages.push({ role: "user", content: UNBACKED_WRITE_RETRY_INSTRUCTION });
           textReply = "";
           continue;
+        }
+        // The retry instruction is ours, not the person's. A model that
+        // answers IT ("I didn't claim the request was done… no tool call is
+        // needed… I can try `delete_budget`") is not answering them.
+        if (unbackedWriteRetried && toolUses.length === 0 && totalToolCalls === 0 && isRetryBackTalk(textReply)) {
+          logger.warn("ai", `[turn ${turnId.slice(0, 8)}] retry answered the system instruction instead of acting — replaced with the plain failure line`);
+          textReply = honestFailureReply([]);
         }
         break;
       }

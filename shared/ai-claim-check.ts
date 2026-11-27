@@ -328,6 +328,18 @@ export const UNBACKED_WRITE_RETRY_INSTRUCTION =
   "using the dates the user stated. Do not answer in prose until the tool calls have run.";
 
 /**
+ * A reply that argues with the retry instruction above, or talks about the
+ * machinery (tool names, "tool call"), instead of speaking to the person.
+ */
+export function isRetryBackTalk(reply: string): boolean {
+  const r = String(reply ?? "");
+  if (r.includes("[SYSTEM]")) return true;
+  if (/\btool calls?\b/i.test(r)) return true;
+  if (/\bI (?:didn'?t|did not|never) (?:claim|say)\b/i.test(r)) return true;
+  return /\b(?:delete|create|update|log|set|get)_[a-z]+(?:_[a-z]+)*\b/.test(r);
+}
+
+/**
  * The honest reply to send when a claim could not be grounded. Used instead of
  * rendering success — never alongside it.
  */

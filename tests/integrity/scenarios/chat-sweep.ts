@@ -11,8 +11,16 @@ async function say(ctx: Ctx, message: string, history: Array<{ role: "user" | "a
   if (!r.ok) throw new Error(`chat "${message.slice(0, 60)}": ${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
   const reply = String(r.data?.reply ?? "");
   ctx.step(`chat reply: ${reply.replace(/\s+/g, " ").slice(0, 220)}`);
+  // Chat may ask before it removes or changes something ("Shall I go ahead?").
+  // That is an answer, not a refusal: say yes ONCE, as a person would, and let
+  // the scenario hold the outcome to the same check as if it had not asked.
+  if (history.length === 0 && ASKS_TO_PROCEED.test(reply)) {
+    ctx.step("chat asked before acting; answered yes");
+    return say(ctx, "Yes, go ahead.", [{ role: "user", content: message }, { role: "assistant", content: reply }]);
+  }
   return reply;
 }
+const ASKS_TO_PROCEED = /(shall i|should i|do you want me to|want me to|would you like me to|can you confirm|please confirm|are you sure)[^?]{0,160}\?\s*$/i;
 /** Everything made since the scenario began, whatever the model called it. */
 function sweepAfter(ctx: Ctx): void {
   const since = new Date(Date.now() - 2000).toISOString();
