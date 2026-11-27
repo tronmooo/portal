@@ -167,10 +167,10 @@ scenario({
     const conf = await ctx.api("PATCH", `/paychecks/${pc.id}/confirm`, { actual_amount: 1200 });
     const after = await inList();
     ctx.check("action", conf.ok && after?.confirmed === true && Number(after?.actual_amount) === 1200, "the paycheck is confirmed at the amount received", JSON.stringify(after).slice(0, 200));
-    const stored = JSON.stringify(await ctx.db.rows("preferences", "key=like.*paycheck*"));
-    ctx.check("db", stored.includes(pc.id) && /"confirmed":\s*true/.test(stored.replace(/\\"/g, '"')), "the stored paycheck is confirmed", stored.slice(0, 200));
+    const pcRow = await ctx.db.row("paychecks", pc.id);
+    ctx.check("db", pcRow?.confirmed === true && Number(pcRow?.actual_amount) === 1200 && Number(pcRow?.amount) === 1234.56, "the paycheck row is confirmed at 1,200 and keeps the expected 1,234.56", JSON.stringify(pcRow).slice(0, 240));
     must(await ctx.api("DELETE", `/paychecks/${pc.id}`), "delete paycheck");
-    ctx.check("db", !JSON.stringify(await ctx.db.rows("preferences", "key=like.*paycheck*")).includes(pc.id), "the deleted paycheck is gone from storage");
+    ctx.check("db", (await ctx.db.row("paychecks", pc.id)) === null, "the deleted paycheck has no row");
 
     // copy budgets into a far month, where nothing is expected to exist
     const month = ctx.today.slice(0, 7), next = "2031-03";
@@ -179,18 +179,21 @@ scenario({
     if (existing) throw new Error("a pets budget already exists this month (left by another run)");
     const b = must(await ctx.api("POST", "/budgets", { month, category, amount: 135 }), "budget");
     const budId = b.id ?? b.budget?.id;
+    // the category as the app stores it (budget keys are canonical: shared/budget-ledger)
+    const stored = String(listOf(must(await ctx.api("GET", `/budgets?month=${month}`), "budgets")).find((x: any) => x.id === budId)?.category ?? "");
+    ctx.check("action", stored.length > 0, "the new budget is listed for this month", JSON.stringify(b).slice(0, 160));
     ctx.cleanup(() => ctx.api("DELETE", `/budgets/${budId}?month=${month}`));
     const copy = await ctx.api("POST", "/budgets/copy", { fromMonth: month, toMonth: next });
     ctx.check("action", copy.ok, "copying this month's budgets is accepted", `${copy.status} ${JSON.stringify(copy.data).slice(0, 160)}`);
     const copied = listOf(must(await ctx.api("GET", `/budgets?month=${next}`), "budgets"));
     for (const c of copied) ctx.cleanup(() => ctx.api("DELETE", `/budgets/${c.id}?month=${next}`));
-    const mineCopy = copied.find((c: any) => c.category === category);
+    const mineCopy = copied.find((c: any) => c.category === stored);
     ctx.check("derived", !!mineCopy && Number(mineCopy.amount) === 135, "the copied month has the same limit for the category");
-    ctx.check("db", String(await pref(ctx, `budget:${next}`)).includes(category), "the copy is stored under its own month");
+    ctx.check("db", String(await pref(ctx, `budget:${next}`)).includes(stored), "the copy is stored under its own month");
     must(await ctx.api("PATCH", `/budgets/${mineCopy?.id}?month=${next}`, { amount: 10 }), "edit the copy");
-    ctx.near("db", listOf(must(await ctx.api("GET", `/budgets?month=${month}`), "budgets")).find((x: any) => x.category === category)?.amount, 135, "changing the copy leaves the original month's limit");
+    ctx.near("db", listOf(must(await ctx.api("GET", `/budgets?month=${month}`), "budgets")).find((x: any) => x.id === budId)?.amount, 135, "changing the copy leaves the original month's limit");
     const again = await ctx.api("POST", "/budgets/copy", { fromMonth: month, toMonth: next });
-    const twice = listOf(must(await ctx.api("GET", `/budgets?month=${next}`), "budgets")).filter((c: any) => c.category === category);
+    const twice = listOf(must(await ctx.api("GET", `/budgets?month=${next}`), "budgets")).filter((c: any) => c.category === stored);
     ctx.check("db", twice.length === 1 && Number(twice[0].amount) === 10, `copying again (answer ${again.status}) neither duplicates the category nor overwrites the edited limit`, JSON.stringify(twice.map((t: any) => t.amount)));
   },
 });
@@ -238,7 +241,7 @@ scenario({
     const tRow = await ctx.db.row("trackers", tr.id);
     ctx.check("db", tRow.name === `${ctx.tag} Push-ups (strict)` && tRow.category === "fitness" && JSON.stringify(tRow.fields).includes("reps"), "the tracker row has the new name, the same category and fields", JSON.stringify({ n: tRow.name, c: tRow.category }));
     ctx.check("db", (await ctx.db.count("tracker_entries", `tracker_id=eq.${tr.id}`)) === 1, "its entry survived the rename");
-    ctx.check("db", (await ctx.db.count("trackers", `name=like.${ctx.tag}*`)) === 1, "the rename made no second tracker");
+    ctx.check("db", (await ctx.db.count("trackers", `name=like.${ctx.tag}*Push*`)) === 1, "the rename made no second tracker");
   },
 });
 

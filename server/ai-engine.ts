@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { memoryKeyFor } from "@shared/memory-key";
 import {
   DetailError, clearRecordDetail, defineAndSetRecordDetail, detailReport, divertDefinedDetails,
   getRecordDetailsPayload, inferDefinitionForRecord, loadDetailRecord, type DetailRecordRef,
@@ -2049,7 +2050,12 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
   const rememberMatch = lower.match(/^remember\s+(?:that\s+)?(.+)/);
   if (rememberMatch && !lower.includes("remind")) {
     const value = rememberMatch[1].trim();
-    const key = value.split(/\s+/).slice(0, 3).join("_").toLowerCase().replace(/[^a-z0-9_]/g, "");
+    // The key is WHAT the fact is about (shared/memory-key): saying the same
+    // subject again updates it, a different subject is its own memory. It used
+    // to be the first three words, so "my library card number is 20418" and
+    // "my library card PIN is 7731" shared `my_library_card` and the second
+    // silently replaced the first (found by the chat-variations check, 2026-11-27).
+    const key = memoryKeyFor(value);
     const memory = await storage.saveMemory({ key, value, category: "general" });
     actions.push({ type: "save_memory", category: "memory", data: { key, value } });
     results.push(memory);
