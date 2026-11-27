@@ -83,6 +83,8 @@ const _wsNotesImport = () => import("@/pages/workspace-notes");
 const _wsJournalImport = () => import("@/pages/workspace-journal");
 const _wsFillImport = () => import("@/pages/workspace-fill");
 const _wsWordImport = () => import("@/pages/workspace-word");
+const _wsModesImport = () => import("@/pages/workspace-modes");
+const _wsModeImport = () => import("@/pages/workspace-mode");
 const _insightsImport = () => import("@/pages/insights");
 const _shareViewImport = () => import("@/pages/share-view");
 const _detailsImport = () => import("@/pages/details");
@@ -111,6 +113,8 @@ const PrivacyPage      = lazyWithRetry(_privImport);
 const TermsPage        = lazyWithRetry(_termsImport);
 const EditorPage       = lazyWithRetry(_editImport);
 const NotesWorkspacePage = lazyWithRetry(_wsNotesImport);
+const ModesWorkspacePage = lazyWithRetry(_wsModesImport);
+const ModeWorkspacePage = lazyWithRetry(_wsModeImport);
 const JournalWorkspacePage = lazyWithRetry(_wsJournalImport);
 const FillWorkspacePage = lazyWithRetry(_wsFillImport);
 const WordWorkspacePage = lazyWithRetry(_wsWordImport);
@@ -680,6 +684,9 @@ function AppRouter() {
         <Route path="/workspace/journal" component={JournalWorkspacePage} />
         <Route path="/workspace/fill" component={FillWorkspacePage} />
         <Route path="/workspace/word" component={WordWorkspacePage} />
+        {/* Custom AI Modes: the list and builder, and each mode as its own app. */}
+        <Route path="/workspace/modes" component={ModesWorkspacePage} />
+        <Route path="/workspace/mode/:id" component={ModeWorkspacePage} />
         <Route path="/editor/new/:type" component={EditorPage} />
         <Route path="/editor/:id" component={EditorPage} />
         <Route path="/insights" component={InsightsPage} />

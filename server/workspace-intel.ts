@@ -43,7 +43,7 @@ const NOTES_BUDGET = 90_000;
 interface NotesBlock { block: string; refs: NoteRef[]; total: number; rows: any[] }
 
 /** The notebook, newest first, inside a budget. Older notes are sent shorter. */
-async function notesBlock(opts: { onlyId?: string | null } = {}): Promise<NotesBlock> {
+export async function notesBlock(opts: { onlyId?: string | null } = {}): Promise<NotesBlock> {
   let rows = (((await storage.getArtifacts()) || []) as any[])
     .filter((a) => a?.type === "note" && String(a.content || "").trim())
     .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
@@ -87,7 +87,7 @@ const JOURNAL_BUDGET = 110_000;
 interface JournalBlock { block: string; days: string[]; read: number; total: number }
 
 /** The writer's own entries, newest first. Recent ones whole, older ones shorter. */
-async function journalBlock(): Promise<JournalBlock> {
+export async function journalBlock(): Promise<JournalBlock> {
   const rows = await journalEntriesFor(storage as any, { limit: 600 });
   const raw = new Map((((await storage.getJournalEntries()) || []) as any[]).map((e) => [String(e.id), e]));
   const parts: string[] = [];
@@ -111,7 +111,7 @@ async function journalBlock(): Promise<JournalBlock> {
 
 const WELLNESS_DAYS = 120;
 /** Tracker readings by day (sleep, exercise, …): numbers only, the writer's own. */
-async function wellnessBlock(): Promise<string> {
+export async function wellnessBlock(): Promise<string> {
   const profiles = ((await storage.getProfiles()) || []) as any[];
   const selfId = profiles.find((p) => p.type === "self")?.id;
   const trackers = ((await storage.getTrackers(WELLNESS_DAYS)) || []) as any[];
@@ -140,7 +140,7 @@ async function wellnessBlock(): Promise<string> {
 }
 
 /** Tasks finished and events held, by day, for the last 90 days. */
-async function activityBlock(): Promise<string> {
+export async function activityBlock(): Promise<string> {
   const since = new Date(Date.now() - 90 * 86_400_000).toISOString().slice(0, 10);
   const now = today();
   const lines: Array<[string, string]> = [];
@@ -158,7 +158,7 @@ async function activityBlock(): Promise<string> {
 // ── Memory: the conversation so far, and what was learned ───────────────────
 
 type Turn = { role: "user" | "assistant"; content: string };
-interface Conversation { turns: Turn[]; question: string; memory: AiMemory | null }
+export interface Conversation { turns: Turn[]; question: string; memory: AiMemory | null }
 
 /**
  * The conversation to send. With remembering ON the history is the one the
@@ -166,7 +166,7 @@ interface Conversation { turns: Turn[]; question: string; memory: AiMemory | nul
  * message; OFF, it is what the client holds for this sitting, and nothing is
  * read from or written to the memory row.
  */
-async function conversation(app: MemoryApp, remember: boolean, messages: unknown): Promise<Conversation | null> {
+export async function conversation(app: MemoryApp, remember: boolean, messages: unknown): Promise<Conversation | null> {
   const client = cleanChatTurns(messages);
   if (!client) return null;
   const question = client[client.length - 1].content;
@@ -177,23 +177,23 @@ async function conversation(app: MemoryApp, remember: boolean, messages: unknown
 }
 
 /** What the AI remembers, as a prompt block (empty when there is nothing, or remembering is off). */
-function memoryBlock(memory: AiMemory | null): string {
+export function memoryBlock(memory: AiMemory | null): string {
   if (!memory || memory.memories.length === 0) return "";
   return `WHAT YOU REMEMBER FROM EARLIER CONVERSATIONS (things they told you; they can see and edit this list):\n${memory.memories.map((m) => `- ${m.text}`).join("\n")}`;
 }
 
-const REMEMBER_RULE =
+export const REMEMBER_RULE =
   `REMEMBERING: you keep a memory of this person between conversations, and it only grows when you write to it. Whenever THIS message tells you something lasting about their life that is not already in what you remember — a person and who they are to them, their work, something they are working on or struggling with, a step they said they would try, what helps them, what matters to them, how they like you to talk with them — or they ask you to remember something, you MUST end your reply with one last line: ${REMEMBER_MARK} followed by a JSON array of up to 3 short statements in the third person. ` +
   `Only what they said themselves: never your interpretation, never a diagnosis or a label, nothing that is already in what you remember, nothing that only matters today (a mood, what they ate). When the message holds nothing like that, write no ${REMEMBER_MARK} line. They never see that line, so do not mention it. If they ask you to forget something, tell them the list of what you remember is on this screen and they can remove anything from it.`;
 
 /** Keep the exchange and what was proposed. Never fails the answer it rides on. */
-async function keep(app: MemoryApp, convo: Conversation, answer: string, proposed: string[]): Promise<string[]> {
+export async function keep(app: MemoryApp, convo: Conversation, answer: string, proposed: string[]): Promise<string[]> {
   if (!convo.memory) return [];
   try { return (await rememberExchange(app, convo.question, answer, proposed, convo.memory.clearedAt ?? null)).added.map((m) => m.text); }
   catch (err) { console.warn(`[workspace-intel] could not save the ${app} conversation:`, (err as Error)?.message); return []; }
 }
 
-async function firstName(): Promise<string> {
+export async function firstName(): Promise<string> {
   const self = (((await storage.getProfiles()) || []) as any[]).find((p) => p.type === "self");
   return String(self?.name || "").trim().split(/\s+/)[0] || "";
 }
@@ -211,7 +211,7 @@ const RETRY_WITHIN_MS = 45_000;
  * Never more than twice, and never an invented result: two bad answers are
  * an error with a retry (WA4).
  */
-async function askParsed<T>(label: string, system: string, user: string, maxTokens: number, parse: (raw: string) => T | null): Promise<{ value: T } | { failed: "model" | "unusable" }> {
+export async function askParsed<T>(label: string, system: string, user: string, maxTokens: number, parse: (raw: string) => T | null): Promise<{ value: T } | { failed: "model" | "unusable" }> {
   let failed: "model" | "unusable" = "model";
   for (let attempt = 1; attempt <= 2; attempt++) {
     const started = Date.now();

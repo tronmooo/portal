@@ -1303,6 +1303,7 @@ export { clearChatCache } from "@/lib/chat-cache";
 import { WELCOME_MSG, getChatCache, setChatCache, saveChatHistory, clearChatCache } from "@/lib/chat-cache";
 import { ChatFollowUps } from "@/components/chat/ChatSuggestions";
 import { ChatHome } from "@/components/chat/ChatHome";
+import { useAiModes } from "@/lib/ai-modes-client";
 import { rollBillsForward } from "@shared/bills-timeline";
 import { buildChatSuggestions, buildFollowUps } from "@shared/chat-suggestions";
 import { isFieldReceipt, receiptCardSummary } from "@shared/field-receipt";
@@ -2542,6 +2543,7 @@ export default function ChatPage() {
   // `attachmentNote` is the note typed while an attachment is staged (the
   // composer is hidden then); it's seeded from the draft when files are staged.
   const composerRef = useRef<ChatComposerHandle>(null);
+  const aiModes = useAiModes();
   const [composerEmpty, setComposerEmpty] = useState(true);
   const [attachmentNote, setAttachmentNote] = useState("");
   // Extract-only: read the file for its data, then throw the image away. The
@@ -3809,6 +3811,31 @@ export default function ChatPage() {
     return messages.filter((msg) => msg.content.toLowerCase().includes(q));
   }, [messages, trimmedQuery]);
 
+  // One composer element: on the home it is drawn inside the scroll (under
+  // the AI Modes), in a conversation it is pinned under the transcript.
+  const showHome = messages.length <= 1 && !searchOpen;
+  const composer = (
+    <ChatComposer
+      ref={composerRef}
+      onSubmit={handleSend}
+      isPending={isPending}
+      searchOpen={searchOpen}
+      onToggleSearch={() => setSearchOpen((v) => !v)}
+      onAttach={() => fileInputRef.current?.click()}
+      onAttachPointerDown={preloadSmartFillDialog}
+      showReset={messages.length > 1}
+      onReset={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}
+      onEmptyChange={setComposerEmpty}
+      newDocButton={<NewDocSheetButton disabled={isPending} />}
+      onOpenWorkspace={(kind) => hashNavigate(WORKSPACES[kind].route)}
+      onOpenApp={hashNavigate}
+      hideModes={showHome}
+      inline={showHome}
+      modes={{ modes: aiModes.modes, failed: aiModes.failed, retry: () => void aiModes.retry() }}
+      onDropFiles={(files) => { void handleFileSelect({ target: { files } } as any); }}
+    />
+  );
+
   return (
     <div className="flex h-full overflow-x-hidden max-w-full" data-testid="page-chat">
       {/* Chat area */}
@@ -3859,8 +3886,9 @@ export default function ChatPage() {
           {/* Greeting + suggestions, INSIDE the scroll container. The chips
               used to render outside it, which is what sliced the welcome
               bubble mid-sentence. */}
-          {messages.length <= 1 && !searchOpen && (
+          {showHome && (
             <ChatHome
+              composer={!hasAttachments ? composer : null}
               suggestions={chatSuggestions}
               onPick={handleSuggestion}
               onSend={(text) => { handleSend(text); }}
@@ -4082,27 +4110,12 @@ export default function ChatPage() {
         </Suspense>
       )}
 
-      {/* Text input area (only shown when no attachment pending). The composer
-          owns its draft state — keystrokes no longer re-render this page. */}
-      {!hasAttachments && (
-        <ChatComposer
-          ref={composerRef}
-          onSubmit={handleSend}
-          isPending={isPending}
-          searchOpen={searchOpen}
-          onToggleSearch={() => setSearchOpen((v) => !v)}
-          onAttach={() => fileInputRef.current?.click()}
-          onAttachPointerDown={preloadSmartFillDialog}
-          showReset={messages.length > 1}
-          onReset={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}
-          onEmptyChange={setComposerEmpty}
-          newDocButton={<NewDocSheetButton disabled={isPending} />}
-          onOpenWorkspace={(kind) => hashNavigate(WORKSPACES[kind].route)}
-          onOpenApp={hashNavigate}
-          hideModes={messages.length <= 1 && !searchOpen}
-          onDropFiles={(files) => { void handleFileSelect({ target: { files } } as any); }}
-        />
-      )}
+      {/* Text input area (only shown when no attachment pending). On the home
+          it sits in the page's flow under the AI Modes, so it scrolls away
+          with the home; in a conversation it is pinned under the transcript
+          (owner, 2026-11-27: the box and the modes "always showing wherever
+          you scroll"). */}
+      {!hasAttachments && !showHome && composer}
       </div>
 
       {/* Artifact viewer — full screen with an X, the whole artifact, its own

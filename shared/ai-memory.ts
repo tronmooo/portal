@@ -19,9 +19,12 @@
 //
 // Pure. Pinned by tests/ai-memory.test.ts.
 
-export type MemoryApp = "journal" | "notes";
+// A custom AI Mode (shared/ai-modes.ts) remembers too, in its own row:
+// `mode-<id>`. One mode's memory never reaches another assistant.
+export type MemoryApp = "journal" | "notes" | `mode-${string}`;
 export const MEMORY_APPS: MemoryApp[] = ["journal", "notes"];
-export const isMemoryApp = (v: unknown): v is MemoryApp => MEMORY_APPS.includes(v as MemoryApp);
+export const isModeMemoryApp = (v: unknown): v is `mode-${string}` => typeof v === "string" && /^mode-[a-z0-9][a-z0-9-]{0,39}$/.test(v);
+export const isMemoryApp = (v: unknown): v is MemoryApp => MEMORY_APPS.includes(v as MemoryApp) || isModeMemoryApp(v);
 
 export const memoryKey = (app: MemoryApp) => `ai_memory:${app}`;
 export const AI_MEMORY_KEY_PREFIX = "ai_memory:";
