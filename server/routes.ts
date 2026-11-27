@@ -712,6 +712,8 @@ export async function bumpDataVersionNow(
  * regardless of what its own memo says.
  */
 export const DATA_VERSION_HEADER = "x-data-version";
+/** On every GET: the account's current version map, for cross-device freshness. */
+export const SERVER_DATA_VERSION_HEADER = "X-Server-Data-Version";
 
 export { MAX_VERSION_LOOKAHEAD };
 
@@ -1594,7 +1596,7 @@ export async function registerRoutes(
     // The client READS X-Data-Version off write responses to build its
     // read-your-writes token; without this it is invisible to cross-origin
     // callers (the Capacitor shell) and those writes silently lose the barrier.
-    res.setHeader("Access-Control-Expose-Headers", "X-Data-Version, X-Write-Manifest, X-Total-Count");
+    res.setHeader("Access-Control-Expose-Headers", "X-Data-Version, X-Server-Data-Version, X-Write-Manifest, X-Total-Count");
     res.setHeader("Access-Control-Allow-Credentials", "true");
     if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
@@ -1746,7 +1748,7 @@ export async function registerRoutes(
   // instance) so cacheUserKey() produces version-stamped keys. Fail open to
   // "no version" — same-instance busting still applies, and correctness is
   // restored on the next successful resolve.
-  app.use("/api", (req, _res, next) => {
+  app.use("/api", (req, res, next) => {
     if (req.method !== "GET") return next();
     const uid = (req as AuthenticatedRequest).userId;
     if (!uid) return next();
@@ -1756,9 +1758,22 @@ export async function registerRoutes(
     // cache entry even while the 2s memo is still stale.
     const token = decodeVersionMap(req.headers[DATA_VERSION_HEADER]);
     currentVersions(uid)
-      .then((own) => { (req as any).__dataVersions = mergeVersionMaps(own, token); next(); })
+      .then((own) => {
+        (req as any).__dataVersions = mergeVersionMaps(own, token);
+        // What the account is at now, as this instance knows it — so a tab can
+        // tell that ANOTHER device wrote (client: lib/server-versions.ts).
+        try { const enc = encodeVersionMap(own); if (enc) res.setHeader(SERVER_DATA_VERSION_HEADER, enc); } catch { /* headers sent */ }
+        next();
+      })
       .catch(() => next());
   });
+
+  // The cheapest authenticated GET there is: its answer is the header the
+  // middleware above just set. The app asks on navigation, on resume and twice
+  // a minute, so a write from another device is on screen within moments
+  // instead of after the three minutes a list is otherwise trusted for.
+  app.get("/api/data-version", (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.json({ ok: true }); });
+
 
   // Rate limit all write operations (POST/PATCH/DELETE) — 60 writes per minute per user
   app.use("/api", (req, res, next) => {

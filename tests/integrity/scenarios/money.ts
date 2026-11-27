@@ -111,7 +111,7 @@ scenario({
   id: "money.loan-payments",
   title: "Loan payments: interest once a month, principal off the balance, reversal restores everything",
   area: "Liabilities",
-  covers: ["liabilityPayment.create.api", "liabilityPayment.delete.api", "liability.edit.api", "liability.delete.api"],
+  covers: ["liabilityPayment.create.api", "liabilityPayment.complete.api", "liabilityPayment.delete.api", "liability.edit.api", "liability.delete.api"],
   requires: ["action", "db", "derived"],
   run: async (ctx) => {
     const balance = ctx.int(80, 200) * 100;
@@ -333,7 +333,7 @@ scenario({
   id: "money.autopay",
   title: "Auto Pay records nothing before the due day, and one payment on it",
   area: "Bills & Auto Pay",
-  covers: ["bill.autopay.api"],
+  covers: ["bill.autopay.api", "bill.edit.api"],
   requires: ["action", "db", "derived"],
   run: async (ctx) => {
     const runToday: string = must(await ctx.api("POST", "/autopay/run"), "autopay run").today;

@@ -369,7 +369,7 @@ export const MODEL: EntityModel[] = [
   },
   {
     key: "system", label: "System (cron, diagnostics, warm-up)", system: true,
-    stores: [], routes: [/^\/api\/(cron|warmup|version|diagnostics|client-errors|cleanup|admin)/], tools: [], derived: [], dependents: [], screens: [],
+    stores: [], routes: [/^\/api\/(cron|warmup|version|data-version|diagnostics|client-errors|cleanup|admin)/], tools: [], derived: [], dependents: [], screens: [],
   },
 ];
 

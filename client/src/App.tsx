@@ -461,6 +461,43 @@ function KeepAlive() {
   return null;
 }
 
+// Another device (or the Auto Pay cron) may have written. The answer to this
+// one tiny request carries the account's version map; lib/server-versions.ts
+// turns "a counter rose that I did not raise" into re-reading just that
+// domain. Asked on every in-app navigation (so a page opened from the menu is
+// current within a moment), when the tab is returned to, and twice a minute
+// while it is in view. A list is still trusted for three minutes when nothing
+// has changed — this only shortens the wait when something has.
+const VERSION_CHECK_MIN_GAP_MS = 3_000;
+const VERSION_CHECK_EVERY_MS = 30_000;
+function VersionWatch() {
+  const { user } = useAuth();
+  const lastAt = useRef(0);
+  const check = useCallback(() => {
+    if (!user || document.visibilityState === "hidden") return;
+    const now = Date.now();
+    if (now - lastAt.current < VERSION_CHECK_MIN_GAP_MS) return;
+    lastAt.current = now;
+    apiRequest("GET", "/api/data-version").catch(() => { /* best-effort: the next one asks again */ });
+  }, [user]);
+  useEffect(() => {
+    if (!user) return;
+    const id = setInterval(check, VERSION_CHECK_EVERY_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    // The app routes by the hash: every in-app navigation is a hashchange.
+    window.addEventListener("hashchange", check);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("hashchange", check);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [user, check]);
+  return null;
+}
+
 // Prefetch shared data immediately after login.
 //
 // PERF (2026-05-31): rewritten. Was firing 9 unfiltered, parallel useQuery
@@ -764,6 +801,7 @@ function App() {
             <PointerEventsGuard />
             <RouteTitle />
             <KeepAlive />
+            <VersionWatch />
             <DataPrefetch />
             <RoutePreloader />
             <SwipeNav />

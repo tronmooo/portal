@@ -114,7 +114,13 @@ async function main() {
       // ── Depreciation is stated; a typed salvage value overrides the AI's ──
       const dep = await page.locator(t("asset-depreciation")).innerText();
       check(/Depreciated since purchase|Gained since purchase/.test(dep), `the Value card states the change since purchase (${dep.split("\n")[0]})`);
-      check(!/Confidence/.test(await page.locator(t("asset-value-card")).innerText()), "the Value card shows no confidence figure");
+      // "Remove confidence" (owner, 2026-11-23) was about the VALUE ESTIMATE. The
+      // lifecycle section (2026-11-24) and the optimal disposal point
+      // (2026-11-26) were later asked to state their own confidence, inside the
+      // same card — so a card-wide search for the word had been red on
+      // production since. The estimate's own block still must not carry one
+      // (triaged 2026-11-27: assertion narrowed to what the owner asked for).
+      check(!/Confidence/i.test(dep) && (await page.locator(t("asset-value-confidence")).count()) === 0, "the value estimate shows no confidence figure");
       // ── Optimal disposal: a money line between Current value and Salvage value ──
       await page.locator(t("asset-optimal-disposal-value")).first().waitFor({ timeout: 20_000 }).catch(() => {});
       const lineOrder = await page.locator(t("asset-value-card")).evaluate((card) =>

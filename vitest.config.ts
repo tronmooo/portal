@@ -620,6 +620,7 @@ export default defineConfig({
       'tests/bootstrap-seed-no-stale-overwrite.test.ts',
       'tests/payment-idempotency-keys.test.ts',
       'tests/deleted-bill-keeps-history.test.ts',
+      'tests/server-versions.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

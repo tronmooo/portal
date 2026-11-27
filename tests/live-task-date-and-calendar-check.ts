@@ -140,13 +140,22 @@ async function main() {
     await row.click();
     const dialog = page.getByRole("dialog");
     await dialog.waitFor({ timeout: 15000 });
-    check(/Mark as done/.test(await dialog.innerText()), "Calendar: the open task offers Mark as done");
-    await dialog.getByRole("checkbox").click();
+    // The grid opens the redesigned detail sheet (GridDetailHost → CalendarItemDetail):
+    // its one primary action for an open task is "Mark complete". This check
+    // looked for the old dialog's "Mark as done" checkbox and had been red on
+    // production since the redesign (triaged 2026-11-27: outdated assertion).
+    const complete = dialog.locator(t("cal-action-complete"));
+    check((await complete.count()) === 1 && /Mark complete/.test(await complete.innerText().catch(() => "")), "Calendar: the open task offers Mark complete");
+    await complete.click();
     await page.getByText(new RegExp(`Pack tripod ${tag}.*completed`)).first().waitFor({ timeout: 20000 });
     // Past the refetch that follows the write: the state must HOLD, not flash.
     await page.waitForTimeout(4000);
+    // The sheet closes when its action lands; open the item again and read the
+    // LIVE row: completed, and no longer offering completion.
+    if (!(await dialog.isVisible().catch(() => false))) await page.locator(t(`agenda-item-task-${dated.data.id}`)).first().click();
+    await dialog.waitFor({ timeout: 15000 });
     const dialogText = await dialog.innerText();
-    check(/Completed/.test(dialogText) && !/Mark as done/.test(dialogText), "Calendar: the dialog reads Completed after the write and its refetch");
+    check(/Completed/i.test(dialogText) && (await dialog.locator(t("cal-action-complete")).count()) === 0, "Calendar: reopened, the item reads Completed and no longer offers Mark complete");
     check((await doneCount()) === doneBefore + 1, `Calendar: the day panel counts it (${doneBefore} → ${await doneCount()} completed)`);
     const after = await timelineItems(dated.data.id);
     check(after.length === 1 && after[0].completed === true, "the timeline says the task is completed");

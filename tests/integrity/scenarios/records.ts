@@ -287,7 +287,7 @@ scenario({
   id: "records.journal-notes",
   title: "Journal and notes: several entries a day, an edit never touches another entry, versions are kept",
   area: "Journal & notes",
-  covers: ["journal.create.api", "journal.edit.api", "journal.delete.api", "note.create.api", "note.edit.api", "note.delete.api", "note.restoreVersion.api"],
+  covers: ["journal.create.api", "journal.edit.api", "journal.delete.api", "note.create.api", "note.edit.api", "note.delete.api", "note.restoreVersion.api", "artifact.restore.api"],
   requires: ["action", "db", "derived"],
   run: async (ctx) => {
     const a = must(await ctx.api("POST", "/journal", { date: ctx.today, content: `${ctx.tag} Morning: slept well and felt rested.`, mood: "good" }), "entry a");
@@ -346,7 +346,7 @@ scenario({
   id: "records.artifact",
   title: "An artifact: checklist ticks are stored, a duplicate is independent, a share link works signed out and stops when turned off",
   area: "Documents & artifacts",
-  covers: ["artifact.create.api", "artifact.edit.api", "artifact.duplicate.api", "artifact.share.api", "artifact.unshare.api", "artifact.delete.api"],
+  covers: ["artifact.create.api", "artifact.edit.api", "artifact.complete.api", "artifact.duplicate.api", "artifact.share.api", "artifact.unshare.api", "artifact.delete.api"],
   requires: ["action", "db", "derived"],
   run: async (ctx) => {
     const art = must(await ctx.api("POST", "/artifacts", { type: "checklist", title: `${ctx.tag} packing`, items: [{ text: "Passport" }, { text: "Charger" }] }), "create");

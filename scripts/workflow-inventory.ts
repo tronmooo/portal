@@ -93,7 +93,7 @@ const SEGMENT_DOMAIN: Record<string, Domain> = {
   chat: "AI chat", ai: "AI chat", "ai-transform": "AI chat", memories: "AI chat", search: "AI chat",
   enrich: "AI chat",
   cron: "System (not a user workflow)", warmup: "System (not a user workflow)",
-  version: "System (not a user workflow)", diagnostics: "System (not a user workflow)",
+  version: "System (not a user workflow)", "data-version": "System (not a user workflow)", diagnostics: "System (not a user workflow)",
   "client-errors": "System (not a user workflow)", cleanup: "System (not a user workflow)",
   admin: "System (not a user workflow)",
 };

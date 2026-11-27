@@ -2,6 +2,7 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { decodeSessionUserId, selectHydratableEntries } from "./cache-isolation";
 import { bootstrapSeedEntries, projectBootstrapShell } from "./bootstrap-seed-keys";
 import { writeStarted, writeSettled } from "./write-clock";
+import { observeServerVersions, resetServerVersions, SERVER_VERSION_HEADER } from "./server-versions";
 import { getProfileFilterSnapshot } from "./profileFilter";
 import { ACTIVE_PROFILE_HEADER } from "@shared/active-scope";
 import { decodeVersionMap, encodeVersionMap, EPOCH_KEY } from "@shared/cache-domains";
@@ -69,6 +70,21 @@ export function noteDataVersion(version: unknown): void {
   }
 }
 
+/**
+ * A version map the server sent with a response. Domains that rose because of
+ * another device are read again (lib/server-versions.ts); and the map is noted,
+ * so this tab's next reads are keyed past any pre-write cache entry.
+ */
+export function noteServerVersions(raw: unknown, ownDomains?: readonly string[] | null): void {
+  if (raw === null || raw === undefined || raw === "") return;
+  let moved: string[] = [];
+  try { moved = observeServerVersions(raw, { ownDomains }); } catch { return; }
+  noteDataVersion(raw);
+  if (moved.length === 0) return;
+  syncLog("invalidate", "another device wrote", { domains: moved });
+  void import("./cache-bus").then(({ invalidateDomainsFromServer }) => invalidateDomainsFromServer(moved)).catch(() => undefined);
+}
+
 export function getKnownDataVersion(): number {
   return knownDataVersions[EPOCH_KEY] ?? 0;
 }
@@ -80,6 +96,7 @@ export function getKnownDataVersions(): Record<string, number> {
 /** Reset on sign-out / account switch — one user's version must not key another's reads. */
 export function clearDataVersion(): void {
   knownDataVersions = {};
+  resetServerVersions();
 }
 
 /* Did the most recent write come back with a server change manifest?
@@ -180,6 +197,7 @@ export async function apiRequest(
     //     change appears everywhere immediately instead of after a round trip.
     // Both are best-effort by construction: a response we do not recognise is
     // left completely alone.
+    if (method.toUpperCase() === "GET") noteServerVersions(res.headers?.get?.(SERVER_VERSION_HEADER));
     if (method.toUpperCase() !== "GET") {
       noteDataVersion(res.headers.get("X-Data-Version"));
       try {
@@ -190,6 +208,9 @@ export async function apiRequest(
         // touched (a payment moves the payment row and the liability balance)
         // and the domains to invalidate, so no call site has to declare them.
         const manifest = decodeWriteManifest(res.headers.get(WRITE_MANIFEST_HEADER));
+        // The write's own token is also a view of the account: a domain it did
+        // not write, or one that rose by more than this write, moved elsewhere.
+        noteServerVersions(res.headers.get("X-Data-Version"), Array.isArray((manifest as any)?.domains) ? (manifest as any).domains : []);
         const handled = applyWriteManifest(manifest);
         if (handled) {
           noteManifestApplied();
@@ -302,6 +323,7 @@ export const getQueryFn: <T>(options: {
 
     await throwIfResNotOk(res);
     noteDataVersion(res.headers.get("X-Data-Version"));
+    noteServerVersions(res.headers?.get?.(SERVER_VERSION_HEADER));
     const payload = await res.json();
     // A response that predates a delete — already in flight when the row was
     // removed, or served from a server cache that had not been busted yet —

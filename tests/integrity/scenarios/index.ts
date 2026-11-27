@@ -4,3 +4,5 @@ import "./hardening";
 import "./assets";
 import "./chat";
 import "./browser";
+import "./sweep";
+import "./chat-sweep";

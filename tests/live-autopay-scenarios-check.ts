@@ -92,7 +92,13 @@ async function main() {
     let notes = await notifications(tag);
     check(!notes.some((n) => n.title.includes("Scenario Tomorrow")), "no due-soon alert for the Auto Pay bill due tomorrow");
     check(notes.some((n) => n.title.includes("Scenario Manual Tomorrow")), "the manual bill due tomorrow still raises its due-soon alert");
-    check(notes.some((n) => /Overdue bill/.test(n.title) && n.title.includes("Scenario Late")), "the bill that was already overdue still shows as overdue (an exception)");
+    // A7 (owner, 2026-11-22, a day after this check was written): a RECURRING
+    // bill's elapsed due date is assumed paid everywhere — nothing reads
+    // overdue, and the bell raises nothing for it. This line used to expect
+    // the opposite and had been red on production since (triaged 2026-11-27:
+    // outdated assertion). A payment marked MISSED is the exception that shows,
+    // and is checked further down.
+    check(!notes.some((n) => /Overdue bill/.test(n.title) && n.title.includes("Scenario Late")), "a monthly bill whose date passed yesterday raises no overdue alert (an elapsed date is assumed paid)");
     await post(`/liabilities/${soon}/autopay`, { reminders: true });
     notes = await notifications(tag);
     check(notes.some((n) => n.title.includes("Scenario Tomorrow")), "\"Remind me anyway\" brings its due-soon alert back");

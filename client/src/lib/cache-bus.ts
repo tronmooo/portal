@@ -505,6 +505,22 @@ export function invalidateDomainsFromManifest(domains: Domain[]): Promise<void> 
   try { channel()?.postMessage({ domains }); } catch {}
   return invalidateDomainsInternal(domains, false);
 }
+/**
+ * Another DEVICE wrote these domains (lib/server-versions.ts): what is on
+ * screen is read again now, the rest when it is next opened. Not broadcast —
+ * every tab learns the same thing from its own next response. "*" means the
+ * account moved and no domain was named.
+ */
+export function invalidateDomainsFromServer(domains: readonly string[]): Promise<void> {
+  if (domains.includes("*")) {
+    return Promise.resolve(queryClient.invalidateQueries({
+      predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/"),
+      refetchType: "active",
+    })).then(() => undefined);
+  }
+  const known = domains.filter((d): d is Domain => Object.prototype.hasOwnProperty.call(DOMAIN_KEYS, d));
+  return invalidateDomainsInternal(known, false);
+}
 /** Test hook: forget recent manifest invalidations. */
 export function __resetManifestCoverage(): void { manifestInvalidatedAt.clear(); }
 

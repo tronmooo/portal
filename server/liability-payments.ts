@@ -872,9 +872,12 @@ export async function claimPaymentKey(storage: IStorage, liabilityId: string, ke
   const next = (fields: Record<string, any> | null | undefined): Record<string, any> | null => {
     const held = fields && typeof fields[PAYMENT_KEYS_FIELD] === "object" && fields[PAYMENT_KEYS_FIELD] ? fields[PAYMENT_KEYS_FIELD] as Record<string, any> : {};
     if (held[key]?.id && !force) return null;
-    const merged = { ...held, [key]: { id: paymentId, at: new Date().toISOString() } };
-    const kept = Object.entries(merged).sort((a: any, b: any) => String(b[1]?.at).localeCompare(String(a[1]?.at))).slice(0, PAYMENT_KEYS_KEPT);
-    return Object.fromEntries(kept);
+    // The key just claimed is always kept; the rest newest first (two claims
+    // can share a millisecond, so the new one is never left to the sort).
+    const others = Object.entries(held).filter(([k]) => k !== key)
+      .sort((a: any, b: any) => String(b[1]?.at).localeCompare(String(a[1]?.at)));
+    const kept: Array<[string, any]> = [[key, { id: paymentId, at: new Date().toISOString() }], ...others];
+    return Object.fromEntries(kept.slice(0, PAYMENT_KEYS_KEPT));
   };
   const read = (p: any) => (p?.fields?.[PAYMENT_KEYS_FIELD]?.[key]?.id as string | undefined) ?? null;
   const mutate = (storage as any).mutateProfileFields as ((id: string, fn: (fresh: any) => any) => Promise<any>) | undefined;
