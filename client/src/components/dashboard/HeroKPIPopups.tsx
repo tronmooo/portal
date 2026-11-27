@@ -7,6 +7,7 @@
  *
  * Filter-aware. All endpoints already exist on the server.
  */
+import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { useMemo, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { isInScope as scopeIsInScope, selfIdsFrom, withAncestorOwnerIds } from "@shared/scope";
@@ -836,6 +837,7 @@ export function BudgetPopup({
     },
   });
 
+  const budgetDeleteArm = useConfirmArm();
   const deleteMut = useMutation<any, Error, string, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: async (id: string) => apiRequest("DELETE", `/api/budgets/${id}`),
     onMutate: async (id) => {
@@ -960,12 +962,16 @@ export function BudgetPopup({
                         </button>
                         <button
                           type="button"
-                          onClick={() => deleteMut.mutate(b.id)}
-                          className="p-1 rounded hover:bg-muted text-muted-foreground"
-                          aria-label="Delete"
+                          // Rule 8: a destructive button takes two taps. This
+                          // one deleted the budget on the first (integrity
+                          // run, 2026-11-27).
+                          onClick={() => budgetDeleteArm.confirm(`budget-del-${b.id}`, () => deleteMut.mutate(b.id))}
+                          className={`p-1 rounded hover:bg-muted ${budgetDeleteArm.isArmed(`budget-del-${b.id}`) ? "text-destructive text-xs font-medium px-1.5" : "text-muted-foreground"}`}
+                          aria-label={budgetDeleteArm.isArmed(`budget-del-${b.id}`) ? "Tap again to delete" : "Delete"}
+                          title={budgetDeleteArm.isArmed(`budget-del-${b.id}`) ? "Tap again to delete" : "Delete"}
                           data-testid={`budget-delete-${b.id}`}
                         >
-                          <Trash2 className="h-3 w-3" />
+                          {budgetDeleteArm.isArmed(`budget-del-${b.id}`) ? "Tap again" : <Trash2 className="h-3 w-3" />}
                         </button>
                       </>
                     )}

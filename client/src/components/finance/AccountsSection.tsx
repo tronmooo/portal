@@ -11,7 +11,7 @@
 // way — the summary comes from `summarizeAccounts` and each row from
 // `toAccountView`, the same helpers the server and the chat tools use.
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
@@ -106,6 +106,7 @@ export function AddAccountDialog({ open, onOpenChange, profiles, onCreated }: {
     [profiles],
   );
 
+  const addingRef = useRef(false);
   const createMut = useMutation({
     mutationFn: async (f: AccountForm) => (await apiRequest("POST", "/api/accounts", {
       name: f.name.trim(),
@@ -136,7 +137,10 @@ export function AddAccountDialog({ open, onOpenChange, profiles, onCreated }: {
         <Button
           className="w-full"
           disabled={!form.name.trim() || createMut.isPending}
-          onClick={() => createMut.mutate(form)}
+          // Two presses can land before the button re-renders as disabled:
+          // the second used to add the account a second time (integrity run,
+          // 2026-11-27 — two identical accounts from one double press).
+          onClick={() => { if (addingRef.current) return; addingRef.current = true; createMut.mutate(form, { onSettled: () => { addingRef.current = false; } }); }}
           data-testid="btn-save-account"
         >
           {createMut.isPending ? "Adding…" : "Add account"}

@@ -25,10 +25,10 @@ describe("a goal asked for again", () => {
 
   it("the question says nothing was saved and names both figures", () => {
     const q = goalConflictQuestion(existing, { target: 5000, deadline: "2027-06-30" });
-    expect(q).toContain("NOTHING WAS SAVED");
+    expect(q).toContain("Nothing was changed");
     expect(q).toContain("$3,000");
     expect(q).toContain("$5,000");
-    expect(q).toContain("update_goal");
+    expect(q.trim().endsWith("?")).toBe(true);
   });
 
   it("the chat tool asks on a difference and reports a duplicate honestly", () => {

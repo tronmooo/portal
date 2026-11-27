@@ -37,7 +37,8 @@ export function goalConflictQuestion(existing: GoalLike & { unit?: string | null
   const fmt = (v: unknown) => { const n = num(v); return n === null ? "no target" : `${unit}${n.toLocaleString("en-US")}`; };
   const was = `${fmt(existing.target)}${day(existing.deadline) ? ` by ${day(existing.deadline)}` : ""}`;
   const now = `${fmt(requested.target ?? existing.target)}${day(requested.deadline) ? ` by ${day(requested.deadline)}` : ""}`;
-  return `NOTHING WAS SAVED. A goal named "${existing.title}" already exists (${was}) and this request asks for ${now}. ` +
-    `Do not say the goal was set or created. Ask the user which they want: change the existing goal to ${now} (then call update_goal), ` +
-    `or keep it and add a second goal (then call create_goal with a different title).`;
+  // Worded for the PERSON: the chat shows a tool's question as it stands (a
+  // directive to the model here was replaced by "I couldn't complete that").
+  return `You already have a "${existing.title}" goal of ${was}. Nothing was changed. ` +
+    `Should I change it to ${now}, or keep it and add a second goal?`;
 }

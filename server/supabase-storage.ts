@@ -747,6 +747,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** writeProfilePatch's answer when the row moved between the read and the guarded write. */
 const PROFILE_WRITE_COLLIDED: unique symbol = Symbol("profile-write-collided");
 
+/** What one stored schedule row pays: `total_payment`, else the older column names. */
+export function scheduledPaymentAmount(row: Record<string, any> | null | undefined): number {
+  const n = Number(row?.total_payment ?? row?.payment ?? row?.amount ?? row?.payment_amount ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export class SupabaseStorage implements IStorage {
   private supabase: SupabaseClient;
   private userId: string;
@@ -2469,6 +2475,13 @@ export class SupabaseStorage implements IStorage {
     // the user's own notes ownerless (visible under nobody's scope). The
     // capture route defaults an owner to the Self; a deleted owner does too.
     await this.rehomeCapturesToSelf(id);
+    // A loan's stored payment schedule goes with the loan: nothing else
+    // deletes those rows, and the Calendar kept listing a deleted loan's
+    // payments, owner-less (integrity run, 2026-11-27).
+    {
+      const { error: schedErr } = await this.supabase.from("loan_amortization").delete().eq("user_id", this.userId).eq("loan_id", id);
+      if (schedErr && !/does not exist|schema cache/i.test(String(schedErr.message || ""))) throw schedErr;
+    }
     const { data: rpcCounts, error: rpcError } = await this.supabase.rpc("delete_profile_cascade", {
       p_user_id: this.userId,
       p_profile_id: id,
@@ -5126,7 +5139,9 @@ export class SupabaseStorage implements IStorage {
           if (d < startDate || d > endDate) continue;
           const linked = (row.loan_id && loanProfileMap.get(row.loan_id)) || [];
           if (!matchesProfile(linked)) continue;
-          const amt = Number(row.payment || row.amount || row.payment_amount || 0);
+          // The column is `total_payment` (what POST /api/loans/schedule stores);
+          // reading only the older names showed every scheduled payment as $0.00.
+          const amt = scheduledPaymentAmount(row);
           const name = row.loan_name || 'Loan payment';
           items.push({
             id: `loan-${row.id || row.loan_id}-${d}`,
@@ -9290,7 +9305,26 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createLoanSchedule(entries: Array<{ loan_id: string; loan_name: string; payment_number: number; payment_date: string; principal_amount: number; interest_amount: number; total_payment: number; remaining_balance: number }>): Promise<any[]> {
-    const withUser = entries.map(e => ({ ...e, user_id: this.userId }));
+    // A schedule posted again REPLACES the unpaid rows it names: posting the
+    // same schedule twice used to store every payment twice (two rows per
+    // payment number, both on the Calendar). A row already marked paid is
+    // history and is kept; its number is not inserted a second time.
+    const byLoan = new Map<string, number[]>();
+    for (const e of entries) byLoan.set(e.loan_id, [...(byLoan.get(e.loan_id) || []), e.payment_number]);
+    const paidKeys = new Set<string>();
+    for (const [loanId, numbers] of byLoan) {
+      const { data: existing, error: readErr } = await this.supabase.from('loan_amortization').select('id, payment_number, paid')
+        .eq('user_id', this.userId).eq('loan_id', loanId).in('payment_number', numbers);
+      if (readErr) throw readErr;
+      for (const r of existing || []) if (r.paid) paidKeys.add(`${loanId}|${r.payment_number}`);
+      const stale = (existing || []).filter((r: any) => !r.paid).map((r: any) => r.id);
+      if (stale.length) {
+        const { error: delErr } = await this.supabase.from('loan_amortization').delete().eq('user_id', this.userId).in('id', stale);
+        if (delErr) throw delErr;
+      }
+    }
+    const withUser = entries.filter(e => !paidKeys.has(`${e.loan_id}|${e.payment_number}`)).map(e => ({ ...e, user_id: this.userId }));
+    if (withUser.length === 0) return [];
     const { data, error } = await this.supabase.from('loan_amortization').insert(withUser).select();
     if (error) throw error;
     return data || [];
@@ -9355,7 +9389,9 @@ export class SupabaseStorage implements IStorage {
           if (due < monthStart || due >= nextMonth) continue;
           // Week of month: 1-indexed, capped at 5
           const week = Math.min(5, Math.floor((due.getDate() - 1) / 7) + 1);
-          const amt = Number(row.payment || row.amount || row.payment_amount || 0);
+          // The column is `total_payment` (what POST /api/loans/schedule stores);
+          // reading only the older names showed every scheduled payment as $0.00.
+          const amt = scheduledPaymentAmount(row);
           if (!isFinite(amt) || amt === 0) continue;
           weekTotals.set(week, (weekTotals.get(week) || 0) + amt);
         }

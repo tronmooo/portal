@@ -7988,6 +7988,9 @@ Rules:
     for (const loanId of new Set(parsed.data.map((e) => e.loan_id))) {
       const loan = await storage.getProfile(loanId);
       if (!loan) return res.status(404).json({ error: "Loan not found" });
+      // A payment schedule belongs to a debt: the route used to store one for
+      // any profile that existed, the account holder's own included.
+      if (!isLiabilityLikeProfile(loan)) return res.status(400).json({ error: "A payment schedule can only be stored for a loan or other debt" });
     }
     const created = await storage.createLoanSchedule(parsed.data);
     const uid_ln1 = cacheUserKey(req as AuthenticatedRequest);
