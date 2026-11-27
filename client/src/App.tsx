@@ -473,13 +473,23 @@ const VERSION_CHECK_EVERY_MS = 30_000;
 function VersionWatch() {
   const { user } = useAuth();
   const lastAt = useRef(0);
+  const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ask = useCallback(() => {
+    lastAt.current = Date.now();
+    apiRequest("GET", "/api/data-version").catch(() => { /* best-effort: the next one asks again */ });
+  }, []);
+  // A navigation inside the gap is not dropped: it is asked as soon as the gap
+  // is over (two taps in a row used to leave the second screen unchecked until
+  // the half-minute timer — integrity run, 2026-11-27). And the server's own
+  // view of the versions is a couple of seconds old at worst, so each
+  // navigation is followed by one more look a moment later.
   const check = useCallback(() => {
     if (!user || document.visibilityState === "hidden") return;
-    const now = Date.now();
-    if (now - lastAt.current < VERSION_CHECK_MIN_GAP_MS) return;
-    lastAt.current = now;
-    apiRequest("GET", "/api/data-version").catch(() => { /* best-effort: the next one asks again */ });
-  }, [user]);
+    const wait = VERSION_CHECK_MIN_GAP_MS - (Date.now() - lastAt.current);
+    if (pending.current) { clearTimeout(pending.current); pending.current = null; }
+    if (wait <= 0) { ask(); pending.current = setTimeout(() => { pending.current = null; ask(); }, VERSION_CHECK_MIN_GAP_MS); }
+    else pending.current = setTimeout(() => { pending.current = null; ask(); }, wait);
+  }, [user, ask]);
   useEffect(() => {
     if (!user) return;
     const id = setInterval(check, VERSION_CHECK_EVERY_MS);
@@ -490,6 +500,7 @@ function VersionWatch() {
     window.addEventListener("focus", onVisible);
     return () => {
       clearInterval(id);
+      if (pending.current) { clearTimeout(pending.current); pending.current = null; }
       window.removeEventListener("hashchange", check);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);

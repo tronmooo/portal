@@ -297,3 +297,128 @@ scenario({
     void listOf;
   },
 });
+
+scenario({
+  id: "browser.loan-payment-dialog",
+  title: "The payment dialog (mouse and touch): a double press is one payment, a second payment is a second, and the header follows",
+  area: "Browser",
+  browser: true,
+  covers: ["liabilityPayment.complete.ui", "liabilityPayment.create.ui"],
+  requires: ["action", "db", "derived", "screen"],
+  run: async (ctx) => {
+    for (const s of surfaces(ctx)) {
+      const L = (x: string) => `[${s.surface}] ${x}`;
+      const loan = must(await ctx.api("POST", "/profiles", { type: "liability", type_key: "personal_loan", name: `${ctx.tag} ${s.surface} Dialog Loan`, fields: { balance: 6000, monthlyPayment: 250, dueDay: 7, interestRate: 0, _interestRateUnit: "percent" } }), "loan");
+      ctx.cleanup(() => ctx.api("DELETE", `/profiles/${loan.id}?deleteHistory=1`));
+      const rows = () => ctx.db.rows("liability_payments", `liability_profile_id=eq.${loan.id}`);
+      const payOnce = async (amount: string, double: boolean) => {
+        await s.press(t("tab-payments"));
+        await s.press(t("action-custom"));
+        await s.page.locator(t("payment-dialog")).waitFor({ timeout: 10000 });
+        await s.page.fill(t("payment-amount-input"), amount);
+        const submit = s.page.locator(t("payment-submit")).locator("visible=true").first();
+        if (double && s.surface === "desktop") await submit.dblclick().catch(() => undefined);
+        else { await submit.tap?.().catch(() => submit.click()); if (double) await submit.tap({ timeout: 300 }).catch(() => undefined); }
+        await s.page.locator(t("payment-dialog")).waitFor({ state: "hidden", timeout: 15000 }).catch(() => undefined);
+      };
+      ctx.step(L(`open the loan, Payments tab, "Custom payment", type 125, press Record twice quickly`));
+      await goto(s, `/profiles/${loan.id}`, "");
+      await s.page.getByText("$6,000").first().waitFor({ timeout: 20000 }).catch(() => undefined);
+      await payOnce("125", true);
+      await sleep(2500);
+      let got = await rows();
+      const one = ctx.check("db", got.length === 1 && Number(got[0]?.amount) === 125, L("a double press of Record is ONE payment of 125"), `${got.length} rows ${JSON.stringify(got.map((r: any) => r.amount))}`);
+      if (!one && got.length > 1) ctx.finding({ severity: "bug", title: "A double press on the payment dialog records two payments", detail: `${got.length} ledger rows on ${s.surface}` });
+      ctx.check("action", got.length >= 1, L("the dialog recorded a payment"));
+      ctx.near("derived", (await ctx.db.row("profiles", loan.id)).fields.balance, 6000 - 125 * Math.max(1, got.length), L("the stored balance fell by what was recorded"));
+      const header1 = await s.page.getByText("$5,875").first().waitFor({ timeout: 12000 }).then(() => true).catch(() => false);
+      ctx.check("screen", header1, L("the page shows the new balance, $5,875, without a reload"));
+
+      // the SAME amount again, deliberately: a second payment (a new key)
+      ctx.step(L("record 125 again, once"));
+      await payOnce("125", false);
+      await sleep(2500);
+      got = await rows();
+      const two = ctx.check("db", got.length === 2, L("the same amount recorded again on purpose is a second payment"), `${got.length} rows`);
+      if (!two) ctx.finding({ severity: "bug", title: "A second identical payment made on purpose is folded into the first", detail: `${got.length} ledger row(s) after two separate submissions on ${s.surface}` });
+      ctx.near("db", (await ctx.db.row("profiles", loan.id)).fields.balance, 6000 - 125 * got.length, L("and the balance fell again"));
+      const over = await s.overflow();
+      ctx.check("screen", over === "", L("nothing is wider than the screen"), over);
+      const problems = s.problems();
+      ctx.check("screen", problems.length === 0, L("no script error and no 5xx"), problems.join("; "));
+    }
+  },
+});
+
+scenario({
+  id: "browser.habit-and-journal",
+  title: "Habits and the journal by hand (mouse and touch): made, checked, written and deleted — each stored once",
+  area: "Browser",
+  browser: true,
+  covers: ["habit.create.ui", "habit.complete.ui", "journal.create.ui", "journal.delete.ui"],
+  requires: ["action", "db", "screen"],
+  run: async (ctx) => {
+    for (const s of surfaces(ctx)) {
+      const L = (x: string) => `[${s.surface}] ${x}`;
+      // a habit
+      const name = `${ctx.tag} ${s.surface} stretch`;
+      await goto(s, "/habits", "");
+      await s.press(t("button-create-habit"));
+      await s.page.fill(t("input-habit-name"), name);
+      const save = s.page.locator(t("button-save-habit")).locator("visible=true").first();
+      await (s.surface === "phone" ? save.tap() : save.dblclick()).catch(() => undefined);
+      const made = await waitRows(ctx, "habits", `name=eq.${encodeURIComponent(name)}&deleted_at=is.null`, (n) => n >= 1);
+      await sleep(1500);
+      const settled = await ctx.db.rows("habits", `name=eq.${encodeURIComponent(name)}&deleted_at=is.null`);
+      for (const h of settled) ctx.cleanup(() => ctx.api("DELETE", `/habits/${h.id}`));
+      ctx.check("action", made.length >= 1, L("the form saved a habit"));
+      const one = ctx.check("db", settled.length === 1, L("one habit row (a double press of Save)"), `${settled.length} rows`);
+      if (!one && settled.length > 1) ctx.finding({ severity: "bug", title: "A double press of Save on the habit form makes two habits", detail: `${settled.length} rows on ${s.surface}` });
+      const hid = settled[0]?.id;
+      if (hid) {
+        const card = await s.page.locator(t(`card-habit-${hid}`)).first().waitFor({ timeout: 12000 }).then(() => true).catch(() => false);
+        ctx.check("screen", card, L("the new habit is listed without a reload"));
+        await s.press(t(`button-seg-${hid}-0`));
+        const checked = await waitRows(ctx, "habit_checkins", `habit_id=eq.${hid}`, (n) => n >= 1);
+        await sleep(1200);
+        ctx.check("db", (await ctx.db.count("habit_checkins", `habit_id=eq.${hid}`)) === 1 && checked.length >= 1, L("checking it in stores one check-in"));
+        ctx.same("db", listOf(must(await ctx.api("GET", "/habits"), "habits")).find((h: any) => h.id === hid)?.currentStreak, 1, L("the streak"));
+      }
+
+      // a journal entry, then delete it with two taps
+      const text = `${ctx.tag} ${s.surface}: walked to the harbour and felt rested.`;
+      await goto(s, "/journal", "");
+      const free = s.page.locator(t("input-journal-free-text")).locator("visible=true").first();
+      if (!(await free.isVisible().catch(() => false))) await s.press(t("button-new-journal")).catch(() => undefined);
+      await free.waitFor({ timeout: 15000 });
+      await free.fill(text);
+      await s.press(t("button-save-journal-free"));
+      const entries = await waitRows(ctx, "journal_entries", `content=ilike.*${encodeURIComponent(`${ctx.tag} ${s.surface}`)}*`, (n) => n >= 1, 15000);
+      await sleep(2500);
+      const final = await ctx.db.rows("journal_entries", `content=ilike.*${encodeURIComponent(`${ctx.tag} ${s.surface}`)}*`);
+      for (const e of final) ctx.cleanup(() => ctx.api("DELETE", `/journal/${e.id}`));
+      ctx.check("action", entries.length >= 1, L("the journal form saved an entry"));
+      ctx.check("db", final.length === 1 && final[0].content === text && final[0].date === ctx.today, L("one journal row holding exactly what was typed, dated today"), `${final.length} rows ${JSON.stringify(final.map((e: any) => e.content.slice(0, 60)))}`);
+      const jid = final[0]?.id;
+      if (jid) {
+        const del = s.page.locator(t(`button-delete-journal-${jid}`)).locator("visible=true").first();
+        const there = await del.waitFor({ timeout: 12000 }).then(() => true).catch(() => false);
+        ctx.check("screen", there, L("the entry is listed without a reload"));
+        if (there) {
+          await (s.surface === "phone" ? del.tap() : del.click());
+          await sleep(1200);
+          const afterOne = await ctx.db.row("journal_entries", jid);
+          const armedOnly = ctx.check("db", !!afterOne && afterOne.deleted_at == null, L("one tap on Delete only arms it: the row is still there"));
+          if (!armedOnly) ctx.finding({ severity: "bug", title: "The journal's Delete removes an entry on the first tap", detail: `${s.surface}: the row was deleted by a single tap (Rule 8: two taps)` });
+          if (armedOnly) {
+            await (s.surface === "phone" ? del.tap() : del.click()).catch(() => undefined);
+            const goneRows = await waitRows(ctx, "journal_entries", `id=eq.${jid}&deleted_at=is.null`, (n) => n === 0, 10000);
+            ctx.check("db", goneRows.length === 0, L("the second tap deletes it"));
+          }
+        }
+      }
+      const problems = s.problems();
+      ctx.check("screen", problems.length === 0, L("no script error and no 5xx"), problems.join("; "));
+    }
+  },
+});

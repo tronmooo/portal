@@ -1067,6 +1067,23 @@ RULES (CRITICAL):
 interface ContextCache {
   data: any[] | null;
   timestamp: number;
+  /** The account's data version this snapshot was loaded at ("" = unknown). */
+  stamp: string;
+}
+
+// The account's data version as of the chat request now running (set by the
+// chat route from the same per-domain counters every cache key carries, merged
+// with the version the client says it has seen). The snapshot below is reused
+// only while that version has not moved: a record added through a form, or
+// from another device, seconds before a chat message used to be invisible to
+// it — the chat answered "I don't see a 'Truck loan' in your liabilities" for
+// a loan created one second earlier (integrity run, 2026-11-27), because the
+// snapshot lived five seconds and only the chat's OWN tool calls refreshed it.
+const contextVersionStamp = new Map<string, string>();
+export function noteContextVersion(userId: string | undefined, stamp: string): void {
+  if (!userId) return;
+  if (contextVersionStamp.size > 2000) contextVersionStamp.clear();
+  contextVersionStamp.set(userId, stamp);
 }
 
 // Per-user context cache — prevents cross-user data leakage (C-2 security fix)
@@ -1119,7 +1136,8 @@ async function getCachedContextData(userId?: string): Promise<any[]> {
   const cacheKey = userId || '_global';
   const now = Date.now();
   const cached = contextCacheMap.get(cacheKey);
-  if (cached?.data && (now - cached.timestamp) < CONTEXT_CACHE_TTL) {
+  const stamp = contextVersionStamp.get(cacheKey) ?? "";
+  if (cached?.data && (now - cached.timestamp) < CONTEXT_CACHE_TTL && cached.stamp === stamp) {
     return cached.data;
   }
   const data = await Promise.all([
@@ -1136,7 +1154,7 @@ async function getCachedContextData(userId?: string): Promise<any[]> {
     storage.getJournalEntries(), // index 10
     storage.getIncomes().catch(() => [] as any[]), // index 11
   ]);
-  contextCacheMap.set(cacheKey, { data, timestamp: now });
+  contextCacheMap.set(cacheKey, { data, timestamp: now, stamp });
   // Evict old entries to prevent memory leak
   if (contextCacheMap.size > 100) {
     const oldest = [...contextCacheMap.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp);

@@ -1916,6 +1916,19 @@ export async function registerRoutes(
     if (rateLimit(`chat:${userId}`, 20)) {
       return res.status(429).json({ error: "Too many requests. Please wait a moment." });
     }
+    // Tell the engine where the account is NOW, so its short-lived snapshot of
+    // the account is not reused across a write it did not make (a form save, a
+    // write from another device). Read-your-writes: the client's own token is
+    // merged in, exactly as on a GET. A failed lookup clears the stamp, which
+    // only costs a reload of the snapshot.
+    try {
+      const uidForVersion = (req as AuthenticatedRequest).userId;
+      if (uidForVersion) {
+        const versions = mergeVersionMaps(await currentVersions(uidForVersion), decodeVersionMap(req.headers[DATA_VERSION_HEADER]));
+        const { noteContextVersion } = await aiEngineMod();
+        noteContextVersion(uidForVersion, encodeVersionMap(versions));
+      }
+    } catch { /* best-effort */ }
     // ── Streaming opt-in (P0: chat had NO streaming) ──────────────────────
     // Clients that send `Accept: text/event-stream` or `?stream=1` get an SSE
     // response: an immediate `ack` frame, incremental `round` /

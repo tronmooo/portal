@@ -6,8 +6,8 @@ import * as O from "../oracle";
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const inWords = (ymd: string) => { const d = O.parseYmd(ymd); return `${MONTHS[d.m - 1]} ${d.d}, ${d.y}`; };
 
-async function say(ctx: Ctx, message: string): Promise<string> {
-  const r = await ctx.api("POST", "/chat", { message, history: [] });
+async function say(ctx: Ctx, message: string, history: Array<{ role: "user" | "assistant"; content: string }> = []): Promise<string> {
+  const r = await ctx.api("POST", "/chat", { message, history });
   if (!r.ok) throw new Error(`chat "${message.slice(0, 60)}": ${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
   const reply = String(r.data?.reply ?? "");
   ctx.step(`chat reply: ${reply.replace(/\s+/g, " ").slice(0, 220)}`);
@@ -124,16 +124,18 @@ scenario({
 
     const month = ctx.today.slice(0, 7);
     const budgetOf = async (category: string) => listOf(must(await ctx.api("GET", `/budgets?month=${month}`), "budgets")).find((b: any) => String(b.category).toLowerCase() === category);
-    if (await budgetOf("gifts")) throw new Error("a gifts budget already exists this month (left by another run)");
-    await say(ctx, "Set a budget of $90 for gifts this month");
-    let bud = await budgetOf("gifts");
-    ctx.cleanup(async () => { const b = await budgetOf("gifts"); if (b) await ctx.api("DELETE", `/budgets/${b.id}?month=${month}`); });
-    ctx.check("db", !!bud && Number(bud.amount) === 90 && String((await ctx.db.rows("preferences", `key=eq.budget:${month}`))[0]?.value).includes("gifts"), "a gifts budget of 90 is stored for this month", JSON.stringify(bud));
-    await say(ctx, "Raise my gifts budget this month to $120");
-    bud = await budgetOf("gifts");
-    ctx.check("db", !!bud && Number(bud.amount) === 120, "the gifts budget reads 120", JSON.stringify(bud?.amount));
-    await say(ctx, "Delete my gifts budget for this month");
-    ctx.check("db", !(await budgetOf("gifts")), "the gifts budget is gone");
+    if (await budgetOf("education")) throw new Error("an education budget already exists this month (left by another run)");
+    await say(ctx, "Set a budget of $90 for education this month");
+    let bud = await budgetOf("education");
+    ctx.cleanup(async () => { const b = await budgetOf("education"); if (b) await ctx.api("DELETE", `/budgets/${b.id}?month=${month}`); });
+    ctx.check("db", !!bud && Number(bud.amount) === 90 && String((await ctx.db.rows("preferences", `key=eq.budget:${month}`))[0]?.value).includes("education"), "an education budget of 90 is stored for this month", JSON.stringify(bud));
+    await say(ctx, "Raise my education budget this month to $120");
+    bud = await budgetOf("education");
+    ctx.check("db", !!bud && Number(bud.amount) === 120, "the education budget reads 120", JSON.stringify(bud?.amount));
+    const others = listOf(must(await ctx.api("GET", `/budgets?month=${month}`), "budgets")).filter((b: any) => String(b.category).toLowerCase() !== "education").map((b: any) => b.id).sort();
+    await say(ctx, "Delete my education budget for this month");
+    ctx.check("db", !(await budgetOf("education")), "the education budget is gone");
+    ctx.same("db", listOf(must(await ctx.api("GET", `/budgets?month=${month}`), "budgets")).map((b: any) => b.id).sort(), others, "and no other budget was touched");
 
     const acct = word(ctx, "Rainyday");
     await say(ctx, `Create a savings account called "${acct}" with a balance of $2,500`);
@@ -164,13 +166,22 @@ scenario({
       await say(ctx, `Undo the "${bill}" payment I just recorded`);
       ctx.check("db", (await ctx.db.count("liability_payments", `liability_profile_id=eq.${bid}`)) === 0, "the payment row is gone");
       ctx.near("derived", (await snap()).totalMonthlySpend, spend0, "this month's spending is back where it was before the payment");
-      await say(ctx, `Delete the "${bill}" bill`);
+      // Deleting a bill is destructive: the chat asks first, and deletes on the answer.
+      const ask = `Delete the "${bill}" bill`;
+      const asked = await say(ctx, ask);
+      const still = await ctx.db.row("profiles", bid);
+      if (still && still.deleted_at == null) {
+        ctx.check("action", /\?/.test(asked), "asked to delete a bill, the chat asks for confirmation before deleting", asked.slice(0, 160));
+        await say(ctx, "Yes, delete it.", [{ role: "user", content: ask }, { role: "assistant", content: asked }]);
+      }
       const gone = await ctx.db.row("profiles", bid);
-      ctx.check("db", gone === null || gone.deleted_at != null, "the bill row is deleted");
+      ctx.check("db", gone === null || gone.deleted_at != null, "after the confirmation the bill row is deleted");
     }
 
     const loan = must(await ctx.api("POST", "/profiles", { type: "liability", type_key: "auto_loan", name: `${word(ctx, "Truckloan")}`, fields: { balance: 14000, monthlyPayment: 320, dueDay: 9, interestRate: 7.5, _interestRateUnit: "percent" } }), "loan");
     ctx.cleanup(() => ctx.api("DELETE", `/profiles/${loan.id}?deleteHistory=1`));
+    // (a write from another client is visible to the next request within ~2 s: known.ts)
+    await new Promise((r) => setTimeout(r, 2500));
     await say(ctx, `I refinanced my "${loan.name}": the rate is now 5.9% and the payment is $295 a month`);
     const f = (await ctx.db.row("profiles", loan.id)).fields;
     ctx.check("db", f.interestRate === 5.9 && f._interestRateUnit === "percent" && f.monthlyPayment === 295 && f.balance === 14000, "the debt row holds 5.9 percent and 295 under the canonical keys; the balance is untouched", JSON.stringify(f).slice(0, 240));

@@ -15,6 +15,18 @@ export interface Known {
 
 export const KNOWN: Known[] = [
   {
+    kind: "question",
+    title: "OPEN — chat: a budget for a category outside the fixed list is filed somewhere different each time",
+    detail: "\"Set a budget of $90 for gifts\" was saved under Shopping; \"raise my gifts budget to $120\" then made a General budget of $120; \"delete my gifts budget\" deleted General. The budget tools tell the model the category MUST be one of fourteen names, so for anything else it picks one, and not the same one twice — and a delete then acts on the guess, which could remove a real General budget. The API itself keeps an unknown name as its own budget. Not changed: whether an unlisted category should be refused, asked about, mapped by a fixed table or allowed as its own budget is a product decision.",
+    evidence: "chat.money-records, preview a4f09e3, 2026-11-27 (replies recorded in test-results); server/ai-engine.ts set_budget / delete_budget",
+  },
+  {
+    kind: "question",
+    title: "OPEN — the duplicate guard asks before saving a second same-priced purchase on the same day",
+    detail: "Rule 35 (documented and tested): same owner + same amount + same day with a DIFFERENT description is a possible duplicate, so the second is not saved until confirmed. In chat that means \"$18 on a movie ticket\" after \"$18 pizza\" is refused (\"the server flagged an unexpected conflict\"), and a message listing several purchases loses the ones whose amounts match something already logged that day (\"$5 coffee, $12 lunch, $40 gas, $8 parking\" saved two of four). Not changed: it is a deliberate rule; whether different descriptions should still ask is the owner's call.",
+    evidence: "tests/live-chat-variations-check.ts on production, 2026-11-27 (7 of its 16 failures); reproduced directly; shared/duplicate-guard.ts",
+  },
+  {
     kind: "discrepancy",
     title: "The dashboard's tracker count includes trackers the tracker list does not show",
     detail: "GET /api/stats counted 9 trackers for the smoke account while GET /api/trackers listed 1: eight live finance-shaped trackers (\"Regression Probe finance …\", from May) are counted but not listed. Two answers to \"how many trackers\" (Rule 1). Not changed: which of the two is intended is the owner's call.",
