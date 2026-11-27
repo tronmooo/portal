@@ -13166,9 +13166,18 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // the call only if they actually asked for a scope change.
       {
         const said = String((input as any).__userMessage || "").trim();
-        const asked = !said || /(switch|scope|filter|focus|only|everyone|everybody|all\s+profiles|household|dashboard|executive|view)/i.test(said);
+        // (This pattern held two literal backspace characters where the word
+        // boundaries belong, so it matched NO message: every switch the model
+        // chose was skipped while the reply said the view had changed —
+        // integrity run, 2026-11-27, 7 of 7.)
+        const SCOPE_WORDS = /\b(switch|scope|filter|focus|only|everyone|everybody|all\s+profiles|household|dashboard|executive|view)\b/i;
+        // A "yes" to the assistant's own question about switching IS the request.
+        const askedBefore = String((input as any).__lastAssistantMessage || "").trim();
+        const confirmsQuestion = /^\s*(yes|yep|yeah|sure|ok(ay)?|please|go ahead|do it|confirm)\b/i.test(said) && /\?\s*$/.test(askedBefore) && SCOPE_WORDS.test(askedBefore);
+        const asked = !said || SCOPE_WORDS.test(said) || confirmsQuestion;
         if (!asked) {
-          return { skipped: true, message: "Not changing the active profile — the user didn't ask to switch views." };
+          // An error, not a quiet skip: a reply must never say the view changed.
+          return { skipped: true, error: "The dashboard view was NOT changed — the user's message did not ask to switch whose data is shown. Do not say it changed." };
         }
       }
       if (input.everyone === true || /^every(one|body)$|^all$/i.test(String(input.profileName || "").trim())) {
@@ -18834,7 +18843,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             ...(roundLogsHeartRate ? { __heartRateLoggedSeparately: true } : {}),
             // Only destructive calls need the assistant's previous reply (to
             // recognise "yes" as the answer to "delete X?").
-            ...(isDestructiveToolCall(toolUse.name, validation.normalized) ? { __lastAssistantMessage: lastAssistantReply } : {}),
+            ...(isDestructiveToolCall(toolUse.name, validation.normalized) || toolUse.name === "set_dashboard_scope" ? { __lastAssistantMessage: lastAssistantReply } : {}),
           };
           // Pre-write snapshot for update/delete tools (one list read) — gives
           // the action ledger a `before` for reapply/recreate undo plans.
