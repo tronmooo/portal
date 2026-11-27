@@ -422,7 +422,14 @@ const CASES: Case[] = [
     return (e[0].linkedProfiles || []).includes(pet.id) ? "" : `the appointment is not Biscuit's (owners: ${JSON.stringify(e[0].linkedProfiles)})`;
   } },
 
-  { group: "dates", say: "book a dentist check-up next Friday at 3pm", expect: oneEvent(["dentist"], nextWeekday(5), "15:00") },
+  // (An appointment at a time may be filed as an event or a timed task — the
+  // "lunch with Sam" case accepts both; what this case holds is the DAY.)
+  { group: "dates", say: "book a dentist check-up next Friday at 3pm", expect: (c) => {
+    const e = [...c.made.events, ...c.made.tasks].filter((x) => has(x.title, "dentist"));
+    if (e.length !== 1) return `expected one dentist item, got ${c.made.events.length} event(s), ${c.made.tasks.length} task(s)`;
+    const when = day(e[0].date ?? e[0].dueDate); const at = String(e[0].time ?? e[0].dueTime ?? "").slice(0, 5);
+    return when === nextWeekday(5) && at === "15:00" ? "" : `it is on ${when} at ${at || "no time"}, expected next Friday ${nextWeekday(5)} 15:00`;
+  } },
 
   // ── Changing your mind ────────────────────────────────────────────────────
   { group: "corrections", say: "coffee with Dana on Thursday at 10am", then: "no wait, make it Friday", expect: (c) => {
@@ -512,7 +519,24 @@ const CASES: Case[] = [
   { group: "capture", say: "remember that my locker combination is 14-32-8", expect: (c) => (c.made.tasks.length || c.made.events.length ? `it made ${c.made.tasks.length} task(s) / ${c.made.events.length} event(s) for a thing to remember` : (c.made.memories.length + c.made.notes.length === 1 ? "" : `expected it kept once, got ${c.made.memories.length} memor(ies) and ${c.made.notes.length} note(s)`)) },
 
   // ── Goals and habits, said loosely ────────────────────────────────────────
+  // CHANGED 2026-11-27. An earlier case of this run leaves a $3,000 "Save for
+  // Vacation" goal, so this sentence asks for a DIFFERENT target under a title
+  // that exists. The old expectation (a new $5,000 goal, always) was met by a
+  // reply that said "Goal set — $5,000" with nothing stored. Rule I16
+  // (CLAUDE.md; L2 "a confirmed change is a stored change"): that request is
+  // either a question naming both figures with nothing written, or a real
+  // change — the vacation goal(s) then hold $5,000 somewhere. With no vacation
+  // goal beforehand the original expectation stands.
   { group: "plans", say: "I want to save $5,000 for a vacation by June", expect: (c) => {
+    const had = c.before.goals.filter((x: any) => has(x.title, "vacation"));
+    if (had.length) {
+      const nowGoals = c.now.goals.filter((x: any) => has(x.title, "vacation"));
+      const stored5000 = nowGoals.some((x: any) => money(x.target ?? x.targetValue ?? x.targetAmount, 5000));
+      const asked = /\?/.test(c.reply) && /3,?000/.test(c.reply) && /5,?000/.test(c.reply);
+      if (stored5000) return "";
+      if (asked && c.made.goals.length === 0 && nowGoals.length === had.length) return "";
+      return `a vacation goal existed (${had.map((x: any) => x.target).join(", ")}); expected a question naming both figures with nothing written, or a stored $5,000 — goals now: ${nowGoals.map((x: any) => x.target).join(", ")}`;
+    }
     const g = c.made.goals;
     if (g.length !== 1) return `expected one goal, got ${g.length}; expenses: ${c.made.expenses.length}, tasks: ${names(c.made.tasks)}`;
     return money(g[0].target ?? g[0].targetValue ?? g[0].targetAmount, 5000) ? "" : `the goal's target is ${g[0].target ?? g[0].targetValue ?? g[0].targetAmount}, expected 5000`;

@@ -179,6 +179,7 @@ import {
   checkToolAgainstIntent,
   isStaleReplayCall,
   staleReplayViolation,
+  movedExistingViolation,
   notReportedViolation,
   findDuplicateCreateInTurn,
   duplicateCreateViolation,
@@ -251,6 +252,8 @@ import { stampSalvageProvenance } from "@shared/asset-salvage";
 import { goalRequestDiffers, goalConflictQuestion } from "@shared/goal-duplicate";
 import { explicitNewTrackerName, isTheNamedTracker } from "@shared/tracker-intent";
 import { retractsOwnClaim, RETRACTION_REPLY } from "@shared/chat-retraction";
+import { correctBareWeekday, asksForAChange, changesWhen } from "@shared/chat-date-intent";
+import { isHabitDoneOn } from "@shared/habit-schedule";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
 import { paymentReceiptLine, paymentNotRecordedLine, composePaymentReply } from "@shared/payment-receipt";
@@ -8965,6 +8968,11 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
     }
 
     case "create_task": {
+      // A weekday named on that weekday is TODAY (owner, 2026-11-27).
+      {
+        const fixed = correctBareWeekday(input.dueDate, (input as any).__userMessage, getUserToday(aiUserTimezone()));
+        if (fixed) { logger.info("ai", `Task date ${input.dueDate} → ${fixed}: the weekday named is today`); input.dueDate = fixed; }
+      }
       // Resolve target profile BEFORE dedup so we can match by profile too
       let taskLinkedProfiles: string[] = [];
       const taskForProfile = await resolveForProfile(input.forProfile, input.title || "");
@@ -9702,6 +9710,27 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         // message ("Sarah and I both ran two miles") produce identical numbers,
         // and those are two runs, not one logged twice — collapsing them loses
         // one person's data.
+        // A habit's mirror tracker: once today's habit is done, saying the
+        // same thing again ("I meditated today", twice) is not a second
+        // session — unless the message says so (again / twice / another) or
+        // brings a real figure. Without this the second sentence, which can
+        // no longer check the habit in, was filed as a second tracker entry.
+        try {
+          const habitId = (tracker as any).linkedHabitId;
+          const said = String((input as any).__userMessage || "");
+          const saysAgain = /\b(?:again|twice|second|2nd|another|one\s+more|two\s+times|a\s+second\s+time)\b/i.test(said);
+          const hasFigure = Object.entries(entryValues).some(([k, v]) => !k.startsWith("_") && typeof v === "number" && v > 0);
+          if (habitId && said && !saysAgain && !hasFigure && !input.at) {
+            const habit = (await storage.getHabits()).find((h: any) => h.id === habitId);
+            const todayStr = getUserToday(aiUserTimezone());
+            const todays = (tracker.entries || []).filter((e: any) => (e.profileId || null) === (targetProfileId || null) && String(new Date(e.timestamp).toLocaleDateString("en-CA", { timeZone: aiUserTimezone() })) === todayStr);
+            if (habit && isHabitDoneOn(habit as any, todayStr) && todays.length > 0) {
+              const kept = todays[todays.length - 1];
+              logger.info("ai", `"${tracker.name}" mirrors the habit "${(habit as any).name}", already done today — not adding a second entry`);
+              return { ...kept, deduped: true, __loggedTo: { id: tracker.id, name: tracker.name }, message: `${(habit as any).name} is already done for today — nothing was added. If this was a second session, say "again" and I'll log it.` };
+            }
+          }
+        } catch { /* never block a log on this */ }
         const twoMinAgo = Date.now() - 120000;
         const recentDup = tracker.entries.find((e: any) => {
           if (new Date(e.timestamp).getTime() < twoMinAgo) return false;
@@ -11611,6 +11640,15 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
     }
 
     case "create_event": {
+      // A weekday named on that weekday is TODAY (owner, 2026-11-27).
+      {
+        const fixed = correctBareWeekday(input.date, (input as any).__userMessage, getUserToday(aiUserTimezone()));
+        if (fixed) {
+          logger.info("ai", `Event date ${input.date} → ${fixed}: the weekday named is today`);
+          if (typeof input.endDate === "string" && input.endDate.slice(0, 10) === String(input.date).slice(0, 10)) input.endDate = fixed;
+          input.date = fixed;
+        }
+      }
       // Validate required fields
       if (!input.title || typeof input.title !== "string" || !input.title.trim()) {
         return { error: "Event title is required" };
@@ -18592,6 +18630,23 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                 });
                 return notReportedViolation(toolUse.name, why);
               }
+            }
+            // ── A NEW STATEMENT DOES NOT MOVE WHAT EXISTS ────────────────
+            // "lunch with Sam tomorrow at noon" re-dated the existing Dec 3
+            // "Lunch with Sam" (shared/chat-date-intent.ts). An event or task
+            // is re-dated only when the message asks for a change — or
+            // answers a question the assistant just asked.
+            if ((toolUse.name === "update_event" || toolUse.name === "update_task")
+              && changesWhen(input.changes)
+              && !asksForAChange(userMessage)
+              && !/\?\s*$/.test(lastAssistantReply.trim())) {
+              logIntegrity({
+                kind: "ai_new_statement_moved_existing",
+                message: `model called ${toolUse.name} to re-date "${label}" for a message that asks for no change — refused before execution`,
+                userId, turnId, requestId: options?.requestId,
+                detail: { tool: toolUse.name, label },
+              });
+              return movedExistingViolation(toolUse.name, label);
             }
             // One request creates ONE record: a second create of the same
             // name this turn is fan-out, not work.

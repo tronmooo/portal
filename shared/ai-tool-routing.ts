@@ -153,7 +153,9 @@ export type RoutingMismatch =
   /** Rule 1: a write tool was called on a turn classified READ. */
   | "read_only_turn"
   /** The sentence said it did NOT happen, or that it happened to someone else. */
-  | "not_reported";
+  | "not_reported"
+  /** A statement of something new tried to re-date a record that exists. */
+  | "new_statement_moved_existing";
 
 export interface RoutingViolation {
   mismatchType: RoutingMismatch;
@@ -577,6 +579,28 @@ export function staleReplayViolation(toolName: string, label: string): RoutingVi
     modelDirective:
       `Blocked: "${label}" belongs to an EARLIER message in this conversation and was already handled. ` +
       `Respond only to the user's current message — do not re-run past requests.`,
+    userMessage: "",
+  };
+}
+
+/**
+ * A message that states something NEW ("lunch with Sam tomorrow at noon") must
+ * not re-date an event or task that already exists; the model reaches for
+ * update because a same-titled record is in its context.
+ */
+export function movedExistingViolation(toolName: string, label: string): RoutingViolation {
+  const entity = TOOL_INTENT_ENTITY[toolName] ?? "unknown";
+  return {
+    mismatchType: "new_statement_moved_existing",
+    tool: toolName,
+    expectedEntity: entity,
+    actualEntity: entity,
+    expectedOperation: "create",
+    actualOperation: "update",
+    modelDirective:
+      `Blocked: the user did not ask to move or change the existing "${label}" — their message states a NEW one. ` +
+      `Leave the existing record exactly as it is and CREATE the new one (create_event / create_task) with the date and time in this message; ` +
+      `a same-titled record on another day is a different record. If you truly cannot tell whether they mean a new one or a change, ask one short question and call nothing.`,
     userMessage: "",
   };
 }

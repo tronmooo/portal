@@ -619,6 +619,7 @@ export default defineConfig({
       'tests/integrity-run-fixes-2026-11-27.test.ts',
       'tests/bootstrap-seed-no-stale-overwrite.test.ts',
       'tests/payment-idempotency-keys.test.ts',
+      'tests/chat-date-intent.test.ts',
       'tests/chat-retraction.test.ts',
       'tests/tracker-named-by-user.test.ts',
       'tests/identical-transactions-allowed.test.ts',

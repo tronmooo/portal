@@ -23,6 +23,7 @@ export type IntegrityKind =
   | "stale_dependency"
   | "ai_read_triggered_write"
   | "ai_recorded_a_non_report"
+  | "ai_new_statement_moved_existing"
   | "scope_mismatch"
   | "conflicting_canonical_facts"
   | "validation_failed"
