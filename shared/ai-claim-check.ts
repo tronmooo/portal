@@ -46,6 +46,25 @@ const lc = (s: unknown) => String(s ?? "").toLowerCase();
 
 // ── Success verbs the assistant may only use after a confirmed write ────────
 // Ordered longest-first so "marked complete" is not swallowed by "marked".
+/** "Saved / added / recorded / created / updated / deleted" in Spanish,
+ *  Portuguese, French, German and Italian. Letters on either side rule a match
+ *  out (\b does not know accented letters). */
+const OTHER_LANGUAGE_WRITE_CLAIM = new RegExp(
+  "(?<![\\p{L}])(?:" + [
+    // Spanish / Portuguese
+    "guardad[oa]s?", "añadid[oa]s?", "agregad[oa]s?", "registrad[oa]s?", "anotad[oa]s?", "cread[oa]s?", "criad[oa]s?",
+    "actualizad[oa]s?", "atualizad[oa]s?", "eliminad[oa]s?", "borrad[oa]s?", "programad[oa]s?", "adicionad[oa]s?", "salv[oa]s?", "exclu[ií]d[oa]s?", "removid[oa]s?",
+    // French
+    "enregistrée?s?", "ajoutée?s?", "créée?s?", "sauvegardée?s?", "notée?s?", "supprimée?s?", "mise?s? à jour", "programmée?s?",
+    // German
+    "gespeichert", "hinzugefügt", "erstellt", "eingetragen", "angelegt", "aktualisiert", "gelöscht", "notiert", "geändert",
+    // Italian
+    "salvat[oaie]", "aggiunt[oaie]", "registrat[oaie]", "creat[oaie]", "aggiornat[oaie]", "eliminat[oaie]", "annotat[oaie]",
+  ].join("|") + ")(?![\\p{L}])", "iu");
+
+/** "no se ha guardado", "n'a pas été enregistré", "nicht gespeichert", "non è stato salvato". */
+const OTHER_LANGUAGE_NEGATION = /(?<![\p{L}])(?:no\s+(?:se\s+)?(?:ha|han|he|pude|pudo|fue|está|se)|não\s+(?:foi|pude|está)|n['’](?:a|est|ai)\s+pas|pas\s+(?:été|pu)|nicht|konnte|non\s+(?:è|ho|sono))(?![\p{L}])/iu;
+
 const SUCCESS_VERBS: Array<{ re: RegExp; operation: IntentOperation }> = [
   { re: /\b(?:marked\s+(?:it\s+)?(?:complete|completed|done|off)|checked\s+(?:it\s+)?(?:in|off))\b/i, operation: "complete" },
   { re: /\b(?:created|added|made|set\s+up|scheduled|logged|recorded|started)\b/i, operation: "create" },
@@ -57,6 +76,12 @@ const SUCCESS_VERBS: Array<{ re: RegExp; operation: IntentOperation }> = [
   // thrown away for a bare "Updated asset "Smoke Car"." (2026-11-12). Checked
   // LAST, so a sentence that also names the operation is classed by that.
   { re: /\bsaved\b/i, operation: "unknown" },
+  // The assistant answers in the user's language, and a claim is a claim in
+  // any of them. "Gasto de $15 en tacos guardado. 🌮" — with no expense saved
+  // — went through because every verb above is English (chat-variations
+  // check, production, 2026-11-27). Past participles only: "voy a guardar" /
+  // "je vais enregistrer" are offers. Which kind of write is not claimed.
+  { re: OTHER_LANGUAGE_WRITE_CLAIM, operation: "unknown" },
 ];
 
 /**
@@ -76,6 +101,7 @@ export function extractSuccessClaims(reply: string): Array<{ claim: string; oper
     if (/\b(?:i(?:'| wi)ll|i can|would you|want me to|should i|do you want|if you)\b/i.test(sentence)) continue;
     if (sentence.trimEnd().endsWith("?")) continue;
     if (/\bcould\s+not|couldn'?t|failed|didn'?t\s+(?:go|save|work)|nothing\s+was\s+saved\b/i.test(sentence)) continue;
+    if (OTHER_LANGUAGE_NEGATION.test(sentence)) continue;
     for (const { re, operation } of SUCCESS_VERBS) {
       if (re.test(sentence)) {
         out.push({ claim: sentence.slice(0, 200), operation });
