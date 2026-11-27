@@ -149,9 +149,10 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
     void queryClient.prefetchQuery({
       queryKey: ["/api/dashboard-bootstrap", "selected", id, currentMonth],
       queryFn: async () => {
+        const startedAt = Date.now();
         const r = await apiRequest("GET", `/api/dashboard-bootstrap?profileIds=${id}&month=${currentMonth}`);
         const b = await r.json();
-        seedDashboardCaches(b, "selected", [id], currentMonth);
+        seedDashboardCaches(b, "selected", [id], currentMonth, startedAt);
         return b ?? null;
       },
       staleTime: 60_000,

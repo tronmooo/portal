@@ -500,12 +500,13 @@ function DataPrefetch() {
     queryClient.prefetchQuery({
       queryKey: ['/api/dashboard-bootstrap', mode, ...ids, month],
       queryFn: async () => {
+        const startedAt = Date.now();
         const r = await apiRequest('GET', `/api/dashboard-bootstrap${qs}`);
         const b = await r.json();
         // One round trip seeds EVERY dashboard mount-time query key
         // (see lib/bootstrap-seed.ts) — the page paints without firing
         // its ~12 individual GETs.
-        seedDashboardCaches(b, mode, ids, month);
+        seedDashboardCaches(b, mode, ids, month, startedAt);
         perfMeasure('boot:bootstrap-landed', 'bootstrap-prefetch-start');
         return b ?? null;
       },

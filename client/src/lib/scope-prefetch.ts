@@ -64,9 +64,10 @@ export function prefetchScopeBootstrap(
   return queryClient.prefetchQuery({
     queryKey,
     queryFn: async () => {
+      const startedAt = Date.now();
       const r = await apiRequest("GET", `/api/dashboard-bootstrap${qs}`);
       const b = await r.json();
-      seedDashboardCaches(b, mode, cleanIds, month);
+      seedDashboardCaches(b, mode, cleanIds, month, startedAt);
       perfMeasure("scope-prefetch-landed", `scope-prefetch-start:${cleanIds.join(",") || "everyone"}`);
       return b ?? null;
     },

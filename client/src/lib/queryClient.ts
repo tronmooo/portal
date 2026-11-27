@@ -1,6 +1,7 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { decodeSessionUserId, selectHydratableEntries } from "./cache-isolation";
 import { bootstrapSeedEntries, projectBootstrapShell } from "./bootstrap-seed-keys";
+import { writeStarted, writeSettled } from "./write-clock";
 import { getProfileFilterSnapshot } from "./profileFilter";
 import { ACTIVE_PROFILE_HEADER } from "@shared/active-scope";
 import { decodeVersionMap, encodeVersionMap, EPOCH_KEY } from "@shared/cache-domains";
@@ -148,6 +149,8 @@ export async function apiRequest(
   // path: the log is about which KIND of write ran, not which row.
   const logPath = isWrite ? url.split("?")[0].replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, ":id") : "";
   if (isWrite) syncLog("mutation", `start ${method.toUpperCase()} ${logPath}`);
+  // A read that started before this write is answered may hold pre-write data (lib/write-clock.ts).
+  if (isWrite) writeStarted();
   try {
     // Document file GETs may 302 to a cross-origin storage CDN. fetch re-sends
     // request headers to the redirect target, and custom headers would force a
@@ -206,6 +209,7 @@ export async function apiRequest(
     throw err;
   } finally {
     clearTimeout(timeout);
+    if (isWrite) writeSettled();
   }
 }
 
