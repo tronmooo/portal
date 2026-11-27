@@ -27,7 +27,7 @@ screen — a real browser all agree. A scenario that only saw a success answer i
 
 **Local suite** (`npx vitest run`, runs on every push and pull request): 8323 of 8323 tests passed in 521 files. It includes the randomized oracle properties (`tests/integrity-oracle-properties.test.ts`), the model guard (`tests/integrity-model.test.ts`) and the guards for the fixes below.
 
-**Existing live checks** (`tests/live-*-check.ts`; 13 of 46 were run against production in this pass — it was time-boxed, the rest were not run): 9 passed, **4 failed**: `live-artifacts-check`, `live-asset-overview-check`, `live-assets-liabilities-ui-check`, `live-autopay-scenarios-check`. These failures are on production as it is, were not caused by this work, and have not been investigated; each line is in the table below.
+**Existing live checks** (`tests/live-*-check.ts`; 46 of 46 were run against production in this pass): 34 passed, **12 failed**: `live-artifacts-check`, `live-asset-overview-check`, `live-assets-liabilities-ui-check`, `live-autopay-scenarios-check`, `live-chat-variations-check`, `live-content-workflows-check`, `live-dated-owner-check`, `live-entry-edit-and-series-edit-check`, `live-exec-dashboards-check`, `live-journal-check`, `live-task-date-and-calendar-check`, `live-wellness-dashboard-check`. These failures are on production as it is, were not caused by this work, and have not been investigated; each line is in the table below.
 
 ## Found by the run, then fixed
 
@@ -169,6 +169,39 @@ Screens (time from navigating to the screen being on the page, then to the netwo
 | `live-bills-workflows-check` | pass | 16 s |
 | `live-calendar-trackers-ui-check` | pass | 37 s |
 | `live-chat-ui-check` | pass | 50 s |
+| `live-chat-variations-check` | **FAIL** — stopped after 7 minutes | 420 s |
+| `live-content-workflows-check` | **FAIL** — stopped after 7 minutes | 420 s |
+| `live-daily-pages-ui-check` | pass | 181 s |
+| `live-dashboard-consistency-check` | pass | 16 s |
+| `live-dated-owner-check` | **FAIL** —   name: 'TimeoutError' · } | 44 s |
+| `live-debt-one-card-check` | pass | 20 s |
+| `live-editors-mobile-check` | pass | 85 s |
+| `live-entry-edit-and-series-edit-check` | **FAIL** —     at main (/home/user/portal/tests/live-entry-edit-and-series-edit-check.ts:50:25) ·     at process.processTicksAndRejections (node:internal/process/task_queues:103:5) | 11 s |
+| `live-exec-dashboards-check` | **FAIL** — FAIL  desktop: Tagged Spend shows both purchases and their total, $43 · FAIL  desktop: …two rows, each purchase once · FAIL  phone: Tagged Spend shows both purchases and their total, $43 | 65 s |
+| `live-finance-workflows-check` | pass | 31 s |
+| `live-goals-ui-check` | pass | 28 s |
+| `live-input-variations-2-check` | pass | 52 s |
+| `live-input-variations-check` | pass | 94 s |
+| `live-journal-check` | **FAIL** — FAIL  a name with no profile creates none and says so (reply: Saved "Passed The Driving Test Successfully" to your journal for today. Mood: Neutral. I don't have a profile ) | 94 s |
+| `live-liability-forms-check` | pass | 19 s |
+| `live-liability-payments-check` | pass | 30 s |
+| `live-liability-profile-check` | pass | 42 s |
+| `live-money-journal-ui-check` | pass | 33 s |
+| `live-profile-account-workflows-check` | pass | 14 s |
+| `live-profile-creation-check` | pass | 40 s |
+| `live-qa-2026-11-24-check` | pass | 103 s |
+| `live-qa-2026-11-24b-check` | pass | 47 s |
+| `live-records-workflows-check` | pass | 48 s |
+| `live-recurring-occurrence-check` | pass | 18 s |
+| `live-schema-drift-check` | pass | 2 s |
+| `live-scroll-check` | pass | 128 s |
+| `live-settings-ui-check` | pass | 39 s |
+| `live-task-date-and-calendar-check` | **FAIL** — FAIL  Calendar: the open task offers Mark as done | 56 s |
+| `live-touch-gestures-check` | pass | 86 s |
+| `live-wellness-dashboard-check` | **FAIL** — FAIL  …the first reads the real tracker's real field: {"kind":"tracker","key":"Rowing zqcl1g2","field":"distance"} · latest · FAIL  after a reload the tab opens on the saved 90-day range | 38 s |
+| `live-workspace-ai-check` | pass | 162 s |
+| `live-workspace-apps-check` | pass | 100 s |
+| `live-workspaces-ui-check` | pass | 57 s |
 
 ## Untested workflows and remaining coverage gaps
 
