@@ -38,6 +38,10 @@ export async function openSignedIn(browser: any, surface: Surface, shots = false
   page.on("pageerror", (e: any) => seen.push(`script error: ${String(e).slice(0, 160)}`));
   page.on("response", (r: any) => {
     const u = new URL(r.url());
+    // An environment with no AI provider (the isolated stack) answers its AI
+    // routes 503 and marks them; that is its declared state, not a fault.
+    // Only there (INTEGRITY_NO_AI=1): against a deployed app it still counts.
+    if (process.env.INTEGRITY_NO_AI === "1" && r.status() === 503 && r.headers()["x-ai-unavailable"] === "1") return;
     if (u.pathname.startsWith("/api/") && r.status() >= 500) seen.push(`${r.status()} ${r.request().method()} ${u.pathname}`);
   });
   const press = async (selector: string) => {

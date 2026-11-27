@@ -23,3 +23,4 @@ api/chunks/
 tests/perf/out/
 .scratch/
 test-results/
+tests/isolated/.run/

@@ -1,0 +1,90 @@
+name: Integrity (isolated database)
+
+# The integrity run against an ISOLATED stack: a throwaway Postgres with the
+# production schema's structure (tests/isolated/schema.sql — no rows), auth and
+# the REST layer in containers, and the app built from THIS commit. Nothing is
+# read from or written to the production project, so it runs on every push to
+# a working branch and on every pull request — before anything is merged.
+#
+# What it does not cover: the chat scenarios (they need the AI provider's key,
+# which this job is not given) and file storage. Those are exercised by
+# "Integrity (deployed app)" against the smoke account.
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Scenario id pattern (regex); empty = every non-chat scenario"
+        required: false
+  pull_request:
+  push:
+    branches: ["claude/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integrity-isolated-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  isolated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - run: npm ci
+      - name: Browser for the screen scenarios
+        run: |
+          npm install --no-save playwright@1.62.1
+          npx playwright install --with-deps chromium
+      - name: Start the isolated stack (database, auth, REST, schema, test accounts)
+        run: tests/isolated/up.sh
+      - name: Start the app from this commit
+        run: |
+          set -a; . tests/isolated/.run/app.env; set +a
+          PORT=5199 nohup npm run dev > tests/isolated/.run/server.log 2>&1 &
+          for _ in $(seq 1 90); do curl -sf -o /dev/null http://127.0.0.1:5199/api/version && break; sleep 2; done
+          curl -sf http://127.0.0.1:5199/api/diagnostics/schema -o /dev/null || true
+      - name: The schema the code expects is the schema it has
+        run: |
+          set -a; . tests/isolated/.run/app.env; set +a
+          npx tsx tests/isolated/schema-check.ts
+      - name: Integrity run
+        id: run
+        env:
+          ONLY: ${{ github.event.inputs.only }}
+        run: |
+          set -a; . tests/isolated/.run/app.env; set +a
+          set +e
+          npx tsx tests/integrity/run.ts --only "${ONLY:-^(?!chat)}" --out test-results/integrity-isolated
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+      - name: Summary
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            let out = "## Integrity run on the isolated database\n\n";
+            try {
+              const r = JSON.parse(fs.readFileSync("test-results/integrity-isolated/results.json", "utf8"));
+              const by = (s) => r.results.filter((x) => x.status === s);
+              out += `${by("pass").length} passed · ${by("fail").length} failed · ${by("incomplete").length} incomplete · ${by("error").length} errored (seed ${r.seed})\n\n`;
+              for (const x of r.results.filter((x) => ["fail", "error", "incomplete"].includes(x.status))) {
+                out += `- **${x.status}** \`${x.id}\` — ${x.title}\n` + x.checks.filter((c) => !c.ok).slice(0, 6).map((c) => `  - [${c.kind}] ${c.what}`).join("\n") + "\n";
+              }
+            } catch (e) { out += "(no results.json: the run stopped before writing it)\n"; }
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, out);
+          '
+          cp tests/isolated/.run/server.log test-results/integrity-isolated/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: integrity-isolated-results
+          path: test-results/integrity-isolated/
+          retention-days: 14
+      - name: Fail the job when the run failed
+        if: steps.run.outputs.exit != '0'
+        run: exit 1

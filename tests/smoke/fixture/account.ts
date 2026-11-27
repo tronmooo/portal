@@ -21,7 +21,8 @@ export const API_BASE = process.env.SMOKE_API_BASE || "https://portol.me/api";
 export const UI_BASE = process.env.SMOKE_UI_BASE || "https://portol.me";
 
 // Supabase project — needed for direct auth.
-export const SB_URL = "https://uvaniovwrezzzlzmizyg.supabase.co";
+// Overridable so the same fixtures drive the isolated stack (tests/isolated/up.sh).
+export const SB_URL = process.env.SMOKE_SB_URL || "https://uvaniovwrezzzlzmizyg.supabase.co";
 export // The anon key is public by design (it ships to every browser and is bound by
 // RLS), but rotating the project JWT secret invalidates it — so allow the
 // environment to override the checked-in default.

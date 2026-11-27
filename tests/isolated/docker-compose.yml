@@ -1,0 +1,56 @@
+# An isolated Supabase-shaped stack for tests: Postgres, auth (GoTrue) and the
+# REST layer (PostgREST) — the three services the app and the integrity run
+# talk to. Started by tests/isolated/up.sh, which also writes .run/env.
+# Nothing here reaches the production project.
+services:
+  db:
+    image: supabase/postgres:17.12.0.005
+    ports: ["54322:5432"]
+    environment:
+      POSTGRES_PASSWORD: ${ISOLATED_DB_PASSWORD}
+      POSTGRES_DB: postgres
+      JWT_SECRET: ${ISOLATED_JWT_SECRET}
+      JWT_EXP: 3600
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+  auth:
+    image: supabase/gotrue:v2.199.0
+    ports: ["54323:9999"]
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: http://localhost:54321
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${ISOLATED_DB_PASSWORD}@db:5432/postgres
+      GOTRUE_SITE_URL: http://localhost:5199
+      GOTRUE_URI_ALLOW_LIST: "*"
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_SECRET: ${ISOLATED_JWT_SECRET}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: 100000
+      GOTRUE_RATE_LIMIT_TOKEN_REFRESH: 100000
+      GOTRUE_RATE_LIMIT_VERIFY: 100000
+      GOTRUE_SMTP_HOST: localhost
+      GOTRUE_SMTP_PORT: 2500
+      GOTRUE_SMTP_ADMIN_EMAIL: admin@example.test
+    depends_on:
+      db: { condition: service_healthy }
+  rest:
+    image: postgrest/postgrest:v12.2.12
+    ports: ["54324:3000"]
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${ISOLATED_DB_PASSWORD}@db:5432/postgres
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${ISOLATED_JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    depends_on:
+      db: { condition: service_healthy }

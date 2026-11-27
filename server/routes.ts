@@ -57,6 +57,14 @@ import { forgetVersions, keepVersionBeforeWrite, readRecordText } from "./conten
 import { writeFromStoredRow } from "./stored-row-write";
 import { paymentExpensesOf, withDeletedSourceTag } from "@shared/deleted-source";
 
+// 60 writes a minute per user. A test stack that is NOT production may raise
+// it (tests/isolated: one process serves every request, so the whole suite
+// shares one minute's allowance); production ignores the variable.
+const WRITE_LIMIT_PER_MINUTE = (() => {
+  const raw = Number(process.env.WRITE_RATE_LIMIT_PER_MIN);
+  return process.env.NODE_ENV !== "production" && Number.isFinite(raw) && raw >= 60 ? Math.floor(raw) : 60;
+})();
+
 /** `Idempotency-Key` header, or `idempotencyKey` in the body: 8–100 visible characters. */
 function idempotencyKeyOf(req: { headers: Record<string, any>; body?: any }): string | null {
   const raw = req.headers["idempotency-key"] ?? req.body?.idempotencyKey;
@@ -1781,7 +1789,7 @@ export async function registerRoutes(
       const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
       // Skip rate limit for chat and upload (they have their own stricter limits)
       if (!req.path.startsWith("/chat") && !req.path.startsWith("/upload")) {
-        if (rateLimit(`write:${uid}`, 60)) {
+        if (rateLimit(`write:${uid}`, WRITE_LIMIT_PER_MINUTE)) {
           return res.status(429).json({ error: "Too many requests. Please slow down." });
         }
       }
@@ -6483,6 +6491,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       res.json(result);
     } catch (err: any) {
       log.error("[ProfileSummary]", err?.message || "unknown error");
+      // No AI provider configured (a local or isolated environment) is a
+      // state, not a crash: say so, so the page shows no summary card and a
+      // monitor does not read it as a server fault.
+      if (/ANTHROPIC_API_KEY/.test(String(err?.message || ""))) {
+        res.setHeader("X-AI-Unavailable", "1");
+        return res.status(503).json({ error: "AI summaries are not available in this environment", code: "AI_UNAVAILABLE" });
+      }
       res.status(500).json({ error: "Failed to generate AI summary" });
     }
   }));
