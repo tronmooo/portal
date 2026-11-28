@@ -14,8 +14,8 @@ evidence there is that the door works — and it separates a test that *names* a
 - 26 data types, 10 operations, 3 doors (the app's screens, the API, AI Chat).
 - 133 data type × operation rows have at least one door.
 - API and AI Chat: 212 doors. **204** are verified: a scenario covering them PASSED in the last recorded run (the action, the stored row and the dependent figures). **0** have a scenario that has not passed yet (failed, or not run). **8** more are only named by an existing test (evidence, not proof — see docs/WORKFLOW_MATRIX.md); **0** have no test at all.
-- Runs counted: portol.me @ 374c77a (2026-11-27 05:25 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 73f4ee4 (2026-11-27 13:30 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3ef5ff1 (2026-11-27 16:01 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3ef5ff1 (2026-11-27 16:01 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:03 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:30 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:37 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:54 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 17:55 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 17:59 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 18:04 UTC); 127.0.0.1:5199 @ ? (2026-11-27 18:04 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3241436 (2026-11-27 19:44 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:14 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:17 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:19 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:19 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:21 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:24 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:25 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:34 UTC); 127.0.0.1:5199 @ ? (2026-11-28 02:27 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:42 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:47 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:54 UTC); 127.0.0.1:5199 @ ? (2026-11-28 02:55 UTC).
-- Screens: 107 operations are offered by a screen; **80** are driven by an integrity browser scenario that passed (desktop mouse and phone touch). The rest are covered per screen by the live browser checks listed in docs/WORKFLOW_MATRIX.md, not by a database-verified scenario.
+- Runs counted: portol.me @ 374c77a (2026-11-27 05:25 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 73f4ee4 (2026-11-27 13:30 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3ef5ff1 (2026-11-27 16:01 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3ef5ff1 (2026-11-27 16:01 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:03 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:30 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:37 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:54 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 17:55 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 17:59 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 18:04 UTC); 127.0.0.1:5199 @ ? (2026-11-27 18:04 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3241436 (2026-11-27 19:44 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:14 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:17 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:19 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:19 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:21 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:24 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:25 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:34 UTC); 127.0.0.1:5199 @ ? (2026-11-28 02:27 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:42 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:47 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:54 UTC); 127.0.0.1:5199 @ ? (2026-11-28 02:55 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 933548e (2026-11-28 03:26 UTC); 127.0.0.1:5199 @ ? (2026-11-28 03:45 UTC); 127.0.0.1:5199 @ ? (2026-11-28 04:01 UTC); 127.0.0.1:5199 @ ? (2026-11-28 04:17 UTC); 127.0.0.1:5199 @ ? (2026-11-28 04:19 UTC).
+- Screens: 107 operations are offered by a screen; **92** are driven by an integrity browser scenario that passed (desktop mouse and phone touch). The rest are covered per screen by the live browser checks listed in docs/WORKFLOW_MATRIX.md, not by a database-verified scenario.
 - 118 integrity scenarios; 37 drive a browser, 31 drive AI Chat.
 
 ## Dependency map
@@ -772,11 +772,11 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 
 | Data type | Operation | Screens | API | AI Chat |
 |---|---|---|---|---|
-| Loan / card payment | create | **V** `ui-money.debt` | **V** `money.loan-payments` `hardening.interrupted-request` `browser.written-elsewhere` `equivalence.loan` | **V** `chat.debt` `equivalence.loan` |
+| Loan / card payment | create | **V** `browser.loan-payment-dialog` `ui-money.debt` | **V** `money.loan-payments` `hardening.interrupted-request` `browser.written-elsewhere` `equivalence.loan` | **V** `chat.debt` `equivalence.loan` |
 | Loan / card payment | edit | — | **V** `sweep.payment-edit-and-status` `equivalence.loan` | **V** `chat-tools.debt-payment-changes` `equivalence.loan` |
 | Loan / card payment | delete | **V** `ui-money.debt` | **V** `money.loan-payments` | **V** `chat-tools.debts` |
 | Loan / card payment | cancel | — | **V** `sweep.payment-edit-and-status` | **V** `chat.money-records` |
-| Loan / card payment | complete | **V** `ui-money.debt` | **V** `money.loan-payments` `sweep.payment-edit-and-status` | **V** `chat-tools.debt-payment-changes` |
+| Loan / card payment | complete | **V** `browser.loan-payment-dialog` `ui-money.debt` | **V** `money.loan-payments` `sweep.payment-edit-and-status` | **V** `chat-tools.debt-payment-changes` |
 | Bill / recurring obligation (and Auto Pay) | create | **V** `ui-money.bill` | **V** `money.net-worth` `money.bill-cycle` `hardening.date-edges` `equivalence.bill` | **V** `chat.money-records` `equivalence.bill` |
 | Bill / recurring obligation (and Auto Pay) | edit | **V** `ui-money.bill` | **V** `money.autopay` `sweep.bill-edit-and-move` | **V** `chat.money-records` |
 | Bill / recurring obligation (and Auto Pay) | delete | **V** `ui-money.bill` | **V** `money.bill-cycle` `money.deleted-bill-history` | **V** `chat.money-records` |
@@ -789,11 +789,11 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 | Debt (loan, card, mortgage) | reschedule | — | **V** `api-rest.loan-schedule` | — |
 | Debt (loan, card, mortgage) | transfer | **V** `ui-money.debt-links` | **V** `assets.shared-ownership` `sweep.ownership-links` | **V** `chat-tools.debts` `chat-tools.ownership-shares` |
 | Debt (loan, card, mortgage) | cancel | **V** `ui-money.debt-links` | **V** `sweep.ownership-links` | **V** `chat-tools.debts` |
-| Asset (owned thing) and its lifecycle | create | **V** `sync.double-submit-one-record` | **V** `money.net-worth` `hardening.refused-input-writes-nothing` `assets.lifecycle` | **V** `chat-tools.assets` |
-| Asset (owned thing) and its lifecycle | edit | **V** `ui-profiles.asset-edit` | **V** `money.net-worth` `hardening.failed-edit-is-atomic` `hardening.interrupted-request` `assets.lifecycle` | **V** `chat-tools.assets` |
-| Asset (owned thing) and its lifecycle | delete | **S** `ui-profiles.asset-delete` | **V** `money.net-worth` | **V** `chat-tools.assets` |
-| Asset (owned thing) and its lifecycle | transfer | **S** `ui-profiles.asset-create` `ui-profiles.asset-ownership` | **V** `assets.nested-and-costs` `assets.shared-ownership` `sweep.ownership-links` `concurrency.owner-set-replace` | **V** `chat-tools.ownership-shares` |
-| Asset (owned thing) and its lifecycle | cancel | **S** `ui-profiles.asset-ownership` | **V** `sweep.ownership-links` | — |
+| Asset (owned thing) and its lifecycle | create | **V** `ui-profiles.asset-create` `sync.double-submit-one-record` | **V** `money.net-worth` `hardening.refused-input-writes-nothing` `assets.lifecycle` | **V** `chat-tools.assets` |
+| Asset (owned thing) and its lifecycle | edit | **V** `ui-profiles.asset-edit` | **V** `money.net-worth` `hardening.failed-edit-is-atomic` `hardening.simultaneous-edits` `hardening.interrupted-request` `assets.lifecycle` | **V** `chat-tools.assets` |
+| Asset (owned thing) and its lifecycle | delete | **V** `ui-profiles.asset-delete` | **V** `money.net-worth` | **V** `chat-tools.assets` |
+| Asset (owned thing) and its lifecycle | transfer | **V** `ui-profiles.asset-create` `ui-profiles.asset-ownership` | **V** `assets.nested-and-costs` `assets.shared-ownership` `sweep.ownership-links` `concurrency.owner-set-replace` | **V** `chat-tools.ownership-shares` |
+| Asset (owned thing) and its lifecycle | cancel | **V** `ui-profiles.asset-ownership` | **V** `sweep.ownership-links` | — |
 | Financial account (cash, card, brokerage) | create | **V** `ui-money.account` | **V** `money.net-worth` | **V** `chat.money-records` |
 | Financial account (cash, card, brokerage) | edit | **V** `ui-money.account` | **V** `money.net-worth` | **V** `chat.money-records` |
 | Financial account (cash, card, brokerage) | delete | **V** `ui-money.account` | **V** `money.net-worth` | **V** `chat-tools.assets` |
@@ -804,28 +804,28 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 | Connected bank data & statement import | cancel | screen | **V** `sweep.statement-import` | — |
 | Connected bank data & statement import | complete | screen | t1 (live) | — |
 | Expense | create | **V** `browser.expense-form` | **V** `money.budget` `hardening.refused-input-writes-nothing` `hardening.unusual-text-round-trips` `hardening.interrupted-request` `hardening.date-edges` `perf.load` `sync.other-device-reload-and-open` `equivalence.expense` | **V** `chat.create-edit-delete` `equivalence.expense` |
-| Expense | edit | **V** `ui-money.expense` | **V** `money.budget` `money.deleted-bill-history` `hardening.failed-edit-is-atomic` `sync.other-device-reload-and-open` | **V** `chat.create-edit-delete` |
+| Expense | edit | **V** `ui-money.expense` | **V** `money.budget` `money.deleted-bill-history` `hardening.failed-edit-is-atomic` `hardening.simultaneous-edits` `sync.other-device-reload-and-open` | **V** `chat.create-edit-delete` |
 | Expense | delete | **V** `ui-money.expense` | **V** `money.budget` `money.deleted-bill-history` `hardening.repeated-requests` `sync.other-device-reload-and-open` | **V** `chat.create-edit-delete` |
 | Expense | restore | — | **V** `money.budget` | — |
 | Expense | transfer | — | **V** `assets.nested-and-costs` | — |
 | Expense | cancel | — | — | **V** `chat.cancelled-and-questions-write-nothing` |
-| Income, paychecks and cash flow | create | **V** `ui-money.income` | **V** `hardening.refused-input-writes-nothing` `sweep.income-and-budget-copy` | **V** `chat.money-records` |
+| Income, paychecks and cash flow | create | **V** `ui-money.income` | **V** `hardening.refused-input-writes-nothing` `sweep.income-and-budget-copy` `equivalence.income` | **V** `chat.money-records` `equivalence.income` |
 | Income, paychecks and cash flow | edit | **V** `ui-money.income` | **V** `sweep.income-and-budget-copy` | **V** `chat.money-records` |
 | Income, paychecks and cash flow | delete | **V** `ui-money.income` | **V** `sweep.income-and-budget-copy` | **V** `chat.money-records` |
 | Income, paychecks and cash flow | complete | **V** `ui-money.income` | **V** `sweep.income-and-budget-copy` | **V** `chat-tools.records` |
-| Budget | create | **S** `ui-money.budget` | **V** `money.budget` | **V** `chat.money-records` |
-| Budget | edit | **S** `ui-money.budget` | **V** `money.budget` | **V** `chat.money-records` |
-| Budget | delete | **S** `ui-money.budget` | **V** `money.budget` | **V** `chat.money-records` |
-| Budget | duplicate | **S** `ui-money.budget` | **V** `sweep.income-and-budget-copy` | **V** `chat-tools.records` |
+| Budget | create | **V** `ui-money.budget` | **V** `money.budget` `equivalence.budget` | **V** `chat.money-records` `equivalence.budget` |
+| Budget | edit | **V** `ui-money.budget` | **V** `money.budget` `equivalence.budget` | **V** `chat.money-records` `equivalence.budget` |
+| Budget | delete | **V** `ui-money.budget` | **V** `money.budget` | **V** `chat.money-records` |
+| Budget | duplicate | **V** `ui-money.budget` | **V** `sweep.income-and-budget-copy` | **V** `chat-tools.records` |
 | Task | create | **V** `browser.task-form` `browser.offline` | **V** `records.task-lifecycle` `hardening.refused-input-writes-nothing` `hardening.unusual-text-round-trips` `hardening.date-edges` `browser.written-elsewhere` `perf.load` `sync.other-device-reload-and-open` `equivalence.task` | **V** `chat.create-edit-delete` `equivalence.task` |
-| Task | edit | **V** `ui-planning.task` | **V** `records.task-lifecycle` `hardening.failed-edit-is-atomic` `sync.other-device-reload-and-open` | **V** `chat.notes-artifacts-tasks` |
+| Task | edit | **V** `ui-planning.task` | **V** `records.task-lifecycle` `hardening.failed-edit-is-atomic` `hardening.simultaneous-edits` `sync.other-device-reload-and-open` | **V** `chat.notes-artifacts-tasks` |
 | Task | delete | **V** `browser.task-form` `ui-planning.task` | **V** `records.task-lifecycle` `browser.written-elsewhere` `perf.load` `sync.other-device-reload-and-open` | **V** `chat.notes-artifacts-tasks` |
 | Task | restore | **V** `ui-planning.task` | **V** `records.task-lifecycle` | **V** `chat.notes-artifacts-tasks` |
 | Task | reschedule | **V** `ui-planning.task` | **V** `records.task-recurring` | — |
 | Task | transfer | — | **V** `assets.person-cascade` | — |
 | Task | cancel | **V** `ui-planning.task` | **V** `records.task-recurring` | — |
 | Task | complete | **V** `browser.task-form` `ui-planning.task` | **V** `records.task-lifecycle` `records.task-recurring` | **V** `chat.create-edit-delete` |
-| Calendar event | create | **V** `ui-planning.event` `ui-planning.recurring-event` | **V** `records.event-series` `hardening.refused-input-writes-nothing` `sync.other-device-reload-and-open` | **V** `chat.create-edit-delete` `chat.names-journal-foods` |
+| Calendar event | create | **V** `ui-planning.event` `ui-planning.recurring-event` | **V** `records.event-series` `hardening.refused-input-writes-nothing` `sync.other-device-reload-and-open` `equivalence.event` | **V** `chat.create-edit-delete` `chat.names-journal-foods` `equivalence.event` |
 | Calendar event | edit | **V** `ui-planning.event` `ui-planning.recurring-event` | **V** `records.event-series` `hardening.failed-edit-is-atomic` `sync.other-device-reload-and-open` | **V** `chat.notes-artifacts-tasks` |
 | Calendar event | delete | **V** `ui-planning.event` `ui-planning.recurring-event` | **V** `records.event-series` `sync.other-device-reload-and-open` | **V** `chat.create-edit-delete` |
 | Calendar event | restore | **V** `ui-planning.recurring-event` | — | — |
@@ -839,9 +839,9 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 | Habit and check-ins | restore | **V** `ui-planning.habit` | **V** `records.habit` | **V** `chat.habits-goals-trackers` |
 | Habit and check-ins | cancel | **V** `ui-planning.habit` | **V** `records.habit` | **V** `chat.habits-goals-trackers` |
 | Habit and check-ins | complete | **V** `browser.habit-and-journal` `ui-planning.habit` | **V** `records.habit` `hardening.repeated-requests` `equivalence.habit-goal` | **V** `chat.habits-goals-trackers` `equivalence.habit-goal` |
-| Goal | create | **V** `sync.double-submit-one-record` | **V** `records.goal` `hardening.refused-input-writes-nothing` `equivalence.habit-goal` | **V** `chat.habits-goals-trackers` `equivalence.habit-goal` |
-| Goal | edit | **S** `ui-planning.goal` | **V** `records.goal` | **V** `chat.habits-goals-trackers` |
-| Goal | delete | **S** `ui-planning.goal` | **V** `records.goal` | **V** `chat.habits-goals-trackers` |
+| Goal | create | **V** `ui-planning.goal` `sync.double-submit-one-record` | **V** `records.goal` `hardening.refused-input-writes-nothing` `equivalence.habit-goal` | **V** `chat.habits-goals-trackers` `equivalence.habit-goal` |
+| Goal | edit | **V** `ui-planning.goal` | **V** `records.goal` | **V** `chat.habits-goals-trackers` |
+| Goal | delete | **V** `ui-planning.goal` | **V** `records.goal` | **V** `chat.habits-goals-trackers` |
 | Goal | restore | — | **V** `records.goal` | — |
 | Tracker entry (a logged reading) | create | **V** `ui-records.tracker-entry` | **V** `records.tracker` `equivalence.tracker-run` | **V** `chat.names-journal-foods` `chat.habits-goals-trackers` `equivalence.tracker-run` |
 | Tracker entry (a logged reading) | edit | **V** `ui-records.tracker-entry` | **V** `records.tracker` | **V** `chat.habits-goals-trackers` |
@@ -857,11 +857,11 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 | Document (uploaded file) | restore | — | **V** `records.document-alerts` | — |
 | Document (uploaded file) | archive | screen | **V** `records.document-alerts` | — |
 | Document (uploaded file) | transfer | — | — | **V** `chat-tools.records` |
-| Note | create | **V** `ui-records.note` | **V** `records.journal-notes` `hardening.refused-input-writes-nothing` `hardening.unusual-text-round-trips` | **V** `chat.notes-artifacts-tasks` |
-| Note | edit | **V** `ui-records.note` | **V** `records.journal-notes` | **V** `chat.notes-artifacts-tasks` |
+| Note | create | **V** `ui-records.note` | **V** `records.journal-notes` `hardening.refused-input-writes-nothing` `hardening.unusual-text-round-trips` `equivalence.journal-note` | **V** `chat.notes-artifacts-tasks` `equivalence.journal-note` |
+| Note | edit | **V** `ui-records.note` | **V** `records.journal-notes` `hardening.simultaneous-edits` | **V** `chat.notes-artifacts-tasks` |
 | Note | delete | **V** `ui-records.note` | **V** `records.journal-notes` | **V** `chat.notes-artifacts-tasks` |
 | Note | restore | — | **V** `records.journal-notes` | — |
-| Journal entry | create | **V** `browser.habit-and-journal` `ui-records.journal` | **V** `records.journal-notes` `hardening.unusual-text-round-trips` | **V** `chat.names-journal-foods` |
+| Journal entry | create | **V** `browser.habit-and-journal` `ui-records.journal` | **V** `records.journal-notes` `hardening.unusual-text-round-trips` `equivalence.journal-note` | **V** `chat.names-journal-foods` `equivalence.journal-note` |
 | Journal entry | edit | **V** `ui-records.journal` | **V** `records.journal-notes` | **V** `chat.notes-artifacts-tasks` |
 | Journal entry | delete | **V** `browser.habit-and-journal` `ui-records.journal` | **V** `records.journal-notes` | **V** `chat.notes-artifacts-tasks` |
 | Journal entry | cancel | **V** `browser.habit-and-journal` | — | — |
@@ -877,9 +877,9 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 | Characteristic (record detail) | edit | **V** `ui-records.detail` | **V** `records.details` | **V** `chat-tools.records` |
 | Characteristic (record detail) | delete | **V** `ui-records.detail` | **V** `records.details` | — |
 | Dashboards, alerts and preferences | create | — | — | **V** `chat-tools.dashboard` |
-| Dashboards, alerts and preferences | edit | **S** `ui-planning.dashboard` | **V** `sweep.memory-preferences-links` | **V** `chat-tools.dashboard` |
-| Dashboards, alerts and preferences | restore | **S** `ui-planning.dashboard` | **V** `records.document-alerts` | — |
-| Dashboards, alerts and preferences | cancel | **S** `ui-planning.dashboard` | **V** `records.document-alerts` | **V** `chat-tools.dashboard` |
+| Dashboards, alerts and preferences | edit | **V** `ui-planning.dashboard` | **V** `sweep.memory-preferences-links` | **V** `chat-tools.dashboard` `chat-tools.dashboard-scope` |
+| Dashboards, alerts and preferences | restore | **V** `ui-planning.dashboard` | **V** `records.document-alerts` | — |
+| Dashboards, alerts and preferences | cancel | **V** `ui-planning.dashboard` | **V** `records.document-alerts` | **V** `chat-tools.dashboard` |
 | Dashboards, alerts and preferences | complete | screen | **V** `api-rest.onboarding-complete` | **V** `chat-tools.notification-read` |
 | AI memory | create | — | **V** `sweep.memory-preferences-links` | **V** `chat.notes-artifacts-tasks` |
 | AI memory | edit | **V** `ui-records.memory` | **V** `sweep.memory-preferences-links` | **V** `chat-tools.dashboard` |
@@ -925,9 +925,9 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 
 Connected bank data & statement import · edit · Chat; Connected bank data & statement import · complete · API; AI chat & search · create · API; AI chat & search · complete · API; AI Mode (a workspace the person builds) · create · API; AI Mode (a workspace the person builds) · edit · API; AI Mode (a workspace the person builds) · delete · API; AI Mode (a workspace the person builds) · duplicate · API.
 
-### Operations a screen offers that no integrity browser scenario drives (26)
+### Operations a screen offers that no integrity browser scenario drives (15)
 
-Asset (owned thing) and its lifecycle · delete; Asset (owned thing) and its lifecycle · transfer; Asset (owned thing) and its lifecycle · cancel; Connected bank data & statement import · create; Connected bank data & statement import · edit; Connected bank data & statement import · archive; Connected bank data & statement import · cancel; Connected bank data & statement import · complete; Budget · create; Budget · edit; Budget · delete; Budget · duplicate; Goal · edit; Goal · delete; Tracker · create; Document (uploaded file) · archive; Dashboards, alerts and preferences · edit; Dashboards, alerts and preferences · cancel; Dashboards, alerts and preferences · complete; AI memory · cancel; Person, pet or provider profile · create; Person, pet or provider profile · transfer; AI chat & search · create; AI chat & search · complete; AI Mode (a workspace the person builds) · create; AI Mode (a workspace the person builds) · delete.
+Connected bank data & statement import · create; Connected bank data & statement import · edit; Connected bank data & statement import · archive; Connected bank data & statement import · cancel; Connected bank data & statement import · complete; Tracker · create; Document (uploaded file) · archive; Dashboards, alerts and preferences · complete; AI memory · cancel; Person, pet or provider profile · create; Person, pet or provider profile · transfer; AI chat & search · create; AI chat & search · complete; AI Mode (a workspace the person builds) · create; AI Mode (a workspace the person builds) · delete.
 
 ## Scenarios
 
