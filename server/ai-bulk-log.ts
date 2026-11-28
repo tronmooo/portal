@@ -32,6 +32,10 @@ export interface OperationOutcome {
   tool: string;
   status: "ok" | "failed" | "skipped" | "deduped";
   error?: string;
+  /** A step that stopped to ASK the person (the tool answered needsConfirmation
+   *  with a question written for them): nothing was saved, and the question is
+   *  the honest reply (shared/ai-claim-check honestFailureReply). */
+  question?: string;
   /** Debug-only (request sent `debug:true`): the tool's raw, model-facing
    *  error and the arguments it was called with — never shown in the UI. */
   rawError?: string;

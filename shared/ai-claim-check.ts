@@ -27,6 +27,8 @@ export interface ExecutedOperation {
   entityId?: string;
   /** Human label for the record touched ("Dodge Ram 2025"). */
   raw?: string;
+  /** The step stopped to ask the person this (nothing was saved). */
+  question?: string;
 }
 
 export type ClaimMismatch =
@@ -344,6 +346,13 @@ export function isRetryBackTalk(reply: string): boolean {
  * rendering success — never alongside it.
  */
 export function honestFailureReply(operations: ExecutedOperation[]): string {
+  // A step that stopped to ASK is not a failure to apologise for: its question
+  // is the reply. The model sometimes answered such a question with "Updated
+  // your goal", the gate rightly refused the claim, and the person was told
+  // "1 step didn't go through" instead of being asked ("save $5,000 for a
+  // vacation" beside a $3,000 vacation goal; chat variations, 2026-11-28).
+  const questions = Array.from(new Set(operations.map((o) => (o.status === "failed" ? String(o.question ?? "").trim() : "")).filter(Boolean)));
+  if (questions.length > 0) return questions.join("\n\n");
   const failed = operations.filter((o) => o.status !== "ok" && o.status !== "deduped").length;
   if (operations.length === 0) {
     return "I wasn't able to complete that — nothing was saved. Could you rephrase it and I'll try again?";

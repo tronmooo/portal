@@ -192,7 +192,7 @@ import {
 } from "@shared/ai-tool-routing";
 import { pleasantryReply } from "@shared/chat-pleasantry";
 import { recordsAnOccurrence, whyNotReported } from "@shared/not-reported";
-import { toUserFacingError, stripInternalText } from "@shared/ai-message-kinds";
+import { toUserFacingError, stripInternalText, isInternalDirective } from "@shared/ai-message-kinds";
 import { checkClaims, shouldRetryUnbackedWriteClaim, isRetryBackTalk, UNBACKED_WRITE_RETRY_INSTRUCTION, honestFailureReply, groundedSummary, describeMismatch, stripStaleCapabilityClaims, type ExecutedOperation } from "@shared/ai-claim-check";
 import { recordChatFailure } from "./ai-failure-log";
 import { detectMoodFromText } from "@shared/mood-detect";
@@ -19272,6 +19272,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               tool: toolUse.name,
               status: isSuccess ? (wasDeduped ? "deduped" : "ok") : "failed",
               error: userFacingError,
+              ...(!isSuccess && (result as any)?.needsConfirmation === true && typeof result?.error === "string"
+                && !isInternalDirective(result.error) ? { question: String(result.error) } : {}),
               // A probe with debug:true needs the raw failure to diagnose a
               // turn; the user-facing sentence above hides it by design.
               ...(options?.debug && !isSuccess ? {
@@ -19909,6 +19911,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         status: op.status,
         entityId: op.entityId,
         raw: op.raw,
+        ...(op.question ? { question: op.question } : {}),
       }));
       const claimCheck = checkClaims({
         reply: finalReply,
