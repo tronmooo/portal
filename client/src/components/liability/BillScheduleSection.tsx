@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -78,6 +78,9 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+/** Two presses this close together are one gesture (a double tap), wherever the second lands. */
+export const SAME_GESTURE_MS = 700;
+
 export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
   const { toast } = useToast();
   const [filter, setFilter] = useState<Filter>("upcoming");
@@ -101,8 +104,18 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
     onSuccess: (_d, _v, ctx) => { resync(); },
     onError: (e: any) => toast({ title: "Couldn't update the bill", description: e?.message || "Try again.", variant: "destructive" }),
   });
-  const act = (fn: () => Promise<Response>, ok: string) =>
+  // A press this soon after the previous action STARTED is the second half
+  // of the same double tap. Paying a row removes its Pay button and slides
+  // the next month's Pay under the finger, so the phone's second tap paid
+  // January as well as December (ui-money.bill, isolated stack, 2026-11-28:
+  // "…/occurrences/2026-12-04/pay" then "…/2027-01-04/pay" 0.3 s apart).
+  const lastActAt = useRef(0);
+  const act = (fn: () => Promise<Response>, ok: string) => {
+    const now = Date.now();
+    if (run.isPending || now - lastActAt.current < SAME_GESTURE_MS) return;
+    lastActAt.current = now;
     run.mutate(fn, { onSuccess: () => { resync(); toast({ title: ok }); } });
+  };
 
   if (isLoading || !data) {
     return (

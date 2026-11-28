@@ -661,6 +661,7 @@ export default defineConfig({
       'tests/owner-set-lock-reentrant.test.ts',
       'tests/document-fields-key-level.test.ts',
       'tests/calendar-grid-press-after-close.test.ts',
+      'tests/bill-pay-double-tap-one-row.dom.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
