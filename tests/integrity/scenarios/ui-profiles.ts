@@ -333,7 +333,12 @@ scenario({
 
       const openAdd = async () => {
         await press(s, t("hub-kpi-networth"));
-        await press(s, t("button-entity-add"));
+        // The sheet's Add asset is its list's last row once anything is owned,
+        // and its empty state's button on an account that owns nothing (a fresh
+        // worker account): the same control, onAdd, either way.
+        await sleep(800);
+        if (await vis(s, t("button-entity-add")).isVisible().catch(() => false)) await press(s, t("button-entity-add"));
+        else await tapIt(s, s.page.getByRole("dialog").getByRole("button", { name: /^add asset$/i }).locator("visible=true").first());
         await vis(s, t("dialog-add-asset")).waitFor({ timeout: 10000 });
       };
       const closeSheet = async () => { await s.page.keyboard.press("Escape"); await sleep(300); await s.page.keyboard.press("Escape"); await sleep(400); };

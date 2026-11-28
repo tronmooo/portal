@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DETAIL_DEFS_PREF, RECORD_DETAILS_PREFIX, parseDefinitions, parseRecordDetails, parseRecordDetailsKey, recordDetailsKey } from "@shared/record-details";
 import { expenseShownOnProfile } from "@shared/expense-on-profile";
 import {
@@ -752,6 +753,10 @@ export function scheduledPaymentAmount(row: Record<string, any> | null | undefin
   const n = Number(row?.total_payment ?? row?.payment ?? row?.amount ?? row?.payment_amount ?? 0);
   return Number.isFinite(n) ? n : 0;
 }
+
+
+/** Owner-set locks the current async call chain already holds (re-entrancy). */
+const ownerSetLocksHeld = new AsyncLocalStorage<Set<string>>();
 
 export class SupabaseStorage implements IStorage {
   private supabase: SupabaseClient;
@@ -8985,6 +8990,13 @@ export class SupabaseStorage implements IStorage {
   }
   /** Run `fn` holding a short per-account lock, waiting (up to ~20 s) for it. */
   private async withOwnerSetLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
+    // RE-ENTRANT within one call chain: removing a co-owner inside the locked
+    // replacement redistributes the survivors' shares, which takes the same
+    // lock. Without this it waited for itself for 20 s and gave up ("could
+    // not redistribute shares"), so every hand-back took 20 s (integrity run
+    // on the isolated stack, 2026-11-28, ui-profiles.asset-ownership).
+    const held = ownerSetLocksHeld.getStore();
+    if (held?.has(name)) return fn();
     const deadline = Date.now() + 20_000;
     let delay = 60;
     while (!(await this.acquireUserLock(name, 30_000))) {
@@ -8996,7 +9008,9 @@ export class SupabaseStorage implements IStorage {
       await new Promise((r) => setTimeout(r, delay + Math.floor(Math.random() * 40)));
       delay = Math.min(delay * 2, 800);
     }
-    try { return await fn(); } finally { await this.releaseUserLock(name).catch(() => undefined); }
+    try {
+      return await ownerSetLocksHeld.run(new Set([...(held ?? []), name]), fn);
+    } finally { await this.releaseUserLock(name).catch(() => undefined); }
   }
   async releaseUserLock(name: string): Promise<void> {
     await this.supabase.from("preferences").delete().eq("user_id", this.userId).eq("key", `lock:${name}`);
