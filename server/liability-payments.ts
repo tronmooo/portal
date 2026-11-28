@@ -13,7 +13,7 @@
 // That is not a synchronization bug, but it is the same disease: two code paths
 // answering one question. Both callers now land here.
 import { isGeneratedBillReminderTask } from "@shared/bill-reminders";
-import { allocatePayment, interestChargedInMonth, resolveAnnualRate } from "@shared/liability-calc";
+import { allocatePayment, roundCents, interestChargedInMonth, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName } from "@shared/liability-types";
 import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate, resolveOccurrenceKey, lastSeriesOccurrence } from "@shared/liability-recurrence";
 import { resolveLiabilityBalance } from "@shared/asset-value";
@@ -204,7 +204,7 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
   let newBalance: number;
   let overpayment = 0;
   let forgiven = 0;
-  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const round2 = roundCents; // half up as written in decimal (shared/liability-calc)
   if (paymentType === "skipped" || paymentType === "deferred") {
     newBalance = balanceBefore;
     principal = 0;

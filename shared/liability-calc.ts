@@ -211,6 +211,18 @@ export function interestChargedInMonth(
  * - Interest is computed from the balance at the time of payment.
  * - Remainder after interest and fees goes to principal.
  */
+/**
+ * Round money to the cent, half up, as written in decimal. Adding
+ * Number.EPSILON does not undo float error at dollar magnitudes:
+ * $18,300 × 3.9% / 12 is exactly $59.475, computed as 59.474999999999994,
+ * and rounded DOWN to $59.47 (integrity run on the isolated stack,
+ * 2026-11-28; a lender charges $59.48). Twelve significant digits first.
+ */
+export function roundCents(n: number): number {
+  if (!Number.isFinite(n)) return n;
+  return Math.round(Number((n * 100).toPrecision(12))) / 100;
+}
+
 export function allocatePayment(
   paymentAmount: number,
   currentBalance: number,
@@ -222,8 +234,7 @@ export function allocatePayment(
   // of the payment is called principal. Rounding the two parts separately
   // let them add up to a cent more or less than was paid ($418.50 split as
   // $70.13 interest + $348.38 principal; integrity run, 2026-11-27).
-  const round2c = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-  const interestAccrued = round2c(Math.max(0, currentBalance * monthlyRate));
+  const interestAccrued = roundCents(Math.max(0, currentBalance * monthlyRate));
   const safeFees = Math.max(0, fees);
   let remaining = Math.max(0, paymentAmount - safeFees);
   const interestPaid = Math.min(interestAccrued, remaining);
@@ -233,12 +244,11 @@ export function allocatePayment(
   // Round every money output to cents so decimal payments (e.g. $0.17) save and
   // reduce the balance by the EXACT amount instead of drifting on float error
   // (60 - 0.17 must be 59.83, not 59.82999999).
-  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
   return {
-    principal: round2(principalPaid),
-    interest: round2(interestPaid),
-    fees: round2(safeFees),
-    remainingBalanceAfter: round2(newBalance),
+    principal: roundCents(principalPaid),
+    interest: roundCents(interestPaid),
+    fees: roundCents(safeFees),
+    remainingBalanceAfter: roundCents(newBalance),
   };
 }
 

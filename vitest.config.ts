@@ -654,6 +654,7 @@ export default defineConfig({
       'tests/budget-self-owner-one-bucket.test.ts',
       'tests/chat-ownership-and-links.test.ts',
       'tests/chat-screen-equivalence-2026-11-28.test.ts',
+      'tests/payment-interest-half-cent.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
