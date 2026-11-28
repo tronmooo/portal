@@ -21,6 +21,9 @@ export interface AnnualLabelEvent {
   /** The person named in the label, "" when the label names nobody. */
   name: string;
   recurrence: "yearly";
+  /** A birthday is a whole day, filed as the Calendar's Birthday form files it. */
+  allDay: true;
+  category: "family";
   tags: string[];
 }
 
@@ -37,6 +40,8 @@ export function annualLabelEvent(title: unknown, existingTags?: readonly unknown
     kind: label.kind,
     name: label.name,
     recurrence: "yearly",
+    allDay: true,
+    category: "family",
     tags: [...base, RD_TAG, `rd:kind:${label.kind}`],
   };
 }

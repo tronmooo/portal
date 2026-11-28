@@ -502,6 +502,12 @@ function VersionWatch() {
     window.addEventListener("hashchange", check);
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
+    // And once as the app starts: after a reload the screens paint from the
+    // restored snapshot, much of it as fresh, so nothing else may ask for a
+    // while. The answer is compared with the map that snapshot was read under
+    // (lib/server-versions.ts restoreServerVersions), so a write another
+    // device made while this tab was closed is read again at once.
+    check();
     return () => {
       clearInterval(id);
       if (pending.current) { clearTimeout(pending.current); pending.current = null; }

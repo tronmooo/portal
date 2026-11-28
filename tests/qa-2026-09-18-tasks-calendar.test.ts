@@ -143,7 +143,10 @@ describe("F-27: one occurrence label for a repeating task", () => {
 // ── F-28 ─────────────────────────────────────────────────────────────────────
 describe("F-28: a birthday told to the chat repeats yearly", () => {
   it("a bare label is yearly and carries the Recurring Dates kind", () => {
-    expect(annualLabelEvent("Dana's Birthday")).toEqual({ kind: "birthday", name: "Dana", recurrence: "yearly", tags: ["rdate", "rd:kind:birthday"] });
+    // allDay / category added 2026-11-28: the chat's birthday is stored as the
+    // Calendar's Birthday form stores it (all day, "family"); the yearly
+    // recurrence and kind tags this test guards are unchanged.
+    expect(annualLabelEvent("Dana's Birthday")).toEqual({ kind: "birthday", name: "Dana", recurrence: "yearly", allDay: true, category: "family", tags: ["rdate", "rd:kind:birthday"] });
     expect(annualLabelEvent("🎂 Dana's Birthday", ["family"])?.tags).toEqual(["family", "rdate", "rd:kind:birthday"]);
     expect(annualLabelEvent("Our Anniversary")?.kind).toBe("anniversary");
   });

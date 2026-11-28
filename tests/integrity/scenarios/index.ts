@@ -14,3 +14,5 @@ import "./ui-profiles";
 import "./chat-tools";
 import "./api-rest";
 import "./concurrency";
+import "./sync-devices";
+import "./equivalence";

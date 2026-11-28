@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { EXPENSE_CATEGORIES } from "@shared/category-canon";
 import { memoryKeyFor } from "@shared/memory-key";
 import {
   DetailError, clearRecordDetail, defineAndSetRecordDetail, detailReport, divertDefinedDetails,
@@ -8,7 +9,7 @@ import {
   findDefinition as findDetailDefinition, formatDetailValue, isDetailEntityType as isDetailEntityTypeShared,
   type DetailEntityType,
 } from "@shared/record-details";
-import { keepStatedBirthPrecision } from "@shared/date-precision";
+import { keepStatedBirthPrecision, isBirthDateField } from "@shared/date-precision";
 import { getAnthropicClient } from "./anthropic-client";
 import { fieldPatchBetween } from "../shared/field-patch";
 import { resolveRequestedScope, resolveProfileTypeForCreate, polishAssistantReply } from "../shared/domain";
@@ -272,6 +273,8 @@ import { classifyTurnScope, type TurnScope } from "@shared/turn-scope";
 import { runWithMutationScope, isReadOnlyTurnError } from "./mutation-scope";
 import { logIntegrity } from "./integrity-log";
 import { operationIdFor, readOnlyTurnViolation } from "@shared/ai-operation-ids";
+import { chatProfileTypeKey } from "@shared/chat-profile-type-key";
+import { isPlaceholderBirthYear, nextAnnualDate, dropPlaceholderBirthDates } from "@shared/placeholder-birth-year";
 import {
   EXTRACT_ACTIONS_TOOL,
   MAX_BULK_OPERATIONS,
@@ -4273,7 +4276,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     input_schema: {
       type: "object" as const,
       properties: {
-        category: { type: "string", description: "Budget category. MUST be one of: food, transport, health, pet, vehicle, entertainment, shopping, utilities, housing, insurance, subscription, education, personal, general" },
+        category: { type: "string", description: `Budget category. MUST be one of: ${EXPENSE_CATEGORIES.join(", ")} (the same list the screens offer). Use the one the user named when it is on this list ("travel" is travel, not transport)` },
         amount: { type: "number", description: "Monthly budget amount in dollars" },
         month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
         notes: { type: "string", description: "Optional notes about this budget" },
@@ -4655,7 +4658,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       properties: {
         amount: { type: "number", description: "Amount in dollars" },
         description: { type: "string", description: "What was purchased" },
-        category: { type: "string", description: "Category. MUST be one of: food, transport, health, pet, vehicle, entertainment, shopping, utilities, housing, insurance, subscription, education, personal, general. You MUST infer the best category from context — NEVER default to 'general' if ANY other category fits. Examples: groceries/restaurant/coffee → food, uber/gas/parking → transport, vet/pet food/grooming → pet, oil change/tires/car wash → vehicle, gym/doctor/pharmacy → health, Netflix/Spotify → subscription, rent/mortgage → housing, electric/water/internet → utilities, Amazon/clothes/electronics → shopping, movies/games/concerts → entertainment." },
+        category: { type: "string", description: `Category. MUST be one of: ${EXPENSE_CATEGORIES.join(", ")} (the same list the screens offer; flights/hotels/trips → travel). You MUST infer the best category from context — NEVER default to 'general' if ANY other category fits. Examples: groceries/restaurant/coffee → food, uber/gas/parking → transport, vet/pet food/grooming → pet, oil change/tires/car wash → vehicle, gym/doctor/pharmacy → health, Netflix/Spotify → subscription, rent/mortgage → housing, electric/water/internet → utilities, Amazon/clothes/electronics → shopping, movies/games/concerts → entertainment.` },
         date: { type: "string", description: "Date of the expense in YYYY-MM-DD format. Use today's date if not specified. Use the actual date the expense occurred if the user says 'yesterday', 'last Tuesday', etc." },
         vendor: { type: "string", description: "Store or vendor name" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
@@ -5820,7 +5823,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         amount: { type: "number", description: "Income amount in dollars, per payment (not the annual total)." },
         source: { type: "string", description: "Income source (employer, client, freelance, etc.)" },
         date: { type: "string", description: "Date received, or the first/next payment date for recurring income (YYYY-MM-DD). Defaults to today." },
-        category: { type: "string", description: "Category: salary, freelance, investment, gift, refund, other" },
+        category: { type: "string", enum: ["salary", "freelance", "business", "rental", "investment", "gift", "refund", "other"], description: "Category — the same list the Finance screen offers. Rent a tenant pays → rental; own company/side business → business." },
         frequency: { type: "string", enum: ["once", "weekly", "biweekly", "monthly", "quarterly", "yearly"], description: "How often this income arrives. 'every Friday' → weekly; 'every other week' → biweekly; 'monthly'/'every month' → monthly. Defaults to 'once' (a single payment). Set it whenever the user states a cadence — recurring income is fully supported." },
         forProfile: { type: "string", description: "Name of the person this income belongs to (e.g. 'Sarah Miller'). ALWAYS set it when the user names whose money it is; without it the income is filed under the account owner and is invisible on that person's Finance screen." },
         notes: { type: "string", description: "Optional notes" },
@@ -5897,7 +5900,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     input_schema: {
       type: "object" as const,
       properties: {
-        category: { type: "string", description: "Budget category. MUST be one of: food, transport, health, pet, vehicle, entertainment, shopping, utilities, housing, insurance, subscription, education, personal, general" },
+        category: { type: "string", description: `Budget category. MUST be one of: ${EXPENSE_CATEGORIES.join(", ")} (the same list the screens offer). Use the one the user named when it is on this list ("travel" is travel, not transport)` },
         amount: { type: "number", description: "Monthly budget amount in dollars" },
         month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
         forProfile: { type: "string", description: "OPTIONAL: name of the person/pet this budget is for (e.g. 'Bob', 'Mom'). Set this when the user scopes the budget to someone ('$200 groceries budget for Bob'). Omit for a shared/household budget." },
@@ -8287,6 +8290,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (resolvedProfileType !== input.type) {
         logger.warn("ai", `create_profile got type=${JSON.stringify(input.type)} for "${input.name}" — filing as "${resolvedProfileType}" (never a person for a thing)`);
       }
+      // A 1900 birth year is a placeholder, never stored (see update_profile).
+      dropPlaceholderBirthDates(finalFields, isBirthDateField);
       const profilePayload = validateAiPayload(insertProfileSchema, {
         type: resolvedProfileType,
         name: input.name,
@@ -8300,7 +8305,12 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       }, "profile");
       if (!profilePayload.ok) return { error: profilePayload.error };
 
-      const newProfile = await storage.createProfile(profilePayload.data);
+      // The screen files a profile under the registry type the person picked;
+      // chat files it under the same key wherever it is unambiguous (L4).
+      const chatTypeKey = chatProfileTypeKey(resolvedProfileType, finalFields);
+      const newProfile = await storage.createProfile(
+        chatTypeKey ? ({ ...profilePayload.data, type_key: chatTypeKey } as any) : profilePayload.data,
+      );
 
       // PROFILE RULE 8: a person created now picks up the birthday and
       // anniversary dates already recorded for them as standalone events
@@ -8523,6 +8533,16 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const updateFlatFields = updateCanon?.fields;
       // "Max was born in March 2020" names a month, not March 1.
       if (updateFlatFields) keepStatedBirthPrecision(updateFlatFields, String((input as any).__userMessage || ""));
+      // A birth year of 1900 is the model's placeholder for "no year given",
+      // never a date of birth (equivalence.event, 2026-11-28): it is dropped.
+      const placeholderBirth = updateFlatFields ? dropPlaceholderBirthDates(updateFlatFields, isBirthDateField) : [];
+      if (placeholderBirth.length > 0 && updateFlatFields && Object.keys(updateFlatFields).length === 0
+        && Object.keys(input.changes || {}).every((k) => k === "fields")) {
+        return {
+          error: `NO_BIRTH_YEAR: the user gave no birth year, so ${profile.name}'s date of birth was NOT written (1900 is not a year to store). ` +
+            `Save it as create_event(title:"🎂 ${profile.name}'s Birthday", date:<its next date>, recurrence:"yearly", forProfile:"${profile.name}") instead.`,
+        };
+      }
       // One source per value: a field named like a characteristic the user
       // DEFINED (record details) is written to that characteristic, typed —
       // not into a loose field beside it (server/record-details).
@@ -11768,9 +11788,17 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         //
         // Anything that fails one of them stays an ordinary calendar event.
         const label = parseBirthdayLabel(input.title);
-        const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
-        const year = /^\d{4}-/.test(iso) ? Number(iso.slice(0, 4)) : NaN;
+        let iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
+        let year = /^\d{4}-/.test(iso) ? Number(iso.slice(0, 4)) : NaN;
         const thisYear = new Date().getFullYear();
+        // A placeholder year (1900) is no year: the birthday is the yearly
+        // event on its next date, as the Calendar's Birthday form files it,
+        // and nobody's date of birth is written from it.
+        if (label && isPlaceholderBirthYear(year)) {
+          iso = nextAnnualDate(iso, getUserToday(aiUserTimezone()));
+          input = { ...input, date: iso };
+          year = Number(iso.slice(0, 4));
+        }
         if (label && year < thisYear) {
           const allProfs = await storage.getProfiles();
           // Only records that HAVE a birthday. `matchProfileByName` searches
@@ -12009,9 +12037,14 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // lists beside the profile-derived birthdays instead of landing as a
       // one-off on next year's date (QA 2026-09-18 F-28).
       const annual = annualLabelEvent(input.title);
+      // It is stored as the Calendar's Birthday form stores one (all day,
+      // "family"), so the two doors make the same row (equivalence.event).
+      let evtAllDay = Boolean(input.allDay);
       if (annual) {
         evtRecurrence = annual.recurrence;
         evtTags = annual.tags;
+        if (!input.time) evtAllDay = annual.allDay;
+        evtCategory = annual.category;
       }
       const evtDaySet = weekdaySetFor(evtRecurrence);
       if (evtDaySet) {
@@ -12028,7 +12061,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         date: evtDate,
         time: input.time,
         endTime: input.endTime,
-        allDay: input.allDay || false,
+        allDay: evtAllDay,
         location: input.location,
         description: input.description,
         recurrence: evtRecurrence,

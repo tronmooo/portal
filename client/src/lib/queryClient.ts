@@ -3,7 +3,7 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { decodeSessionUserId, selectHydratableEntries } from "./cache-isolation";
 import { bootstrapSeedEntries, projectBootstrapShell } from "./bootstrap-seed-keys";
 import { writeStarted, writeSettled } from "./write-clock";
-import { observeServerVersions, resetServerVersions, SERVER_VERSION_HEADER } from "./server-versions";
+import { observeServerVersions, resetServerVersions, restoreServerVersions, serverVersionsSnapshot, SERVER_VERSION_HEADER } from "./server-versions";
 import { getProfileFilterSnapshot } from "./profileFilter";
 import { ACTIVE_PROFILE_HEADER } from "@shared/active-scope";
 import { decodeVersionMap, encodeVersionMap, EPOCH_KEY } from "@shared/cache-domains";
@@ -148,7 +148,74 @@ const CHAT_TIMEOUT_MS = 170000; // 170s for chat — heavy multi-action queries 
 const VALUATION_TIMEOUT_MS = 150000;
 const SEARCH_TIMEOUT_MS = 15000; // 15s for ⌘K search — must fail fast with an error state, never spin for the full 60s default.
 
+/*
+ * ONE SUBMISSION, ONE REQUEST (integrity run, 2026-11-28). A double click or a
+ * double tap lands two clicks before React re-renders the button as disabled,
+ * so a form's `isPending` guard reads false twice and the same create is sent
+ * twice: two identical goals from the goal form, two assets from the Net worth
+ * sheet's "Add asset" (and earlier the account, child-asset and ownership
+ * forms, each patched locally with a ref). Fixed here, once, for every form:
+ * a write identical to one still IN FLIGHT (same method, URL and body) is the
+ * same submission — it is not sent again, and its caller gets the first one's
+ * answer (a clone, so each caller reads its own body; a failure rejects both).
+ * Once the first is answered, an identical write is a NEW submission and goes
+ * out (I14: two identical purchases are allowed). The per-submission
+ * Idempotency-Key of a transaction (lib/submission-key.ts) still rides on the
+ * one request that is sent.
+ * Guard: tests/sync-devices-reload-and-double-submit.test.ts.
+ */
+interface InFlightWrite { joiners: Array<{ resolve: (r: Response) => void; reject: (e: unknown) => void }> }
+const inFlightWrites = new Map<string, InFlightWrite>();
+
+/** Sign-out / account switch: a write the previous session still has in the
+ *  air must never answer one the next session sends (and tests). Its own
+ *  caller still gets its answer. */
+export function abandonInFlightWrites(): void { inFlightWrites.clear(); }
+
+function sameSubmissionKey(method: string, url: string, data: unknown): string | null {
+  try {
+    return `${method.toUpperCase()} ${url} ${data === undefined ? "" : JSON.stringify(data)}`;
+  } catch { return null; /* not serialisable: never treated as a repeat */ }
+}
+
+function cloneForJoiner(res: Response): Response {
+  return typeof (res as any)?.clone === "function" ? res.clone() : res;
+}
+
 export async function apiRequest(
+  method: string,
+  url: string,
+  data?: unknown | undefined,
+): Promise<Response> {
+  if (method.toUpperCase() === "GET") return sendApiRequest(method, url, data);
+  const key = sameSubmissionKey(method, url, data);
+  if (key === null) return sendApiRequest(method, url, data);
+  const running = inFlightWrites.get(key);
+  if (running) {
+    syncLog("mutation", `joined in-flight ${method.toUpperCase()} (same submission)`);
+    return new Promise<Response>((resolve, reject) => { running.joiners.push({ resolve, reject }); });
+  }
+  const mine: InFlightWrite = { joiners: [] };
+  inFlightWrites.set(key, mine);
+  const done = () => { if (inFlightWrites.get(key) === mine) inFlightWrites.delete(key); };
+  let res: Response;
+  try {
+    res = await sendApiRequest(method, url, data);
+  } catch (err) {
+    done();
+    for (const j of mine.joiners) j.reject(err);
+    throw err;
+  }
+  done();
+  // Clone before the first caller can read the body: an unread response can be
+  // cloned any number of times; a read one cannot.
+  for (const j of mine.joiners) {
+    try { j.resolve(cloneForJoiner(res)); } catch (e) { j.reject(e); }
+  }
+  return res;
+}
+
+async function sendApiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
@@ -750,8 +817,12 @@ export function snapshotCache(): void {
     // Nothing curated is loaded yet (very early boot) — leave any existing blob
     // in place rather than wiping a good restore snapshot.
     if (out.length === 0) return;
-    // Stamp the snapshot with the owning user id (see currentSessionUserId).
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ uid, entries: out }));
+    // Stamp the snapshot with the owning user id (see currentSessionUserId),
+    // and the server version map this data was read under: a reload compares
+    // the next map with it, so a write another device made in between is read
+    // again instead of hiding behind the restored rows (persistedVersionsOf).
+    const v = serverVersionsSnapshot();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(v ? { uid, v, entries: out } : { uid, entries: out }));
   } catch { /* localStorage may be unavailable (private browsing) */ }
 }
 
@@ -789,6 +860,7 @@ export function clearAllClientCaches(): void {
     queryClient.clear();
   } catch { /* ignore */ }
   clearDataVersion();
+  abandonInFlightWrites();
   void import("./write-sync").then((m) => m.clearAllTombstones()).catch(() => { /* ignore */ });
   try {
     localStorage.removeItem(STORAGE_KEY);
@@ -813,7 +885,22 @@ export function clearAllClientCaches(): void {
 export function resetQueryCacheForUserSwitch(): void {
   try { queryClient.clear(); } catch { /* ignore */ }
   clearDataVersion();
+  abandonInFlightWrites();
   try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+}
+
+/**
+ * The version map saved with a snapshot (see snapshotCache). It is written
+ * right after `uid`, so it is read from the head of the blob without parsing
+ * the whole snapshot a second time. Undefined: the snapshot has none.
+ */
+export function persistedVersionsOf(raw: string): Record<string, unknown> | undefined {
+  const m = /^\{"uid":"(?:[^"\\]|\\.)*","v":(\{[^{}]*\})/.exec(raw);
+  if (!m) return undefined;
+  try {
+    const v = JSON.parse(m[1]);
+    return v && typeof v === "object" && !Array.isArray(v) ? v : undefined;
+  } catch { return undefined; }
 }
 
 export function hydrateQueryCache(): void {
@@ -842,6 +929,9 @@ export function hydrateQueryCache(): void {
     // everything else is seeded fresh. When that single bootstrap refetch
     // lands, seedDashboardCaches overwrites all dependent keys with fresh
     // rows — so staleness is bounded by one round trip, not by the blob age.
+    // What the restored data was read under: the first version map after this
+    // reload names what another device changed meanwhile (lib/server-versions.ts).
+    if (entries.length > 0) restoreServerVersions(persistedVersionsOf(raw) ?? null);
     const seededAt = Date.now();
     let bootstrapEntry: { k: any; d: any; t: number; inv?: boolean } | null = null;
     const markInvalidated = (key: unknown) =>

@@ -192,8 +192,9 @@ export interface JournalInput {
   /**
    * The writer PICKED this mood (the journal page's mood buttons). A picked
    * mood is kept as given. Any other mood is a guess — chat's model sent
-   * "neutral" for "frustrated and overwhelmed" — and a neutral guess gives way
-   * to what the text itself says (shared/mood-detect).
+   * "neutral" for "frustrated and overwhelmed", "good" for "calm and
+   * grateful" — and a guess gives way to what the text itself says
+   * (shared/mood-detect); it stands only where the text says nothing.
    */
   moodPicked?: boolean;
 }
@@ -222,12 +223,17 @@ export async function upsertJournalEntry(
   const date = String(input.entryDate).slice(0, 10);
   const given = MOODS.includes(String(input.mood)) ? String(input.mood) : null;
   const detected = detectMoodFromText(content);
-  // What this piece of writing says about the day: the picked mood, else a
-  // non-neutral guess, else the text's own, else nothing.
+  // What this piece of writing says about the day: the picked mood, else the
+  // text's own (detected), else a non-neutral guess, else nothing. A mood is
+  // picked or DETECTED (J2): a guess the writer did not pick — the chat
+  // model's — gives way to what the words say, so the same words make the
+  // same mood through the composer and the chat ("calm and grateful": the
+  // composer stored great, the chat's guess good — equivalence.journal-note,
+  // 2026-11-28).
   const said: string | null = input.moodPicked && given
     ? given
-    : given && given !== "neutral" ? given
     : detected !== "neutral" ? detected
+    : given && given !== "neutral" ? given
     : null;
   const mood = said ?? given ?? "neutral";
 

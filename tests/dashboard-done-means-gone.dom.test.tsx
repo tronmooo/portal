@@ -45,7 +45,11 @@ function stubRoutes(routes: Record<string, Route | any>) {
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Each test is a fresh session. The app's client sends an identical write
+  // still in flight only once (lib/queryClient.ts apiRequest), so the previous
+  // test's slow PATCH of the same task would otherwise answer this test's.
+  (await import("../client/src/lib/queryClient")).abandonInFlightWrites();
   calls = [];
   fetchStub = vi.fn();
   vi.stubGlobal("fetch", fetchStub);
