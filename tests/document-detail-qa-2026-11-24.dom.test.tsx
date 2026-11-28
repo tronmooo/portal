@@ -15,6 +15,7 @@
 //     fields" — with none of the fields. The filled values are listed as
 //     label → value, and the Overview no longer denies them.
 
+import { applyExtractedDataChanges } from "../shared/extracted-data-changes";
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -123,10 +124,16 @@ describe("#16 a document's expiration and the calendar", () => {
     expect(method).toBe("PATCH");
     expect(url).toBe("/api/documents/d1");
     // It puts back the derived date (no new event): the opt-out loses the
-    // field and every other field is kept.
-    expect(body.extractedData._calendarOptOut).toEqual([]);
-    expect(body.extractedData.expiration_date).toBe("2031-03-14");
-    expect(body.extractedData.license_number).toBe("D1234567");
+    // field and every other field is kept. Since 2026-11-28 the page sends
+    // only that change and the server applies it to the STORED row (Rule 6:
+    // no client read-modify-write of a whole array or object); the stored
+    // result is checked through the same function the route applies.
+    expect(body.extractedData).toBeUndefined();
+    expect(body.extractedDataChanges.unlist.key).toBe("_calendarOptOut");
+    const stored = applyExtractedDataChanges(doc.extractedData, body.extractedDataChanges);
+    expect(stored._calendarOptOut).toEqual([]);
+    expect(stored.expiration_date).toBe("2031-03-14");
+    expect(stored.license_number).toBe("D1234567");
     expect(writes().some(([, u]) => String(u).startsWith("/api/events"))).toBe(false);
   });
 });

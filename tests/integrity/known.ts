@@ -16,6 +16,12 @@ export interface Known {
 export const KNOWN: Known[] = [
   {
     kind: "gap",
+    title: "ENVIRONMENT — the smoke account's mailbox does not accept mail, so a password-reset email cannot be sent to it on production",
+    detail: "Supabase answers email_address_invalid for the smoke account's address (the provider marked it as bouncing). The reset link itself was verified end to end on the auth-release preview against the production auth service with a deliverable address, and on the isolated stack through its mail catcher (accounts.password-change-and-reset). A production gate that needs a delivered email needs a deliverable test mailbox.",
+    evidence: "production auth logs, 2026-11-27 (auth release verification); tests/password-reset-link-session.test.ts",
+  },
+  {
+    kind: "gap",
     title: "There is no way to delete the account itself",
     detail: "Settings → \"Delete all data\" (DELETE /api/data/all) removes every record and leaves the sign-in in place: no route or screen removes the auth user. A person who asks for their account to be deleted keeps an empty one. Building it is a product decision (it must also end sessions and remove stored files, which the wipe already sweeps).",
     evidence: "accounts.delete-all-data on the isolated stack, 2026-11-27; server/auth.ts and server/routes.ts have no user-deletion route",
@@ -35,7 +41,7 @@ export const KNOWN: Known[] = [
   {
     kind: "question",
     title: "OPEN — chat: a budget for a category outside the fixed list is filed somewhere different each time",
-    detail: "\"Set a budget of $90 for gifts\" was saved under Shopping; \"raise my gifts budget to $120\" then made a General budget of $120; \"delete my gifts budget\" deleted General. The budget tools tell the model the category MUST be one of fourteen names, so for anything else it picks one, and not the same one twice — and a delete then acts on the guess, which could remove a real General budget. The API itself keeps an unknown name as its own budget. Not changed: whether an unlisted category should be refused, asked about, mapped by a fixed table or allowed as its own budget is a product decision.",
+    detail: "\"Set a budget of $90 for gifts\" was saved under Shopping; \"raise my gifts budget to $120\" then made a General budget of $120; \"delete my gifts budget\" deleted General. The budget tools tell the model the category MUST be one of the screens' categories (EXPENSE_CATEGORIES — since 2026-11-28 the same list the Budget popup offers, so \"travel\" is kept as travel; it used to be filed as transport), so for anything OFF that list it picks one, and not the same one twice — and a delete then acts on the guess, which could remove a real General budget. The API itself keeps an unknown name as its own budget. Not changed: whether an unlisted category should be refused, asked about, mapped by a fixed table or allowed as its own budget is a product decision.",
     evidence: "chat.money-records, preview a4f09e3, 2026-11-27 (replies recorded in test-results); server/ai-engine.ts set_budget / delete_budget",
   },
   {

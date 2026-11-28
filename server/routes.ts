@@ -517,6 +517,7 @@ import { isDirectChatTurn } from "@shared/chat-pleasantry";
 import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE, toCents, validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
 import { normalizeMonthKey, budgetCategoryKey, spendByCategory } from "@shared/budget-ledger";
 import { canonicalizeRegistryFields } from "@shared/registry-fields";
+import { isExtractedDataChanges, applyExtractedDataChanges } from "@shared/extracted-data-changes";
 import { canonicalIncomeFrequency, findDuplicatePaycheck } from "@shared/obligation-windows";
 import { profileValueFingerprint } from "@shared/profile-summary-fingerprint";
 import { toMonthlyAmount } from "@shared/obligation-windows";
@@ -8546,6 +8547,17 @@ Rules:
     }
   }));
   app.patch("/api/documents/:id", asyncHandler(async (req, res) => {
+    // Key-level field changes are applied to the STORED fields, read here,
+    // never to the copy the page loaded (Rule 6; shared/extracted-data-changes).
+    if (req.body && req.body.extractedDataChanges !== undefined) {
+      const changes = req.body.extractedDataChanges;
+      if (!isExtractedDataChanges(changes)) return res.status(400).json({ error: "extractedDataChanges must hold set, remove or unlist" });
+      if (req.body.extractedData !== undefined) return res.status(400).json({ error: "Send extractedData or extractedDataChanges, not both" });
+      const stored = await storage.getDocumentMeta(req.params.id).catch(() => undefined);
+      if (!stored) return res.status(404).json({ error: "Not found" });
+      const { extractedDataChanges: _changes, ...rest } = req.body;
+      req.body = { ...rest, extractedData: applyExtractedDataChanges((stored as any).extractedData, changes) };
+    }
     {
       const parsed = parsePatch(insertDocumentSchema, req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });

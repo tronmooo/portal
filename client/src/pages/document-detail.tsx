@@ -51,6 +51,7 @@ import { userVisibleTags } from "@shared/system-tags";
 import { documentHasFile } from "@shared/document-file";
 import EditableTitle from "@/components/EditableTitle";
 import { hashNavigate } from "@/lib/hashNavigate";
+import { applyExtractedDataChanges } from "@shared/extracted-data-changes";
 import { classifyDateField, bareDateOf, daysBetweenISO, countdownLabel, rulesFromDocuments, CALENDAR_OPT_OUT_KEY, normalizeFieldKey, type DateRule } from "@shared/date-rules";
 import { isSystemFieldKey } from "@shared/system-fields";
 import { readSmartFill, SMART_FILL_KEY, type SmartFillRecord } from "@shared/smart-fill-fields";
@@ -144,7 +145,6 @@ function useDocumentDateRules(doc: Document): Map<string, DateRule> {
   }, [doc]);
 }
 
-const optOutNorm = (v: unknown) => String(v ?? "").split(".").map(normalizeFieldKey).filter(Boolean).join(".");
 
 /**
  * Whether a dated field is on the calendar, and the way to it.
@@ -185,10 +185,8 @@ function CalendarPresence({
     );
   }
   const addBack = () => {
-    const current = (doc.extractedData || {})[CALENDAR_OPT_OUT_KEY];
-    const drop = new Set([optOutNorm(rule.sourcePath), optOutNorm(fieldKey)]);
-    const next = (Array.isArray(current) ? current : []).filter((v: unknown) => !drop.has(optOutNorm(v)));
-    onUpdate({ extractedData: { ...(doc.extractedData || {}), [CALENDAR_OPT_OUT_KEY]: next } });
+    // Taken out of the STORED list by the server (Rule 6), never a rebuilt copy.
+    onUpdate({ extractedDataChanges: { unlist: { key: CALENDAR_OPT_OUT_KEY, values: [String(rule.sourcePath ?? ""), fieldKey] } } } as any);
   };
   return (
     <button
@@ -829,14 +827,12 @@ function DataPanel({
 
   const commitEdit = (key: string) => {
     if (editingKey !== key) return;
-    onUpdate({ extractedData: { ...doc.extractedData, [key]: editingValue } });
+    onUpdate({ extractedDataChanges: { set: { [key]: editingValue } } } as any);
     setEditingKey(null);
   };
 
   const deleteField = (key: string) => {
-    const updated = { ...doc.extractedData };
-    delete updated[key];
-    onUpdate({ extractedData: updated });
+    onUpdate({ extractedDataChanges: { remove: [key] } } as any);
   };
 
   const addField = () => {
@@ -844,7 +840,7 @@ function DataPanel({
       toast({ title: "Field name required", variant: "destructive" });
       return;
     }
-    onUpdate({ extractedData: { ...doc.extractedData, [newFieldKey.trim()]: newFieldValue } });
+    onUpdate({ extractedDataChanges: { set: { [newFieldKey.trim()]: newFieldValue } } } as any);
     setNewFieldKey("");
     setNewFieldValue("");
     setAddingField(false);
@@ -1388,12 +1384,20 @@ export function DocumentWorkspace({
       await queryClient.cancelQueries({ queryKey: ["/api/documents"] });
       const prevDetail = queryClient.getQueryData(["/api/documents", id]);
       const prevList = queryClient.getQueriesData({ queryKey: ["/api/documents"] });
-      // Optimistically merge into the single detail object
-      queryClient.setQueryData(["/api/documents", id], (old: any) => old ? { ...old, ...patch } : old);
+      // Optimistically merge into the single detail object. Key-level field
+      // changes are applied to each cached copy's own fields, the way the
+      // server applies them to the stored row.
+      const merge = (d: any) => {
+        const { extractedDataChanges, ...rest } = patch as any;
+        const next = { ...d, ...rest };
+        if (extractedDataChanges) next.extractedData = applyExtractedDataChanges(d.extractedData, extractedDataChanges);
+        return next;
+      };
+      queryClient.setQueryData(["/api/documents", id], (old: any) => old ? merge(old) : old);
       // Optimistically merge into list queries that contain this doc
       queryClient.setQueriesData({ queryKey: ["/api/documents"] }, (old: any) => {
         if (!old) return old;
-        if (Array.isArray(old)) return old.map((d: any) => d.id === id ? { ...d, ...patch } : d);
+        if (Array.isArray(old)) return old.map((d: any) => d.id === id ? merge(d) : d);
         return old;
       });
       return { prevDetail, prevList };

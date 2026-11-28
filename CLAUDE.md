@@ -1833,6 +1833,44 @@ refused. A password or OAuth session never resets a password.
 *Guards:* `tests/password-reset-link-session.test.ts`; live on the isolated
 stack: `accounts.password-change-and-reset`, `security.permissions`.
 
+**I19. The same intent through the screen and the chat is the same row.**
+`equivalence.*` (`tests/integrity/scenarios/equivalence.ts`) does each intent
+once by the screen's request and once by chat and compares the rows field by
+field. Fixed from it (2026-11-28): chat files a car under `type_key` "vehicle"
+(`chatProfileTypeKey`; an ambiguous type is never guessed); a chat birthday is
+the Birthday form's row (all day, `family`, `annualLabelEvent`); a 1900 birth
+year is the model's placeholder and is never stored
+(`shared/placeholder-birth-year.ts`); an unpicked mood gives way to the
+detected one (J2); the budget, expense and income tools list the screens'
+categories (`EXPENSE_CATEGORIES`, the Finance form's income list). A chat
+update never renames one record into another the user is ADDING
+(`renameIsReallyAnAdd`, `shared/rename-intent.ts`: "Add my car Civic C"
+renamed the person's Civic M), and `link_entities` resolves each id it is
+handed to ONE stored row or writes nothing (`resolveIdRef`, `shared/id-ref.ts`:
+it stored a link to the 8-character short id).
+*Guards:* `tests/chat-screen-equivalence-2026-11-28.test.ts`,
+`tests/chat-add-is-not-rename.test.ts`, `tests/chat-link-short-id.test.ts`.
+**I20. Small rules the integrity runs set (2026-11-28).** Money is rounded half
+up as written in decimal (`roundCents`, `shared/liability-calc.ts`: $59.475
+of interest is $59.48; `+Number.EPSILON` is not enough at dollar sizes). The
+owner-set lock (`withOwnerSetLock`, `server/supabase-storage.ts`) is
+re-entrant within one call chain (a hand-back waited 20 s for itself). With
+no AI provider every AI route answers 503 `AI_UNAVAILABLE`
+(`answeredAiUnavailable`, `server/ai-unavailable.ts`), never a 500. A
+document's fields are changed key by key on the stored row
+(`extractedDataChanges`, `shared/extracted-data-changes.ts`) — never a whole
+`extractedData` rebuilt from the page's copy (Rule 6). On desktop the
+scrollbar gutter is reserved on the right only (`index.css`): `both-edges`
+moved every fixed popover 15 px off its anchor. An identical write while the
+first is still in the air joins it (`apiRequest`, `client/src/lib/queryClient.ts`;
+a double press made two goals); once answered, the same write is a new
+submission (I14). The persisted cache keeps the server version map it had
+seen, so the first map after a reload invalidates what another device moved
+(`restoreServerVersions`, I9).
+*Guards:* `tests/payment-interest-half-cent.test.ts`, `tests/owner-set-lock-reentrant.test.ts`,
+`tests/ai-unavailable-routes.test.ts`, `tests/document-fields-key-level.test.ts`,
+`tests/fixed-overlays-not-shifted.test.ts`, `tests/sync-devices-reload-and-double-submit.test.ts`.
+
 ## Data and credentials
 
 - This repository is **public**. Never commit a password, token or real
