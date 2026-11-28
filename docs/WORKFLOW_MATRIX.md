@@ -9,14 +9,14 @@ is certainly unproven. Method: `scripts/workflow-inventory.ts`.
 
 | | Total | No test at all | Not exercised on the deployed app |
 |---|---:|---:|---:|
-| API write routes | 209 | 29 | 54 |
+| API write routes | 209 | 29 | 53 |
 | API read routes | 117 | 23 | 43 |
 | Chat tools that write | 111 | 0 | 0 |
 | Chat tools that read | 42 | 0 | 0 |
 
 Screens: 32 pages (51 routes). 5 are opened by no live browser check, 5 by none in a touch (phone) context.
 Write routes no screen calls: 47 (chat-only, script-only or dead).
-Test files read: 724. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
+Test files read: 735. Test files no config runs: 2 (`tests/critical-flows.test.ts`, `tests/full-suite.test.ts`).
 
 ## By domain
 
@@ -38,7 +38,7 @@ Test files read: 724. Test files no config runs: 2 (`tests/critical-flows.test.t
 | Wellness dashboard | 1 | 0 | 1 | 1 | 0 | 0 |
 | Executive dashboard & alerts | 3 | 0 | 1 | 10 | 9 | 0 |
 | Documents & artifacts | 20 | 5 | 7 | 7 | 12 | 0 |
-| Workspaces | 30 | 6 | 12 | 6 | 0 | 0 |
+| Workspaces | 30 | 6 | 11 | 6 | 0 | 0 |
 | Journal & notes | 9 | 0 | 3 | 4 | 9 | 0 |
 | Record details | 6 | 0 | 2 | 4 | 3 | 0 |
 | AI chat | 9 | 2 | 3 | 5 | 22 | 0 |
@@ -153,7 +153,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 |---|---|---:|---:|
 | `get_profile_data` | read | **0** | 1 |
 | `create_profile` | write | 9 | 7 |
-| `update_profile` | write | 12 | 3 |
+| `update_profile` | write | 13 | 3 |
 | `delete_profile` | write | 1 | 3 |
 | `get_relationships` | read | 1 | 1 |
 | `merge_profiles` | write | 2 | 2 |
@@ -458,7 +458,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 
 | Chat tool | Kind | Local tests | Deployed tests |
 |---|---|---:|---:|
-| `create_goal` | write | 2 | 3 |
+| `create_goal` | write | 3 | 3 |
 | `get_goal_progress` | read | **0** | 1 |
 | `update_goal` | write | **0** | 1 |
 | `delete_goal` | write | **0** | 1 |
@@ -552,7 +552,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `POST /api/documents` | **no** | 2 | 9 |
 | `DELETE /api/documents/:id` | yes | 5 | 11 |
 | `GET /api/documents/:id` | yes | 3 | 2 |
-| `PATCH /api/documents/:id` | yes | 1 | 2 |
+| `PATCH /api/documents/:id` | yes | 2 | 2 |
 | `GET /api/documents/:id/delete-impact` | yes | **0** | 1 |
 | `GET /api/documents/:id/file` | yes | 4 | **0** |
 | `POST /api/documents/:id/purge` | yes | 2 | 7 |
@@ -597,12 +597,12 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `DELETE /api/workspace/memory/:app/conversation` | yes | 2 | 1 |
 | `DELETE /api/workspace/memory/:app/items/:id` | **no** | 2 | 2 |
 | `POST /api/workspace/memory/:app/remember` | **no** | 1 | 3 |
-| `GET /api/workspace/modes` | yes | 2 | 1 |
-| `POST /api/workspace/modes` | **no** | 2 | 1 |
-| `DELETE /api/workspace/modes/:id` | **no** | 1 | 1 |
-| `PATCH /api/workspace/modes/:id` | **no** | 2 | 1 |
+| `GET /api/workspace/modes` | yes | 2 | 2 |
+| `POST /api/workspace/modes` | **no** | 2 | 2 |
+| `DELETE /api/workspace/modes/:id` | **no** | 1 | 2 |
+| `PATCH /api/workspace/modes/:id` | **no** | 2 | 2 |
 | `GET /api/workspace/modes/:id/digest` | yes | **0** | **0** |
-| `POST /api/workspace/modes/:id/duplicate` | **no** | 1 | **0** |
+| `POST /api/workspace/modes/:id/duplicate` | **no** | 1 | 1 |
 | `POST /api/workspace/modes/chat` | yes | 1 | 1 |
 | `POST /api/workspace/modes/generate` | yes | 1 | 1 |
 | `POST /api/workspace/modes/insights` | yes | 1 | 1 |
@@ -698,7 +698,7 @@ deployed (contract suite, live scenarios, live checks, acceptance rig, audit scr
 | `recall_memory` | read | 2 | 1 |
 | `save_memory` | write | 2 | 1 |
 | `navigate` | read | 5 | 7 |
-| `link_entities` | write | 4 | 2 |
+| `link_entities` | write | 5 | 2 |
 | `get_related` | read | 1 | 1 |
 | `delete_memory` | write | 1 | 1 |
 | `update_memory` | write | 1 | 3 |

@@ -13,10 +13,10 @@ evidence there is that the door works — and it separates a test that *names* a
 
 - 26 data types, 10 operations, 3 doors (the app's screens, the API, AI Chat).
 - 133 data type × operation rows have at least one door.
-- API and AI Chat: 212 doors. **204** are verified: a scenario covering them PASSED in the last recorded run (the action, the stored row and the dependent figures). **0** have a scenario that has not passed yet (failed, or not run). **8** more are only named by an existing test (evidence, not proof — see docs/WORKFLOW_MATRIX.md); **0** have no test at all.
-- Runs counted: portol.me @ 374c77a (2026-11-27 05:25 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 73f4ee4 (2026-11-27 13:30 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3ef5ff1 (2026-11-27 16:01 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3ef5ff1 (2026-11-27 16:01 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:03 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:30 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:37 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:54 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 17:55 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 17:59 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 18:04 UTC); 127.0.0.1:5199 @ ? (2026-11-27 18:04 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3241436 (2026-11-27 19:44 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:14 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:17 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:19 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:19 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:21 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:24 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:25 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:34 UTC); 127.0.0.1:5199 @ ? (2026-11-28 02:27 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:42 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:47 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:54 UTC); 127.0.0.1:5199 @ ? (2026-11-28 02:55 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 933548e (2026-11-28 03:26 UTC); 127.0.0.1:5199 @ ? (2026-11-28 03:45 UTC); 127.0.0.1:5199 @ ? (2026-11-28 04:01 UTC); 127.0.0.1:5199 @ ? (2026-11-28 04:17 UTC); 127.0.0.1:5199 @ ? (2026-11-28 04:19 UTC).
+- API and AI Chat: 212 doors. **208** are verified: a scenario covering them PASSED in the last recorded run (the action, the stored row and the dependent figures). **0** have a scenario that has not passed yet (failed, or not run). **4** more are only named by an existing test (evidence, not proof — see docs/WORKFLOW_MATRIX.md); **0** have no test at all.
+- Runs counted: portol.me @ 374c77a (2026-11-27 05:25 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 73f4ee4 (2026-11-27 13:30 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3ef5ff1 (2026-11-27 16:01 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3ef5ff1 (2026-11-27 16:01 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:03 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:30 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:37 UTC); 127.0.0.1:5199 @ ? (2026-11-27 17:54 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 17:55 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 17:59 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 8c15a1e (2026-11-27 18:04 UTC); 127.0.0.1:5199 @ ? (2026-11-27 18:04 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 3241436 (2026-11-27 19:44 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:14 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:17 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:19 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:19 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:21 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:24 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:25 UTC); 127.0.0.1:5199 @ ? (2026-11-28 00:34 UTC); 127.0.0.1:5199 @ ? (2026-11-28 02:27 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:42 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:47 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 0d00f1b (2026-11-28 02:54 UTC); 127.0.0.1:5199 @ ? (2026-11-28 02:55 UTC); portal-git-claude-gallant-knuth-3cr7u6-tronmooos-projects.vercel.app @ 933548e (2026-11-28 03:26 UTC); 127.0.0.1:5199 @ ? (2026-11-28 03:45 UTC); 127.0.0.1:5199 @ ? (2026-11-28 04:01 UTC); 127.0.0.1:5199 @ ? (2026-11-28 04:19 UTC); 127.0.0.1:5199 @ ? (2026-11-28 04:27 UTC); 127.0.0.1:5199 @ ? (2026-11-28 04:48 UTC).
 - Screens: 107 operations are offered by a screen; **92** are driven by an integrity browser scenario that passed (desktop mouse and phone touch). The rest are covered per screen by the live browser checks listed in docs/WORKFLOW_MATRIX.md, not by a database-verified scenario.
-- 118 integrity scenarios; 37 drive a browser, 31 drive AI Chat.
+- 119 integrity scenarios; 37 drive a browser, 31 drive AI Chat.
 
 ## Dependency map
 
@@ -901,10 +901,10 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 | Account, sign-in, export / import | duplicate | — | **V** `accounts.export-import` | — |
 | Account, sign-in, export / import | transfer | — | **V** `accounts.export-import` | — |
 | Account, sign-in, export / import | cancel | — | **V** `accounts.delete-all-data` | — |
-| AI Mode (a workspace the person builds) | create | screen | t3 (live) | — |
-| AI Mode (a workspace the person builds) | edit | — | t3 (live) | — |
-| AI Mode (a workspace the person builds) | delete | screen | t2 (live) | — |
-| AI Mode (a workspace the person builds) | duplicate | — | t1 | — |
+| AI Mode (a workspace the person builds) | create | screen | **V** `api-rest.ai-modes` | — |
+| AI Mode (a workspace the person builds) | edit | — | **V** `api-rest.ai-modes` | — |
+| AI Mode (a workspace the person builds) | delete | screen | **V** `api-rest.ai-modes` | — |
+| AI Mode (a workspace the person builds) | duplicate | — | **V** `api-rest.ai-modes` | — |
 
 ### Cross-cutting properties
 
@@ -921,9 +921,9 @@ its browser checks are per screen in docs/WORKFLOW_MATRIX.md. `none` = a door wi
 ### Doors with no test at all (0)
 
 
-### Doors a test names but no integrity scenario verifies (8)
+### Doors a test names but no integrity scenario verifies (4)
 
-Connected bank data & statement import · edit · Chat; Connected bank data & statement import · complete · API; AI chat & search · create · API; AI chat & search · complete · API; AI Mode (a workspace the person builds) · create · API; AI Mode (a workspace the person builds) · edit · API; AI Mode (a workspace the person builds) · delete · API; AI Mode (a workspace the person builds) · duplicate · API.
+Connected bank data & statement import · edit · Chat; Connected bank data & statement import · complete · API; AI chat & search · create · API; AI chat & search · complete · API.
 
 ### Operations a screen offers that no integrity browser scenario drives (15)
 
@@ -1037,6 +1037,7 @@ Connected bank data & statement import · create; Connected bank data & statemen
 | `api-rest.bank-corrections` — Corrections to a bank transaction or account are stored beside the imported row, never over it, and the month's totals follow | Connected bank data | action + db + derived | bankLedger.edit.api |
 | `api-rest.bank-disconnect` — Disconnecting a bank keeps its history unless asked to delete it; a connection cannot be completed without the bank provider | Connected bank data | action + db + derived | bankLedger.archive.api |
 | `api-rest.chat-cannot-answer` — A chat request the app cannot carry out, and a confirmation of nothing, answer plainly and write nothing | AI chat | action + db · chat | chat.readonly |
+| `api-rest.ai-modes` — An AI Mode created, renamed and pinned, duplicated and deleted: each change lands on the one stored row, the id and creation date never move, and deleting forgets its memory | AI Modes | action + db + derived | aiMode.create.api, aiMode.edit.api, aiMode.duplicate.api, aiMode.delete.api |
 | `concurrency.owner-set-replace` — Two different ownership saves for one asset at the same moment: the stored set is exactly one of them, never a mix or the old one | hardening | action + db + derived | asset.transfer.api |
 | `sync.other-device-reload-and-open` — A task, an expense and an event written on one device show on the other after a reload AND while it stays open: dashboard tiles, Timeline, Tasks, Finance month total, Calendar | Sync across devices | action + db + derived + screen · browser | task.create.api, task.edit.api, task.delete.api, expense.create.api, expense.edit.api, expense.delete.api, event.create.api, event.edit.api, event.delete.api |
 | `sync.double-submit-one-record` — A double press (desktop double click, phone double tap) on the goal form's Create and the Net worth sheet's Add asset stores one record each | Sync across devices | action + db + derived + screen · browser | goal.create.ui, asset.create.ui |
