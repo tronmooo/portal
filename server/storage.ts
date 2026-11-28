@@ -3175,13 +3175,13 @@ export class MemStorage implements IStorage {
   async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>) { this.budgetStore.set(budgetMonthOrThrow(month), budgets); }
   async addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string) {
     const list = await this.getBudgets(month);
-    const entry = upsertBudget(list, { category, amount, notes, profileId }, () => crypto.randomUUID());
+    const entry = upsertBudget(list, { category, amount, notes, profileId }, () => crypto.randomUUID(), { selfProfileId: (await this.getSelfProfile())?.id ?? null });
     await this.setBudgets(month, list);
     return entry;
   }
   async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string | null; profileId?: string}) {
     const list = await this.getBudgets(month);
-    const entry = applyBudgetUpdate(list, budgetId, updates);
+    const entry = applyBudgetUpdate(list, budgetId, updates, { selfProfileId: (await this.getSelfProfile())?.id ?? null });
     if (!entry) return false;
     await this.setBudgets(month, list);
     return true;
@@ -3197,7 +3197,7 @@ export class MemStorage implements IStorage {
   async copyBudgetsToMonth(fromMonth: string, toMonth: string) {
     const source = await this.getBudgets(fromMonth);
     if (source.length === 0) return 0;
-    const { list, added } = mergeBudgetsForCopy(await this.getBudgets(toMonth), source, () => crypto.randomUUID());
+    const { list, added } = mergeBudgetsForCopy(await this.getBudgets(toMonth), source, () => crypto.randomUUID(), { selfProfileId: (await this.getSelfProfile())?.id ?? null });
     if (added > 0) await this.setBudgets(toMonth, list);
     return added;
   }

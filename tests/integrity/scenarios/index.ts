@@ -13,3 +13,4 @@ import "./ui-records";
 import "./ui-profiles";
 import "./chat-tools";
 import "./api-rest";
+import "./concurrency";

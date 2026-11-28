@@ -1,5 +1,6 @@
 // Routes for the AI boxes in the full-screen workspaces. Every one is a
 // read: it returns a proposal and writes nothing (server/workspace-ai.ts).
+import { answeredAiUnavailable } from "./ai-unavailable";
 import type { Express, Request, Response } from "express";
 import { isVersionKind, type VersionKind } from "@shared/content-versions";
 import { isMemoryApp, isModeMemoryApp, type AiMemory, type MemoryApp } from "@shared/ai-memory";
@@ -43,6 +44,7 @@ export function registerWorkspaceRoutes(app: Express, rateLimit: Limiter): void 
       if (out && out.ok === false) return res.status(out.status).json({ error: out.error });
       res.json(out);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("[workspace-ai]", err?.message || err);
       res.status(500).json({ error: "The AI request failed. Nothing was changed." });
     }
@@ -86,6 +88,7 @@ export function registerWorkspaceRoutes(app: Express, rateLimit: Limiter): void 
       if (out && out.ok === false) return res.status(out.status).json({ error: out.error });
       res.status(status).json({ mode: out.value ?? undefined, modes: out.modes });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("[ai-modes]", err?.message || err);
       res.status(500).json({ error: "Couldn't save your AI modes. Nothing was changed." });
     }
@@ -105,6 +108,7 @@ export function registerWorkspaceRoutes(app: Express, rateLimit: Limiter): void 
       const { ok: _ok, ...body } = out;
       res.status(status).json(body);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("[ai-mode-library]", err?.message || err);
       res.status(500).json({ error: "Couldn't reach the mode library." });
     }
@@ -134,6 +138,7 @@ export function registerWorkspaceRoutes(app: Express, rateLimit: Limiter): void 
   const memSafe = (fn: (req: Request, res: Response, app: MemoryApp) => Promise<any>) => async (req: Request, res: Response) => {
     if (!isMemoryApp(req.params.app)) return res.status(400).json({ error: "Unknown assistant." });
     try { await fn(req, res, req.params.app); } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("[ai-memory]", err?.message || err);
       res.status(500).json({ error: "Couldn't reach what the AI remembers. Nothing was changed." });
     }
@@ -164,6 +169,7 @@ export function registerWorkspaceRoutes(app: Express, rateLimit: Limiter): void 
   // replaces first.
   const safe = (fn: (req: Request, res: Response) => Promise<any>) => async (req: Request, res: Response) => {
     try { await fn(req, res); } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("[versions]", err?.message || err);
       res.status(500).json({ error: "Couldn't read the version history. Nothing was changed." });
     }

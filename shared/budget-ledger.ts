@@ -55,11 +55,24 @@ export function budgetCategoryKey(raw: unknown): string {
   return foldExpenseCategory(s) ?? s.toLowerCase();
 }
 
-const sameOwner = (a: string | null | undefined, b: string | null | undefined) => (a || null) === (b || null);
+/**
+ * The account holder's budgets are stored two ways: a budget set on a screen
+ * under the account holder's own scope carries their (Self) profile id, while
+ * one set by chat or the API carries none. Both mean the account holder, so
+ * they are ONE owner here — compared as different owners, "Copy last month"
+ * and a second Add gave the month two caps for one category, both listed
+ * (integrity run, 2026-11-28: "housing" twice on Finance).
+ */
+export interface BudgetOwnerContext { selfProfileId?: string | null }
+const ownerKey = (id: string | null | undefined, ctx?: BudgetOwnerContext) => {
+  const v = id || null;
+  return v && ctx?.selfProfileId && v === ctx.selfProfileId ? null : v;
+};
+const sameOwner = (a: string | null | undefined, b: string | null | undefined, ctx?: BudgetOwnerContext) => ownerKey(a, ctx) === ownerKey(b, ctx);
 
-function findBucket(list: BudgetEntry[], category: string, profileId: string | null | undefined, exceptId?: string): BudgetEntry | undefined {
+function findBucket(list: BudgetEntry[], category: string, profileId: string | null | undefined, exceptId?: string, ctx?: BudgetOwnerContext): BudgetEntry | undefined {
   const key = budgetCategoryKey(category);
-  return list.find((b) => b.id !== exceptId && budgetCategoryKey(b.category) === key && sameOwner(b.profileId, profileId));
+  return list.find((b) => b.id !== exceptId && budgetCategoryKey(b.category) === key && sameOwner(b.profileId, profileId, ctx));
 }
 
 /**
@@ -70,9 +83,10 @@ export function upsertBudget(
   list: BudgetEntry[],
   input: { category: string; amount: number; notes?: string; profileId?: string },
   newId: () => string,
+  ctx?: BudgetOwnerContext,
 ): BudgetEntry {
   const category = budgetCategoryKey(input.category);
-  const existing = findBucket(list, category, input.profileId);
+  const existing = findBucket(list, category, input.profileId, undefined, ctx);
   if (existing) {
     existing.category = category;
     existing.amount = input.amount;
@@ -93,12 +107,13 @@ export function applyBudgetUpdate(
   list: BudgetEntry[],
   budgetId: string,
   updates: { amount?: number; category?: string; notes?: string | null; profileId?: string | null },
+  ctx?: BudgetOwnerContext,
 ): BudgetEntry | null {
   const entry = list.find((b) => b.id === budgetId);
   if (!entry) return null;
   const nextCategory = updates.category ? budgetCategoryKey(updates.category) : budgetCategoryKey(entry.category);
   const nextOwner = updates.profileId !== undefined ? (updates.profileId || undefined) : entry.profileId;
-  const clash = findBucket(list, nextCategory, nextOwner, entry.id);
+  const clash = findBucket(list, nextCategory, nextOwner, entry.id, ctx);
   if (clash) {
     const err: any = new Error(`A ${nextCategory} budget already exists for this month; edit that one instead`);
     err.statusCode = 409;
@@ -120,11 +135,12 @@ export function mergeBudgetsForCopy(
   destination: BudgetEntry[],
   source: BudgetEntry[],
   newId: () => string,
+  ctx?: BudgetOwnerContext,
 ): { list: BudgetEntry[]; added: number } {
   const list = destination.map((b) => ({ ...b }));
   let added = 0;
   for (const b of source) {
-    if (findBucket(list, b.category, b.profileId)) continue;
+    if (findBucket(list, b.category, b.profileId, undefined, ctx)) continue;
     list.push({ ...b, category: budgetCategoryKey(b.category), id: newId() });
     added += 1;
   }

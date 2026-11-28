@@ -188,3 +188,24 @@ describe("filing and clearing, on the stored row", () => {
     expect((await api("PATCH", "/api/journal/j-1", { energy: 9 })).status).toBe(400);
   });
 });
+
+// Integrity run, 2026-11-28: the replaced text was kept AFTER the write, so a
+// failure between the two lost it. It is kept first now, in all three routes.
+describe("the replaced text is kept before the write", () => {
+  const src = require("node:fs").readFileSync(`${process.cwd()}/server/routes.ts`, "utf8") as string;
+  for (const [route, write] of [
+    ['app.patch("/api/notes/:id"', "await updateNote(storage, req.params.id, changes)"],
+    ['app.patch("/api/artifacts/:id"', "await storage.updateArtifact(req.params.id, req.body)"],
+    ['app.patch("/api/journal/:id"', "await storage.updateJournalEntry(req.params.id, req.body)"],
+  ] as const) {
+    it(route, () => {
+      const at = src.indexOf(route);
+      expect(at).toBeGreaterThan(0);
+      const body = src.slice(at, src.indexOf("\n  }));", at));
+      const keep = body.indexOf("keepVersionBeforeWrite(");
+      const w = body.indexOf(write);
+      expect(keep).toBeGreaterThan(0);
+      expect(w).toBeGreaterThan(keep);
+    });
+  }
+});

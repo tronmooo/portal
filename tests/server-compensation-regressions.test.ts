@@ -15,6 +15,11 @@ function bareStorage(over: Record<string, any>): any {
   storage.memoCache = new Map();
   storage.logActivity = () => {};
   storage.clearRequestMemo = () => {};
+  // The owner-set write now holds a per-account lock (2026-11-28); this
+  // hand-built storage has no database, so the lock is a stand-in that is
+  // always free. What these tests assert — the rollback — is unchanged.
+  storage.acquireUserLock = async () => true;
+  storage.releaseUserLock = async () => {};
   Object.assign(storage, over);
   return storage;
 }

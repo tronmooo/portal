@@ -8983,6 +8983,21 @@ export class SupabaseStorage implements IStorage {
     if (takeErr) throw takeErr;
     return Array.isArray(data) && data.length > 0;
   }
+  /** Run `fn` holding a short per-account lock, waiting (up to ~20 s) for it. */
+  private async withOwnerSetLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
+    const deadline = Date.now() + 20_000;
+    let delay = 60;
+    while (!(await this.acquireUserLock(name, 30_000))) {
+      if (Date.now() > deadline) {
+        const busy: any = new Error("Ownership is being changed elsewhere — try again in a moment.");
+        busy.code = "OWNERSHIP_BUSY";
+        throw busy;
+      }
+      await new Promise((r) => setTimeout(r, delay + Math.floor(Math.random() * 40)));
+      delay = Math.min(delay * 2, 800);
+    }
+    try { return await fn(); } finally { await this.releaseUserLock(name).catch(() => undefined); }
+  }
   async releaseUserLock(name: string): Promise<void> {
     await this.supabase.from("preferences").delete().eq("user_id", this.userId).eq("key", `lock:${name}`);
   }
@@ -9220,12 +9235,14 @@ export class SupabaseStorage implements IStorage {
   async addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string): Promise<{id: string; category: string; amount: number; notes?: string; profileId?: string}> {
     // One cap per (category, owner) bucket, with the category folded to the
     // expense canon so the cap meets the spend (shared/budget-ledger.ts).
-    return this.mutateBudgets(month, (list) => ({ ...upsertBudget(list, { category, amount, notes, profileId }, () => crypto.randomUUID()) }));
+    const selfProfileId = (await this.getSelfProfile())?.id ?? null;
+    return this.mutateBudgets(month, (list) => ({ ...upsertBudget(list, { category, amount, notes, profileId }, () => crypto.randomUUID(), { selfProfileId }) }));
   }
 
   async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string | null; profileId?: string}): Promise<boolean> {
     // Throws a 409 when the edit would leave two caps for one bucket.
-    return this.mutateBudgets(month, (list) => !!applyBudgetUpdate(list, budgetId, updates));
+    const selfProfileId = (await this.getSelfProfile())?.id ?? null;
+    return this.mutateBudgets(month, (list) => !!applyBudgetUpdate(list, budgetId, updates, { selfProfileId }));
   }
 
   async deleteBudget(month: string, budgetId: string): Promise<boolean> {
@@ -9243,8 +9260,9 @@ export class SupabaseStorage implements IStorage {
     // next month before the copy were lost. Returns the number added.
     const source = await this.getBudgets(fromMonth);
     if (source.length === 0) return 0;
+    const selfProfileId = (await this.getSelfProfile())?.id ?? null;
     return this.mutateBudgets(toMonth, (list) => {
-      const { list: merged, added } = mergeBudgetsForCopy(list, source, () => crypto.randomUUID());
+      const { list: merged, added } = mergeBudgetsForCopy(list, source, () => crypto.randomUUID(), { selfProfileId });
       list.splice(0, list.length, ...merged);
       return added;
     });
@@ -10174,7 +10192,12 @@ export class SupabaseStorage implements IStorage {
       id: `desired:${owner.partyProfileId}`,
       ...owner,
     }));
-    await replaceOwnerSetWithRollback(targets, {
+    // One replacement of this record's owner set at a time, across server
+    // instances (integrity run, 2026-11-28): two saves racing interleaved
+    // their phases, and the loser's rollback wrote its stale snapshot over
+    // the set the winner had saved and answered 200 for. The second save now
+    // waits and is applied after the first, whole.
+    await this.withOwnerSetLock(`owners:asset:${assetProfileId}`, () => replaceOwnerSetWithRollback(targets, {
       load: async () => {
         this.clearRequestMemo();
         return this.getAssetPartyLinks(assetProfileId);
@@ -10192,7 +10215,7 @@ export class SupabaseStorage implements IStorage {
         effectiveTo: (target as AssetPartyLink).effectiveTo ?? null,
         notes: (target as AssetPartyLink).notes ?? null,
       } as InsertAssetPartyLink),
-    });
+    }));
     this.clearRequestMemo();
     return this.getAssetPartyLinks(assetProfileId);
   }
@@ -10225,7 +10248,12 @@ export class SupabaseStorage implements IStorage {
       id: `desired:${owner.partyProfileId}`,
       ...owner,
     }));
-    await replaceOwnerSetWithRollback(targets, {
+    // One replacement of this record's owner set at a time, across server
+    // instances (integrity run, 2026-11-28): two saves racing interleaved
+    // their phases, and the loser's rollback wrote its stale snapshot over
+    // the set the winner had saved and answered 200 for. The second save now
+    // waits and is applied after the first, whole.
+    await this.withOwnerSetLock(`owners:liability:${liabilityProfileId}`, () => replaceOwnerSetWithRollback(targets, {
       load: async () => {
         this.clearRequestMemo();
         return this.getLiabilityProfileLinks(liabilityProfileId);
@@ -10240,7 +10268,7 @@ export class SupabaseStorage implements IStorage {
         role: (target.role || "owner") as any,
         notes: (target as LiabilityProfileLink).notes ?? null,
       } as InsertLiabilityProfileLink),
-    });
+    }));
     this.clearRequestMemo();
     return this.getLiabilityProfileLinks(liabilityProfileId);
   }

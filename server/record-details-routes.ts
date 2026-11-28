@@ -13,6 +13,7 @@
 //
 // All logic lives in server/record-details.ts; this file is HTTP only.
 
+import { answeredAiUnavailable } from "./ai-unavailable";
 import type { Express, Request, Response } from "express";
 import { getUserToday, DEFAULT_TIMEZONE } from "@shared/timezone";
 import {
@@ -28,6 +29,7 @@ function wrap(fn: Handler) {
     try {
       await fn(req, res);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       if (err instanceof DetailError) {
         if (!res.headersSent) res.status(err.status).json({ error: err.message });
         return;

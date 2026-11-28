@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { answeredAiUnavailable } from "./ai-unavailable";
 import express, { type Express, type Request } from "express";
 import { fieldPatchBetween } from "../shared/field-patch";
 import { briefingFacts, briefingFingerprint, reconcileBriefing } from "../shared/dashboard-briefing";
@@ -2420,6 +2421,7 @@ export async function registerRoutes(
       const result = await transformText(command, sanitize(text));
       res.json({ text: result });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       const msg = err?.message || "unknown error";
       log.error("[AI Transform]", msg);
       res.status(500).json({ error: "Failed to transform text" });
@@ -2444,6 +2446,7 @@ export async function registerRoutes(
       const result = await extractReceipt(fileData, mime);
       res.json(result);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       const msg = err?.message || "unknown error";
       log.error("[Receipt Extract]", msg);
       res.status(500).json({ error: "Failed to extract receipt" });
@@ -2458,6 +2461,7 @@ export async function registerRoutes(
       const anomalies = await detectAnomalies(storage, ids);
       res.json({ anomalies });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Anomalies]", err?.message || err);
       res.status(500).json({ error: "Failed to detect anomalies" });
     }
@@ -2477,6 +2481,7 @@ export async function registerRoutes(
       const result = await generateWeeklyReview(storage, ids);
       res.json(result);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Weekly Review]", err?.message || err);
       res.status(500).json({ error: "Failed to generate weekly review" });
     }
@@ -2553,6 +2558,7 @@ export async function registerRoutes(
       }
       res.json({ generated: results.filter(r => r.ok).length, total: results.length, results });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Cron Weekly Review]", err?.message || err);
       res.status(500).json({ error: "Cron failed" });
     }
@@ -2618,6 +2624,7 @@ export async function registerRoutes(
         taskRollover: settle("task-rollover", taskRollover),
       });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Cron Daily Maintenance]", err?.message || err);
       res.status(500).json({ error: "Cron failed" });
     }
@@ -2672,6 +2679,7 @@ export async function registerRoutes(
     try {
       res.json(await runNetWorthSnapshot());
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Cron Snapshot Net Worth]", err?.message || err);
       res.status(500).json({ error: "Cron failed" });
     }
@@ -2716,6 +2724,7 @@ export async function registerRoutes(
       }
       res.json({ users, ran, failed });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Cron Mode Check-ins]", err?.message || err);
       res.status(500).json({ error: "Cron failed" });
     }
@@ -2900,6 +2909,7 @@ export async function registerRoutes(
     try {
       res.json(await runLiabilityDueScan());
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Cron Liability Due Scan]", err?.message || err);
       res.status(500).json({ error: "Cron failed" });
     }
@@ -3011,6 +3021,7 @@ export async function registerRoutes(
         ...(deduped ? { deduped: true } : {}),
       });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Upload.saveOnly]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to save file" });
     }
@@ -3047,6 +3058,7 @@ export async function registerRoutes(
       const result = await processFileUpload(fileName, mimeType, fileData, message, profileId, { discardImage: discardUploadImage });
       res.json(result);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Upload]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to process upload" });
     }
@@ -3198,6 +3210,7 @@ export async function registerRoutes(
 
       res.json({ results, summary });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[BatchUpload]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to process batch upload" });
     }
@@ -3312,6 +3325,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       if (text) setCache(briefingKey, payload, 4 * 60 * 60 * 1000);
       res.json(payload);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[AISummary]", err?.message || "unknown");
       res.status(500).json({ error: "Couldn't generate summary right now." });
     }
@@ -3336,6 +3350,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       const result = await analyzeSmartFill(fileName, fileData, safeSources, mimeType || "application/pdf");
       res.json(result);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[SmartFill.analyze]", err?.message || "unknown error");
       res.status(500).json({ error: "Smart Fill analysis failed. Try again." });
     }
@@ -3452,6 +3467,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         createdObligations,
       });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[SmartFill.render]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to fill PDF. Try again." });
     }
@@ -4656,6 +4672,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         ...(expenseSkipped ? { expenseSkipped: true, expenseSkippedReason: expenseSkipped.reason, financialStatus: expenseSkipped.status } : {}),
       });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[ConfirmExtraction]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to confirm extraction" });
     }
@@ -4699,6 +4716,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       bustUserCaches(cacheUserKey(req as AuthenticatedRequest));
       res.json({ success: true, summary });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[OwnershipRepair]", err?.message || err);
       res.status(500).json({ error: "Ownership repair failed" });
     }
@@ -5122,6 +5140,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       }, getTimezone(req));
       res.json(insights);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Insights]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to generate insights" });
     }
@@ -5186,6 +5205,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       });
       res.json({ narrative: decision.value.narrative, findingsCount: brief.length });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[WellnessInsights]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to generate wellness insights" });
     }
@@ -5210,6 +5230,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         totalEvents: events.length,
       });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       res.status(500).json({ error: "Failed to get calendar status" });
     }
   }));
@@ -6060,6 +6081,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       bustCache(`profiles:${uid_pl1}`); bustCache(`profile-detail:${uid_pl1}:`); bustCache(`stats:${uid_pl1}`); bustCache(`${entityType}s:${uid_pl1}`);
       res.json({ ok: true });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("[profile-link]", err?.message || err);
       if (err instanceof ProfileLinkFailure) {
         return res.status(err.statusCode).json({
@@ -6192,6 +6214,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       if (!spec) return res.status(404).json({ error: "Not found" });
       res.json(spec);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[overview]", err?.message || "unknown error");
       // A failed composition must never blank the profile page — the client
       // falls back to its static rendering when this 500s.
@@ -6303,6 +6326,7 @@ Respond ONLY in JSON format:
         profileName: profile.name,
       });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("[routes] find-value failed:", err?.message, err?.status, err?.error);
       // The upstream message can name the provider, its model or key state;
       // it's logged above and never sent to the client.
@@ -6612,6 +6636,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         valuation: outcome.snapshot,
       });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[LookupValue]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to look up current value" });
     }
@@ -6758,6 +6783,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
         .slice(0, 10);
       res.json({ stale, source: decision.source, totalCandidates: candidates.length });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[StaleValuations]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to compute stale valuations", stale: [] });
     }
@@ -7312,10 +7338,13 @@ Rules:
     if (Array.isArray(req.body?.tags)) changes.tags = req.body.tags.map(String);
     if (typeof req.body?.category === "string") changes.category = sanitize(req.body.category).trim().slice(0, 40);
     // The text about to be replaced is kept as a version (one per sitting).
+    // Kept BEFORE the write (it used to be kept after it, so a failure in
+    // between lost the replaced text; a failed write now leaves at most one
+    // extra version of the text still current).
     const noteBefore = changes.content !== undefined || changes.append ? await readRecordText("note", req.params.id) : null;
+    if (noteBefore) await keepVersionBeforeWrite("note", req.params.id, noteBefore, { content: changes.content !== undefined ? String(changes.content) : `${noteBefore.content}${String(changes.append ?? "")}` });
     const updated = await updateNote(storage, req.params.id, changes);
     if (!updated) return res.status(404).json({ error: "Note not found" });
-    if (noteBefore) await keepVersionBeforeWrite("note", req.params.id, noteBefore, { content: String(updated.content ?? "") });
     const uid_n2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_n2}`); bustCache(`stats:${uid_n2}`);
     res.json(updated);
@@ -8310,6 +8339,7 @@ Rules:
       setCache(calCacheKey, items, 30 * 1000);
       res.json(items);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       res.status(500).json({ error: "Failed to load calendar" });
     }
   }));
@@ -8360,6 +8390,7 @@ Rules:
       rules.sort((a, b) => a.date.localeCompare(b.date) || a.label.localeCompare(b.label));
       res.json(rules);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error(`[date-rules] ${err?.message || err}`);
       res.status(500).json({ error: "Failed to load date rules" });
     }
@@ -9663,10 +9694,11 @@ Rules:
     }
     if (req.body.description !== undefined && typeof req.body.description === "string") req.body.description = sanitize(req.body.description);
     // A document's text about to be replaced is kept as a version.
+    // Kept BEFORE the write, so the replaced text cannot be lost in between.
     const docBefore = typeof req.body.content === "string" ? await readRecordText("document", req.params.id) : null;
+    if (docBefore) await keepVersionBeforeWrite("document", req.params.id, docBefore, { content: String(req.body.content) });
     const updated = await storage.updateArtifact(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    if (docBefore) await keepVersionBeforeWrite("document", req.params.id, docBefore, { content: String(updated.content ?? "") });
     const uid_a2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_a2}`); bustCache(`stats:${uid_a2}`);
     res.json(updated);
@@ -9981,10 +10013,11 @@ Rules:
     }
     delete req.body.autoTitle;
     // The entry's text about to be replaced is kept as a version.
+    // Kept BEFORE the write, so the replaced text cannot be lost in between.
     const entryBefore = typeof req.body.content === "string" ? await readRecordText("journal", req.params.id) : null;
+    if (entryBefore) await keepVersionBeforeWrite("journal", req.params.id, entryBefore, { content: String(req.body.content) });
     const updated = await storage.updateJournalEntry(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    if (entryBefore) await keepVersionBeforeWrite("journal", req.params.id, entryBefore, { content: String(updated.content ?? "") });
     const uid_j2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_j2}`);
     res.json(updated);
@@ -10041,6 +10074,7 @@ Rules:
       if (!result) return res.status(404).json({ error: "Memory not found" });
       res.json(result);
     } catch (e: any) {
+      if (answeredAiUnavailable(e, res)) return;
       if (Number(e?.statusCode) >= 400 && Number(e?.statusCode) < 500) throw e;
       console.error("[memories]", e?.message || e); res.status(500).json({ error: "Failed to update memory" });
     }
@@ -10143,6 +10177,7 @@ Rules:
       setCache(fullKey, deduped, 2 * 60 * 1000); // 2-minute cache
       res.json(deduped);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Notifications]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to compute notifications" });
     }
@@ -10207,6 +10242,7 @@ Rules:
       }
       res.json(results);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       res.status(500).json({ error: "Search failed" });
     }
   }));
@@ -10383,6 +10419,7 @@ Rules:
       res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${getUserToday(getTimezone(req))}.json"`);
       res.json(data);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Export]", err?.message || "unknown error");
       res.status(500).json({ error: "Export failed" });
     }
@@ -10838,6 +10875,7 @@ Rules:
         await storage.releaseUserLock("import").catch(() => {});
       }
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[Import]", err?.message || "unknown error");
       res.status(500).json({ error: "Import failed" });
     }
@@ -10985,6 +11023,7 @@ If unsure, use "other". Use "subscription" for recurring services; "vehicle" for
         totalRows: parsedCsv.rows.length + parsedCsv.skippedCredits + parsedCsv.skippedEmpty,
       });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("Bank CSV import error:", err);
       res.status(500).json({ error: "CSV import failed" });
     }
@@ -11230,6 +11269,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
       res.json(result);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("AI Digest error:", err);
       res.status(500).json({ error: "Failed to generate AI digest" });
     }
@@ -11347,6 +11387,7 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
 
       res.json({ results, source: decision.source, totalScanned: trimmed.length });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       log.error("[SemanticSearch]", err?.message || "unknown error");
       res.status(500).json({ error: "Semantic search failed", results: [] });
     }
@@ -11560,6 +11601,7 @@ No emojis. No prose outside the JSON.`,
       try { await storage.setPreference(CACHE_KEY, JSON.stringify(result)); } catch { /* ignore */ }
       res.json(result);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("AI Suggestions error:", err);
       res.status(500).json({ error: "Failed to generate AI suggestions", suggestions: [] });
     }
@@ -11578,6 +11620,7 @@ No emojis. No prose outside the JSON.`,
       }
       res.json(paginateFull(goals, req, res));
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("Goals error:", err);
       res.status(500).json({ error: "Failed to get goals" });
     }
@@ -11593,6 +11636,7 @@ No emojis. No prose outside the JSON.`,
       }
       res.json(goal);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("Goal error:", err);
       res.status(500).json({ error: "Failed to get goal" });
     }
@@ -11626,6 +11670,7 @@ No emojis. No prose outside the JSON.`,
       const goal = await storage.createGoal({ ...parsed.data, ...(goalOwners.length > 0 ? { linkedProfiles: goalOwners } : {}) } as any);
       res.json(goal);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("Create goal error:", err);
       res.status(500).json({ error: "Failed to create goal" });
     }
@@ -11653,6 +11698,7 @@ No emojis. No prose outside the JSON.`,
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       res.json(goal);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       if (Number(err?.statusCode) >= 400 && Number(err?.statusCode) < 500) throw err;
       console.error("Update goal error:", err);
       res.status(500).json({ error: "Failed to update goal" });
@@ -11665,6 +11711,7 @@ No emojis. No prose outside the JSON.`,
       if (!deleted) return res.status(404).json({ error: "Goal not found" });
       res.json({ success: true });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("Delete goal error:", err);
       res.status(500).json({ error: "Failed to delete goal" });
     }
@@ -11681,6 +11728,7 @@ No emojis. No prose outside the JSON.`,
       const links = await storage.getEntityLinks(req.params.type, req.params.id);
       res.json(links);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("Get entity links error:", err);
       res.status(500).json({ error: "Failed to get entity links" });
     }
@@ -11691,6 +11739,7 @@ No emojis. No prose outside the JSON.`,
       const related = await storage.getRelatedEntities(req.params.type, req.params.id);
       res.json(related);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("Get related entities error:", err);
       res.status(500).json({ error: "Failed to get related entities" });
     }
@@ -11726,6 +11775,7 @@ No emojis. No prose outside the JSON.`,
       if (!deleted) return res.status(404).json({ error: "Entity link not found" });
       res.json({ success: true });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("Delete entity link error:", err);
       res.status(500).json({ error: "Failed to delete entity link" });
     }
@@ -11934,6 +11984,7 @@ No emojis. No prose outside the JSON.`,
       }
       res.json(data);
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("[api] audit-log POST failed:", err?.message);
       res.status(500).json({ error: "Failed to write audit log" });
     }
@@ -11984,6 +12035,7 @@ No emojis. No prose outside the JSON.`,
         ...(failed.length > 0 ? { errors: (result as any).errors } : {}),
       });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("[api] Delete all data failed:", err.message);
       res.status(500).json({ error: "Failed to delete all data" });
     }
@@ -12002,6 +12054,7 @@ No emojis. No prose outside the JSON.`,
       if (value === null) return res.json({ value: null });
       res.json({ value });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       res.status(500).json({ error: "Failed to get preference" });
     }
   }));
@@ -12027,6 +12080,7 @@ No emojis. No prose outside the JSON.`,
       if (key === "item_enrichment" || key === "nutrition_enrichment") forgetEnrichmentMode(String((req as AuthenticatedRequest).userId || ""));
       res.json({ success: true });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       res.status(500).json({ error: "Failed to set preference" });
     }
   }));
@@ -12104,6 +12158,7 @@ No emojis. No prose outside the JSON.`,
       await storage.setPreference("onboarding_completed", "true");
       res.json({ success: true });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       res.status(500).json({ error: "Failed to complete onboarding" });
     }
   }));
@@ -12245,6 +12300,7 @@ No emojis. No prose outside the JSON.`,
           : "All Google Calendar events are already synced.",
       });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("Calendar sync error:", err);
       res.status(500).json({ error: "Calendar sync failed" });
     }
@@ -12336,6 +12392,7 @@ No emojis. No prose outside the JSON.`,
 
       res.json({ exported: true, title: event.title, result });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       console.error("Calendar export error:", err);
       res.status(500).json({ error: "Failed to export event to Google Calendar" });
     }
@@ -12358,6 +12415,7 @@ No emojis. No prose outside the JSON.`,
         importedCount: gcalEvents.length,
       });
     } catch (err: any) {
+      if (answeredAiUnavailable(err, res)) return;
       res.status(500).json({ error: "Failed to get sync status" });
     }
   }));
@@ -12864,6 +12922,7 @@ No emojis. No prose outside the JSON.`,
         // that is not a successful restoration.
         restored = replay.ok && !!replay.payment?.id;
       } catch (error) {
+        if (answeredAiUnavailable(error, res)) return;
         log.error("[liability payment edit] original payment replay failed", error);
       }
       bustBillCaches(uid);
@@ -13034,6 +13093,8 @@ No emojis. No prose outside the JSON.`,
       const links = await storage.setAssetOwners(req.params.id, owners);
       res.json({ ownerProfileId: req.params.id, owners: links });
     } catch (e: any) {
+      // Another save of this owner set held it past the wait: a retry, not a bad request.
+      if (e?.code === "OWNERSHIP_BUSY") return res.status(409).json({ error: e.message, code: "OWNERSHIP_BUSY" });
       res.status(400).json({ error: e?.message || "Failed to set owners" });
     }
   }));

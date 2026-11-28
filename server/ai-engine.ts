@@ -254,6 +254,7 @@ import { explicitNewTrackerName, isTheNamedTracker } from "@shared/tracker-inten
 import { retractsOwnClaim, RETRACTION_REPLY } from "@shared/chat-retraction";
 import { correctBareWeekday, asksForAChange, changesWhen } from "@shared/chat-date-intent";
 import { isHabitDoneOn } from "@shared/habit-schedule";
+import { withOwnerShare } from "@shared/owner-share";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
 import { paymentReceiptLine, paymentNotRecordedLine, composePaymentReply } from "@shared/payment-receipt";
@@ -11236,6 +11237,26 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         }
       }
       if (!party) return { error: `Person not found: ${input.partyName}` };
+      // An OWNERSHIP share makes room for itself: the owner set is rewritten
+      // whole (the same locked write the ownership screen makes), the new
+      // share as asked and the others keeping their proportions of the rest
+      // (shared/owner-share.ts). Adding it on top of an existing 100% owner
+      // was refused by the database guard every time.
+      const role = String(input.role || "owner");
+      if ((role === "owner" || role === "co_owner") && !input.replaceExisting) {
+        const stored = ((await storage.getAssetPartyLinks(asset.id)) || []).filter((l: any) => ["owner", "co_owner", "co-owner"].includes(String(l.role || "owner")));
+        const selfP = profiles.find((p: any) => p.type === "self");
+        const alreadyOwners = stored.length;
+        const pct = input.ownershipPct != null ? Number(input.ownershipPct) : (alreadyOwners <= 1 ? 50 : 100 / (alreadyOwners + 1));
+        const next = withOwnerShare(stored.map((l: any) => ({ partyProfileId: l.partyProfileId, ownershipPercentage: Number(l.ownershipPercentage) })), party.id, pct, selfP?.id ?? null);
+        try {
+          const links = await storage.setAssetOwners(asset.id, next);
+          const names = (links || []).map((l: any) => `${profiles.find((p: any) => p.id === l.partyProfileId)?.name ?? "?"} ${l.ownershipPercentage}%`);
+          return { result: { asset: asset.name, owners: names }, ownersNow: names.join(", "), actions: [{ type: "link", category: "asset_owner", data: { assetProfileId: asset.id, owners: links } }] };
+        } catch (e: any) {
+          return { error: `The ownership was NOT changed: ${e?.message || "unknown"}. Do not say it was.` };
+        }
+      }
       try {
         const link = await storage.createAssetPartyLink({
           assetProfileId: asset.id,
@@ -13357,18 +13378,45 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         relationship: input.relationship,
         confidence: 1,
       });
-      // Also update the profile arrays for proper display
-      if (input.target_type === "profile") {
+      // Also update the profile arrays for proper display.
+      //
+      // A record that belongs to ONE person (task, expense, event…) linked to
+      // a person is FILED under that person — the same move update_task's
+      // forProfile makes. This used to add a link row while the isolation
+      // guard silently refused to touch the record's owner, so the task stayed
+      // the account holder's, the person's list lacked it, and the reply said
+      // "linked to Kin" (chat-tools scenarios, 2026-11-28, 3 runs in 7).
+      const recordSide = input.target_type === "profile" ? { type: input.source_type, id: input.source_id, person: input.target_id }
+        : input.source_type === "profile" ? { type: input.target_type, id: input.target_id, person: input.source_id } : null;
+      if (recordSide && recordSide.type !== "profile") {
         try {
-          await storage.linkProfileTo(input.target_id, input.source_type, input.source_id);
-          await updateEntityLinkedProfiles(input.source_type, input.source_id, input.target_id);
-        } catch (e) { console.error("link_entities profile update failed:", e); }
-      }
-      if (input.source_type === "profile") {
-        try {
-          await storage.linkProfileTo(input.source_id, input.target_type, input.target_id);
-          await updateEntityLinkedProfiles(input.target_type, input.target_id, input.source_id);
-        } catch (e) { console.error("link_entities profile update failed:", e); }
+          // Records filed under ONE person: the exclusive kinds, plus tasks,
+          // expenses and events (their storage keeps one owner, so appending
+          // the person changed nothing).
+          if (PROFILE_EXCLUSIVE_TYPES.has(recordSide.type) || recordSide.type === "task" || recordSide.type === "expense" || recordSide.type === "event") {
+            const owners = await getEntityLinkedProfiles(recordSide.type, recordSide.id);
+            const self = (await storage.getProfiles()).find((p: any) => p.type === "self");
+            const ownedByOther = owners.some((o) => o !== recordSide.person && o !== self?.id);
+            if (ownedByOther) {
+              return { ...linkResult, error: `That ${recordSide.type} belongs to someone else, so it was NOT moved. Tell the user it is still filed under its current owner and ask whether to move it.` };
+            }
+            if (!(owners.length === 1 && owners[0] === recordSide.person)) {
+              const changes = { linkedProfiles: [recordSide.person] } as any;
+              if (recordSide.type === "task") await storage.updateTask(recordSide.id, changes);
+              else if (recordSide.type === "expense") await storage.updateExpense(recordSide.id, changes);
+              else if (recordSide.type === "event") await storage.updateEvent(recordSide.id, changes);
+              else await updateEntityLinkedProfiles(recordSide.type, recordSide.id, recordSide.person);
+              try { await storage.linkProfileTo(recordSide.person, recordSide.type, recordSide.id); } catch { /* dup OK */ }
+            }
+            const after = await getEntityLinkedProfiles(recordSide.type, recordSide.id);
+            if (!after.includes(recordSide.person)) {
+              return { ...linkResult, error: `The ${recordSide.type} could NOT be filed under that person. Do not say it was linked.` };
+            }
+            return { ...linkResult, filedUnder: recordSide.person };
+          }
+          await storage.linkProfileTo(recordSide.person, recordSide.type, recordSide.id);
+          await updateEntityLinkedProfiles(recordSide.type, recordSide.id, recordSide.person);
+        } catch (e) { console.error("link_entities profile update failed:", e); return { ...linkResult, error: "The link could not be saved. Do not say it was linked." }; }
       }
       return linkResult;
     }
@@ -16438,6 +16486,9 @@ async function getEntityLinkedProfiles(entityType: string, entityId: string): Pr
       case "goal": { const g = (await storage.getGoals()).find(g => g.id === entityId); return (g as any)?.linkedProfiles || []; }
       case "journal": { const j = (await storage.getJournalEntries()).find(j => j.id === entityId); return (j as any)?.linkedProfiles || []; }
       case "income": { const inc = (await storage.getIncomes()).find((i: any) => i.id === entityId); return inc?.linkedProfiles || []; }
+      case "task": { const t = (await storage.getTasks()).find((x: any) => x.id === entityId); return (t as any)?.linkedProfiles || []; }
+      case "expense": { const e = (await storage.getExpenses()).find((x: any) => x.id === entityId); return (e as any)?.linkedProfiles || []; }
+      case "event": { const ev = (await storage.getEvents()).find((x: any) => x.id === entityId); return (ev as any)?.linkedProfiles || []; }
       default: return [];
     }
   } catch { return []; }

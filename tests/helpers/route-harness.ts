@@ -216,6 +216,9 @@ export function makeFakeStorage(db: FakeDb) {
       return true;
     },
 
+    // An empty dashboard payload with every list present (briefingFacts
+    // refuses a missing list), for routes that read it before anything else.
+    getDashboardEnhanced: async () => ({ financeSnapshot: { upcomingBills: [] }, todaysEvents: [] }),
     getExpenses: async () => db.expenses,
     // As the real storages: the request's key names the row (the same key is
     // the same expense, answered with the first row); the control keys are
