@@ -227,9 +227,17 @@ body {
    Fix: keep scrollbar-gutter on desktop only (it solves the original Radix
    dialog shift bug), and on mobile clamp the root chain to 100% width with
    `overflow-x: hidden`. */
+/* `stable`, not `stable both-edges` (2026-11-28): the left gutter moved the
+   fixed-position origin with it, so every popover, menu and toast Radix
+   places by viewport coordinates was drawn ~15 px right of its anchor on a
+   desktop with classic scrollbars — a right-edge popover ran off the screen
+   and its button could not be pressed (integrity run, bill "Move"). The
+   right gutter alone still keeps the page from shifting when a dialog hides
+   the root scrollbar (the chat home scrolls the root).
+   Guard: tests/fixed-overlays-not-shifted.test.ts. */
 @media (min-width: 768px) {
   html, body {
-    scrollbar-gutter: stable both-edges;
+    scrollbar-gutter: stable;
   }
 }
 html, body, #root {

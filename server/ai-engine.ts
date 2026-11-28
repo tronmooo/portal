@@ -274,6 +274,8 @@ import { runWithMutationScope, isReadOnlyTurnError } from "./mutation-scope";
 import { logIntegrity } from "./integrity-log";
 import { operationIdFor, readOnlyTurnViolation } from "@shared/ai-operation-ids";
 import { chatProfileTypeKey } from "@shared/chat-profile-type-key";
+import { resolveIdRef } from "@shared/id-ref";
+import { renameIsReallyAnAdd } from "@shared/rename-intent";
 import { isPlaceholderBirthYear, nextAnnualDate, dropPlaceholderBirthDates } from "@shared/placeholder-birth-year";
 import {
   EXTRACT_ACTIONS_TOOL,
@@ -8512,7 +8514,20 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           })
           .slice(0, 5)
           .map(p => p.name);
-        return { error: `Profile "${input.name}" not found.${suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : " Use create_profile to create a new one."}` };
+        // A near name is offered as a QUESTION for the user, never as the
+        // record to change: "Civic …C" is not "Civic …M" (shared/rename-intent).
+        return { error: `Profile "${input.name}" not found.${suggestions.length > 0 ? ` Similar names: ${suggestions.join(", ")} — those are DIFFERENT records; do not change one of them unless the user says it is the one they mean.` : ""} If the user is adding "${input.name}", use create_profile.` };
+      }
+
+      // "Add my car X" is never a rename of a DIFFERENT record into X: checked
+      // before anything is written (shared/rename-intent).
+      if (typeof input.changes?.name === "string"
+        && renameIsReallyAnAdd((input as any).__userMessage, profile.name, input.changes.name)) {
+        logger.warn("ai", `update_profile refused: "${profile.name}" → "${input.changes.name}" — the user asked to ADD "${input.changes.name}", not to rename "${profile.name}"`);
+        return {
+          error: `NOT_A_RENAME: the user asked to ADD "${input.changes.name}"; "${profile.name}" is a different record and was NOT changed. ` +
+            `Create the new one with create_profile(name:"${input.changes.name}", …). Never rename an existing record to make a new one.`,
+        };
       }
 
       // ----- Revert support -----
@@ -13403,6 +13418,23 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
     }
 
     case "link_entities": {
+      // Each side is resolved to a stored row BEFORE anything is written: the
+      // model may pass a short id or a name, and a link to an id that names
+      // nothing filed the task under nobody (shared/id-ref).
+      for (const side of ["source", "target"] as const) {
+        const type = String(input[`${side}_type`] || "");
+        const lister: Record<string, () => Promise<any[]>> = {
+          profile: () => storage.getProfiles(),
+          task: () => storage.getTasks(),
+          expense: () => storage.getExpenses(),
+          event: () => storage.getEvents(),
+        };
+        if (!lister[type]) continue;
+        const rows = (await lister[type]()) || [];
+        const ref = resolveIdRef(input[`${side}_id`], rows, (r: any) => r.name ?? r.title ?? r.description, type);
+        if ("error" in ref) return { error: `${ref.error} Nothing was linked. Look the ${type} up again and use the id the result gives.` };
+        input = { ...input, [`${side}_id`]: ref.id };
+      }
       const linkResult = await storage.createEntityLink({
         sourceType: input.source_type,
         sourceId: input.source_id,

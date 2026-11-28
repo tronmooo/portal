@@ -348,11 +348,10 @@ function OccurrenceRow({
           )}
           <Popover>
             <PopoverTrigger asChild><Button size="sm" variant="ghost" className="h-7 px-2 text-xs" aria-label="Edit this occurrence" title="Edit" data-testid={`occ-edit-${occ.date}`}><Pencil className="w-3.5 h-3.5" /></Button></PopoverTrigger>
-            {/* align="end": the pencil sits at the right edge of the row, and on a
-                desktop the html's "scrollbar-gutter: stable both-edges"
-                (index.css) shifts fixed popovers ~15 px right of where Radix
-                places them, so a start-aligned popover ran off the screen and
-                "Move" could not be pressed (integrity run, 2026-11-27). */}
+            {/* align="end": the pencil sits at the right edge of the row, so the
+                popover opens leftward and stays on screen ("Move" could not
+                be pressed, integrity run, 2026-11-27; the 15 px shift of every
+                fixed popover was index.css's both-edges gutter, removed). */}
             <PopoverContent className="w-72 space-y-3" align="end" collisionPadding={24}>
               {/* Each row's input shrinks (min-w-0 flex-1), so its button stays inside the popover. */}
               <div className="space-y-1">
