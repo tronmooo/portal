@@ -29,6 +29,7 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { useProfileDocuments } from "@/hooks/useProfileDocuments";
 import { infoFieldsForType, readField, computeAge, birthdayForAge } from "@/lib/profile-fields";
 import { useToast } from "@/hooks/use-toast";
+import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { formatApiError } from "@/lib/formatError";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
 import { prefetchDocument } from "@/lib/document-preview";
@@ -948,6 +949,11 @@ function FieldCell({ label, value, editable, onSave, onRemove }: {
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  // Rule 8: removing a field is destructive, so its X takes two taps — the
+  // first arms it ("Remove?"), the second removes. One stray touch on a phone
+  // used to delete the field outright (integrity run 2026-11-27), while the
+  // characteristic cells on the same page already asked twice (D7).
+  const { confirm, isArmed } = useConfirmArm();
   useEffect(() => { setDraft(value); }, [value]);
 
   if (editing && editable) {
@@ -980,11 +986,13 @@ function FieldCell({ label, value, editable, onSave, onRemove }: {
         // User, 2026-07-26: "Why won't it let me edit these or delete them".
         // A hit target of 24px keeps it tappable without covering the value.
         <button
-          onClick={e => { e.stopPropagation(); onRemove(); }}
-          className="absolute top-0.5 right-0.5 h-6 w-6 grid place-items-center rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 active:bg-destructive/20 transition-colors"
+          onClick={e => { e.stopPropagation(); confirm("rm", () => onRemove?.()); }}
+          className={`absolute top-0.5 right-0.5 h-6 min-w-6 px-1 grid place-items-center rounded-md text-[11px] transition-colors ${isArmed("rm") ? "bg-destructive text-destructive-foreground" : "text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 active:bg-destructive/20"}`}
+          title={isArmed("rm") ? `Tap again to remove ${label}` : undefined}
+          data-armed={isArmed("rm") ? "true" : undefined}
           aria-label={`Remove ${label}`}
           data-testid={`info-remove-${label}`}
-        ><X className="h-3.5 w-3.5" /></button>
+        >{isArmed("rm") ? "Remove?" : <X className="h-3.5 w-3.5" />}</button>
       )}
     </Card>
   );

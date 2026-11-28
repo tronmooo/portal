@@ -19,13 +19,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft, Bell, CalendarDays, Check, CircleSlash, Infinity as InfinityIcon,
-  ListOrdered, Plus, Repeat, Trash2, X, AlertTriangle, PauseCircle,
+  ListOrdered, Plus, Repeat, Trash2, X, AlertTriangle, PauseCircle, PlayCircle,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { isCommittableDay } from "@/lib/date-input";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
-import { refreshCalendarSurfaces } from "@/lib/calendar-mutations";
+import { refreshCalendarSurfaces, setSeriesPaused } from "@/lib/calendar-mutations";
 import { setEventSeriesFlag } from "@/lib/event-occurrence";
 import { WeekdayPicker, isCustomDaySet, seedDaySet } from "@/components/recurring/WeekdayPicker";
 import {
@@ -380,6 +380,16 @@ export function EditSeriesScreen({
       onGone();
     } catch (e: any) {
       toast({ title: "Couldn't pause", description: e?.message || "Try again", variant: "destructive" });
+    }
+  };
+
+  const resumeSeries = async () => {
+    try {
+      await setSeriesPaused(series, false);
+      toast({ title: "Series resumed", description: "Its dates are back on the calendar." });
+      onBack();
+    } catch (e: any) {
+      toast({ title: "Couldn't resume", description: e?.message || "Try again", variant: "destructive" });
     }
   };
 
@@ -794,7 +804,21 @@ export function EditSeriesScreen({
                       data-testid="cal-edit-require" />
                   </label>
                 )}
-                {mode === "series" && series.recurrence !== "none" && (
+                {mode === "series" && series.recurrence !== "none" && series.paused && (
+                  // A paused series is resumed where it was paused: the only
+                  // place the toast "until you resume it" can point to.
+                  <button type="button"
+                    onClick={() => void resumeSeries()}
+                    className="w-full flex items-center gap-3 rounded-2xl border border-border p-3.5 text-left hover:bg-muted/50"
+                    data-testid="cal-edit-resume">
+                    <PlayCircle className="h-5 w-5 text-muted-foreground" />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold">Resume series</span>
+                      <span className="block text-[13px] text-muted-foreground">Puts its dates back on the calendar, with every skip and check-off it had.</span>
+                    </span>
+                  </button>
+                )}
+                {mode === "series" && series.recurrence !== "none" && !series.paused && (
                   <button type="button"
                     onClick={() => arm.confirm("pause", () => void pauseSeries())}
                     className="w-full flex items-center gap-3 rounded-2xl border border-border p-3.5 text-left hover:bg-muted/50"

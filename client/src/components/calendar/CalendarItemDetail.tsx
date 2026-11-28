@@ -35,14 +35,14 @@ import { useConfirmArm } from "@/hooks/useConfirmArm";
 import {
   ArrowLeft, Bell, CalendarClock, CalendarDays, Check, ChevronRight, ChevronsRight,
   ExternalLink, History as HistoryIcon, Infinity as InfinityIcon, MoreHorizontal,
-  Pencil, Repeat, RotateCcw, Scissors, Tag, Trash2, X,
+  Pencil, PauseCircle, PlayCircle, Repeat, RotateCcw, Scissors, Tag, Trash2, X,
 } from "lucide-react";
 import {
   KIND_LABELS, relativeDayLabel, isPaymentKind,
   type CalendarOccurrence, type CalendarSeries,
 } from "@shared/calendar-occurrences";
 import {
-  can, actionLabelFor, hasPerOccurrenceMoney, occurrenceMenuFor, editsInPlace,
+  can, actionLabelFor, hasPerOccurrenceMoney, occurrenceMenuFor, editsInPlace, canEndSeriesBefore, canPauseSeries,
   MONEY_ACTIONS, MONEY_ACTION_LABELS,
   type CalendarAction, type CalendarMoneyAction, type OccurrenceMenuAction, type OccurrenceMenuItem,
 } from "@shared/calendar-capabilities";
@@ -50,7 +50,7 @@ import { humanRecurrenceLabel, parseRecurringMeta } from "@shared/recurring-date
 import {
   seriesHistory, completionStats, hasHistory, HISTORY_LABELS, type HistoryStatus,
 } from "@shared/occurrence-history";
-import { applyCalendarAction, applyCalendarMoneyAction, restoreOccurrence } from "@/lib/calendar-mutations";
+import { applyCalendarAction, applyCalendarMoneyAction, restoreOccurrence, setSeriesPaused } from "@/lib/calendar-mutations";
 import { KIND_ICONS, KIND_HSL, fmtDate, fmtShort, fmtDay } from "./detail/kind-style";
 import { EditSeriesScreen } from "./detail/EditSeriesScreen";
 
@@ -119,6 +119,8 @@ export interface CalendarItemDetailProps {
   onClose: () => void;
   /** Series ids collapsed into this one, disclosed rather than hidden. */
   duplicateNote?: string;
+  /** Open straight on the series editor (a rule card's Edit). */
+  initialScreen?: "edit";
 }
 
 type Screen =
@@ -127,13 +129,13 @@ type Screen =
   | { name: "edit"; mode: "series" | "future"; fromDate?: string; tab?: "details" | "repeat" | "reminders" | "advanced" };
 
 export function CalendarItemDetail({
-  occurrence: tapped, seriesOccurrences, getEventRow, profileName, todayISO, onClose, duplicateNote,
+  occurrence: tapped, seriesOccurrences, getEventRow, profileName, todayISO, onClose, duplicateNote, initialScreen,
 }: CalendarItemDetailProps) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const arm = useConfirmArm();
   const [busy, setBusy] = useState<string | null>(null);
-  const [screen, setScreen] = useState<Screen>({ name: "overview" });
+  const [screen, setScreen] = useState<Screen>(initialScreen === "edit" ? { name: "edit", mode: "series" } : { name: "overview" });
   /** The occurrence whose action list is open. */
   const [menuOcc, setMenuOcc] = useState<CalendarOccurrence | null>(null);
   const [moveDate, setMoveDate] = useState<string | null>(null);
@@ -180,7 +182,10 @@ export function CalendarItemDetail({
   const inPlace = editsInPlace(series);
   const showHistory = hasHistory(series);
 
-  const menuItemsFor = (o: CalendarOccurrence) => occurrenceMenuFor(series, o, { isOpen: !!next && o.id === next.id });
+  // A paused series has no date to act on: the one thing it offers is Resume.
+  const paused = !!series.paused;
+  const resumable = paused && canPauseSeries(series);
+  const menuItemsFor = (o: CalendarOccurrence) => (paused ? [] : occurrenceMenuFor(series, o, { isOpen: !!next && o.id === next.id }));
   const nextMenu = next ? menuItemsFor(next) : [];
   const primaryComplete = nextMenu.find((m) => m.action === "complete");
 
@@ -214,6 +219,19 @@ export function CalendarItemDetail({
       toast({ title: `${fmtShort(occ.date)} is back on the schedule` });
     } catch (e: any) {
       toast({ title: "Couldn't complete that", description: e?.message || "Try again", variant: "destructive" });
+    } finally {
+      setBusy(null);
+      closeMenus();
+    }
+  };
+
+  const resume = async () => {
+    setBusy("resume");
+    try {
+      await setSeriesPaused(series, false);
+      toast({ title: "Series resumed", description: "Its dates are back on the calendar." });
+    } catch (e: any) {
+      toast({ title: "Couldn't resume", description: e?.message || "Try again", variant: "destructive" });
     } finally {
       setBusy(null);
       closeMenus();
@@ -338,7 +356,14 @@ export function CalendarItemDetail({
           onClick={() => { closeMenus(); setScreen({ name: "occurrences", tab: "occurrences" }); }}
           testId="cal-more-occurrences" />
       )}
-      {next && can(series, "deleteFuture") && (
+      {resumable && (
+        <ActionRow icon={PlayCircle} label="Resume series"
+          hint="Puts its dates back on the calendar, with every skip and check-off it had."
+          onClick={() => void resume()} testId={inMenu ? "cal-more-resume" : "cal-option-resume"} />
+      )}
+      {/* Ending before the series' first date would leave no date at all —
+          that is Delete, and End series is not offered (O4). */}
+      {next && canEndSeriesBefore(series, next.date) && (
         <ActionRow icon={Scissors} destructive
           label={arm.isArmed("future") ? "Tap again to end the series" : "End series"}
           hint={`Stops before ${fmtShort(next.date)}. Earlier dates keep their history.`}
@@ -425,6 +450,18 @@ export function CalendarItemDetail({
             {screen.name === "overview" && (
               <>
                 <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-3">
+                  {resumable && (
+                    <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3.5 flex items-center gap-3" data-testid="cal-detail-paused">
+                      <PauseCircle className="h-5 w-5 shrink-0 text-amber-500" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold">Paused</span>
+                        <span className="block text-[13px] text-muted-foreground">Its dates are hidden everywhere. Nothing was deleted.</span>
+                      </span>
+                      <Button size="sm" className="shrink-0" disabled={busy != null} onClick={() => void resume()} data-testid="cal-resume">
+                        <PlayCircle className="h-4 w-4 mr-1" /> Resume
+                      </Button>
+                    </div>
+                  )}
                   {/* Next occurrence — the one thing this screen is for. */}
                   <button type="button"
                     disabled={!next || nextMenu.length === 0 || busy != null}
@@ -460,7 +497,7 @@ export function CalendarItemDetail({
                   </button>
 
                   {/* The date the user tapped, when it is not the next one. */}
-                  {(!next || occurrence.id !== next.id) && (
+                  {!paused && (!next || occurrence.id !== next.id) && (
                     <button type="button"
                       disabled={menuItemsFor(occurrence).length === 0 || busy != null}
                       onClick={() => setMenuOcc(occurrence)}

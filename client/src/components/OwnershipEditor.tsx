@@ -12,7 +12,7 @@
 //   • With NO owners, the asset belongs to "Me" (Self) at 100% — shown as
 //     "Ownership not set".
 // ─────────────────────────────────────────────────────────────────────────────
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -166,6 +166,19 @@ export function OwnershipEditor({
     onError: (err: Error) => toast({ title: "Couldn't save ownership", description: err.message, variant: "destructive" }),
   });
 
+  // One press, one write. `saveMut.isPending` disables the button only on the
+  // render after TanStack publishes the mutation's state, so a double click
+  // sent two PUTs at once; the server's replace is not safe against itself and
+  // the losing request rolled the asset back to its old owners after the
+  // other had answered 200 (integrity run 2026-11-27: 60/40 saved, 100/0
+  // stored). The ref closes that gap synchronously.
+  const savingRef = useRef(false);
+  const save = () => {
+    if (savingRef.current || !validation.valid) return;
+    savingRef.current = true;
+    saveMut.mutate(undefined, { onSettled: () => { savingRef.current = false; } });
+  };
+
   const availableToAdd = candidates.filter((c) => !rows.some((r) => r.partyProfileId === c.id));
   const unconfigured = rows.length === 0;
 
@@ -295,7 +308,7 @@ export function OwnershipEditor({
               size="sm"
               className="h-8 text-xs gap-1"
               disabled={!validation.valid || saveMut.isPending}
-              onClick={() => saveMut.mutate()}
+              onClick={save}
               data-testid="owner-save"
             >
               {saveMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}

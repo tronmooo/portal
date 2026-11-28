@@ -327,7 +327,7 @@ function HabitCard({ habit, rangeDays, rangeLabel }: { habit: Habit; rangeDays: 
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Delete "{habit.name}"?</AlertDialogTitle>
-              <AlertDialogDescription>All check-in history will be permanently removed.</AlertDialogDescription>
+              <AlertDialogDescription>It leaves your habits with its check-in history. You can undo this right after.</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>

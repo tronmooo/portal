@@ -224,6 +224,47 @@ export function can(series: CalendarSeries, action: CalendarAction): boolean {
   return capabilitiesFor(series).find((c) => c.action === action)?.enabled ?? false;
 }
 
+/**
+ * Can the series be ended before `date` ("End series", "Delete future
+ * occurrences")?
+ *
+ * An event stores the end as `recurrenceEnd`, and a repeating event cannot
+ * stop before its first date (shared/event-span: the route answers 400). So
+ * when `date` is the event's first date, ending it would leave no date at all
+ * — that is "Delete entire series", and End series is not offered (O4: an
+ * action that does not apply is not on the screen). A task ends itself
+ * instead (`endBefore` → `ended`), so it keeps the action.
+ */
+export function canEndSeriesBefore(series: CalendarSeries, date: string | null | undefined): boolean {
+  if (!date || !can(series, "deleteFuture")) return false;
+  if (series.source.system === "event" && String(date).slice(0, 10) <= String(series.baseDate || "").slice(0, 10)) return false;
+  return true;
+}
+
+/**
+ * Can this series be paused and resumed from the calendar? Only a repeating
+ * event (`rd:paused`) or a repeating task (`rpaused`) stores the flag itself.
+ */
+export function canPauseSeries(series: CalendarSeries): boolean {
+  const recurring = !!series.recurrence && series.recurrence !== "none";
+  return recurring && !series.materializedFrom
+    && (series.source.system === "event" || series.source.system === "task");
+}
+
+/**
+ * The actions a rule CARD offers. Per-occurrence actions act on the series'
+ * next open date, so a series with none (paused, finished) offers only what
+ * reaches the whole series (O4: never a button that cannot apply).
+ */
+export function cardActionsFor(series: CalendarSeries, nextDate: string | null | undefined): ActionCapability[] {
+  const perOccurrence = new Set<CalendarAction>(["move", "complete", "skip", "deleteOccurrence"]);
+  return capabilitiesFor(series).filter((c) => {
+    if (c.action === "deleteFuture") return canEndSeriesBefore(series, nextDate);
+    if (perOccurrence.has(c.action)) return !!nextDate || (c.action === "deleteOccurrence" && !(series.recurrence && series.recurrence !== "none"));
+    return true;
+  });
+}
+
 /** The explanation for a disabled action, or undefined when it's enabled. */
 export function reasonFor(series: CalendarSeries, action: CalendarAction): string | undefined {
   const c = capabilitiesFor(series).find((x) => x.action === action);

@@ -738,7 +738,7 @@ export function BudgetPopup({
   const budgetsParam = filterMode === "selected" && filterIds.length > 0
     ? `?month=${currentMonthForPopup}&profileIds=${filterIds.join(",")}`
     : `?month=${currentMonthForPopup}`;
-  const { data: budgetsResp } = useQuery<any>({
+  const { data: budgetsResp, isError: budgetsFailed, refetch: refetchBudgets } = useQuery<any>({
     queryKey: ["/api/budgets", "popup", currentMonthForPopup, filterMode, ...filterIds],
     queryFn: async () => (await apiRequest("GET", `/api/budgets${budgetsParam}`)).json(),
     enabled: open,
@@ -858,6 +858,24 @@ export function BudgetPopup({
     },
   });
 
+  // "Copy last month": the server adds the categories this month lacks and
+  // keeps the ones it has (`copyBudgetsToMonth`). It was offered only by the
+  // legacy dashboard's Finance section; Finance itself had no way to carry a
+  // month's limits forward (integrity run, 2026-11-27).
+  const previousMonth = (() => {
+    const [y, m] = currentMonthForPopup.split("-").map(Number);
+    const idx = y * 12 + (m - 1) - 1;
+    return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, "0")}`;
+  })();
+  const copyMut = useMutation<{ copied: number }, Error>({
+    mutationFn: async () => (await apiRequest("POST", "/api/budgets/copy", { fromMonth: previousMonth, toMonth: currentMonthForPopup })).json(),
+    onSuccess: (r) => {
+      invalidate();
+      toast({ title: r?.copied ? `Copied ${r.copied} budget${r.copied === 1 ? "" : "s"} from last month` : "Nothing new to copy from last month" });
+    },
+    onError: (e) => toast({ title: "Couldn't copy", description: e?.message || "Try again", variant: "destructive" }),
+  });
+
   const startEdit = (b: BudgetRow) => {
     setEditingId(b.id);
     setEditAmount(String(b.amount));
@@ -900,7 +918,7 @@ export function BudgetPopup({
       icon={PieChartIcon}
       iconColor={overallPct > 100 ? "hsl(0 72% 52%)" : "hsl(43 85% 52%)"}
       title="Monthly Budget"
-      description={hasBudget ? `$${fmt(totalSpent)} of $${fmt(totalBudget)} spent` : "No budget set for this scope"}
+      description={hasBudget ? `$${fmt(totalSpent)} of $${fmt(totalBudget)} spent` : budgetsResp == null ? (budgetsFailed ? "Couldn't load budgets" : "Loading…") : "No budget set for this scope"}
       total={hasBudget ? `${overallPct}%` : ""}
       testId="popup-budget"
     >
@@ -928,8 +946,18 @@ export function BudgetPopup({
           </div>
         )}
 
-        {/* Categories */}
-        {budgets.length === 0 ? (
+        {/* Categories. A list not read yet, or a failed read, is not "no
+            budget categories" (Rule 7): it says so, and offers no "first". */}
+        {budgetsResp == null ? (
+          budgetsFailed ? (
+            <div className="px-4 py-6 flex flex-col items-center gap-2" role="alert" data-testid="budget-list-error">
+              <p className="text-xs text-muted-foreground">Couldn't load your budgets.</p>
+              <Button size="sm" variant="outline" onClick={() => { void refetchBudgets(); }} data-testid="budget-list-retry">Retry</Button>
+            </div>
+          ) : (
+            <p className="px-4 py-6 text-center text-xs text-muted-foreground" role="status" data-testid="budget-list-loading">Loading…</p>
+          )
+        ) : budgets.length === 0 ? (
           <div className="px-4 py-8 flex flex-col items-center gap-2">
             <p className="text-xs text-muted-foreground">No budget categories yet</p>
             <Button size="sm" onClick={() => setShowAdd(true)} data-testid="budget-add-first">
@@ -1029,10 +1057,15 @@ export function BudgetPopup({
         )}
 
         {/* Add category */}
-        {!showAdd ? (
-          <Button size="sm" variant="outline" className="w-full text-xs h-8" onClick={() => setShowAdd(true)} data-testid="budget-show-add">
-            <Plus className="h-3.5 w-3.5 mr-1.5" /> Add category
-          </Button>
+        {budgetsResp == null ? null : !showAdd ? (
+          <div className="flex gap-1.5">
+            <Button size="sm" variant="outline" className="flex-1 text-xs h-8" onClick={() => setShowAdd(true)} data-testid="budget-show-add">
+              <Plus className="h-3.5 w-3.5 mr-1.5" /> Add category
+            </Button>
+            <Button size="sm" variant="outline" className="flex-1 text-xs h-8" onClick={() => copyMut.mutate()} disabled={copyMut.isPending} data-testid="budget-copy-last-month">
+              {copyMut.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null} Copy last month
+            </Button>
+          </div>
         ) : (() => {
           // QA BUG-007 — disable submit until required fields filled,
           // highlight invalid inputs in red, and never let the button flash

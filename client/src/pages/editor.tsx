@@ -243,11 +243,24 @@ export default function EditorPage() {
   const isNew = !!matchNew || hashIsNew || !existingId;
   const newType = ((paramsNew?.type === "sheet" || hashType === "sheet") ? "sheet" : "doc") as "doc" | "sheet";
 
-  const { data: existing, isLoading: loadingExisting } = useQuery<Artifact>({
+  const { data: cachedExisting, isLoading: loadingExisting, isStale: existingStale, isFetching: fetchingExisting } = useQuery<Artifact>({
     queryKey: ["/api/artifacts", existingId],
     queryFn: () => apiRequest("GET", `/api/artifacts/${existingId}`).then(r => r.json()),
     enabled: !!existingId && !isNew,
   });
+  // The page is filled from the document ONCE (below), so it must be filled
+  // from the saved copy, not from a stale one the cache still holds while it
+  // is being read again. A version restored in Word (or a change made in chat)
+  // marks the cached copy stale; hydrating from it put the replaced text on
+  // the page, and the next autosave would have written it back over the
+  // restore (integrity run ui-records.artifact, 2026-11-28). A copy that is
+  // stale and NOT being read (offline, a failed read) is still the last good
+  // data and is used (Rule 7).
+  // Only the FIRST fill waits: once this document is on the page, the refetch
+  // after each save must not swap the editor for a spinner.
+  const firstFresh = useRef<string | null>(null);
+  const existing = cachedExisting && (firstFresh.current === cachedExisting.id || !(existingStale && fetchingExisting)) ? cachedExisting : undefined;
+  if (existing) firstFresh.current = existing.id;
 
   const type: "doc" | "sheet" = isNew ? newType : (existing?.type === "sheet" ? "sheet" : "doc");
   const [title, setTitle] = useState<string>("");
@@ -1346,7 +1359,7 @@ export default function EditorPage() {
   }, []);
 
   // ── Render ─────────────────────────────────────────────────────────────────
-  if (loadingExisting && !isNew) {
+  if ((loadingExisting || (!!cachedExisting && !existing)) && !isNew) {
     return <WorkspacePortal><div className="fixed inset-0 z-40 bg-background flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div></WorkspacePortal>;
   }
 

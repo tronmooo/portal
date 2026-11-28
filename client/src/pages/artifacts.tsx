@@ -1,3 +1,4 @@
+import { deleteRequestFor } from "@/components/artifacts/artifact-delete";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -482,8 +483,8 @@ export default function ArtifactsPage() {
   // legacy Document/scan.
   const deleteMut = useMutation({
     mutationFn: async (item: UnifiedArtifact) => {
-      const url = item.isArtifact ? `/api/artifacts/${item.id}` : `/api/documents/${item.id}`;
-      await apiRequest("DELETE", url);
+      const { method, url } = deleteRequestFor(item);
+      await apiRequest(method, url);
       return item;
     },
     onMutate: async (item) => {

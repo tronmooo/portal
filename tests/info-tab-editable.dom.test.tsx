@@ -238,6 +238,12 @@ describe("fields", () => {
     renderPage();
     await ready();
 
+    // Rule 8: a destructive button takes two taps. The first only arms it
+    // (this test used to expect one tap to delete — integrity run 2026-11-27).
+    fireEvent.click(screen.getByTestId("info-remove-Phone"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(wrote("PATCH", "/api/profiles/bob-1")).toBeUndefined();
+    expect(screen.getByTestId("info-remove-Phone").textContent).toMatch(/Remove\?/);
     fireEvent.click(screen.getByTestId("info-remove-Phone"));
     await waitFor(() => expect(wrote("PATCH", "/api/profiles/bob-1")).toBeTruthy());
     expect(wrote("PATCH", "/api/profiles/bob-1")!.body).toEqual({ fieldsToDelete: ["phone"] });
@@ -260,6 +266,7 @@ describe("fields", () => {
     renderPage();
     await ready();
     fireEvent.click(screen.getByTestId("info-remove-Age"));
+    fireEvent.click(screen.getByTestId("info-remove-Age")); // the second tap (Rule 8)
     await waitFor(() => expect(wrote("PATCH", "/api/profiles/bob-1")).toBeTruthy());
     expect(wrote("PATCH", "/api/profiles/bob-1")!.body).toEqual({ fieldsToDelete: ["birthday"] });
     expect(screen.getByTestId("info-remove-Birthday")).toBeTruthy();
@@ -318,6 +325,7 @@ describe("fields", () => {
     await ready();
 
     fireEvent.click(screen.getByTestId("info-remove-License Number"));
+    fireEvent.click(screen.getByTestId("info-remove-License Number")); // the second tap (Rule 8)
     await waitFor(() => expect(wrote("PATCH", "/api/profiles/bob-1")).toBeTruthy());
     expect(wrote("PATCH", "/api/profiles/bob-1")!.body).toEqual({ fieldsToDelete: ["licenseNumber"] });
   });

@@ -348,11 +348,17 @@ function OccurrenceRow({
           )}
           <Popover>
             <PopoverTrigger asChild><Button size="sm" variant="ghost" className="h-7 px-2 text-xs" aria-label="Edit this occurrence" title="Edit" data-testid={`occ-edit-${occ.date}`}><Pencil className="w-3.5 h-3.5" /></Button></PopoverTrigger>
-            <PopoverContent className="w-72 space-y-3">
+            {/* align="end": the pencil sits at the right edge of the row, and on a
+                desktop the html's "scrollbar-gutter: stable both-edges"
+                (index.css) shifts fixed popovers ~15 px right of where Radix
+                places them, so a start-aligned popover ran off the screen and
+                "Move" could not be pressed (integrity run, 2026-11-27). */}
+            <PopoverContent className="w-72 space-y-3" align="end" collisionPadding={24}>
+              {/* Each row's input shrinks (min-w-0 flex-1), so its button stays inside the popover. */}
               <div className="space-y-1">
                 <Label className="text-xs">Reschedule this occurrence</Label>
                 <div className="flex gap-1">
-                  <Input type="date" value={moveTo} onChange={(e) => setMoveTo(e.target.value)} className="h-8" />
+                  <Input type="date" value={moveTo} onChange={(e) => setMoveTo(e.target.value)} className="h-8 min-w-0 flex-1" />
                   <Button size="sm" className="h-8" onClick={() => onAct(() => apiRequest("PATCH", base, { movedTo: moveTo }), "Rescheduled")}>Move</Button>
                 </div>
               </div>
@@ -365,7 +371,7 @@ function OccurrenceRow({
                   <div className="space-y-1">
                     <Label className="text-xs">Estimate for this month</Label>
                     <div className="flex gap-1">
-                      <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8" />
+                      <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8 min-w-0 flex-1" />
                       <Button size="sm" variant="outline" className="h-8"
                         onClick={() => onAct(() => apiRequest("PATCH", base, { estimatedAmount: Number(amt) }), "Estimate updated")}
                         data-testid={`occ-estimate-${occ.date}`}>Estimate</Button>
@@ -374,7 +380,7 @@ function OccurrenceRow({
                   <div className="space-y-1">
                     <Label className="text-xs">Actual charged</Label>
                     <div className="flex gap-1">
-                      <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8" />
+                      <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8 min-w-0 flex-1" />
                       <Button size="sm" className="h-8"
                         onClick={() => onAct(() => apiRequest("PATCH", base, { actualAmount: Number(amt) }), "Actual amount recorded")}
                         data-testid={`occ-actual-${occ.date}`}>Actual</Button>
@@ -387,7 +393,7 @@ function OccurrenceRow({
                     <Label className="text-xs">Add a charge to this month</Label>
                     <div className="flex gap-1">
                       <Input type="number" step="0.01" value={chargeAmt} onChange={(e) => setChargeAmt(e.target.value)}
-                        placeholder="0.00" className="h-8" data-testid={`occ-charge-amount-${occ.date}`} />
+                        placeholder="0.00" className="h-8 min-w-0 flex-1" data-testid={`occ-charge-amount-${occ.date}`} />
                       <select value={chargeKind} onChange={(e) => setChargeKind(e.target.value)}
                         className="h-8 rounded-md border border-input bg-background px-1.5 text-[11px]"
                         data-testid={`occ-charge-kind-${occ.date}`}>
@@ -405,7 +411,7 @@ function OccurrenceRow({
                 <div className="space-y-1">
                   <Label className="text-xs">Amount for this occurrence</Label>
                   <div className="flex gap-1">
-                    <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8" />
+                    <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8 min-w-0 flex-1" />
                     <Button size="sm" className="h-8" onClick={() => onAct(() => apiRequest("PATCH", base, { amount: Number(amt) }), "Amount updated")}>Save</Button>
                   </div>
                 </div>
@@ -414,7 +420,7 @@ function OccurrenceRow({
               <div className="space-y-1">
                 <Label className="text-xs">Notes</Label>
                 <div className="flex gap-1">
-                  <Input value={notes} onChange={(e) => setNotes(e.target.value)} className="h-8" placeholder="e.g. paid early" />
+                  <Input value={notes} onChange={(e) => setNotes(e.target.value)} className="h-8 min-w-0 flex-1" placeholder="e.g. paid early" />
                   <Button size="sm" className="h-8" onClick={() => onAct(() => apiRequest("PATCH", base, { notes }), "Note saved")}>Save</Button>
                 </div>
               </div>

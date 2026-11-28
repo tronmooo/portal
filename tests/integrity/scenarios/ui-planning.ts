@@ -133,7 +133,10 @@ async function calDay(s: any, date: string) {
     // another screen in between: a person does not do that, so neither do we.
     const gap = Date.now() - (lastCellPress.get(s) ?? 0);
     if (gap < 800) await sleep(800 - gap);
-    await hit(s, cell);
+    // Pressed at its top-left corner, by the day number: the middle of a short
+    // cell can be one of its event chips, which opens that event instead.
+    await cell.scrollIntoViewIfNeeded().catch(() => undefined);
+    await (s.surface === "phone" ? cell.tap({ position: { x: 6, y: 6 } }) : cell.click({ position: { x: 6, y: 6 } }));
     lastCellPress.set(s, Date.now());
   }
   await s.page.waitForFunction((d: string) => document.querySelector(`[data-testid="day-cell-${d}"]`)?.getAttribute("data-selected") === "true", date, { timeout: 8000 }).catch(() => undefined);
@@ -335,10 +338,10 @@ async function scheduledDates(s: any, want: string[]): Promise<{ ok: boolean; go
 
 scenario({
   id: "ui-planning.recurring-event",
-  title: "A weekly event by hand (mouse and touch): the series is moved, one date skipped, one date moved, paused and ended — every later date stays where the schedule puts it",
+  title: "A weekly event by hand (mouse and touch): the series is moved, one date skipped, one date moved, one date deleted, paused and resumed, ended and deleted — every later date stays where the schedule puts it",
   area: "Browser · planning",
   browser: true,
-  covers: ["event.create.ui", "event.reschedule.ui", "event.cancel.ui", "event.complete.ui", "event.archive.ui"],
+  covers: ["event.create.ui", "event.edit.ui", "event.reschedule.ui", "event.cancel.ui", "event.complete.ui", "event.archive.ui", "event.restore.ui", "event.delete.ui"],
   requires: ["action", "db", "derived", "screen"],
   run: async (ctx) => {
     const tell = finder(ctx);
@@ -371,6 +374,8 @@ scenario({
       if (!ctx.check("action", !!id, L("the form saved a weekly event")) || !id) { await closing(ctx, s, L, reloads()); continue; }
       const row = () => ctx.db.row("events", id);
       const tagsOf = (r: any): string[] => (Array.isArray(r?.tags) ? r.tags : []);
+      /** The series' own row on the dashboard's Timeline (not the moved one-off, which shares its title). */
+      const dashItem = `[data-testid^="exec-item-event:event-${id}-"]`;
 
       await openDetail(s, a, id);
       await showAllDates(s);
@@ -431,13 +436,31 @@ scenario({
         L(`and that one occurrence is stored once, on ${moveTo}, not repeating`), JSON.stringify(others.map((r: any) => [r.date, r.recurrence])));
       list = await scheduledDates(s, weekly(b, [skipDay, moveFrom]));
       ctx.check("derived", list.ok, L(`the series' own list keeps ${after} and every week after it`), `listed ${list.got.slice(0, 6).join(", ")}… wanted ${weekly(b, [skipDay, moveFrom]).slice(0, 6).join(", ")}…`);
+
+      // ── Delete ONE date (two taps) ──
+      const delDay = O.addDays(b, 28);
+      ctx.step(L(`press ${delDay}, "Delete this occurrence" (first tap arms), tap again`));
+      await s.press(t(`cal-occ-${delDay}`));
+      await s.press(t("cal-menu-deleteOccurrence"));
+      await sleep(900);
+      const delArmed = await row();
+      ctx.check("db", !tagsOf(delArmed).includes(`rd:skip:${delDay}`) && delArmed?.deleted_at == null, L("the first tap on Delete this occurrence only arms it (Rule 8)"), JSON.stringify(tagsOf(delArmed)));
+      await s.press(t("cal-menu-deleteOccurrence"));
+      const delOne = await waitRow(ctx, "events", id, (r) => tagsOf(r).includes(`rd:skip:${delDay}`));
+      ctx.check("db", tagsOf(delOne).includes(`rd:skip:${delDay}`) && delOne?.deleted_at == null && delOne?.date === b && delOne?.recurrence === "weekly" && delOne?.recurrence_end == null && tagsOf(delOne).includes(`rd:skip:${skipDay}`),
+        L(`deleting one date of the series marks that date alone (rd:skip:${delDay}); the series, its rule and its other marks stay (O1)`), JSON.stringify([delOne?.deleted_at, delOne?.date, delOne?.recurrence, delOne?.recurrence_end, tagsOf(delOne)]));
+      list = await scheduledDates(s, weekly(b, [skipDay, moveFrom, delDay]));
+      ctx.check("derived", list.ok, L(`the list steps over ${delDay} and keeps ${O.addDays(delDay, 7)} and every week after`), `listed ${list.got.slice(0, 8).join(", ")}… wanted ${weekly(b, [skipDay, moveFrom, delDay]).slice(0, 8).join(", ")}…`);
       await closeDetail(s);
+      ctx.check("screen", !(await onDay(s, delDay, id, false)), L(`the Calendar shows nothing of it on the deleted ${delDay}`));
+      ctx.check("screen", await onDay(s, O.addDays(delDay, 7), id, true), L(`and the week after (${O.addDays(delDay, 7)}) is still there`));
       ctx.check("screen", !(await onDay(s, skipDay, id, false)), L(`the Calendar shows nothing of it on the skipped ${skipDay}`));
       ctx.check("screen", !(await onDay(s, moveFrom, id, false)), L(`nor on ${moveFrom}, the date that was moved away`));
       if (others[0]) ctx.check("screen", await onDay(s, moveTo, others[0].id, true), L(`it shows the moved occurrence on ${moveTo}`));
       ctx.check("screen", await onDay(s, after, id, true), L(`and the next week, ${after}, is where it always was`));
       await goto(s, "/dashboard", "page-dashboard");
       ctx.check("screen", await seen(s, title, 12000, t("executive-briefing")), L("the dashboard names the series' next date without a reload"));
+      ctx.check("screen", await visible(s, `[data-testid="exec-item-event:event-${id}-${b}"]`, 10000), L(`the dashboard's Timeline row for the series is dated ${b}, its next date`));
 
       // ── Archive, first way: Pause (two taps) ──
       ctx.step(L(`on #/calendar open ${b}, More → Edit series → Advanced → "Pause series" (first tap arms), tap again`));
@@ -456,6 +479,9 @@ scenario({
       await hidden(s, t("calendar-item-detail"), 8000);
       ctx.check("screen", !(await onDay(s, b, id, false)), L(`a paused series is off the Calendar (${b})`));
       ctx.check("screen", !(await onDay(s, after, id, false)), L(`and off ${after} too`));
+      await goto(s, "/dashboard", "page-dashboard");
+      ctx.check("screen", await hidden(s, dashItem, 10000), L("and off the dashboard's Timeline, without a reload"));
+      await goto(s, "/calendar", "calendar-view");
       // The Recurring tab still names it, and says how to get it back.
       await s.press(t("calendar-tab-recurring"));
       const card = t(`rule-card-event:${id}`);
@@ -514,6 +540,7 @@ scenario({
 
       // ── Archive, second way: End series (two taps) ──
       await goto(s, "/dashboard", "page-dashboard");
+      ctx.check("screen", await visible(s, dashItem, 15000), L(`resumed, the dashboard's Timeline lists its next date (${b}) again without a reload`));
       await goto(s, "/calendar", "calendar-view");
       const back = await onDay(s, b, id, true, 15000);
       ctx.check("screen", back, L(`resumed, the series is on the Calendar again (${b}) without a reload`));
@@ -533,6 +560,10 @@ scenario({
         ctx.step(L(`open ${b} (still the first and next date), View All → Options → "End series", tap again`));
         await openDetail(s, b, id);
         const offeredEarly = await (async () => { await showAllDates(s); await s.press(t("cal-tab-options")); return visible(s, t("cal-action-deleteFuture"), 3000); })();
+        // A repeating event cannot stop before its first date (shared/event-span),
+        // so ending it there could not be stored: O4 — not on the screen. Delete
+        // entire series is the action that applies.
+        ctx.check("screen", !offeredEarly && (await visible(s, t("cal-action-deleteSeries"), 3000)), L(`"End series" is not offered while the series' first date is the next one (it cannot end before it starts — O4); "Delete entire series" is`));
         let endedEarly = false;
         if (offeredEarly) {
           await s.press(t("cal-action-deleteFuture"));
@@ -564,7 +595,8 @@ scenario({
             L(`ending the series stores its last day (${endWanted}: the day before ${after}, the next open date); the row, its rule and its history are kept`), JSON.stringify([ended?.recurrence_end, ended?.deleted_at, ended?.date, ended?.recurrence, tagsOf(ended)]));
           await closeDetail(s);
           ctx.check("screen", !(await onDay(s, after, id, false)), L(`the Calendar has no date of the ended series from ${after} on`));
-          ctx.check("screen", !(await onDay(s, O.addDays(after, 7), id, false)), L(`nor a week later (${O.addDays(after, 7)})`));
+          // (a week after it was deleted on its own above; two weeks after is a date only the end removes)
+          ctx.check("screen", !(await onDay(s, O.addDays(after, 14), id, false)), L(`nor two weeks later (${O.addDays(after, 14)})`));
           ctx.check("screen", await onDay(s, b, id, true), L(`the date that was checked off (${b}) keeps its place: earlier dates keep their history`));
         }
         if (others[0]) {
@@ -572,6 +604,23 @@ scenario({
           ctx.check("db", !!stillThere && stillThere.deleted_at == null && stillThere.date === moveTo, L(`the occurrence moved to ${moveTo} is its own record and is still there`));
           ctx.check("screen", await onDay(s, moveTo, others[0].id, true), L("and still on the Calendar"));
         }
+
+        // ── Delete the entire series (two taps) ──
+        ctx.step(L(`open ${b}, More → "Delete entire series" (first tap arms), tap again`));
+        await openDetail(s, b, id);
+        await s.press(t("cal-action-more"));
+        await s.press(t("cal-action-deleteSeries"));
+        await sleep(900);
+        const armedDel = await row();
+        ctx.check("db", !!armedDel && armedDel.deleted_at == null, L("the first tap on Delete entire series only arms it (Rule 8)"));
+        await s.press(t("cal-action-deleteSeries"));
+        const goneSeries = await waitRow(ctx, "events", id, (r) => !r || r.deleted_at != null);
+        ctx.check("db", !goneSeries || goneSeries.deleted_at != null, L("the second tap deletes the series row"));
+        await hidden(s, t("calendar-item-detail"), 8000);
+        ctx.check("screen", !(await onDay(s, b, id, false)), L(`the Calendar no longer shows the series on ${b} (deleting a series removes every occurrence)`));
+        await s.press(t("calendar-tab-recurring"));
+        await s.page.waitForSelector(t("recurring-dates-page"), { timeout: 15000 });
+        ctx.check("screen", await hidden(s, t(`rule-card-event:${id}`), 8000), L("Recurring & Important no longer lists the series"));
       }
       await closing(ctx, s, L, reloads());
     }

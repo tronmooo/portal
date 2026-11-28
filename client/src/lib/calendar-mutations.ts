@@ -15,10 +15,10 @@
 // without requiring a refresh" requirement.
 
 import { apiRequest } from "@/lib/queryClient";
-import { setEventOccurrence } from "./event-occurrence";
+import { setEventOccurrence, setEventSeriesFlag } from "./event-occurrence";
 import { invalidateDomains, type Domain } from "@/lib/cache-bus";
 import { addDaysISO } from "@shared/date-math";
-import { can, canEditMoney, type CalendarAction, type CalendarMoneyAction } from "@shared/calendar-capabilities";
+import { can, canEditMoney, canPauseSeries, type CalendarAction, type CalendarMoneyAction } from "@shared/calendar-capabilities";
 import type { CalendarSeries, CalendarOccurrence } from "@shared/calendar-occurrences";
 
 /** Domains a calendar write can ripple into. Kept wide on purpose: a bill is a
@@ -212,6 +212,19 @@ export function setTaskOccurrence(
   return apiRequest("POST", `/api/tasks/${taskId}/occurrence`, {
     action, date: String(date).slice(0, 10), ...(newDate ? { newDate: String(newDate).slice(0, 10) } : {}),
   });
+}
+
+/**
+ * Pause or resume a repeating event or task, on the stored row (Rule 6). A
+ * pause hides every date and deletes nothing; resuming brings the same dates
+ * back with every skip, move and check-off they had.
+ */
+export async function setSeriesPaused(series: CalendarSeries, paused: boolean): Promise<void> {
+  if (!canPauseSeries(series)) throw new Error(`This ${series.kind} is paused and resumed on its own page.`);
+  const { system, id } = series.source;
+  if (system === "task") await apiRequest("POST", `/api/tasks/${id}/schedule`, { paused });
+  else await setEventSeriesFlag(id, "paused", paused);
+  await refreshCalendarSurfaces();
 }
 
 /**

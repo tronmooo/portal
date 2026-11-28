@@ -34,13 +34,13 @@ import {
   type CalendarCategory,
 } from "@shared/calendar-categories";
 import {
-  KIND_LABELS, relativeDayLabel, isRecurringRule, isImportantDate, isPaymentKind,
+  KIND_LABELS, relativeDayLabel, isRecurringRule, isImportantDate, isPaymentKind, seriesIdentityKey,
   type CalendarOccurrence, type CalendarSeries,
 } from "@shared/calendar-occurrences";
 import { humanRecurrenceLabel } from "@shared/recurring-dates";
-import { type CalendarAction } from "@shared/calendar-capabilities";
+import { editsInPlace, type CalendarAction } from "@shared/calendar-capabilities";
 import { useCalendarOccurrences } from "@/hooks/useCalendarOccurrences";
-import { applyCalendarAction } from "@/lib/calendar-mutations";
+import { applyCalendarAction, setSeriesPaused } from "@/lib/calendar-mutations";
 import { CalendarItemDetail } from "@/components/calendar/CalendarItemDetail";
 import {
   RecurringRuleCard, RULE_ICONS, RULE_HSL, fmtMoney,
@@ -108,6 +108,8 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
   const [view, setView] = useState<ViewMode>("rules");
   const [category, setCategory] = useState<CalendarCategory>("all");
   const [detail, setDetail] = useState<CalendarOccurrence | null>(null);
+  /** The detail opens on its editor (the card's Edit, for a series edited in place). */
+  const [detailEdit, setDetailEdit] = useState(false);
 
   // recurringOnly: this screen manages REPEATING RULES plus IMPORTANT ONE-OFF
   // DATES (expirations, renewals). Ordinary one-offs — a house viewing, a
@@ -213,6 +215,13 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
 
   const runAction = async (series: CalendarSeries, action: CalendarAction) => {
     const occurrence = nextByRule.get(series.id) ?? undefined;
+    if (action === "edit" && editsInPlace(series)) {
+      // An event or a task is edited where its schedule lives (O6): the
+      // detail's editor. Navigating to its href (the calendar itself) did
+      // nothing — the card's Edit on a paused series opened no screen at all.
+      openDetailFor(series, true);
+      return;
+    }
     if (action === "edit") {
       const href = String(series.source.href || "").replace(/^#/, "");
       if (href) window.location.hash = `#${href}`;
@@ -232,9 +241,22 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
     }
   };
 
-  const openDetailFor = (series: CalendarSeries) => {
-    const occ = nextByRule.get(series.id) ?? cal.occurrencesForSeries(series.id)[0] ?? null;
-    if (occ) setDetail(occ);
+  const openDetailFor = (series: CalendarSeries, edit = false) => {
+    // A paused series generates no date (shared/calendar-occurrences), so its
+    // detail is opened on the series' own first date: the sheet then offers
+    // Resume. Without one, "Open details" on a paused card did nothing.
+    const occ = nextByRule.get(series.id) ?? cal.occurrencesForSeries(series.id)[0] ?? seriesAnchorOccurrence(series, today);
+    setDetailEdit(edit);
+    setDetail(occ);
+  };
+
+  const resume = async (series: CalendarSeries) => {
+    try {
+      await setSeriesPaused(series, false);
+      toast({ title: "Series resumed", description: "Its dates are back on the calendar." });
+    } catch (e: any) {
+      toast({ title: "Couldn't resume", description: e?.message || "Try again", variant: "destructive" });
+    }
   };
 
   /**
@@ -377,6 +399,7 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
                     todayISO={today}
                     onOpen={() => openDetailFor(s)}
                     onAction={(a) => void runAction(s, a)}
+                    onResume={() => void resume(s)}
                     linkedNote={linkedNoteFor(s)}
                   />
                 ))}
@@ -409,7 +432,7 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
                       occ={o}
                       ownerName={o.source.profileId ? cal.profileName(o.source.profileId) : undefined}
                       todayISO={today}
-                      onOpen={() => setDetail(o)}
+                      onOpen={() => { setDetailEdit(false); setDetail(o); }}
                     />
                   ))}
                 </div>
@@ -426,6 +449,7 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
           getEventRow={cal.getEventRow}
           profileName={cal.profileName}
           todayISO={today}
+          initialScreen={detailEdit ? "edit" : undefined}
           duplicateNote={
             // Same fix as `linkedNoteFor`: this panel captioned every merged
             // series as a financial record, including birthdays.
@@ -441,6 +465,29 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
       )}
     </div>
   );
+}
+
+/**
+ * The series' own first date as an occurrence, for a series that generates
+ * none (paused): what the detail sheet needs to open on it.
+ */
+export function seriesAnchorOccurrence(series: CalendarSeries, todayISO: string): CalendarOccurrence {
+  const date = String(series.baseDate || todayISO).slice(0, 10);
+  return {
+    id: `${series.id}@${date}`,
+    seriesId: series.id,
+    identityKey: seriesIdentityKey(series),
+    kind: series.kind,
+    title: series.title,
+    subtitle: series.subtitle,
+    source: series.source,
+    date,
+    effectiveDate: date,
+    moved: false,
+    status: date < todayISO ? "past" : date === todayISO ? "today" : "upcoming",
+    amount: series.amount,
+    series,
+  };
 }
 
 function EmptyState({ category, onAdd, upcoming }: {

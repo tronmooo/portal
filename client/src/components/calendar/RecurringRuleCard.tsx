@@ -18,7 +18,7 @@ import {
   Cake, CalendarHeart, CreditCard, Receipt, Wallet, RefreshCw, Wrench,
   Stethoscope, Bell, CheckSquare, FileText, CalendarDays, Repeat,
   ChevronRight, MoreHorizontal, Check, SkipForward, Trash2, CalendarClock,
-  Pencil, ExternalLink,
+  Pencil, ExternalLink, PlayCircle,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
@@ -30,7 +30,7 @@ import {
   type CalendarOccurrence, type CalendarSeries, type OccurrenceKind,
 } from "@shared/calendar-occurrences";
 import {
-  capabilitiesFor, actionLabelFor, hasPrimaryAction, type CalendarAction,
+  cardActionsFor, canPauseSeries, actionLabelFor, hasPrimaryAction, type CalendarAction,
 } from "@shared/calendar-capabilities";
 import { humanRecurrenceLabel } from "@shared/recurring-dates";
 import { countdownLabel, RULE_TYPE_FOR_KIND, type DateRuleType } from "@shared/date-rules";
@@ -100,14 +100,20 @@ export interface RecurringRuleCardProps {
   onAction: (action: CalendarAction) => void;
   /** Set when this rule absorbed a duplicate, e.g. a linked liability record. */
   linkedNote?: string;
+  /** Resume a paused series (offered only while it is paused). */
+  onResume?: () => void;
 }
 
 export function RecurringRuleCard({
-  series, next, upcomingCount, ownerName, todayISO, onOpen, onAction, linkedNote,
+  series, next, upcomingCount, ownerName, todayISO, onOpen, onAction, linkedNote, onResume,
 }: RecurringRuleCardProps) {
   const Icon = RULE_ICONS[series.kind] ?? CalendarDays;
   const hsl = RULE_HSL[series.kind] ?? RULE_HSL.custom;
-  const caps = capabilitiesFor(series);
+  // What the menu offers acts on the NEXT date where it is per-date, so a
+  // series with none (paused, finished) offers only what reaches the series
+  // (O4). A paused series says "resume to schedule dates": it is offered here.
+  const caps = cardActionsFor(series, next?.date ?? null);
+  const canResume = !!series.paused && canPauseSeries(series) && !!onResume;
   const showPrimary = hasPrimaryAction(series) && !!next;
   // An important one-off (a licence, a passport, a lease end) reads as a
   // countdown rather than as a schedule — see isImportantDate.
@@ -226,6 +232,12 @@ export function RecurringRuleCard({
             <ExternalLink className="h-3.5 w-3.5 mr-2" />
             Open {series.source.linkedLabel ? "linked record" : "details"}
           </DropdownMenuItem>
+          {canResume && (
+            <DropdownMenuItem onClick={onResume} data-testid={`rule-resume-${series.id}`}>
+              <PlayCircle className="h-3.5 w-3.5 mr-2" />
+              Resume series
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           {caps.map((cap) => {
             const ActionIcon = ACTION_ICONS[cap.action];

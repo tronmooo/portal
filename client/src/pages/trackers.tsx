@@ -5204,7 +5204,7 @@ function TrackerDetailDialog({
       <Dialog open={open} onOpenChange={(v) => { if (!v) { setAddEntryOpen(false); setDeleteTrackerOpen(false); onClose(); } }}>
         <DialogContent className="td-scope td-dialog max-w-2xl flex flex-col gap-0 p-0 overflow-hidden" style={themeVars(theme)} data-testid="tracker-detail-dialog" data-identity={theme.identity}>
           {/* ── Header ── */}
-          <div className="td-header px-4 sm:px-5 pt-3.5 pb-2.5 pr-12 border-b border-border/60 shrink-0">
+          <div className="td-header pl-4 sm:pl-5 pr-14 pt-3.5 pb-2.5 border-b border-border/60 shrink-0">
             <div className="flex items-center justify-between gap-2.5">
               <span className="medallion medallion-sm" aria-hidden="true"><ThemeIcon className="h-4 w-4" strokeWidth={2.2} /></span>
               <div className="min-w-0 flex-1">

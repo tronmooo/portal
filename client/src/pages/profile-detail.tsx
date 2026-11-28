@@ -892,7 +892,7 @@ function LocationEditor({
 // NESTED ASSETS — CHILD ASSETS CARD (Section 3)
 // ============================================================
 
-function ChildAssetsCard({
+export function ChildAssetsCard({
   profile,
   onChildAdded,
 }: {
@@ -974,6 +974,17 @@ function ChildAssetsCard({
     enabled: showAddChild,
   });
 
+  // One press, one asset. `isPending` reaches the button only on the render
+  // after the mutation's state is published (TanStack batches it to the next
+  // tick), so a double click — or a double tap — sent two creates and stored
+  // the child twice (integrity run 2026-11-27). The ref closes the gap
+  // synchronously; it opens again when the request settles.
+  const addingChildRef = useRef(false);
+  const submitChild = () => {
+    if (addingChildRef.current || !childName.trim()) return;
+    addingChildRef.current = true;
+    createChildMut.mutate(undefined, { onSettled: () => { addingChildRef.current = false; } });
+  };
   const createChildMut = useMutation({
     mutationFn: async () => {
       if (!childName.trim()) throw new Error("Name required");
@@ -1187,7 +1198,7 @@ function ChildAssetsCard({
                 value={childName}
                 onChange={(e) => setChildName(e.target.value)}
                 className="h-[44px] text-sm"
-                onKeyDown={(e) => { if (e.key === "Enter") createChildMut.mutate(); }}
+                onKeyDown={(e) => { if (e.key === "Enter") submitChild(); }}
                 data-testid="input-child-asset-name"
               />
             </div>
@@ -1218,7 +1229,7 @@ function ChildAssetsCard({
                   value={childValue}
                   onChange={(e) => setChildValue(e.target.value)}
                   className="h-[44px] text-sm pl-7"
-                  onKeyDown={(e) => { if (e.key === "Enter") createChildMut.mutate(); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") submitChild(); }}
                   data-testid="input-child-asset-value"
                 />
               </div>
@@ -1236,7 +1247,7 @@ function ChildAssetsCard({
             <Button
               size="sm"
               className="h-[44px]"
-              onClick={() => createChildMut.mutate()}
+              onClick={submitChild}
               disabled={createChildMut.isPending || !childName.trim()}
               data-testid="button-confirm-add-child-asset"
             >

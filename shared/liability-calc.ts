@@ -218,7 +218,12 @@ export function allocatePayment(
   fees: number = 0,
 ): { principal: number; interest: number; fees: number; remainingBalanceAfter: number } {
   const monthlyRate = normalizeAnnualRate(annualRate) / 12;
-  const interestAccrued = Math.max(0, currentBalance * monthlyRate);
+  // The month's interest is money: it is rounded to the cent BEFORE the rest
+  // of the payment is called principal. Rounding the two parts separately
+  // let them add up to a cent more or less than was paid ($418.50 split as
+  // $70.13 interest + $348.38 principal; integrity run, 2026-11-27).
+  const round2c = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const interestAccrued = round2c(Math.max(0, currentBalance * monthlyRate));
   const safeFees = Math.max(0, fees);
   let remaining = Math.max(0, paymentAmount - safeFees);
   const interestPaid = Math.min(interestAccrued, remaining);

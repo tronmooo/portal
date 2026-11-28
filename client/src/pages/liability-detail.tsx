@@ -1044,6 +1044,12 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     // an ordinary payment, so interest was charged on an "extra principal" one.
     else if (preset === "extra") initial = "100.00";
     else if (preset === "interest_only") initial = monthlyInterest.toFixed(2);
+    // One key per payment the person sets out to make: minted when the dialog
+    // OPENS, so a second tap that lands after the first payment was recorded
+    // (the dialog still on screen while it closes) repeats the key and is the
+    // same payment. Minting it on success made that tap a second payment
+    // (integrity run, 2026-11-27: two taps 300 ms apart on a phone, two rows).
+    paymentKeyRef.current = newPaymentKey();
     setPaymentDialog({
       open: true,
       preset,
@@ -1074,8 +1080,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       }),
   });
 
-  // The name of the payment being made (L5): kept across a double press and a
-  // retry, replaced once the payment is recorded.
+  // The name of the payment being made (L5, I10): kept across a double press,
+  // a retry and a tap on the closing dialog; a new one each time the dialog
+  // opens for another payment (openPaymentDialog).
   const paymentKeyRef = useRef(newPaymentKey());
   const recordPaymentMutation = useMutation({
     mutationFn: async (input: {
@@ -1101,7 +1108,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       return res.json();
     },
     onSuccess: () => {
-      paymentKeyRef.current = newPaymentKey();
       toast({ title: "Payment recorded" });
       setPaymentDialog((s) => ({ ...s, open: false }));
     },
@@ -1114,6 +1120,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   });
 
   function submitPayment() {
+    // The dialog already answered (it is closing): a late second tap records nothing.
+    if (!paymentDialog.open) return;
     const amt = parseFloat(paymentDialog.amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       toast({
@@ -2945,6 +2953,9 @@ function AssetLinkRow({
 }) {
   const [, navigate] = useLocation();
   const [pct, setPct] = useState<number>(link.ownershipPercentage ?? 100);
+  // Rule 8: unlinking takes two taps (it used to go on the first).
+  const unlinkArm = useConfirmArm();
+  const armed = unlinkArm.isArmed("unlink");
   return (
     <div className="rounded-md border p-3 space-y-2" data-testid={`asset-link-row-${link.id}`}>
       <div className="flex items-center justify-between gap-2">
@@ -2970,8 +2981,9 @@ function AssetLinkRow({
             ))}
           </SelectContent>
         </Select>
-        <Button size="icon" variant="ghost" onClick={onDelete} data-testid="asset-link-delete" aria-label="Unlink asset">
-          <Trash2 className="w-4 h-4 text-rose-500" />
+        <Button size={armed ? "sm" : "icon"} variant="ghost" onClick={() => unlinkArm.confirm("unlink", onDelete)} data-testid="asset-link-delete"
+          aria-label={armed ? "Tap again to unlink" : "Unlink asset"} title={armed ? "Tap again to unlink" : "Unlink asset"}>
+          {armed ? <span className="text-xs text-rose-500">Tap again</span> : <Trash2 className="w-4 h-4 text-rose-500" />}
         </Button>
       </div>
       <div className="flex items-center gap-3">

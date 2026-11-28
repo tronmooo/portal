@@ -150,6 +150,11 @@ export function MoneyOverview(props: {
    *  made of, so a number nobody can find the source of never appears alone. */
   incomeParts?: string;
   budgets: Array<{ category: string; limit: number; spent: number }>;
+  /** Where the budget list stands. "loading" and "error" are not "no budgets"
+   *  (Rule 7): the card says Loading… / Couldn't load instead of offering a
+   *  first budget over a list it has not read. Default "ready". */
+  budgetsStatus?: "loading" | "error" | "ready";
+  onRetryBudgets?: () => void;
   // The server's Bills & Payments timeline (financeSnapshot.billsTimeline,
   // shared/bills-timeline) exactly as the BillsDuePopup receives it. ONE list:
   // the KPI count, the card rows and the popup rows are the same arrays
@@ -181,7 +186,7 @@ export function MoneyOverview(props: {
 }) {
   const {
     netWorth, assets, liabilities, momPct, nwSeries, cashIn, cashOut, spendMtd,
-    spendTrendPct, incomeMtd = 0, incomeParts, budgets, spendByCategory = {}, alerts = [],
+    spendTrendPct, incomeMtd = 0, incomeParts, budgets, budgetsStatus = "ready", onRetryBudgets, spendByCategory = {}, alerts = [],
     assetBreakdown, liabilityBreakdown, monthLabel,
     cashTrend = [], spendSeries, incomeSeries, billsSeries,
     onOpenNetWorth, onOpenCashFlow, onOpenBudget, onCategoryClick,
@@ -344,8 +349,11 @@ export function MoneyOverview(props: {
         </Card>
       )}
 
-      {/* Budgets */}
-      {budgets.length > 0 && (
+      {/* Budgets. Drawn with no budget too, whenever the page can open the
+          budget editor: the card used to appear only once a budget existed,
+          so no screen offered a way to make the FIRST one (integrity run,
+          2026-11-27; the owner asked for a first budget to be verified). */}
+      {(budgets.length > 0 || onOpenBudget) && (
         <Card className="p-4" data-testid="money-budgets">
           <div className="flex items-center justify-between mb-3">
             <SectionHeading title="Budgets · MTD vs limit" icon={Target} accent="38 96% 54%" count={budgets.length}
@@ -357,6 +365,20 @@ export function MoneyOverview(props: {
               {onOpenBudget && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onOpenBudget} data-testid="money-manage-budgets">+ Budget</Button>}
             </div>
           </div>
+          {budgets.length === 0 ? (
+            budgetsStatus === "loading" ? (
+              <p className="text-xs text-muted-foreground py-2" role="status" data-testid="money-budgets-loading">Loading…</p>
+            ) : budgetsStatus === "error" ? (
+              <div className="flex items-center gap-2 py-2 text-xs" role="alert" data-testid="money-budgets-error">
+                <span className="text-muted-foreground">Couldn't load budgets.</span>
+                {onRetryBudgets && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onRetryBudgets} data-testid="money-budgets-retry">Retry</Button>}
+              </div>
+            ) : (
+              <EmptyState compact scope="global" icon={Target} accent="38 96% 54%" testId="money-budgets-empty"
+                label="No budget set for this month."
+                hint="Set a monthly limit for a category to see what's left." />
+            )
+          ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
             {budgets.map(b => {
               const pct = Math.round((b.spent / (b.limit || 1)) * 100);
@@ -381,6 +403,7 @@ export function MoneyOverview(props: {
               );
             })}
           </div>
+          )}
         </Card>
       )}
 

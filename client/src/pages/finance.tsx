@@ -882,7 +882,7 @@ export default function FinancePage() {
   // ── Money-overview data (2026-07 Finance redesign) ───────────────────────
   // Budgets (per-category limits) + net-worth trend history power the new
   // snapshot/budget cards. Scoped like every other query on this page.
-  const { data: budgetData } = useQuery<any>({
+  const { data: budgetData, isError: budgetsFailed, isLoading: budgetsLoading, refetch: refetchBudgets } = useQuery<any>({
     queryKey: ["/api/budgets", cfMonth, filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/budgets?month=${cfMonth}${profileParam ? `&${profileParam.slice(1)}` : ""}`).then(r => r.json()),
   });
@@ -1447,6 +1447,8 @@ export default function FinancePage() {
                 + (projectedIncome != null && projectedIncome > monthlyIncome + 0.5 ? ` · ${formatMoney(projectedIncome)} expected by month end` : "")
               : undefined}
             budgets={budgetRows}
+            budgetsStatus={budgetData != null ? "ready" : budgetsFailed ? "error" : budgetsLoading ? "loading" : "ready"}
+            onRetryBudgets={() => { void refetchBudgets(); }}
             billsTimeline={billsTimeline}
             spendByCategory={spendByCat}
             cashTrend={cashTrend}

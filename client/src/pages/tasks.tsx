@@ -21,7 +21,7 @@ import { ToastAction } from "@/components/ui/toast";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { isRecurring, humanSummary, parseRecurrence, userTags } from "@shared/recurrence";
+import { isRecurring, humanSummary, parseRecurrence, scheduledDateOf, userTags } from "@shared/recurrence";
 import { isMigrationTag, isRetiredMigratedReminderTask } from "@shared/legacy-reminder-tasks";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { withFullLimit } from "@/lib/list-limit";
@@ -697,7 +697,9 @@ function TaskItem({
               {isRecurring(task.tags || []) && (
                 <Badge variant="outline" className="text-xs py-0.5" data-testid={`badge-task-recurrence-${task.id}`}>
                   <Repeat className="h-3 w-3 mr-1" />
-                  {humanSummary(parseRecurrence(task.tags || []), task.dueDate || undefined)}
+                  {/* The weekday is the SCHEDULED date's: one date moved to a
+                      Wednesday does not make a Monday series "on Wednesday" (O2). */}
+                  {(() => { const rule = parseRecurrence(task.tags || []); return humanSummary(rule, scheduledDateOf(task.dueDate, rule) || undefined); })()}
                 </Badge>
               )}
               {/* The meta line is one line; tags past its end are clipped here
