@@ -1450,17 +1450,19 @@ chat box. Only a loaded list may read as a zero.
 box (`prompt`); a whole request ("AI Suggestions", AI Briefing) is sent as
 typed. Opening the page writes nothing (Rule 3). Rows that scroll sideways
 carry `data-swipe-ignore` (T1).
-**CH4. The modes are on screen once, and nothing is pinned over the home.**
-Before the first message the modes are the home's tiles (Chat, Notes,
-Journal, Word, Fill In, the person's PINNED modes, More), and the chat box sits
-under them IN THE PAGE'S FLOW (`ChatHome` `composer`, `ChatComposer`
-`inline`), so both scroll away with the home (owner, 2026-11-27: "always
-showing wherever you scroll"). During a conversation the box is pinned under
-the transcript, compact (one line), and carries ONE small AI Modes button
-(`button-chat-modes`) — never a row of modes above it. More and that button
-open the same `ModesSheet` (`components/modes/AiModesMenu.tsx`): the person's
-modes, Customize, Create Mode, and Documents / Analyze / Plan / Dashboard
-(`CHAT_APPS`, `components/chat/chat-apps.ts`). Chat is the box itself. The box
+**CH4. The modes and the chat box are pinned; the page scrolls under them.**
+The AI Modes row (Chat, Notes, Journal, Word, Fill In, the person's PINNED
+modes, More) and the chat box are ONE dock under the scrolling area
+(`ChatModesDock`, `ChatHome.tsx`), before the first message and during a
+conversation alike; the home and the transcript scroll on their own above it
+(owner, 2026-11-28: "keep the AI mode selector and chat input box fixed at the
+bottom of the screen while allowing the conversation to scroll independently"
+— this replaces 2026-11-27's in-flow home). The modes are on screen once: the
+box carries no AI Modes button while the row is shown (`hideModes`). More
+opens `ModesSheet` (`components/modes/AiModesMenu.tsx`): the person's modes,
+Customize, Create Mode, and Documents / Analyze / Plan / Dashboard
+(`CHAT_APPS`, `components/chat/chat-apps.ts`). Chat is the box itself. While
+an attachment is staged the dock steps aside for the staging panel. The box
 keeps a label for assistive tech (`sr-only`).
 **CH5. The home reads from its top;** only a conversation is pinned to its
 end. A bill chip reads the bill's NEXT date (`rollBillsForward`, A7).

@@ -133,7 +133,7 @@ interface ChatComposerProps {
   hideModes?: boolean;
   /** The person's own AI modes, for the AI Modes sheet. */
   modes?: ModesState;
-  /** In the page's flow (the chat home) rather than pinned under the transcript. */
+  /** The fuller box shown under the chat home (both sit in the pinned dock). */
   inline?: boolean;
   /** Files dropped onto the box (same as picking them with the paperclip). */
   onDropFiles?: (files: File[]) => void;
@@ -239,7 +239,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   };
 
   return (
-    <div className={inline ? "pt-1" : "px-3 pt-2 pb-[env(safe-area-inset-bottom,12px)] bg-background/95 backdrop-blur-sm border-t border-border/40"} data-testid={inline ? "chat-composer-inline" : "chat-composer-pinned"}>
+    <div className="px-3 pt-2 pb-[env(safe-area-inset-bottom,12px)]" data-testid={inline ? "chat-composer-inline" : "chat-composer-pinned"}>
       <div className="max-w-2xl mx-auto">
         {/* The field's label. The modes row is what is on screen (owner's
             design, 2026-11-25); the label stays for assistive tech, so the box

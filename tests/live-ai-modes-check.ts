@@ -143,7 +143,7 @@ async function main() {
       await page.waitForSelector(t("chat-modes"), { timeout: 30000 });
       // The modes list loads after the home's own figures; the tile joins the row when it lands.
       check(await page.waitForSelector(t(`button-ai-mode-${modeId}`), { timeout: 20000 }).then(() => true, () => false), "the pinned mode is in the chat home's modes row");
-      check(await page.locator(t("chat-composer-inline")).count() === 1 && await page.locator(t("chat-composer-pinned")).count() === 0, "the chat box is in the home's flow, not pinned");
+      check(await page.locator(`${t("chat-dock")} ${t("chat-modes")}`).count() === 1 && await page.locator(`${t("chat-dock")} ${t("chat-composer-inline")}`).count() === 1 && await page.locator(`${t("chat-home")} ${t("chat-modes")}`).count() === 0, "the modes and the chat box are pinned in the dock under the home");
       await page.tap(t("button-modes-more"));
       await page.waitForSelector(t(`modes-sheet-open-${modeId}`), { timeout: 15000 });
       check(true, "More lists the mode");
