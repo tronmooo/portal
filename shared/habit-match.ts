@@ -55,6 +55,12 @@ function stem(word: string): string {
   // Collapse a doubled trailing consonant left by -ing/-ed ("runn" → "run",
   // "swimm" → "swim", "stopp" → "stop").
   if (s.length >= 3 && /([bcdfghjklmnpqrstvwxz])\1$/.test(s)) s = s.slice(0, -1);
+  // A silent final "e" goes too, so the noun meets its verb forms:
+  // "meditate" / "meditated" / "meditating" → "meditat", "exercise" /
+  // "exercised" → "exercis", "hike" / "hiked" / "hiking" → "hik". Without it
+  // "I meditated today" matched no habit called "Meditate" and the chat
+  // refused the check-in (chat variations on the preview, 2026-11-28).
+  if (s.length > 3 && s.endsWith("e") && !s.endsWith("ee")) s = s.slice(0, -1);
   return s;
 }
 
