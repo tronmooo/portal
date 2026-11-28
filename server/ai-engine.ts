@@ -275,6 +275,7 @@ import { logIntegrity } from "./integrity-log";
 import { operationIdFor, readOnlyTurnViolation } from "@shared/ai-operation-ids";
 import { chatProfileTypeKey } from "@shared/chat-profile-type-key";
 import { resolveIdRef } from "@shared/id-ref";
+import { uploadTitle } from "@shared/upload-title";
 import { renameIsReallyAnAdd } from "@shared/rename-intent";
 import { isPlaceholderBirthYear, nextAnnualDate, dropPlaceholderBirthDates } from "@shared/placeholder-birth-year";
 import {
@@ -2822,7 +2823,9 @@ Return ONLY the JSON object. No prose, no markdown fences.${userMessage ? `\n\nT
         classification = {
           documentClass: cleanType,
           category: cleanCat,
-          label: String(parsedCls.label || fileName).slice(0, 80),
+          // A title that says nothing ("Unreadable Document") or an unsure
+          // one keeps the name the person gave the file (shared/upload-title).
+          label: uploadTitle(parsedCls.label, fileName, typeof parsedCls.confidence === "number" ? Math.max(0, Math.min(1, parsedCls.confidence)) : 0.5),
           confidence: typeof parsedCls.confidence === "number" ? Math.max(0, Math.min(1, parsedCls.confidence)) : 0.5,
           summary: String(parsedCls.summary || "").slice(0, 240),
           destinations: {
