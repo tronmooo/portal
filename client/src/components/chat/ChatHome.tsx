@@ -40,7 +40,6 @@ import {
 import type { ChatSuggestion } from "@shared/chat-suggestions";
 import { ChatSuggestions } from "./ChatSuggestions";
 import { ModeTiles, type ModesState } from "@/components/modes/AiModesMenu";
-import { useAiModes } from "@/lib/ai-modes-client";
 import { WORKSPACES, type WorkspaceKind } from "@/components/workspace/WorkspaceShell";
 
 // ── Looks ────────────────────────────────────────────────────────────────────
@@ -319,19 +318,11 @@ export interface ChatHomeViewProps {
   /** Send a whole request now. */
   onSend: (text: string) => void;
   onRetry?: () => void;
-  /** Open a full-screen workspace (Notes, Journal, Document, Fill In). */
-  onOpenWorkspace?: (kind: WorkspaceKind) => void;
-  /** Put the cursor in the chat box. */
-  onFocusChat?: () => void;
-  /** The person's own AI modes (pinned ones join the row; More lists them all). */
-  modes?: ModesState;
-  /** The chat box, in the page's flow under the modes. */
-  composer?: ReactNode;
   now?: Date;
 }
 
 /** Presentation only: everything it shows was decided by `buildChatHome`. */
-export function ChatHomeView({ home, name, todayISO, suggestions, onPick, onSend, onRetry, onOpenWorkspace, onFocusChat, modes, composer, now = new Date() }: ChatHomeViewProps) {
+export function ChatHomeView({ home, name, todayISO, suggestions, onPick, onSend, onRetry, now = new Date() }: ChatHomeViewProps) {
   const go = useGo(onPick);
   const [askPage, setAskPage] = useState(0);
   const asks = [0, 1, 2, 3].map((n) => ASKS[(askPage * 4 + n) % ASKS.length]);
@@ -469,26 +460,42 @@ export function ChatHomeView({ home, name, todayISO, suggestions, onPick, onSend
       {/* Earned from the user's own records */}
       {suggestions.length > 0 && <ChatSuggestions suggestions={suggestions} onPick={onPick} now={now} bare />}
 
-      {/* AI Modes, then the chat box: both in the page's flow, so they scroll
-          away with the home instead of staying pinned over it (owner,
-          2026-11-27). Chat is the box; the others are their own apps; More
-          opens the person's own modes and the builder. */}
-      {onOpenWorkspace && (
-        <section aria-label="AI modes" data-testid="chat-modes">
-          <SectionTitle icon={Layers}>AI Modes <span className="text-xs font-medium text-muted-foreground">(Apps)</span></SectionTitle>
-          <ModeTiles state={modes ?? {}} onOpenWorkspace={onOpenWorkspace} onFocusChat={onFocusChat} />
-        </section>
-      )}
-      {composer}
     </div>
   );
 }
 
 /** The home, wired to the app's data. */
-export function ChatHome(p: Pick<ChatHomeViewProps, "suggestions" | "onPick" | "onSend" | "onOpenWorkspace" | "onFocusChat" | "composer">) {
+export function ChatHome(p: Pick<ChatHomeViewProps, "suggestions" | "onPick" | "onSend">) {
   const { home, name, todayISO, retry } = useChatHome(true);
-  const m = useAiModes();
-  return <ChatHomeView {...p} home={home} name={name} todayISO={todayISO} onRetry={retry} modes={{ modes: m.modes, failed: m.failed, retry: () => void m.retry() }} />;
+  return <ChatHomeView {...p} home={home} name={name} todayISO={todayISO} onRetry={retry} />;
+}
+
+/**
+ * The AI Modes row and the chat box, pinned under the scrolling page (owner,
+ * 2026-11-28: "keep the AI mode selector and chat input box fixed at the
+ * bottom of the screen while allowing the conversation to scroll
+ * independently"). The same dock is under the home and under a conversation.
+ * Chat focuses the box; the others open their own app; More opens the
+ * person's own modes and the builder.
+ */
+export function ChatModesDock({ modes, onOpenWorkspace, onFocusChat, composer }: {
+  modes?: ModesState;
+  onOpenWorkspace: (kind: WorkspaceKind) => void;
+  onFocusChat?: () => void;
+  /** The chat box (pinned style), or null while an attachment is staged. */
+  composer?: ReactNode;
+}) {
+  return (
+    <div className="shrink-0 border-t border-border/40 bg-background/95 backdrop-blur-sm" data-testid="chat-dock">
+      <section aria-label="AI modes" className="max-w-2xl mx-auto px-4 pt-2" data-testid="chat-modes">
+        <h2 className="flex items-center gap-2 text-sm font-bold tracking-tight mb-1.5">
+          <Layers className="h-4 w-4 text-primary" aria-hidden="true" /> AI Modes <span className="text-[11px] font-medium text-muted-foreground">(Apps)</span>
+        </h2>
+        <ModeTiles state={modes ?? {}} onOpenWorkspace={onOpenWorkspace} onFocusChat={onFocusChat} />
+      </section>
+      {composer}
+    </div>
+  );
 }
 
 export default ChatHome;

@@ -1302,7 +1302,7 @@ function BatchAttachmentPanel({
 export { clearChatCache } from "@/lib/chat-cache";
 import { WELCOME_MSG, getChatCache, setChatCache, saveChatHistory, clearChatCache } from "@/lib/chat-cache";
 import { ChatFollowUps } from "@/components/chat/ChatSuggestions";
-import { ChatHome } from "@/components/chat/ChatHome";
+import { ChatHome, ChatModesDock } from "@/components/chat/ChatHome";
 import { useAiModes } from "@/lib/ai-modes-client";
 import { rollBillsForward } from "@shared/bills-timeline";
 import { buildChatSuggestions, buildFollowUps } from "@shared/chat-suggestions";
@@ -3811,8 +3811,8 @@ export default function ChatPage() {
     return messages.filter((msg) => msg.content.toLowerCase().includes(q));
   }, [messages, trimmedQuery]);
 
-  // One composer element: on the home it is drawn inside the scroll (under
-  // the AI Modes), in a conversation it is pinned under the transcript.
+  // One composer element, pinned with the AI Modes row in the dock under the
+  // scrolling home / transcript (owner, 2026-11-28).
   const showHome = messages.length <= 1 && !searchOpen;
   const composer = (
     <ChatComposer
@@ -3829,7 +3829,7 @@ export default function ChatPage() {
       newDocButton={<NewDocSheetButton disabled={isPending} />}
       onOpenWorkspace={(kind) => hashNavigate(WORKSPACES[kind].route)}
       onOpenApp={hashNavigate}
-      hideModes={showHome}
+      hideModes
       inline={showHome}
       modes={{ modes: aiModes.modes, failed: aiModes.failed, retry: () => void aiModes.retry() }}
       onDropFiles={(files) => { void handleFileSelect({ target: { files } } as any); }}
@@ -3888,12 +3888,9 @@ export default function ChatPage() {
               bubble mid-sentence. */}
           {showHome && (
             <ChatHome
-              composer={!hasAttachments ? composer : null}
               suggestions={chatSuggestions}
               onPick={handleSuggestion}
               onSend={(text) => { handleSend(text); }}
-              onOpenWorkspace={(kind) => hashNavigate(WORKSPACES[kind].route)}
-              onFocusChat={() => composerRef.current?.focus()}
             />
           )}
 
@@ -4110,12 +4107,18 @@ export default function ChatPage() {
         </Suspense>
       )}
 
-      {/* Text input area (only shown when no attachment pending). On the home
-          it sits in the page's flow under the AI Modes, so it scrolls away
-          with the home; in a conversation it is pinned under the transcript
-          (owner, 2026-11-27: the box and the modes "always showing wherever
-          you scroll"). */}
-      {!hasAttachments && !showHome && composer}
+      {/* The AI Modes row and the chat box, pinned under the scrolling home or
+          transcript (owner, 2026-11-28: "fixed at the bottom of the screen
+          while allowing the conversation to scroll independently"). Hidden
+          while an attachment is staged: the staging panel takes its place. */}
+      {!hasAttachments && (
+        <ChatModesDock
+          modes={{ modes: aiModes.modes, failed: aiModes.failed, retry: () => void aiModes.retry() }}
+          onOpenWorkspace={(kind) => hashNavigate(WORKSPACES[kind].route)}
+          onFocusChat={() => composerRef.current?.focus()}
+          composer={composer}
+        />
+      )}
       </div>
 
       {/* Artifact viewer — full screen with an X, the whole artifact, its own

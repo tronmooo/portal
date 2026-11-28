@@ -12,7 +12,7 @@ vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 const navigated: string[] = [];
 vi.mock("@/lib/hashNavigate", () => ({ hashNavigate: (to: string) => { navigated.push(to); } }));
 
-import { ChatHomeView } from "../client/src/components/chat/ChatHome";
+import { ChatHomeView, ChatModesDock } from "../client/src/components/chat/ChatHome";
 import { ChatComposer } from "../client/src/components/chat/ChatComposer";
 import { buildChatHome, type HomeList } from "../shared/chat-home";
 import { buildChatSuggestions } from "../shared/chat-suggestions";
@@ -36,6 +36,10 @@ const SUGGESTIONS = buildChatSuggestions({ now: NOW }, 4);
 
 function Home(props: Partial<React.ComponentProps<typeof ChatHomeView>> = {}) {
   return <ChatHomeView home={HOME} name="Robert" todayISO={TODAY} suggestions={SUGGESTIONS} onPick={() => {}} onSend={() => {}} now={NOW} {...props} />;
+}
+/** The AI Modes row and the chat box, pinned under the home (owner, 2026-11-28). */
+function Dock(props: Partial<React.ComponentProps<typeof ChatModesDock>> = {}) {
+  return <ChatModesDock onOpenWorkspace={() => {}} {...props} />;
 }
 
 describe("chat home", () => {
@@ -133,7 +137,7 @@ describe("chat home", () => {
 
   it("the modes are tiles on the home: Chat focuses the box, the rest open their own tool; More opens the rest", async () => {
     const open = vi.fn(); const focus = vi.fn();
-    render(<Home onOpenWorkspace={open} onFocusChat={focus} />);
+    render(<Dock onOpenWorkspace={open} onFocusChat={focus} />);
     fireEvent.click(screen.getByTestId("button-mode-chat"));
     expect(focus).toHaveBeenCalledTimes(1);
     for (const kind of ["notes", "journal", "document", "fill"]) fireEvent.click(screen.getByTestId(`button-workspace-${kind}`));
@@ -150,7 +154,7 @@ describe("chat home", () => {
   it("a PINNED custom mode joins the row; the rest are in More, with Create Mode", async () => {
     const mk = (id: string, name: string, pinned: boolean) => ({ id, name, icon: "dumbbell", color: "orange", tagline: "", personality: "", instructions: "", access: [], remember: true,
       tabs: [{ id: "chat", title: "Chat", kind: "chat" }], prompts: [], pinned, createdAt: "2026-11-27T00:00:00Z", updatedAt: "2026-11-27T00:00:00Z" });
-    render(<Home onOpenWorkspace={() => {}} modes={{ modes: [mk("fit", "Fitness Coach", true), mk("money", "Money", false)] as any }} />);
+    render(<Dock modes={{ modes: [mk("fit", "Fitness Coach", true), mk("money", "Money", false)] as any }} />);
     expect(screen.getByTestId("button-ai-mode-fit").textContent).toContain("Fitness Coach");
     expect(screen.queryByTestId("button-ai-mode-money")).toBeNull();
     fireEvent.click(screen.getByTestId("button-ai-mode-fit"));
@@ -163,7 +167,7 @@ describe("chat home", () => {
 
   it("a modes list that failed to load says so in More, with a retry — never 'none yet' (Rule 7)", async () => {
     const retry = vi.fn();
-    render(<Home onOpenWorkspace={() => {}} modes={{ failed: true, retry }} />);
+    render(<Dock modes={{ failed: true, retry }} />);
     fireEvent.click(screen.getByTestId("button-modes-more"));
     expect((await screen.findByTestId("modes-sheet-error")).textContent).toContain("Couldn't load");
     expect(screen.queryByTestId("modes-sheet-empty")).toBeNull();
@@ -171,17 +175,22 @@ describe("chat home", () => {
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
-  it("the chat box is in the home's flow, under the modes — it scrolls away with the page", () => {
-    render(<Home onOpenWorkspace={() => {}} composer={<ChatComposer onSubmit={() => true} isPending={false} searchOpen={false} onToggleSearch={() => {}} onAttach={() => {}}
-      showReset={false} onReset={() => {}} onOpenWorkspace={() => {}} hideModes inline />} />);
+  it("the modes and the chat box are pinned in one dock, not in the scrolling home (owner, 2026-11-28)", () => {
+    render(<><Home /><Dock composer={<ChatComposer onSubmit={() => true} isPending={false} searchOpen={false} onToggleSearch={() => {}} onAttach={() => {}}
+      showReset={false} onReset={() => {}} onOpenWorkspace={() => {}} hideModes inline />} /></>);
+    const home = screen.getByTestId("chat-home");
+    const dock = screen.getByTestId("chat-dock");
     const modes = screen.getByTestId("chat-modes");
     const box = screen.getByTestId("chat-composer-inline");
+    expect(home.contains(modes)).toBe(false);
+    expect(home.contains(box)).toBe(false);
+    expect(dock.contains(modes) && dock.contains(box)).toBe(true);
     expect(modes.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByTestId("button-chat-modes")).toBeNull();
   });
 
   it("rows that scroll sideways keep their own drag (T1)", () => {
-    render(<Home onOpenWorkspace={() => {}} />);
+    render(<><Home /><Dock /></>);
     for (const id of ["home-glance-tasks", "home-insight-wellness", "button-mode-chat"]) {
       expect(screen.getByTestId(id).closest("[data-swipe-ignore]")).not.toBeNull();
     }
