@@ -660,6 +660,7 @@ export default defineConfig({
       'tests/chat-add-is-not-rename.test.ts',
       'tests/owner-set-lock-reentrant.test.ts',
       'tests/document-fields-key-level.test.ts',
+      'tests/calendar-grid-press-after-close.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

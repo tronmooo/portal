@@ -763,6 +763,9 @@ function EventFormDialog({
 
 // Exported for regression tests (tests/calendar-event-actions.test.tsx), which
 // assert that Edit never reaches the delete path and that Delete is confirm-gated.
+/** A press on the grid this soon after a form closed is that button's second click. */
+export const GRID_PRESS_AFTER_CLOSE_MS = 600;
+
 export function EventDetailDialog({
   open,
   onClose,
@@ -1331,6 +1334,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
   // The month view's agenda panel, so "+N more" can scroll it into view.
   const agendaRef = useRef<HTMLElement>(null);
   const [addOpen, setAddOpen] = useState(false);
+  // When a form over the grid last closed. The second click of a double click
+  // on its Create/Save button lands on the day cell under it once the form is
+  // gone; the cell's double-click then opened a NEW empty event form
+  // (integrity run, ui-planning.event, 2026-11-28). A press that arrives
+  // within a double-click's span of a close belongs to that button.
+  const formClosedAt = useRef(0);
+  const pressFollowsClose = () => Date.now() - formClosedAt.current < GRID_PRESS_AFTER_CLOSE_MS;
   const [detailItem, setDetailItem] = useState<CalendarTimelineItem | null>(null);
   const [editEvent, setEditEvent] = useState<CalendarEvent | null>(null);
   // Recurring-event edit scope: editing one occurrence must never silently
@@ -1810,6 +1820,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
                   data-today={isToday ? "true" : undefined}
                   aria-pressed={isSelected}
                   onClick={() => {
+                    if (pressFollowsClose()) return;
                     // If already selected, drill into day view; otherwise just select
                     if (selectedDate === day.date) {
                       setViewMode("day");
@@ -1818,7 +1829,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
                       setSelectedDate(day.date);
                     }
                   }}
-                  onDoubleClick={() => { setQuickAddDate(day.date); setAddOpen(true); }}
+                  onDoubleClick={() => { if (pressFollowsClose()) return; setQuickAddDate(day.date); setAddOpen(true); }}
                   data-testid={`day-cell-${day.date}`}
                 >
                   <span className="cal-daynum text-sm leading-none font-medium tabular-nums">
@@ -2184,7 +2195,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
       {addOpen && (
         <EventFormDialog
           open={addOpen}
-          onClose={() => { setAddOpen(false); setQuickAddDate(null); }}
+          onClose={() => { formClosedAt.current = Date.now(); setAddOpen(false); setQuickAddDate(null); }}
           defaultDate={quickAddDate ?? selectedDate}
         />
       )}
@@ -2193,7 +2204,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
       {editEvent && (
         <EventFormDialog
           open={!!editEvent}
-          onClose={() => setEditEvent(null)}
+          onClose={() => { formClosedAt.current = Date.now(); setEditEvent(null); }}
           eventId={editEvent.id}
           initial={{
             title: editEvent.title,
