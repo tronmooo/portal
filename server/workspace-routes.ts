@@ -2,13 +2,14 @@
 // read: it returns a proposal and writes nothing (server/workspace-ai.ts).
 import type { Express, Request, Response } from "express";
 import { isVersionKind, type VersionKind } from "@shared/content-versions";
-import { isMemoryApp, type AiMemory, type MemoryApp } from "@shared/ai-memory";
+import { isMemoryApp, isModeMemoryApp, type AiMemory, type MemoryApp } from "@shared/ai-memory";
 
 // Loaded on first use, like the rest of the AI stack, so the model SDK stays
 // out of the everyday function's cold start (script/build-vercel.ts).
 const ai = () => import("./workspace-ai");
 const intel = () => import("./workspace-intel");
 const versions = () => import("./content-versions");
+const modes = () => import("./ai-modes");
 
 /** Paths here never write user data (listed in READONLY_POST_PATHS). */
 export const WORKSPACE_AI_PATHS = [
@@ -21,6 +22,11 @@ export const WORKSPACE_AI_PATHS = [
   "/api/workspace/journal/insights",
   "/api/workspace/journal/prompts",
   "/api/workspace/document/review",
+  // Custom AI Modes (server/ai-modes.ts): a proposal to review, a revised
+  // proposal, an analysis. Saving a mode is its own route below.
+  "/api/workspace/modes/generate",
+  "/api/workspace/modes/revise",
+  "/api/workspace/modes/insights",
 ] as const;
 // The two CONVERSATIONS are not in that list: with remembering on they save
 // the exchange and what was learned to the AI's own memory row
@@ -64,6 +70,63 @@ export function registerWorkspaceRoutes(app: Express, rateLimit: Limiter): void 
   app.post("/api/workspace/journal/prompts", guard(async () => (await intel()).journalPrompts()));
   app.post("/api/workspace/document/review", guard(async (req) => (await intel()).reviewDocument({ html: str(req.body?.html, 200_000), title: str(req.body?.title, 200) })));
 
+  // ── Custom AI Modes (shared/ai-modes.ts) ─────────────────────────────────
+  // Building and revising answer with a proposal; the mode's chat keeps its
+  // own conversation; insights only read. What a mode may read is the STORED
+  // mode's access, never anything the client sends.
+  app.post(WORKSPACE_AI_PATHS[8], guard(async (req) => (await modes()).generateMode(str(req.body?.description, 2000))));
+  app.post(WORKSPACE_AI_PATHS[9], guard(async (req) => (await modes()).reviseMode(str(req.body?.modeId, 40), str(req.body?.instruction, 2000))));
+  app.post(WORKSPACE_AI_PATHS[10], guard(async (req) => (await modes()).modeInsights({ modeId: req.body?.modeId, tabId: req.body?.tabId })));
+  app.post("/api/workspace/modes/chat", guard(async (req) => (await modes()).modeChat({ modeId: req.body?.modeId, messages: req.body?.messages })));
+
+  // The list itself: every change is applied to the stored row (Rule 6).
+  const modeSafe = (fn: (req: Request) => Promise<any>, status = 200) => async (req: Request, res: Response) => {
+    try {
+      const out = await fn(req);
+      if (out && out.ok === false) return res.status(out.status).json({ error: out.error });
+      res.status(status).json({ mode: out.value ?? undefined, modes: out.modes });
+    } catch (err: any) {
+      console.error("[ai-modes]", err?.message || err);
+      res.status(500).json({ error: "Couldn't save your AI modes. Nothing was changed." });
+    }
+  };
+  app.get("/api/workspace/modes", async (_req, res) => {
+    try { res.json({ modes: await (await modes()).readModes() }); }
+    catch (err: any) { console.error("[ai-modes]", err?.message || err); res.status(500).json({ error: "Couldn't load your AI modes." }); }
+  });
+  // ── The library: modes people published (server/ai-mode-library.ts) ──────
+  const library = () => import("./ai-mode-library");
+  const libSafe = (fn: (req: Request, uid: string) => Promise<any>, status = 200) => async (req: Request, res: Response) => {
+    const uid = String((req as any).userId || "");
+    if (!uid) return res.status(401).json({ error: "Sign in to use the mode library." });
+    try {
+      const out = await fn(req, uid);
+      if (out && out.ok === false) return res.status(out.status).json({ error: out.error });
+      const { ok: _ok, ...body } = out;
+      res.status(status).json(body);
+    } catch (err: any) {
+      console.error("[ai-mode-library]", err?.message || err);
+      res.status(500).json({ error: "Couldn't reach the mode library." });
+    }
+  };
+  app.get("/api/workspace/modes/library", libSafe(async (req, uid) => (await library()).listLibrary(uid, {
+    q: String(req.query.q || ""), sort: String(req.query.sort || ""), mine: req.query.mine === "1",
+  })));
+  app.post("/api/workspace/modes/library", libSafe(async (req, uid) => (await library()).publishMode(uid, str(req.body?.modeId, 40)), 201));
+  app.delete("/api/workspace/modes/library/:id", libSafe(async (req, uid) => (await library()).unpublishMode(uid, String(req.params.id))));
+  app.post("/api/workspace/modes/library/:id/install", libSafe(async (req) => (await library()).installMode(String(req.params.id))));
+  app.post("/api/workspace/modes/library/:id/report", libSafe(async (req, uid) => (await library()).reportMode(uid, String(req.params.id))));
+
+  app.get("/api/workspace/modes/:id/digest", async (req, res) => {
+    try { res.json(await (await modes()).readDigest(String(req.params.id))); }
+    catch (err: any) { console.error("[ai-modes]", err?.message || err); res.status(500).json({ error: "Couldn't load this mode's check-ins." }); }
+  });
+  app.post("/api/workspace/modes", modeSafe(async (req) => (await modes()).createMode(req.body?.mode), 201));
+  app.post("/api/workspace/modes/order", modeSafe(async (req) => (await modes()).orderModes(req.body?.ids)));
+  app.patch("/api/workspace/modes/:id", modeSafe(async (req) => (await modes()).updateMode(String(req.params.id), req.body?.patch)));
+  app.post("/api/workspace/modes/:id/duplicate", modeSafe(async (req) => (await modes()).copyMode(String(req.params.id)), 201));
+  app.delete("/api/workspace/modes/:id", modeSafe(async (req) => (await modes()).deleteMode(String(req.params.id))));
+
   // ── What an AI remembers (server/ai-memory.ts) ────────────────────────────
   // The person sees all of it and is in charge of it: add, remove one, clear
   // the conversation, forget everything.
@@ -76,7 +139,10 @@ export function registerWorkspaceRoutes(app: Express, rateLimit: Limiter): void 
     }
   };
   const view = async (m: AiMemory, app: MemoryApp) => {
-    const access = (await (await intel()).readAiAccess())[app];
+    // A custom mode's switch is on the mode itself (shared/ai-modes.ts).
+    const access = isModeMemoryApp(app)
+      ? { memory: !!(await (await modes()).readModes()).find((x) => `mode-${x.id}` === app)?.remember }
+      : (await (await intel()).readAiAccess())[app];
     const self = (((await (await import("./storage")).storage.getProfiles()) || []) as any[]).find((p) => p.type === "self");
     const { clearedAt: _internal, ...shown } = m;
     return { ...shown, remember: access.memory, name: String(self?.name || "").trim().split(/\s+/)[0] || "" };

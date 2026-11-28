@@ -32,21 +32,26 @@ function Composer(props: Partial<React.ComponentProps<typeof ChatComposer>>) {
 afterEach(() => { cleanup(); navigated.length = 0; });
 
 describe("workspace buttons in the chat box", () => {
-  it("there are four, and each asks for its own workspace", () => {
+  // Owner, 2026-11-27: a row of modes pinned above the box was "always
+  // showing wherever you scroll". In a conversation the box carries ONE small
+  // AI Modes button; the workspaces open from the sheet it opens.
+  it("one small AI Modes button; the sheet it opens has the four, each asking for its own workspace", async () => {
     const open = vi.fn();
     render(<Composer onOpenWorkspace={open} />);
+    expect(screen.queryByTestId("chat-modes")).toBeNull();
+    expect(screen.queryByTestId("button-workspace-notes")).toBeNull();
     for (const kind of ["notes", "journal", "document", "fill"] as const) {
-      fireEvent.click(screen.getByTestId(`button-workspace-${kind}`));
+      fireEvent.click(screen.getByTestId("button-chat-modes"));
+      fireEvent.click(await screen.findByTestId(`button-workspace-${kind}`));
     }
     expect(open.mock.calls.map((c) => c[0])).toEqual(["notes", "journal", "document", "fill"]);
-    expect(screen.getByTestId("button-workspace-fill").textContent).toMatch(/Fill In/);
   });
 
-  it("a button does not turn the chat box into something else", () => {
+  it("a mode does not turn the chat box into something else", async () => {
     const sent = vi.fn(() => true);
     render(<Composer onOpenWorkspace={() => {}} onSubmit={sent} />);
-    fireEvent.click(screen.getByTestId("button-workspace-journal"));
-    expect(screen.getByTestId("button-workspace-journal").getAttribute("aria-pressed")).toBeNull();
+    fireEvent.click(screen.getByTestId("button-chat-modes"));
+    fireEvent.click(await screen.findByTestId("button-workspace-journal"));
     expect(screen.queryByTestId("capture-hint")).toBeNull();
     expect(screen.getByTestId("button-send").textContent).toMatch(/Send/);
     fireEvent.change(screen.getByTestId("input-chat"), { target: { value: "what's on my calendar?" } });
@@ -62,10 +67,25 @@ describe("workspace buttons in the chat box", () => {
     expect(WORKSPACES.document.route).toBe("/workspace/word");
   });
 
-  it("the buttons stay small and say Notes, Journal, Word", () => {
-    render(<Composer onOpenWorkspace={() => {}} />);
-    expect(["notes", "journal", "document"].map((k) => screen.getByTestId(`button-workspace-${k}`).textContent?.trim())).toEqual(["Notes", "Journal", "Word"]);
-    for (const k of ["notes", "journal", "document"]) expect(screen.getByTestId(`button-workspace-${k}`).className).toMatch(/\bh-7\b.*\btext-xs\b/);
+  it("the sheet says Notes, Journal, Word, Fill In, and lists the person's own modes", async () => {
+    const modes = [{ id: "coach", name: "Life Coach", icon: "compass", color: "violet", tagline: "Goals", personality: "", instructions: "", access: [], remember: true,
+      tabs: [{ id: "chat", title: "Chat", kind: "chat" }], prompts: [], pinned: false, createdAt: "2026-11-27T00:00:00Z", updatedAt: "2026-11-27T00:00:00Z" }] as any;
+    render(<Composer onOpenWorkspace={() => {}} modes={{ modes }} />);
+    fireEvent.click(screen.getByTestId("button-chat-modes"));
+    await screen.findByTestId("modes-sheet");
+    expect(["notes", "journal", "document", "fill"].map((k) => screen.getByTestId(`button-workspace-${k}`).textContent?.trim())).toEqual(["Notes", "Journal", "Word", "Fill In"]);
+    fireEvent.click(screen.getByTestId("modes-sheet-open-coach"));
+    expect(navigated).toEqual(["/workspace/mode/coach"]);
+  });
+
+  it("the box is compact when pinned, and fuller in the home's flow", () => {
+    const { unmount } = render(<Composer onOpenWorkspace={() => {}} />);
+    expect(screen.getByTestId("chat-composer-pinned")).toBeTruthy();
+    expect(screen.getByTestId("input-chat").getAttribute("rows")).toBe("1");
+    unmount();
+    render(<Composer onOpenWorkspace={() => {}} inline hideModes />);
+    expect(screen.getByTestId("chat-composer-inline")).toBeTruthy();
+    expect(screen.queryByTestId("button-chat-modes")).toBeNull();
   });
 
   it("files dropped on the box are handed over; dragging text is left alone", () => {

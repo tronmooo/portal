@@ -131,33 +131,53 @@ describe("chat home", () => {
     expect(screen.queryByTestId("home-retry")).toBeNull();
   });
 
-  it("the modes are tiles on the home: Chat focuses the box, the rest open their own tool", () => {
+  it("the modes are tiles on the home: Chat focuses the box, the rest open their own tool; More opens the rest", async () => {
     const open = vi.fn(); const focus = vi.fn();
     render(<Home onOpenWorkspace={open} onFocusChat={focus} />);
     fireEvent.click(screen.getByTestId("button-mode-chat"));
     expect(focus).toHaveBeenCalledTimes(1);
     for (const kind of ["notes", "journal", "document", "fill"]) fireEvent.click(screen.getByTestId(`button-workspace-${kind}`));
     expect(open.mock.calls.map((c) => c[0])).toEqual(["notes", "journal", "document", "fill"]);
-    fireEvent.click(screen.getByTestId("button-app-documents"));
-    fireEvent.click(screen.getByTestId("button-app-plan"));
+    // The pages no longer crowd the row: they are in More.
+    expect(screen.queryByTestId("button-app-documents")).toBeNull();
+    fireEvent.click(screen.getByTestId("button-modes-more"));
+    fireEvent.click(await screen.findByTestId("button-app-documents"));
+    fireEvent.click(screen.getByTestId("button-modes-more"));
+    fireEvent.click(await screen.findByTestId("button-app-plan"));
     expect(navigated).toEqual(["/artifacts", "/calendar"]);
   });
 
-  it("…and the chat box leaves its own row out while the home shows them (once on screen)", () => {
-    const composer = (hideModes: boolean) => (
-      <ChatComposer onSubmit={() => true} isPending={false} searchOpen={false} onToggleSearch={() => {}} onAttach={() => {}}
-        showReset={false} onReset={() => {}} onOpenWorkspace={() => {}} onOpenApp={() => {}} hideModes={hideModes} />
-    );
-    const { unmount } = render(composer(true));
-    expect(screen.queryByTestId("button-workspace-notes")).toBeNull();
-    expect(screen.getByLabelText("Message")).toBeTruthy();
-    unmount();
-    const app = vi.fn();
-    render(<ChatComposer onSubmit={() => true} isPending={false} searchOpen={false} onToggleSearch={() => {}} onAttach={() => {}}
-      showReset onReset={() => {}} onOpenWorkspace={() => {}} onOpenApp={app} />);
-    expect(screen.getByTestId("button-workspace-notes")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("button-app-analyze"));
-    expect(app).toHaveBeenCalledWith("/insights");
+  it("a PINNED custom mode joins the row; the rest are in More, with Create Mode", async () => {
+    const mk = (id: string, name: string, pinned: boolean) => ({ id, name, icon: "dumbbell", color: "orange", tagline: "", personality: "", instructions: "", access: [], remember: true,
+      tabs: [{ id: "chat", title: "Chat", kind: "chat" }], prompts: [], pinned, createdAt: "2026-11-27T00:00:00Z", updatedAt: "2026-11-27T00:00:00Z" });
+    render(<Home onOpenWorkspace={() => {}} modes={{ modes: [mk("fit", "Fitness Coach", true), mk("money", "Money", false)] as any }} />);
+    expect(screen.getByTestId("button-ai-mode-fit").textContent).toContain("Fitness Coach");
+    expect(screen.queryByTestId("button-ai-mode-money")).toBeNull();
+    fireEvent.click(screen.getByTestId("button-ai-mode-fit"));
+    expect(navigated).toEqual(["/workspace/mode/fit"]);
+    fireEvent.click(screen.getByTestId("button-modes-more"));
+    expect((await screen.findByTestId("modes-sheet-open-money")).textContent).toContain("Money");
+    fireEvent.click(screen.getByTestId("modes-sheet-create"));
+    expect(navigated[1]).toBe("/workspace/modes?new=1");
+  });
+
+  it("a modes list that failed to load says so in More, with a retry — never 'none yet' (Rule 7)", async () => {
+    const retry = vi.fn();
+    render(<Home onOpenWorkspace={() => {}} modes={{ failed: true, retry }} />);
+    fireEvent.click(screen.getByTestId("button-modes-more"));
+    expect((await screen.findByTestId("modes-sheet-error")).textContent).toContain("Couldn't load");
+    expect(screen.queryByTestId("modes-sheet-empty")).toBeNull();
+    fireEvent.click(screen.getByText("Retry"));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("the chat box is in the home's flow, under the modes — it scrolls away with the page", () => {
+    render(<Home onOpenWorkspace={() => {}} composer={<ChatComposer onSubmit={() => true} isPending={false} searchOpen={false} onToggleSearch={() => {}} onAttach={() => {}}
+      showReset={false} onReset={() => {}} onOpenWorkspace={() => {}} hideModes inline />} />);
+    const modes = screen.getByTestId("chat-modes");
+    const box = screen.getByTestId("chat-composer-inline");
+    expect(modes.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId("button-chat-modes")).toBeNull();
   });
 
   it("rows that scroll sideways keep their own drag (T1)", () => {

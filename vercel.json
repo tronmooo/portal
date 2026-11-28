@@ -37,6 +37,10 @@
       "destination": "/api/ai"
     },
     {
+      "source": "/api/cron/mode-checkins",
+      "destination": "/api/ai"
+    },
+    {
       "source": "/api/profiles/:id/valuation/refresh",
       "destination": "/api/ai"
     },
@@ -130,6 +134,10 @@
     {
       "path": "/api/cron/fire-due-reminders",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/mode-checkins",
+      "schedule": "37 13 * * *"
     }
   ],
   "functions": {

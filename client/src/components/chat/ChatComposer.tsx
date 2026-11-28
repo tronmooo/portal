@@ -21,7 +21,8 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { BarChart3, CalendarDays, Camera, FolderOpen, LayoutGrid, Loader2, Mic, Paperclip, RotateCcw, Search, Send, type LucideIcon } from "lucide-react";
+import { Camera, Layers, Loader2, Mic, Paperclip, RotateCcw, Search, Send } from "lucide-react";
+import { ModesSheet, type ModesState } from "@/components/modes/AiModesMenu";
 import { WORKSPACES, type WorkspaceKind } from "@/components/workspace/WorkspaceShell";
 import { useToast } from "@/hooks/use-toast";
 
@@ -90,15 +91,8 @@ function useSpeechInput(onResult: (text: string) => void, onError?: (title: stri
   return { listening, start, stop, supported };
 }
 
-/** The pages offered beside the workspaces, here and on the chat home. */
-export const CHAT_APPS: Array<{ id: string; label: string; icon: LucideIcon; href: string; blurb: string }> = [
-  { id: "documents", label: "Documents", icon: FolderOpen, href: "/artifacts", blurb: "Everything you have saved" },
-  { id: "analyze", label: "Analyze", icon: BarChart3, href: "/insights", blurb: "Patterns across your records" },
-  { id: "plan", label: "Plan", icon: CalendarDays, href: "/calendar", blurb: "Your calendar" },
-  { id: "more", label: "More", icon: LayoutGrid, href: "/dashboard", blurb: "The full dashboard" },
-];
+export { CHAT_APPS } from "./chat-apps";
 
-const MODE_PILL = "aurora-mode pressable shrink-0 h-7 px-2.5 rounded-full text-xs font-medium flex items-center gap-1";
 
 export interface ChatComposerHandle {
   /** Current draft text (used to seed an attachment note from the draft). */
@@ -135,8 +129,12 @@ interface ChatComposerProps {
   onOpenWorkspace?: (kind: WorkspaceKind) => void;
   /** The Documents / Analyze / Plan / More tiles: each goes to its page. */
   onOpenApp?: (href: string) => void;
-  /** The chat home is showing the modes as tiles: leave the row out. */
+  /** The chat home is showing the modes as tiles: leave the AI Modes button out. */
   hideModes?: boolean;
+  /** The person's own AI modes, for the AI Modes sheet. */
+  modes?: ModesState;
+  /** In the page's flow (the chat home) rather than pinned under the transcript. */
+  inline?: boolean;
   /** Files dropped onto the box (same as picking them with the paperclip). */
   onDropFiles?: (files: File[]) => void;
 }
@@ -156,11 +154,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     onOpenWorkspace,
     onOpenApp,
     hideModes,
+    modes,
+    inline,
     onDropFiles,
   },
   ref,
 ) {
   const { toast } = useToast();
+  const [modesOpen, setModesOpen] = useState(false);
   const [input, setInput] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -238,34 +239,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   };
 
   return (
-    <div className="px-3 pt-2 pb-[env(safe-area-inset-bottom,12px)] bg-background/95 backdrop-blur-sm border-t border-border/40">
+    <div className={inline ? "pt-1" : "px-3 pt-2 pb-[env(safe-area-inset-bottom,12px)] bg-background/95 backdrop-blur-sm border-t border-border/40"} data-testid={inline ? "chat-composer-inline" : "chat-composer-pinned"}>
       <div className="max-w-2xl mx-auto">
         {/* The field's label. The modes row is what is on screen (owner's
             design, 2026-11-25); the label stays for assistive tech, so the box
             is never unlabelled once the placeholder is typed over. */}
         <label htmlFor="chat-message-input" className="sr-only">Message</label>
-        {/* AI Modes, as one compact line. Chat is this box; each of the
-            others is its own tool — a full-screen workspace or a page — not a
-            version of this box. Before the first message the chat home shows
-            them as tiles instead (`hideModes`), so they are on screen once.
-            The row scrolls sideways inside itself (T1: data-swipe-ignore). */}
-        {onOpenWorkspace && !hideModes && (
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar -mx-3 px-3 pb-2" data-swipe-ignore data-testid="chat-modes">
-            {(Object.keys(WORKSPACES) as WorkspaceKind[]).map((kind) => {
-              const { label, icon: Icon, blurb } = WORKSPACES[kind];
-              return (
-                <button key={kind} type="button" onClick={() => onOpenWorkspace(kind)} title={blurb} className={MODE_PILL} data-testid={`button-workspace-${kind}`}>
-                  <Icon className="h-3.5 w-3.5" /> {label}
-                </button>
-              );
-            })}
-            {onOpenApp && CHAT_APPS.map(({ id, label, icon: Icon, href, blurb }) => (
-              <button key={id} type="button" onClick={() => onOpenApp(href)} title={blurb} className={MODE_PILL} data-testid={`button-app-${id}`}>
-                <Icon className="h-3.5 w-3.5" /> {label}
-              </button>
-            ))}
-          </div>
-        )}
         {/* Large prominent input box */}
         <div
           className={`bubble aurora-composer relative transition-all duration-200 ${dragOver ? "ring-2 ring-primary border-primary" : ""}`}
@@ -298,8 +277,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             onKeyDown={handleKeyDown}
             placeholder="Ask me anything, or drop a file here…"
             maxLength={10000}
-            className="min-h-[76px] max-h-[280px] resize-none border-0 bg-transparent px-4 pt-3.5 pb-14 text-sm leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0 rounded-2xl"
-            rows={3}
+            className={`${inline ? "min-h-[76px]" : "min-h-[52px]"} max-h-[280px] resize-none border-0 bg-transparent px-4 pt-3 pb-12 text-sm leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0 rounded-2xl`}
+            rows={inline ? 3 : 1}
             data-testid="input-chat"
           />
           {/* Action row inside the box. z-10 keeps these controls stacked
@@ -307,8 +286,24 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               (which extends under this row via its pb-14 padding) could
               swallow taps meant for the Send button, so only the Enter key
               worked (#2, 2026-06-25 user report). */}
-          <div className="absolute bottom-0 left-0 right-0 z-10 flex items-center justify-between px-3 pb-3">
+          <div className="absolute bottom-0 left-0 right-0 z-10 flex items-center justify-between px-3 pb-2">
             <div className="flex items-center gap-0.5">
+              {/* AI Modes: one small button, not a row pinned above the box
+                  (owner, 2026-11-27). It opens the same sheet as the home's
+                  More tile, with the workspaces at its top. */}
+              {onOpenWorkspace && !hideModes && (
+                <button
+                  type="button"
+                  onClick={() => setModesOpen(true)}
+                  title="AI Modes: Notes, Journal, Word, Fill In and your own"
+                  aria-label="AI Modes"
+                  aria-haspopup="dialog"
+                  data-testid="button-chat-modes"
+                  className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                >
+                  <Layers className="h-4 w-4" />
+                </button>
+              )}
               <button
                 onClick={onAttach}
                 onPointerDown={onAttachPointerDown}
@@ -416,6 +411,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           </div>
         </div>
       </div>
+      {onOpenWorkspace && !hideModes && (
+        <ModesSheet open={modesOpen} onOpenChange={setModesOpen} state={modes ?? {}} onOpenWorkspace={onOpenWorkspace} onOpenApp={onOpenApp} />
+      )}
     </div>
   );
 });

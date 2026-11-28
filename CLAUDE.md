@@ -1450,12 +1450,18 @@ chat box. Only a loaded list may read as a zero.
 box (`prompt`); a whole request ("AI Suggestions", AI Briefing) is sent as
 typed. Opening the page writes nothing (Rule 3). Rows that scroll sideways
 carry `data-swipe-ignore` (T1).
-**CH4. The modes are on screen once.** Before the first message they are the
-home's tiles; the chat box then leaves its own row out (`hideModes`) and shows
-it, as one compact line, during a conversation. Chat is the box itself; Notes,
-Journal, Document and Fill In open their workspaces (W1–W11); Documents,
-Analyze, Plan and More are pages (`CHAT_APPS`). The box keeps a label for
-assistive tech (`sr-only`).
+**CH4. The modes are on screen once, and nothing is pinned over the home.**
+Before the first message the modes are the home's tiles (Chat, Notes,
+Journal, Word, Fill In, the person's PINNED modes, More), and the chat box sits
+under them IN THE PAGE'S FLOW (`ChatHome` `composer`, `ChatComposer`
+`inline`), so both scroll away with the home (owner, 2026-11-27: "always
+showing wherever you scroll"). During a conversation the box is pinned under
+the transcript, compact (one line), and carries ONE small AI Modes button
+(`button-chat-modes`) — never a row of modes above it. More and that button
+open the same `ModesSheet` (`components/modes/AiModesMenu.tsx`): the person's
+modes, Customize, Create Mode, and Documents / Analyze / Plan / Dashboard
+(`CHAT_APPS`, `components/chat/chat-apps.ts`). Chat is the box itself. The box
+keeps a label for assistive tech (`sr-only`).
 **CH5. The home reads from its top;** only a conversation is pinned to its
 end. A bill chip reads the bill's NEXT date (`rollBillsForward`, A7).
 **CH6. The look is one layer.** The glowing glass surfaces are the `aurora-*`
@@ -1466,6 +1472,107 @@ border and shadow only — no layout or size, so no screen's arrangement moves.
 (they are drawn); a net-worth change on the tile; a water goal (the bar is
 today against the week's average day); the summary is rule-written, not
 model-written.
+
+## AI Modes rules (workspaces the person builds by describing them)
+
+Owner request 2026-11-27: "users aren't limited to the modes we develop. They
+can describe what they want their AI to do, and the AI builds a customized
+mode with its own interface, tabs, instructions, tools and access to relevant
+personal data … validated configuration schemas using approved interactive
+components rather than executing unrestricted generated code." Read these
+before touching `shared/ai-modes.ts`, `server/ai-modes.ts`,
+`client/src/pages/workspace-modes.tsx`, `client/src/pages/workspace-mode.tsx`
+or `client/src/components/modes/*`.
+*Guards:* `tests/ai-modes.test.ts` (the pure rules), `tests/ai-modes-routes.test.ts`
+(the real routes), `tests/ai-modes-intel.test.ts` (access and grounding over a
+mocked model), `tests/ai-modes.dom.test.tsx` (the builder and a mode, clicked),
+`tests/chat-home.dom.test.tsx`, `tests/chat-workspace-buttons.dom.test.tsx`.
+
+**AM1. A mode is a description, never code or data.** Name, icon and color
+from fixed sets, personality, instructions, what it may read (`MODE_SOURCES`),
+whether it remembers, suggested conversations, reminders, check-ins, and its
+tabs — each one of SIX approved kinds: `overview`, `widgets` (cards over the
+person's records: `ExecWidget`, drawn by `ExecWidgetBody` from the lists every
+screen reads — Rule 1), `charts` (graphs: `WellnessWidget`s drawn by the
+Wellness widget system over the account holder's trackers — H1, H3, H10),
+`log` (a form that saves an entry to the mode's tracker), `insights` (an
+analysis on a tap) and `chat` (exactly one, last).
+Five tabs by default, at most `MAX_MODE_TABS`. Whatever made it — the model,
+a template, the fixed rules, an imported file, a PATCH — it passes
+`sanitizeAiMode`: an unknown part is DROPPED, never coerced. Add a new kind
+of tab or card by adding it to the schema and a renderer, never by letting a
+model emit markup, a query or a URL.
+**AM2. One row, changed on the server.** The modes are the preference
+`ai_modes` (`serializeAiModes`); the generic preferences route refuses it.
+Create, change, pin, duplicate, reorder and delete are each a route that
+applies the change to the STORED row under a lock (Rule 6) and answers with
+the whole list, which the client writes into its cache (`useAiModes`). A
+PATCH never changes the id or the creation date. Deleting a mode (two taps,
+Rule 8) forgets its conversation and memories too.
+**AM3. What a mode reads is enforced where the prompt is built.** Its chat and
+analysis read ONLY the sources the STORED mode allows (`modeDataBlock`); the
+client never says what may be read. Passwords, ID and card numbers are never
+sent. A bill's date is the rolled-forward one (A7). **The journal is off
+unless the person switches it on**: no builder or revision turns it on
+(`keepJournal: false`); a mode that would use it shows it as "Suggested".
+**AM4. Building proposes; the person saves (W5).**
+`POST /api/workspace/modes/generate` and `/revise` write nothing (they are in
+`WORKSPACE_AI_PATHS`). The builder always answers: no model, or an unusable
+answer, falls back to the fixed rules (`inferModeFromText` over
+`MODE_TEMPLATES`; `reviseModeByRules` — what they cannot read is refused,
+never guessed). A revision is shown as its differences
+(`describeModeChanges`) and written only by Apply.
+**AM5. A mode's AI keeps the app's limits.** Its system prompt puts the
+person's instructions UNDER rules that do not bend (`modeSystem`): facts only
+from the records sent, it changes nothing, general information rather than
+medical / financial / legal advice, never a diagnosis. An analysis item that
+names a source that was not sent is dropped (`parseModeInsights`). Its memory
+is its own row (`ai_memory:mode-<id>`, WA13's rules): it never reaches
+another assistant, and with `remember` off nothing is saved or recalled.
+**AM6. A mode is an app (W1, WA1).** `#/workspace/mode/<id>` is full screen
+(`ModeFrame`), with its tabs and Settings. A tab stays mounted once opened;
+opening any tab writes nothing (Rule 3); an analysis is asked for on a tap.
+Settings edits a DRAFT (Save / Undo; the X saves first and warns when it
+can't). A shared template (`exportModeTemplate`) carries the setup only — no
+id, dates, pin, conversation, memories, records or journal switch.
+**AM7. Graphs, logs, reminders and check-ins use what exists.** A graph over
+a tracker the person lacks is dropped unless the mode's own Log tab creates
+it (`groundModeGraphs`; the builder sees tracker names and number fields,
+never a reading — H8). A Log tab's tracker is created only on the person's
+tap, through `POST /api/trackers` (Rule 11 reuses one with the name). A
+reminder turned on IS a recurring task tagged `reminderTaskTag(mode, reminder)`;
+whether it is on is read from the task list (Rule 5); off takes two taps. A
+check-in is one of the mode's Analysis tabs run by the daily cron
+(`/api/cron/mode-checkins`, `runDueCheckins`; at most three per person a run,
+`checkinDue`): it writes only the mode's digest row (`ai_mode_digest:<id>`,
+refused by the generic preferences route) and one notification that opens
+the mode. Nothing a mode runs on its own writes a record the person owns.
+**AM8. The library shares a setup, never a person.** Publishing
+(`server/ai-mode-library.ts`, table `ai_mode_library`, service role only)
+sends `exportModeTemplate` of the STORED mode after the person has read what
+will be shared (instructions included) and tapped Publish. The author id is
+kept to let them unpublish and is never returned (`mine` only). Installing
+returns a proposal reviewed and saved like a generated one (journal off).
+Three reports from different people hide an entry. A missing table is "not
+available yet" (503), never an empty library.
+*Guard:* `tests/ai-mode-library.test.ts`.
+**AM9. A mode is reachable from everywhere, and acts through the main chat.**
+The main chat's `navigate` tool opens a mode by its spoken name
+(`matchModeByName`; an unknown name opens the list and names the modes), the
+list, or the builder with the user's words (`create_ai_mode` →
+`#/workspace/modes?new=1&describe=…`, which builds a PROPOSAL at once — the
+chat itself creates nothing). Search lists the person's modes and "AI Modes"
+(shortcut M); Settings has an AI Modes tile; a check-in's notification opens
+its mode. A mode's own AI changes nothing (AM5): under each reply,
+"Do this in Portol chat" hands the question to the main chat
+(`portol_chat_prefill`), where the app's checks apply. A backup
+(`GET /api/export`) carries `aiModes`; a restore adds the ones the account
+lacks by name.
+*Guards:* `tests/ai-modes-connected.test.ts`, `tests/chat-navigation.test.ts`.
+*Live check (deployed app, smoke account, phone touch):* `npx tsx tests/live-ai-modes-check.ts`.
+*Not built (2026-11-27):* premium (paid) modes; a mode that creates forms
+other than a tracker log, or a dashboard outside its own tabs; editing an
+installed mode's published original; moderation beyond reports.
 
 ## Artifact rules (one viewer, the whole artifact, sent anywhere)
 

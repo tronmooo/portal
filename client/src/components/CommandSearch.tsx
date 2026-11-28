@@ -38,9 +38,11 @@ import {
   Bell,
   Sparkles,
   SlidersHorizontal,
+  Layers,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { hashNavigate } from "@/lib/hashNavigate";
+import { useAiModes, modeRoute } from "@/lib/ai-modes-client";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { onCacheBust } from "@/lib/cache-bus";
 import { itemMatches, rankResults, matchNote } from "@/lib/search-index";
@@ -198,6 +200,7 @@ export const QUICK_ACTIONS = [
   { label: "Go to Settings",  icon: SettingsIcon,    path: "/settings", shortcut: "S" },
   { label: "Insights",        icon: Sparkles,        path: "/insights", shortcut: "I" },
   { label: "Details & characteristics", icon: SlidersHorizontal, path: "/details", shortcut: "E" },
+  { label: "AI Modes",        icon: Layers,          path: "/workspace/modes", shortcut: "M" },
 ];
 
 // Actions that create a new artifact/entity. Shown as their own group above
@@ -209,6 +212,7 @@ const CREATE_ACTIONS = [
   { label: "Log an expense",  icon: Wallet,     path: "/finance?new=expense", color: "text-emerald-500" },
   { label: "New task",        icon: ListTodo,   path: "/tasks?new=1",      color: "text-orange-500" },
   { label: "New habit",       icon: Flame,      path: "/habits?new=1",     color: "text-red-500" },
+  { label: "New AI mode",     icon: Layers,     path: "/workspace/modes?new=1", color: "text-violet-500" },
   // Tracker creation is chat-only — shortcut removed 2026-05-21.
   { label: "Scan receipt",    icon: Sparkles,   path: "/insights",        color: "text-pink-500" },
   { label: "Generate weekly review", icon: Sparkles, path: "/insights",   color: "text-indigo-500" },
@@ -272,6 +276,10 @@ export function CommandSearch() {
   };
 
   const [query, setQuery] = useState("");
+  // The person's own AI Modes, matched by name as they type (shared/ai-modes.ts).
+  const aiModes = useAiModes({ enabled: open });
+  const q = query.trim().toLowerCase();
+  const matchingModes = q ? (aiModes.modes ?? []).filter((m) => `${m.name} ${m.tagline}`.toLowerCase().includes(q)).slice(0, 5) : [];
   const [results, setResults] = useState<SearchResults | null>(null);
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState(false);
@@ -797,6 +805,20 @@ export function CommandSearch() {
               </CommandGroup>
             )}
           </>
+        )}
+
+        {matchingModes.length > 0 && (
+          <CommandGroup heading="AI Modes">
+            {matchingModes.map((m) => (
+              <CommandItem key={`mode-${m.id}`} value={`ai-mode-${m.id}-${m.name}`} onSelect={() => handleSelect(modeRoute(m.id))} data-testid={`item-search-ai-mode-${m.id}`}>
+                <Layers className="shrink-0 text-violet-500" />
+                <div className="flex flex-col min-w-0">
+                  <span className="truncate font-medium text-sm">{m.name}</span>
+                  <span className="truncate text-xs text-muted-foreground">{m.tagline || "AI mode"}</span>
+                </div>
+              </CommandItem>
+            ))}
+          </CommandGroup>
         )}
 
         {/* No-query state: recent searches + quick actions */}

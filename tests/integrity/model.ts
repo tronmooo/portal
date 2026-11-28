@@ -368,6 +368,21 @@ export const MODEL: EntityModel[] = [
     screens: ["/settings", "/reset-password"],
   },
   {
+    // Owner, 2026-11-27 (AI Modes rules AM1–…): a mode is a DESCRIPTION the
+    // person builds — tabs, sources, reminders — stored as one preference row
+    // and drawn by the existing widget systems over the records every screen
+    // reads. Placed here so its routes are inside the coverage matrix (I3).
+    key: "aiMode", label: "AI Mode (a workspace the person builds)",
+    stores: ["preferences (ai_modes, the mode library, each mode's AI memory row)"],
+    routes: [/^\/api\/workspace\/modes(\/|$)/],
+    tools: [],
+    derived: [
+      D("a mode's cards and charts", "ExecWidgetBody / Wellness widgets over the shared lists (Rule 1)", "/workspace/modes"),
+    ],
+    dependents: ["a mode's log tab saves an entry to its tracker", "deleting a mode leaves the person's records alone"],
+    screens: ["/workspace/modes", "/workspace/mode"],
+  },
+  {
     key: "system", label: "System (cron, diagnostics, warm-up)", system: true,
     stores: [], routes: [/^\/api\/(cron|warmup|version|data-version|diagnostics|client-errors|cleanup|admin)/], tools: [], derived: [], dependents: [], screens: [],
   },

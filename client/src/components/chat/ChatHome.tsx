@@ -14,7 +14,7 @@
 // Every row goes somewhere: a route (`href`) or a message put in the chat box
 // (`prompt`). Nothing on it is decoration that looks tappable.
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity, BarChart3, Brain, CalendarDays, Car, CheckSquare, ChevronRight, Coins, Droplet, Dumbbell,
@@ -39,7 +39,8 @@ import {
 } from "@shared/chat-home";
 import type { ChatSuggestion } from "@shared/chat-suggestions";
 import { ChatSuggestions } from "./ChatSuggestions";
-import { CHAT_APPS } from "./ChatComposer";
+import { ModeTiles, type ModesState } from "@/components/modes/AiModesMenu";
+import { useAiModes } from "@/lib/ai-modes-client";
 import { WORKSPACES, type WorkspaceKind } from "@/components/workspace/WorkspaceShell";
 
 // ── Looks ────────────────────────────────────────────────────────────────────
@@ -185,7 +186,6 @@ function SectionTitle({ icon: Icon, children, action }: { icon: LucideIcon; chil
   );
 }
 
-const MODE_TILE = "aurora-mode pressable shrink-0 min-w-[68px] px-2.5 py-2.5 rounded-2xl text-[11.5px] font-medium flex flex-col items-center justify-center gap-1.5";
 const linkCls = "aurora-link inline-flex items-center gap-0.5 text-xs font-semibold";
 
 function Delta({ d }: { d: NonNullable<HomeKpi["delta"]> }) {
@@ -323,11 +323,15 @@ export interface ChatHomeViewProps {
   onOpenWorkspace?: (kind: WorkspaceKind) => void;
   /** Put the cursor in the chat box. */
   onFocusChat?: () => void;
+  /** The person's own AI modes (pinned ones join the row; More lists them all). */
+  modes?: ModesState;
+  /** The chat box, in the page's flow under the modes. */
+  composer?: ReactNode;
   now?: Date;
 }
 
 /** Presentation only: everything it shows was decided by `buildChatHome`. */
-export function ChatHomeView({ home, name, todayISO, suggestions, onPick, onSend, onRetry, onOpenWorkspace, onFocusChat, now = new Date() }: ChatHomeViewProps) {
+export function ChatHomeView({ home, name, todayISO, suggestions, onPick, onSend, onRetry, onOpenWorkspace, onFocusChat, modes, composer, now = new Date() }: ChatHomeViewProps) {
   const go = useGo(onPick);
   const [askPage, setAskPage] = useState(0);
   const asks = [0, 1, 2, 3].map((n) => ASKS[(askPage * 4 + n) % ASKS.length]);
@@ -465,38 +469,26 @@ export function ChatHomeView({ home, name, todayISO, suggestions, onPick, onSend
       {/* Earned from the user's own records */}
       {suggestions.length > 0 && <ChatSuggestions suggestions={suggestions} onPick={onPick} now={now} bare />}
 
-      {/* AI Modes. Chat is the box below; each of the others is its own tool. */}
+      {/* AI Modes, then the chat box: both in the page's flow, so they scroll
+          away with the home instead of staying pinned over it (owner,
+          2026-11-27). Chat is the box; the others are their own apps; More
+          opens the person's own modes and the builder. */}
       {onOpenWorkspace && (
         <section aria-label="AI modes" data-testid="chat-modes">
           <SectionTitle icon={Layers}>AI Modes <span className="text-xs font-medium text-muted-foreground">(Apps)</span></SectionTitle>
-          <div className="flex items-stretch gap-2 overflow-x-auto no-scrollbar -mx-4 px-4 pb-1" data-swipe-ignore>
-            <button type="button" onClick={onFocusChat} aria-current="true" className={`${MODE_TILE} aurora-mode-active`} data-testid="button-mode-chat">
-              <MessageCircle className="h-5 w-5" aria-hidden="true" /> Chat
-            </button>
-            {(Object.keys(WORKSPACES) as WorkspaceKind[]).map((kind) => {
-              const { label, icon: Icon, blurb } = WORKSPACES[kind];
-              return (
-                <button key={kind} type="button" onClick={() => onOpenWorkspace(kind)} title={blurb} className={MODE_TILE} data-testid={`button-workspace-${kind}`}>
-                  <Icon className="h-5 w-5" aria-hidden="true" /> {label}
-                </button>
-              );
-            })}
-            {CHAT_APPS.map(({ id, label, icon: Icon, href, blurb }) => (
-              <button key={id} type="button" onClick={() => hashNavigate(href)} title={blurb} className={MODE_TILE} data-testid={`button-app-${id}`}>
-                <Icon className="h-5 w-5" aria-hidden="true" /> {label}
-              </button>
-            ))}
-          </div>
+          <ModeTiles state={modes ?? {}} onOpenWorkspace={onOpenWorkspace} onFocusChat={onFocusChat} />
         </section>
       )}
+      {composer}
     </div>
   );
 }
 
 /** The home, wired to the app's data. */
-export function ChatHome(p: Pick<ChatHomeViewProps, "suggestions" | "onPick" | "onSend" | "onOpenWorkspace" | "onFocusChat">) {
+export function ChatHome(p: Pick<ChatHomeViewProps, "suggestions" | "onPick" | "onSend" | "onOpenWorkspace" | "onFocusChat" | "composer">) {
   const { home, name, todayISO, retry } = useChatHome(true);
-  return <ChatHomeView {...p} home={home} name={name} todayISO={todayISO} onRetry={retry} />;
+  const m = useAiModes();
+  return <ChatHomeView {...p} home={home} name={name} todayISO={todayISO} onRetry={retry} modes={{ modes: m.modes, failed: m.failed, retry: () => void m.retry() }} />;
 }
 
 export default ChatHome;

@@ -394,13 +394,19 @@ export function MemoryPanel({ app, view, onChanged, onClose }: { app: MemoryApp;
  * this sitting only, and the screen says which.
  */
 export function AiConversation({
-  app, ask, intro, suggestions, placeholder, boundary, testId, footer, memoryApp, greet, wrapUp, onSaveReply,
+  app, ask, intro, suggestions, placeholder, boundary, testId, footer, memoryApp, greet, wrapUp, onSaveReply, accessLine, sendNow, onHandoff,
 }: {
+  /** Offers "Do this in Portol chat" under each reply: hands the question that led to it to the main chat, which can act on records. */
+  onHandoff?: (text: string) => void;
+  /** In place of the workspace AI-access line (a custom AI Mode carries its own switches). */
+  accessLine?: ReactNode;
+  /** A message to send as soon as it changes (a suggested conversation tapped on another tab). */
+  sendNow?: { text: string; key: number } | null;
   /** Shown once the conversation has some length: sends this message ("wrap up our session"). */
   wrapUp?: { label: string; message: string };
   /** Offers "Save to my journal" under each reply. The person taps it; the AI saves nothing on its own (W5). */
   onSaveReply?: (text: string) => Promise<void>;
-  app: WorkspaceAiApp;
+  app?: WorkspaceAiApp;
   ask: (turns: ChatTurn[]) => Promise<ConversationReply>;
   intro: string;
   suggestions: string[];
@@ -468,6 +474,14 @@ export function AiConversation({
       setError(aiErrorText(err));
     } finally { setBusy(false); }
   };
+  // A suggested conversation tapped elsewhere is sent once, when it arrives.
+  const sentKey = useRef<number | null>(null);
+  useEffect(() => {
+    if (!sendNow || sentKey.current === sendNow.key) return;
+    sentKey.current = sendNow.key;
+    void send(sendNow.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sendNow?.key]);
   const retry = () => {
     const last = turns[turns.length - 1];
     if (!last || last.role !== "user") return;
@@ -496,7 +510,7 @@ export function AiConversation({
         <div className="max-w-3xl mx-auto px-3 sm:px-6 py-3 space-y-3">
           {boundary && <p className="text-[11px] rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-muted-foreground" data-testid={`${testId}-boundary`}>{boundary}</p>}
           <div className="flex items-center gap-x-3 gap-y-1 flex-wrap">
-            <AiAccessLine app={app} onChange={() => setAccessOpen((v) => !v)} />
+            {accessLine ?? (app && <AiAccessLine app={app} onChange={() => setAccessOpen((v) => !v)} />)}
             {memoryApp && (
               mem.isError ? <span className="text-[11px] text-destructive" role="alert" data-testid={`${testId}-memory-error`}>Couldn't load what I remember. <button type="button" className="underline" onClick={() => mem.refetch()}>Retry</button></span>
                 : view ? (
@@ -507,7 +521,7 @@ export function AiConversation({
                 ) : null
             )}
           </div>
-          {accessOpen && <AiAccessPanel app={app} onClose={() => setAccessOpen(false)} />}
+          {accessOpen && app && <AiAccessPanel app={app} onClose={() => setAccessOpen(false)} />}
           {memoryOpen && memoryApp && view && (
             <MemoryPanel app={memoryApp} view={view} onClose={() => setMemoryOpen(false)}
               onChanged={(next) => { setView(next); if (next.turns.length === 0 && next.memories.length === 0) { setTurns([]); setError(null); } }} />
@@ -535,6 +549,12 @@ export function AiConversation({
                   </span>
                 )}
                 {t.note && <span className="block mt-1.5 text-[11px] opacity-70">{t.note}</span>}
+                {t.role === "assistant" && onHandoff && i > 0 && turns[i - 1]?.role === "user" && (
+                  <button type="button" onClick={() => onHandoff(turns[i - 1].content)}
+                    className="block mt-1.5 text-[11px] underline opacity-80" data-testid={`${testId}-handoff`}>
+                    Do this in Portol chat
+                  </button>
+                )}
                 {t.role === "assistant" && onSaveReply && (
                   <button type="button" disabled={!!savedReplies[i]} onClick={() => void saveReply(i, t.content)}
                     className="block mt-1.5 text-[11px] underline opacity-80 disabled:no-underline disabled:opacity-60" data-testid={`${testId}-save-reply`}>

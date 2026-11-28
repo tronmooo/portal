@@ -169,6 +169,8 @@ export async function __traceSharp() { return import("sharp"); }
       { source: "/api/smart-fill/:path*", destination: "/api/ai" },
       { source: "/api/smart-fill", destination: "/api/ai" },
       { source: "/api/workspace/:path*", destination: "/api/ai" },
+      // AI Mode check-ins call the model: the AI function has the time.
+      { source: "/api/cron/mode-checkins", destination: "/api/ai" },
       { source: "/api/:path*", destination: "/api" },
       // SPA fallback: any non-asset, non-api, non-file path → index.html
       // Lets users refresh /dashboard, /trackers, /profiles/abc directly without hitting Vercel 404.
@@ -209,6 +211,9 @@ export async function __traceSharp() { return import("sharp"); }
     // faster schedule makes the whole DEPLOY fail rather than just the cron.
     crons: [
       { path: "/api/cron/fire-due-reminders", schedule: "0 9 * * *" },
+      // Custom AI Modes' scheduled check-ins (server/ai-modes.ts runDueCheckins).
+      // The second and last job the Hobby plan allows.
+      { path: "/api/cron/mode-checkins", schedule: "37 13 * * *" },
     ],
     functions: {
       // Fast read/write API: 60s is generous once AI traffic is out of this
