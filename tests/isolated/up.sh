@@ -43,6 +43,13 @@ user 229685c4-8dcb-4349-8448-57fc38e6e3d2 "${SMOKE_EMAIL:-portol-smoke@aol.com}"
 user 7d0c2f6e-3b1a-4c58-9e47-1f2a3b4c5d6e "${INTEGRITY_OTHER_EMAIL:-testfix2026@aol.com}" "${INTEGRITY_OTHER_PASSWORD:-Testtest1!}"
 # Worker accounts, so several runs can go side by side (ISOLATED_WORKER=1..9).
 for i in 1 2 3 4 5 6 7 8 9; do user "00000000-0000-4000-8000-00000000010$i" "worker$i@isolated.test" "${SMOKE_PASSWORD:-Smoke-Test-2026!}"; done
+# Reference data the screens list from (the "Add asset" / "Add Liability"
+# type pickers): production holds it; a fresh database does not.
+if [ "$(docker exec isolated-db-1 psql -U supabase_admin -d postgres -Atc "select count(*) from public.profile_type_definitions")" = "0" ]; then
+  ( cd ../.. && VITE_SUPABASE_URL=http://127.0.0.1:54321 SUPABASE_SERVICE_ROLE_KEY="$ISOLATED_SERVICE_KEY" \
+      NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost npx tsx scripts/seed-type-registry.ts >/dev/null ) \
+    && echo "seeded profile type definitions" || echo "could not seed profile type definitions"
+fi
 cat > .run/app.env <<ENV
 VITE_SUPABASE_URL=http://127.0.0.1:54321
 VITE_SUPABASE_ANON_KEY=$ISOLATED_ANON_KEY

@@ -6,9 +6,11 @@ name: Integrity (isolated database)
 # read from or written to the production project, so it runs on every push to
 # a working branch and on every pull request — before anything is merged.
 #
-# What it does not cover: the chat scenarios (they need the AI provider's key,
-# which this job is not given) and file storage. Those are exercised by
-# "Integrity (deployed app)" against the smoke account.
+# Chat scenarios need an AI provider. When the repository has an
+# ANTHROPIC_API_KEY secret, the app is started with it and the chat scenarios
+# run HERE too — against the throwaway database, so they never write to
+# production. Without the secret the chat scenarios are skipped (as before) and
+# remain covered by "Integrity (deployed app)" against the smoke account.
 on:
   workflow_dispatch:
     inputs:
@@ -44,6 +46,8 @@ jobs:
       - name: Start the isolated stack (database, auth, REST, schema, test accounts)
         run: tests/isolated/up.sh
       - name: Start the app from this commit
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -a; . tests/isolated/.run/app.env; set +a
           PORT=5199 nohup npm run dev > tests/isolated/.run/server.log 2>&1 &
@@ -57,10 +61,14 @@ jobs:
         id: run
         env:
           ONLY: ${{ github.event.inputs.only }}
+          HAS_AI: ${{ secrets.ANTHROPIC_API_KEY != '' }}
         run: |
           set -a; . tests/isolated/.run/app.env; set +a
           set +e
-          npx tsx tests/integrity/run.ts --only "${ONLY:-^(?!chat)}" --out test-results/integrity-isolated
+          # With an AI key every scenario runs; without one, every scenario
+          # that is marked as using chat is skipped (--no-chat), whatever its name.
+          NOCHAT=""; [ "$HAS_AI" = "true" ] || NOCHAT="--no-chat"
+          npx tsx tests/integrity/run.ts --only "${ONLY:-.}" $NOCHAT --out test-results/integrity-isolated
           echo "exit=$?" >> "$GITHUB_OUTPUT"
       - name: Summary
         if: always()

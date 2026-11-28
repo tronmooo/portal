@@ -832,6 +832,19 @@ scenario({
         ctx.check("db", json(await ctx.db.row("profiles", kin.id), 4000) === rowBefore, "the person's own row is untouched by being looked at");
       });
     }
+    // Owner, 2026-11-28: verify the scope switch "including conversational
+    // confirmation such as answering yes". The assistant asked; the person
+    // answers only "Yes, please." — that answer is the request (the tool used
+    // to judge the last message alone and skip it).
+    await part(ctx, "set_dashboard_scope — a yes to the assistant's own question", async () => {
+      const c0 = await census(ctx);
+      const asked = `I can switch your dashboard to show only ${kin.name}'s data. Do you want me to switch the dashboard view to ${kin.name}?`;
+      const t = await chat(ctx, "Yes, please.", [{ role: "user", content: `I'd like to focus on ${kin.name} for a bit.` }, { role: "assistant", content: asked }]);
+      const ok = ctx.check("action", selected(t), "a plain \"Yes, please.\" to that question switches the view: the answer carries the person's scope", json({ results: t.data?.results, reply: t.reply }, 400));
+      report(ctx, ok, "bug", "A yes to the assistant's question about switching the dashboard did not switch it", t, "no scope in the answer", "I16 (what chat confirms is what was stored), Rule 4");
+      ctx.check("action", selected(t) || !claims(t), "and the reply never says it switched when it did not", t.reply.slice(0, 200));
+      ctx.same("db", moved(c0, await census(ctx)), {}, "and nothing was written");
+    });
     await part(ctx, "set_dashboard_scope — back to Everyone", async () => {
       const c0 = await census(ctx);
       const t = await say(ctx, "Switch to the Everyone view on my dashboard.");
